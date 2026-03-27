@@ -1,0 +1,250 @@
+/* 全局样式 - 美化所有组件 */
+
+/* 按钮动画 */
+:deep(.t-button) {
+  transition: all 0.3s ease;
+  border-radius: 8px;
+}
+
+:deep(.t-button:hover) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+:deep(.t-button:active) {
+  transform: translateY(0);
+}
+
+/* 输入框动画 */
+:deep(.t-input) {
+  transition: all 0.3s ease;
+  border-radius: 8px;
+}
+
+:deep(.t-input:hover) {
+  border-color: #667eea;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.1);
+}
+
+:deep(.t-input:focus) {
+  border-color: #764ba2;
+  box-shadow: 0 0 0 3px rgba(118, 75, 162, 0.1);
+}
+
+/* 卡片动画 */
+:deep(.t-card) {
+  transition: all 0.3s ease;
+  border-radius: 12px;
+}
+
+:deep(.t-card:hover) {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 20px rgba(102, 126, 234, 0.15);
+}
+
+/* 表格动画 */
+:deep(.t-table) {
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+:deep(.t-table tr) {
+  transition: all 0.3s ease;
+}
+
+:deep(.t-table tbody tr:hover) {
+  background-color: rgba(102, 126, 234, 0.05);
+  transform: scale(1.01);
+}
+
+/* 模态框动画 */
+:deep(.t-dialog) {
+  border-radius: 16px;
+}
+
+:deep(.t-dialog__wrap) {
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 消息提示动画 */
+:deep(.t-message) {
+  border-radius: 8px;
+  animation: slideInRight 0.3s ease;
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(50px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* 加载动画 */
+:deep(.t-loading__spinner) {
+  animation: rotate 1s linear infinite;
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 下拉菜单动画 */
+:deep(.t-dropdown) {
+  border-radius: 8px;
+}
+
+:deep(.t-dropdown__menu) {
+  animation: fadeInDown 0.3s ease;
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 标签页动画 */
+:deep(.t-tabs__nav-item) {
+  transition: all 0.3s ease;
+  border-radius: 6px;
+}
+
+:deep(.t-tabs__nav-item:hover) {
+  background-color: rgba(102, 126, 234, 0.1);
+}
+
+:deep(.t-tabs__nav-item.t-is-active) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+/* 开关动画 */
+:deep(.t-switch) {
+  transition: all 0.3s ease;
+}
+
+:deep(.t-switch.t-is-checked) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+/* 进度条动画 */
+:deep(.t-progress) {
+  border-radius: 6px;
+}
+
+:deep(.t-progress__bar) {
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+/* 分页动画 */
+:deep(.t-pagination) {
+  border-radius: 8px;
+}
+
+:deep(.t-pagination__btn) {
+  transition: all 0.3s ease;
+  border-radius: 6px;
+}
+
+:deep(.t-pagination__btn:hover) {
+  background-color: rgba(102, 126, 234, 0.1);
+  transform: translateY(-2px);
+}
+
+:deep(.t-pagination__btn.t-is-active) {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+/* 选择器动画 */
+:deep(.t-select) {
+  transition: all 0.3s ease;
+  border-radius: 8px;
+}
+
+:deep(.t-select:hover) {
+  border-color: #667eea;
+}
+
+:deep(.t-select.t-is-focused) {
+  border-color: #764ba2;
+  box-shadow: 0 0 0 3px rgba(118, 75, 162, 0.1);
+}
+
+/* 标签动画 */
+:deep(.t-tag) {
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+:deep(.t-tag:hover) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.2);
+}
+
+/* 骨架屏动画 */
+:deep(.t-skeleton__row) {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+}

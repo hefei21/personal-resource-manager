@@ -1,0 +1,42 @@
+# Clash + Yacd Dashboard 部署配置
+# 用于在极空间NAS上部署代理服务
+
+services:
+  # Clash 核心服务
+  clash:
+    # 使用极空间已下载的镜像
+    image: dreamacro/clash:latest
+    container_name: clash
+    restart: unless-stopped
+    volumes:
+      # 挂载你的 Glados 配置文件（极空间NAS路径）
+      - /tmp/zfsv3/nvme12/13996971105/data/Docker/clash/config.yml:/root/.config/clash/config.yaml:ro
+    ports:
+      - "7890:7890"      # HTTP代理端口
+      - "7891:7891"      # SOCKS5代理端口
+      - "9090:9090"      # Dashboard API端口
+    networks:
+      - pr-network      # 使用与后端相同的网络
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Yacd Dashboard 管理界面
+  yacd:
+    # 使用极空间已拉取的镜像
+    image: haishanh/yacd:latest
+    container_name: yacd-dashboard
+    restart: unless-stopped
+    ports:
+      - "9091:80"      # 换成9091端口，避开极空间限制
+    networks:
+      - pr-network      # 使用与后端相同的网络
+    depends_on:
+      - clash
+
+networks:
+  pr-network:
+    external: true
+    name: personal-resource-manager_pr-network  # 指定完整的网络名称

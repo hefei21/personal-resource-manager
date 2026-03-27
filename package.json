@@ -1,0 +1,21 @@
+{
+  "name": "personal-resource-manager",
+  "version": "1.0.0",
+  "description": "个人资源管理系统 - 支持NAS部署",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && npm run dev",
+    "build": "cd frontend && npm run build && cd ../backend && npm run build",
+    "start": "cd backend && npm start",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": ["resource-manager", "nas", "vue", "node"],
+  "author": "",
+  "license": "MIT"
+}

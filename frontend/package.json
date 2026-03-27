@@ -1,0 +1,29 @@
+{
+  "name": "pr-manager-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vue": "^3.4.0",
+    "vue-router": "^4.2.5",
+    "pinia": "^2.1.7",
+    "axios": "^1.6.2",
+    "tdesign-vue-next": "^1.9.1",
+    "marked": "^12.0.0",
+    "highlight.js": "^11.9.0",
+    "prismjs": "^1.29.0",
+    "mammoth": "^1.7.1",
+    "xlsx": "^0.18.5",
+    "lunar-javascript": "^1.6.12",
+    "md-editor-v3": "^4.13.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.2",
+    "vite": "^5.0.10"
+  }
+}

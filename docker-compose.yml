@@ -1,0 +1,134 @@
+version: '3.8'
+
+# ==========================================
+# 个人资源管理系统 - Docker Compose 配置
+# ==========================================
+# 
+# 【重要】部署前请修改以下配置：
+# 1. 所有包含 "/path/to/your" 的路径
+# 2. JWT_SECRET 环境变量
+# 3. DEFAULT_USERNAME 和 DEFAULT_PASSWORD
+#
+# 使用方法：
+# 1. 复制 .env.example 为 .env
+# 2. 修改下面的路径配置
+# 3. 运行：docker-compose up -d
+# ==========================================
+
+services:
+  # ==================== 后端服务 ====================
+  backend:
+    # 【配置】构建路径（修改为你的实际路径）
+    # 示例：
+    # - Linux/Mac: ./backend
+    # - Windows: ./backend
+    # - NAS: /volume1/docker/pr-manager/backend
+    build: ./backend
+    
+    container_name: pr-manager-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    
+    # 【配置】数据目录挂载（修改为你的实际路径）
+    # 格式：宿主机路径:容器路径
+    volumes:
+      # 数据库文件目录
+      - ./data/db:/app/data/database
+      
+      # 文档存储目录
+      - ./data/docs:/app/data/documents
+      
+      # 音乐存储目录
+      - ./data/music:/app/data/music
+      
+      # 书籍存储目录
+      - ./data/books:/app/data/books
+      
+      # 代码仓库目录
+      - ./data/code:/app/data/code
+      
+      # 上传文件目录
+      - ./data/uploads:/app/data/uploads
+      
+      # 日志目录
+      - ./data/logs:/app/data/logs
+    
+    environment:
+      # 运行环境
+      - NODE_ENV=production
+      - PORT=3000
+      
+      # 【安全】JWT 密钥（生产环境必须修改）
+      # 生成方法：node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      - JWT_SECRET=${JWT_SECRET:-change-this-in-production}
+      - JWT_EXPIRE=7d
+      
+      # 数据路径
+      - DATA_PATH=/app/data
+      - DB_PATH=/app/data/database/app.db
+      
+      # 资源路径
+      - DOCUMENTS_PATH=/app/data/documents
+      - MUSIC_PATH=/app/data/music
+      - BOOKS_PATH=/app/data/books
+      - CODE_PATH=/app/data/code
+      - UPLOADS_PATH=/app/data/uploads
+      - LOGS_PATH=/app/data/logs
+      
+      # CORS 配置
+      - CORS_ORIGIN=*
+      
+      # 【安全】默认管理员账户（首次启动后请修改密码）
+      - DEFAULT_USERNAME=${DEFAULT_USERNAME:-admin}
+      - DEFAULT_PASSWORD=${DEFAULT_PASSWORD:-admin123}
+      
+      # 【配置】代理配置（用于访问国外 API，如 Bangumi）
+      # 如果不需要爬虫功能，可以注释掉这些行
+      # 如果需要代理，请确保 Clash 容器已启动
+      - HTTP_PROXY=http://clash:7890
+      - HTTPS_PROXY=http://clash:7890
+      - ALL_PROXY=socks5://clash:7891
+      - NO_PROXY=localhost,127.0.0.1,*.local
+    
+    # 网络配置（如果使用 Clash 代理，需要连接到 pr-network）
+    networks:
+      - pr-network
+
+  # ==================== 前端服务 ====================
+  frontend:
+    # 【配置】构建路径
+    build: ./frontend
+    
+    container_name: pr-manager-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    networks:
+      - pr-network
+
+# ==================== 网络配置 ====================
+networks:
+  pr-network:
+    driver: bridge
+    # 如果需要连接到外部网络（如 Clash），使用：
+    # external: true
+
+# ==================== 可选：Clash 代理服务 ====================
+# 如果需要爬虫功能，取消注释以下配置
+#
+# services:
+#   clash:
+#     image: centralx/clash:latest
+#     container_name: clash
+#     restart: unless-stopped
+#     ports:
+#       - "7890:7890"   # HTTP代理
+#       - "7891:7891"   # SOCKS5代理
+#       - "9090:9090"   # API端口
+#     volumes:
+#       - ./config/clash/config.yml:/root/.config/clash/config.yaml:ro
+#     networks:
+#       - pr-network
