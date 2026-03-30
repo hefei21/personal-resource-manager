@@ -169,10 +169,12 @@ export default {
     batchDownloadIcons: () => api.post('/bookmarks/batch-download-icons')
   },
   anime: {
-    search: (keyword) => api.get('/anime/search', { params: { keyword } }),
+    search: (keyword, tag, page = 1) => api.get('/anime/search', { params: { keyword, tag, page } }),
     import: (bangumiId, animeData) => api.post('/anime/import', { bangumiId, animeData }),
     list: (params) => api.get('/anime', { params }),
     get: (id) => api.get(`/anime/${id}`),
+    getByBangumiId: (bangumiId) => api.get(`/anime/bangumi/${bangumiId}`),
+    getCover: (id) => api.get(`/anime/${id}/cover`),
     getDetail: (bangumiId) => api.get(`/anime/detail/${bangumiId}`),
     getRelations: (bangumiId) => api.get(`/anime/relations/${bangumiId}`),
     update: (id, data) => api.put(`/anime/${id}`, data),
@@ -181,7 +183,8 @@ export default {
     updateStatus: (id, status) => api.post(`/anime/${id}/status`, { status }),
     updateRating: (id, rating) => api.post(`/anime/${id}/rating`, { rating }),
     searchResources: (keyword) => api.get('/anime/resources/search', { params: { keyword } }),
-    batchDownloadCovers: () => api.post('/anime/batch-download-covers')
+    batchDownloadCovers: () => api.post('/anime/batch-download-covers'),
+    getTokenStatus: () => api.get('/anime/token-status')
   },
   search: {
     global: (keyword) => api.get('/search', { params: { keyword } })

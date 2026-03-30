@@ -286,6 +286,34 @@ router.delete('/categories/:id', authenticateToken, async (req, res) => {
   }
 })
 
+// 更新分类排序 - 注意：必须放在 /categories/:id 之前，否则会被 :id 匹配
+router.put('/categories/reorder', authenticateToken, async (req, res) => {
+  try {
+    const { orders } = req.body // orders 是一个数组，格式：[{ id: 1, sortOrder: 0 }, { id: 2, sortOrder: 1 }, ...]
+
+    if (!orders || !Array.isArray(orders)) {
+      return res.status(400).json({ message: '参数错误' })
+    }
+
+    const db = getDatabase()
+
+    // 使用事务批量更新
+    const updateStmt = db.prepare('UPDATE categories SET sort_order = ? WHERE id = ?')
+    const transaction = db.transaction((items) => {
+      items.forEach(item => {
+        updateStmt.run(item.sortOrder, item.id)
+      })
+    })
+
+    transaction(orders)
+
+    res.json({ message: '排序更新成功' })
+  } catch (error) {
+    console.error('更新排序失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
 // 更新分类名称
 router.put('/categories/:id', authenticateToken, async (req, res) => {
   try {
@@ -371,34 +399,6 @@ router.put('/categories/:id', authenticateToken, async (req, res) => {
     res.json({ message: '更新成功', newPath })
   } catch (error) {
     console.error('更新分类名称失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
-// 更新分类排序
-router.put('/categories/reorder', authenticateToken, async (req, res) => {
-  try {
-    const { orders } = req.body // orders 是一个数组，格式：[{ id: 1, sortOrder: 0 }, { id: 2, sortOrder: 1 }, ...]
-
-    if (!orders || !Array.isArray(orders)) {
-      return res.status(400).json({ message: '参数错误' })
-    }
-
-    const db = getDatabase()
-
-    // 使用事务批量更新
-    const updateStmt = db.prepare('UPDATE categories SET sort_order = ? WHERE id = ?')
-    const transaction = db.transaction((items) => {
-      items.forEach(item => {
-        updateStmt.run(item.sortOrder, item.id)
-      })
-    })
-
-    transaction(orders)
-
-    res.json({ message: '排序更新成功' })
-  } catch (error) {
-    console.error('更新排序失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
 })

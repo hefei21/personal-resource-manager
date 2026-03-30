@@ -90,6 +90,14 @@ services:
       - HTTPS_PROXY=http://clash:7890
       - ALL_PROXY=socks5://clash:7891
       - NO_PROXY=localhost,127.0.0.1,*.local
+      
+      # 【可选】Bangumi API Access Token
+      # 获取方式：https://next.bgm.tv/demo/access-token
+      # 配置后可获取更多搜索结果（最多50条），避免limit=10的限制
+      # 方式1：直接填写Token值（推荐）
+      - BANGUMI_ACCESS_TOKEN=请在这里粘贴你的Token
+      # 方式2：使用.env文件（取消注释下一行，注释上一行）
+      # - BANGUMI_ACCESS_TOKEN=${BANGUMI_ACCESS_TOKEN}
     
     # 网络配置（如果使用 Clash 代理，需要连接到 pr-network）
     networks:

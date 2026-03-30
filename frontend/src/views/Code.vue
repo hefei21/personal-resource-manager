@@ -925,6 +925,7 @@ onMounted(() => loadRepos())
   align-items: flex-start;
   padding: 16px;
   gap: 24px;
+  width: 100%;
 }
 
 .repo-info {

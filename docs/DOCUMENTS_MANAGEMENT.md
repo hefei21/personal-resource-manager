@@ -125,7 +125,10 @@
 - **视图模式**：表格视图 / 卡片视图切换
 - **搜索过滤**：按标题、分类、标签搜索
 - **批量操作**：多选、批量移动、批量删除
-- **排序方式**：按名称、更新时间、分类排序
+- **排序方式**：
+  - 下拉栏排序：标题、文件类型、更新时间
+  - 表头排序：支持点击表头排序（与下拉栏双向同步）
+  - 取消排序：点击表头取消排序，恢复默认排序
 - **分页显示**：支持分页浏览
 
 ### 3. 文档上传
@@ -251,7 +254,72 @@ db.prepare(`
 `).run(newVersion, newFilePath, docId)
 ```
 
-### 5. 拖拽排序实现
+### 5. 表格排序功能
+
+#### 双向同步实现
+
+```javascript
+// 字段映射：列 colKey -> 后端字段名
+const sortFieldMap = {
+  'title': 'title',
+  'type': 'file_type',
+  'updatedAt': 'updated_at'
+}
+
+// 反向映射：后端字段名 -> 列 colKey
+const sortColKeyMap = {
+  'title': 'title',
+  'file_type': 'type',
+  'updated_at': 'updatedAt'
+}
+
+// 计算表格排序状态（双向同步）
+const tableSort = computed(() => {
+  const colKey = sortColKeyMap[sortBy.value]
+  if (!colKey) {
+    // 下拉栏选择的是表头没有的字段，清空表头高亮
+    return null
+  }
+  return {
+    sortBy: colKey,
+    descending: sortOrder.value === 'desc'
+  }
+})
+```
+
+#### 处理表头排序
+
+```javascript
+function handleSortChange(context) {
+  const sort = context?.sort || context
+
+  if (!sort || !sort.sortBy) {
+    // 取消排序时，恢复默认排序（更新时间降序）
+    sortBy.value = 'updated_at'
+    sortOrder.value = 'desc'
+    pagination.value.current = 1
+    loadDocuments()
+    return
+  }
+
+  // 正常排序处理
+  const field = sortFieldMap[sort.sortBy] || sort.sortBy
+  sortBy.value = field
+  sortOrder.value = sort.descending ? 'desc' : 'asc'
+  pagination.value.current = 1
+  loadDocuments()
+}
+```
+
+#### 效果
+- ✅ 表头点击排序生效
+- ✅ 再次点击取消排序，恢复默认
+- ✅ 下拉栏选择同步表头高亮
+- ✅ 下拉栏选择"更新时间"，表头无高亮
+
+---
+
+### 6. 拖拽排序实现
 
 ```javascript
 // 前端拖拽实现

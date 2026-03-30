@@ -186,7 +186,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '@/api'
 import { getCoverFromCache, saveCoverToCache, initCoverDB } from '@/utils/coverCache'
 
@@ -200,7 +200,7 @@ const currentTime = ref(0)
 const duration = ref(0)
 const volume = ref(80)
 const isMuted = ref(false)
-const playMode = ref('sequence') // sequence, loop, shuffle
+const playMode = ref(localStorage.getItem('playMode') || 'sequence') // sequence, loop, shuffle - 从localStorage读取
 const showPlaylist = ref(false)
 const isSidebarMode = ref(false)
 const coverLoadFailed = ref(false) // 封面加载失败标志
@@ -234,7 +234,7 @@ const playModeText = computed(() => {
 })
 
 // 播放控制
-function playSong(song, list = null) {
+async function playSong(song, list = null) {
   if (list) {
     playlist.value = list
     currentIndex.value = list.findIndex(s => s.id === song.id)
@@ -249,6 +249,9 @@ function playSong(song, list = null) {
   coverLoadFailed.value = false // 切换歌曲时重置封面加载状态
   playerCoverData.value = null // 重置封面数据
   loadPlayerCover(song) // 加载封面
+  
+  // 等待DOM更新（audio元素可能在v-if条件下还未渲染）
+  await nextTick()
   loadAndPlay()
 }
 
@@ -369,6 +372,8 @@ function togglePlayMode() {
   const modes = ['sequence', 'loop', 'shuffle']
   const currentModeIndex = modes.indexOf(playMode.value)
   playMode.value = modes[(currentModeIndex + 1) % modes.length]
+  // 保存播放模式到localStorage
+  localStorage.setItem('playMode', playMode.value)
 }
 
 // 进度控制
@@ -484,8 +489,8 @@ function formatTime(seconds) {
 // 监听播放事件
 function handlePlayMusic(e) {
   const { song, list } = e.detail
-  playSong(song, list)
   isSidebarMode.value = false
+  playSong(song, list)
 }
 
 // 监听删除音乐事件

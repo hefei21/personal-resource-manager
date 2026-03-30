@@ -176,7 +176,7 @@
               placeholder="输入待办内容"
               :disabled="!!todo.confirmed && !todo.editing"
               @blur="handleBlur(todo)"
-              @keyup.enter="(e) => e.target.blur()"
+              @keyup.enter="(e) => handleTodoEnter(todo, e)"
               class="todo-input"
             />
             <t-button 
@@ -505,6 +505,24 @@ async function handleBlur(todo) {
     return
   }
   await updateTodo(todo)
+}
+
+// 处理回车键：有内容则确认，无内容则删除
+async function handleTodoEnter(todo, e) {
+  const text = (todo.text || '').trim()
+  if (text) {
+    // 有内容：执行确认操作
+    await confirmTodo(todo)
+  } else {
+    // 无内容：删除该待办
+    if (todo.isNew) {
+      // 新建的空待办，直接从列表移除
+      todos.value = todos.value.filter(t => t.id !== todo.id)
+    } else {
+      // 已存在的空待办，也删除
+      await deleteTodo(todo.id)
+    }
+  }
 }
 
 // 更新待办

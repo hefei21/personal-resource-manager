@@ -42,7 +42,7 @@
             v-model="sortBy"
             placeholder="排序方式"
             style="width: 140px"
-            @change="handleSortChange"
+            @change="handleDropdownSortChange"
           >
             <t-option value="updated_at" label="更新时间" />
             <t-option value="title" label="文件名" />
@@ -258,9 +258,11 @@
         hover
         :selected-row-keys="selectedRowKeys"
         @select-change="handleSelectChange"
+        :sort="tableSort"
+        @sort-change="handleSortChange"
       >
         <template #operation="{ row }">
-          <t-space>
+        <t-space>
             <t-button theme="primary" variant="outline" size="small" @click="handleView(row)">
               <t-icon name="browse" /> 预览
             </t-button>
@@ -911,6 +913,34 @@ const uploadRules = {
 // 排序相关状态
 const sortBy = ref('updated_at')
 const sortOrder = ref('desc')
+
+// 字段映射：列 colKey -> 后端字段名
+const sortFieldMap = {
+  'title': 'title',
+  'type': 'file_type',
+  'updatedAt': 'updated_at'
+}
+
+// 反向映射：后端字段名 -> 列 colKey
+const sortColKeyMap = {
+  'title': 'title',
+  'file_type': 'type',
+  'updated_at': 'updatedAt'
+}
+
+// 计算表格排序状态（双向同步）
+const tableSort = computed(() => {
+  const colKey = sortColKeyMap[sortBy.value]
+  if (!colKey) {
+    // 下拉栏选择的是表头没有的字段，清空表头高亮
+    return null
+  }
+  return {
+    sortBy: colKey,
+    descending: sortOrder.value === 'desc'
+  }
+})
+
 const selectedRowKeys = ref([])
 const batchEditDialogVisible = ref(false)
 const isSingleEdit = ref(false)
@@ -971,8 +1001,36 @@ const currentSubcategories = computed(() => {
   return currentCat?.subcategories || []
 })
 
-// 处理排序方式变化
-function handleSortChange() {
+// 处理排序方式变化（下拉选择框）
+function handleDropdownSortChange() {
+  tableSort.value = { sortBy: sortBy.value, descending: sortOrder.value === 'desc' }
+  pagination.value.current = 1
+  loadDocuments()
+}
+
+// 处理表头排序变化
+function handleSortChange(context) {
+  console.log('[表头排序] 完整参数:', context)
+  
+  // TDesign 排序参数可能是：{ sort: {...} } 或直接是排序对象
+  // 取消排序时可能是 undefined 或 { sortBy: undefined }
+  const sort = context?.sort || context
+  
+  if (!sort || !sort.sortBy) {
+    console.log('[表头排序] 取消排序，恢复默认排序')
+    // 取消排序时，恢复默认排序（更新时间降序）
+    sortBy.value = 'updated_at'
+    sortOrder.value = 'desc'
+    pagination.value.current = 1
+    loadDocuments()
+    return
+  }
+
+  const field = sortFieldMap[sort.sortBy] || sort.sortBy
+  if (!field) return
+
+  sortBy.value = field
+  sortOrder.value = sort.descending ? 'desc' : 'asc'
   pagination.value.current = 1
   loadDocuments()
 }
@@ -980,6 +1038,7 @@ function handleSortChange() {
 // 切换排序顺序
 function toggleSortOrder() {
   sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
+  pagination.value.current = 1
   loadDocuments()
 }
 
@@ -1103,15 +1162,15 @@ function findCategoryById(categories, id) {
   return null
 }
 
-const columns = [
+const columns = computed(() => [
   { colKey: 'row-select', type: 'multiple', width: 50 },
-  { colKey: 'title', title: '标题', width: 200 },
+  { colKey: 'title', title: '标题', width: 200, sorter: true },
   { colKey: 'tags', title: '标签', width: 150 },
   { colKey: 'version', title: '版本', width: 80, cell: (h, { row }) => h('span', row.version ? (row.version.toString().includes('.') ? row.version : `${row.version}.0`) : '1.0') },
-  { colKey: 'type', title: '类型', width: 80, cell: (h, { row }) => h('span', getFileExtension(row.filePath || '')) },
-  { colKey: 'updatedAt', title: '更新时间', width: 180 },
+  { colKey: 'type', title: '类型', width: 80, cell: (h, { row }) => h('span', getFileExtension(row.filePath || '')), sorter: true },
+  { colKey: 'updatedAt', title: '更新时间', width: 180, sorter: true },
   { colKey: 'operation', title: '操作', width: 300 }
-]
+])
 
 // 私密空间表格列（无版本控制）
 const privateColumns = [
@@ -2368,6 +2427,15 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   align-items: center;
+}
+
+/* 可排序列样式 */
+:deep(.sortable-col) {
+  cursor: pointer;
+}
+
+:deep(.sortable-col:hover) {
+  background-color: rgba(0, 82, 217, 0.05);
 }
 
 /* 分页样式 */

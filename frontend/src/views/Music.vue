@@ -558,6 +558,15 @@ const filterArtist = ref('')
 const filterAlbum = ref('')
 const sortBy = ref('created_at')
 
+// 排序方向映射（常量）
+const sortOrderMap = {
+  'created_at': 'DESC',
+  'title': 'ASC',
+  'artist': 'ASC',
+  'album': 'ASC',
+  'duration': 'DESC'
+}
+
 // 艺术家和专辑列表
 const artists = ref([])
 const albums = ref([])
@@ -693,16 +702,6 @@ async function loadMusic() {
   loading.value = true
   try {
     // 根据排序字段智能选择排序方向
-    // 时间字段：降序（新的在前）
-    // 文本字段：升序（A-Z）
-    // 时长字段：降序（长的在前）
-    const sortOrderMap = {
-      'created_at': 'DESC',
-      'title': 'ASC',
-      'artist': 'ASC',
-      'album': 'ASC',
-      'duration': 'DESC'
-    }
     const sortOrder = sortOrderMap[sortBy.value] || 'DESC'
     
     const response = await api.music.list({
@@ -1370,10 +1369,39 @@ async function cancelUpload() {
   }
 }
 
-// 播放歌曲
-function playSong(song) {
+// 播放歌曲（将当前显示的所有音乐加入临时歌单）
+async function playSong(song) {
+  // 获取当前显示的所有音乐（可能跨页）
+  let songsToPlay = []
+  
+  if (currentPlaylist.value) {
+    // 如果在歌单中，使用当前歌单的歌曲
+    songsToPlay = [...musicList.value]
+  } else {
+    // 不在歌单中，获取当前筛选条件下的所有音乐
+    try {
+      // 使用相同的筛选条件，获取所有音乐
+      const params = {
+        page: 1,
+        pageSize: 10000, // 获取所有音乐
+        sortBy: sortBy.value,
+        sortOrder: sortOrderMap[sortBy.value] || 'DESC'
+      }
+      
+      if (searchKeyword.value) params.keyword = searchKeyword.value
+      if (filterArtist.value) params.artist = filterArtist.value
+      if (filterAlbum.value) params.album = filterAlbum.value
+      
+      const response = await api.music.list(params)
+      songsToPlay = response.data.data || []
+    } catch (e) {
+      // 如果获取失败，使用当前页面的音乐
+      songsToPlay = [...musicList.value]
+    }
+  }
+  
   window.dispatchEvent(new CustomEvent('play-music', { 
-    detail: { song, list: currentPlaylist.value ? musicList.value : null }
+    detail: { song, list: songsToPlay }
   }))
 }
 

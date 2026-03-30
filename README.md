@@ -29,9 +29,11 @@
 - 代码高亮（Atom 主题）
 
 ### 🎬 动漫管理
-- Bangumi API 集成
+- Bangumi API 集成（支持认证）
 - 收藏、评分、想看/看过标记
 - Nyaa 资源搜索
+- 封面懒加载（IndexedDB 缓存）
+- 详情页优化（数据库优先）
 
 ### 其他功能
 - 💻 代码仓库管理
@@ -128,7 +130,6 @@ volumes:
 - [Docker 部署](docs/NAS_DEPLOYMENT.md)
 - [FFmpeg 配置](docs/FFMPEG_SETUP.md)
 - [Clash 代理](docs/CLASH_DEPLOYMENT.md)
-- [GitHub 上传指南](docs/GITHUB_UPLOAD_GUIDE.md)
 
 ## 🔒 安全提示
 

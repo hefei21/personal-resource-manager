@@ -346,58 +346,15 @@ async function loadDetail() {
   relations.value = []
 
   try {
-    // 如果传入的是本地数据，直接使用（不再调用 API）
-    if (props.animeData) {
+    // 如果传入的是本地数据（有 id 字段），直接使用
+    if (props.animeData?.id) {
       anime.value = props.animeData
+      characters.value = props.animeData.characters || []
+      staff.value = props.animeData.staff || []
+      isImported.value = true
+      localAnime.value = props.animeData
 
-      // 解析 JSON 字段
-      if (typeof props.animeData.characters === 'string') {
-        try {
-          characters.value = JSON.parse(props.animeData.characters)
-        } catch {
-          characters.value = []
-        }
-      } else {
-        characters.value = props.animeData.characters || []
-      }
-
-      if (typeof props.animeData.staff === 'string') {
-        try {
-          staff.value = JSON.parse(props.animeData.staff)
-        } catch {
-          staff.value = []
-        }
-      } else {
-        staff.value = props.animeData.staff || []
-      }
-
-      // 检查是否已导入
-      // 如果有 bangumi_id，检查该 bangumi_id 是否在库中
-      if (props.animeData.bangumi_id) {
-        try {
-          const listRes = await api.anime.list()
-          const existing = listRes.data.data.find(a => a.bangumi_id === props.animeData.bangumi_id)
-          if (existing) {
-            isImported.value = true
-            localAnime.value = existing
-          } else {
-            isImported.value = false
-            localAnime.value = null
-          }
-        } catch {
-          isImported.value = false
-          localAnime.value = null
-        }
-      } else if (props.animeData.id) {
-        // 有本地 id 表示已存在于数据库
-        isImported.value = true
-        localAnime.value = props.animeData
-      } else {
-        isImported.value = false
-        localAnime.value = null
-      }
-
-      // 如果有 bangumi_id，尝试获取关联作品
+      // 获取关联作品
       if (props.animeData.bangumi_id) {
         try {
           const relRes = await api.anime.getRelations(props.animeData.bangumi_id)
@@ -406,39 +363,52 @@ async function loadDetail() {
           relations.value = []
         }
       }
-
       loading.value = false
       return
     }
 
-    // 如果没有 bangumiId，无法获取远程数据
-    if (!props.bangumiId) {
-      loading.value = false
-      return
+    // 如果有 bangumiId，优先从数据库获取
+    if (props.bangumiId) {
+      try {
+        const dbRes = await api.anime.getByBangumiId(props.bangumiId)
+        if (dbRes.data.data) {
+          anime.value = dbRes.data.data
+          characters.value = dbRes.data.data.characters || []
+          staff.value = dbRes.data.data.staff || []
+          isImported.value = true
+          localAnime.value = dbRes.data.data
+
+          // 获取关联作品
+          try {
+            const relRes = await api.anime.getRelations(props.bangumiId)
+            relations.value = relRes.data.data || []
+          } catch {
+            relations.value = []
+          }
+          loading.value = false
+          return
+        }
+      } catch {
+        // 数据库中没有，继续从 API 获取
+      }
     }
 
-    // 从 API 获取详情
-    const res = await api.anime.getDetail(props.bangumiId)
-    const data = res.data.data
+    // 数据库没有，从 Bangumi API 获取
+    if (props.bangumiId) {
+      const res = await api.anime.getDetail(props.bangumiId)
+      const data = res.data.data
 
-    anime.value = data.subject
-    characters.value = data.characters || []
-    staff.value = data.persons || []
+      anime.value = data.subject
+      characters.value = data.characters || []
+      staff.value = data.persons || []
 
-    // 获取关联作品
-    try {
-      const relRes = await api.anime.getRelations(props.bangumiId)
-      relations.value = relRes.data.data || []
-    } catch {
-      relations.value = []
-    }
-
-    // 检查是否已导入
-    const listRes = await api.anime.list()
-    const existing = listRes.data.data.find(a => a.bangumi_id === props.bangumiId)
-    if (existing) {
-      isImported.value = true
-      localAnime.value = existing
+      // 获取关联作品
+      try {
+        const relRes = await api.anime.getRelations(props.bangumiId)
+        relations.value = relRes.data.data || []
+      } catch {
+        relations.value = []
+      }
     }
   } catch (error) {
     console.error('加载详情失败:', error)

@@ -8,9 +8,20 @@ const router = express.Router()
 const BANGUMI_API_BASE = process.env.BANGUMI_API_BASE || 'https://api.bgm.tv'
 const BANGUMI_API_V0 = 'https://api.bgm.tv/v0'
 
+// Token状态缓存（避免频繁验证）
+let tokenStatusCache = {
+  isValid: null,
+  lastCheck: 0,
+  ttl: 3600000 // 1小时缓存
+}
+
 // Bangumi API 要求自定义 User-Agent
+// 如果提供了Access Token，可以获取更多搜索结果（避免limit=10的限制）
 const BANGUMI_HEADERS = {
-  'User-Agent': 'PersonalResourceManager/1.0 (https://github.com/user/pr-manager)'
+  'User-Agent': 'PersonalResourceManager/1.0 (https://github.com/user/pr-manager)',
+  ...(process.env.BANGUMI_ACCESS_TOKEN && {
+    'Authorization': `Bearer ${process.env.BANGUMI_ACCESS_TOKEN}`
+  })
 }
 
 // 创建代理 agent
@@ -74,51 +85,139 @@ async function scrapeAnimeInfo(bangumiId) {
   return detail.subject
 }
 
+// 验证Token是否有效（通过实际API调用）
+async function validateToken() {
+  if (!process.env.BANGUMI_ACCESS_TOKEN) {
+    return false
+  }
+
+  // 使用缓存（1小时内不重复验证）
+  const now = Date.now()
+  if (tokenStatusCache.isValid !== null && (now - tokenStatusCache.lastCheck) < tokenStatusCache.ttl) {
+    return tokenStatusCache.isValid
+  }
+
+  try {
+    // 调用一个简单的API来验证Token
+    const response = await axios.get(`${BANGUMI_API_V0}/subjects/1`, {
+      httpsAgent,
+      timeout: 5000,
+      headers: BANGUMI_HEADERS,
+      validateStatus: (status) => status < 500 // 不抛出4xx错误
+    })
+
+    // 如果返回401，说明Token无效
+    const isValid = response.status !== 401
+    tokenStatusCache = { isValid, lastCheck: now, ttl: 3600000 }
+    return isValid
+  } catch (error) {
+    console.error('[Token验证] 验证失败:', error.message)
+    // 网络错误时，假设Token有效（避免误报）
+    return true
+  }
+}
+
+// 获取Bangumi Token状态
+router.get('/token-status', authenticateToken, async (req, res) => {
+  try {
+    const hasToken = !!process.env.BANGUMI_ACCESS_TOKEN
+
+    if (!hasToken) {
+      return res.json({
+        hasToken: false,
+        isValid: false,
+        message: ''
+      })
+    }
+
+    // 验证Token是否有效
+    const isValid = await validateToken()
+
+    console.log('[Token状态检查] BANGUMI_ACCESS_TOKEN 存在:', hasToken)
+    console.log('[Token状态检查] Token有效:', isValid)
+
+    res.json({
+      hasToken,
+      isValid,
+      message: isValid ? '' : '⚠️ Bangumi Token 已失效，请重新配置'
+    })
+  } catch (error) {
+    console.error('获取Token状态失败:', error)
+    res.status(500).json({ message: '获取Token状态失败' })
+  }
+})
+
 // 搜索动漫
 router.get('/search', authenticateToken, async (req, res) => {
   try {
-    const { keyword } = req.query
-    if (!keyword) {
-      return res.status(400).json({ message: '请输入搜索关键词' })
+    const { keyword, tag } = req.query
+    const page = parseInt(req.query.page) || 1
+    if (!keyword && !tag) {
+      return res.status(400).json({ message: '请输入搜索关键词或标签' })
     }
 
-    // 使用 v0 API 获取更丰富的信息 (POST 请求)
-    const response = await axios.post(`${BANGUMI_API_V0}/search/subjects`, {
-      keyword,
-      type: [2], // 动画类型（数组格式）
-      limit: 25  // 增加搜索结果数量
-    }, {
+    // 构建 Bangumi API 搜索请求体
+    // Bangumi v0 API: POST /v0/search/subjects
+    // filter 中包含 type, tag, air_date 等筛选条件
+    const searchBody = {
+      keyword: keyword || '',  // keyword 是必需的顶层字段
+      sort: 'match',  // 排序方式：match(匹配度), heat(热门), rank(排名)
+      filter: {
+        type: [2]  // 动画类型（数组格式）
+      }
+    }
+
+    // 如果有标签，添加到filter中（数组格式）
+    if (tag) {
+      searchBody.filter.tag = [tag]
+    }
+
+    console.log('[Bangumi搜索] 请求参数:', JSON.stringify(searchBody, null, 2))
+    console.log('[Bangumi搜索] 是否使用Access Token:', !!process.env.BANGUMI_ACCESS_TOKEN)
+    console.log('[Bangumi搜索] Token值长度:', process.env.BANGUMI_ACCESS_TOKEN?.length || 0)
+
+    // Bangumi API 限制：每次请求最多返回 20 条数据
+    // 前端分页请求：每次只请求一页
+    const limit = 20 // Bangumi API 硬编码限制
+    const offset = (parseInt(page) - 1) * limit
+    const requestUrl = `${BANGUMI_API_V0}/search/subjects?limit=${limit}&offset=${offset}`
+
+    console.log(`[Bangumi搜索] 请求URL: ${requestUrl}`)
+
+    const response = await axios.post(requestUrl, searchBody, {
       httpsAgent,
       timeout: 15000,
-      headers: BANGUMI_HEADERS
+      headers: BANGUMI_HEADERS,
+      validateStatus: (status) => status < 500
+    }).catch(error => {
+      if (error.response?.status === 401) {
+        console.error('[Bangumi搜索] Token已失效（401）')
+        tokenStatusCache = { isValid: false, lastCheck: Date.now(), ttl: 3600000 }
+      }
+      throw error
     })
 
-    // 为每个结果获取更多信息（再次过滤确保只保留动画 type=2）
-    const results = (response.data.data || []).filter(item => item.type === 2)
+    if (response.status === 401) {
+      console.error('[Bangumi搜索] Token已失效（401响应）')
+      tokenStatusCache = { isValid: false, lastCheck: Date.now(), ttl: 3600000 }
+      return res.status(401).json({ message: 'Bangumi Token已失效，请重新配置' })
+    }
 
-    // 对搜索结果进行模糊匹配排序，提高相关性
-    const keywordLower = keyword.toLowerCase()
-    const scoredResults = results.map(item => {
-      let score = 0
-      const nameCn = (item.name_cn || '').toLowerCase()
-      const name = (item.name || '').toLowerCase()
+    const pageData = response.data.data || []
+    const total = response.data.total || 0
 
-      // 完全匹配得分最高
-      if (nameCn === keywordLower || name === keywordLower) score = 100
-      // 开头匹配
-      else if (nameCn.startsWith(keywordLower) || name.startsWith(keywordLower)) score = 80
-      // 包含匹配
-      else if (nameCn.includes(keywordLower) || name.includes(keywordLower)) score = 60
-      // 默认得分
-      else score = 40
+    console.log(`[Bangumi搜索] 结果: ${pageData.length} 条, 总数: ${total}`)
 
-      return { ...item, _score: score }
-    }).sort((a, b) => b._score - a._score)
+    // 过滤只保留动画类型
+    const results = pageData.filter(item => item.type === 2)
+
+    // 不再需要手动排序，Bangumi API 已经按匹配度排序
+    const scoredResults = results.map(item => ({ ...item, _score: 50 }))
 
     // 性能优化：不再对每个搜索结果单独请求详情API
     // 详细信息会在用户点击详情时按需获取
     // 搜索结果只返回基本信息，大幅减少API请求次数
-    const searchResults = scoredResults.slice(0, 25).map(item => ({
+    const searchResults = scoredResults.map(item => ({
       id: item.id,
       name: item.name,
       name_cn: item.name_cn,
@@ -134,9 +233,18 @@ router.get('/search', authenticateToken, async (req, res) => {
       _score: item._score
     }))
 
-    res.json({ data: searchResults })
+    res.json({ data: searchResults, total })
   } catch (error) {
     console.error('搜索动漫失败:', error)
+
+    // 如果是401错误，返回特定消息
+    if (error.response?.status === 401) {
+      return res.status(401).json({
+        message: 'Bangumi Token已失效，请重新配置',
+        tokenExpired: true
+      })
+    }
+
     res.status(500).json({ message: '搜索失败' })
   }
 })
@@ -237,6 +345,33 @@ router.get('/detail/:bangumiId', authenticateToken, async (req, res) => {
   }
 })
 
+// 从数据库获取动漫详情（通过 bangumi_id）
+router.get('/bangumi/:bangumiId', authenticateToken, async (req, res) => {
+  try {
+    const db = getDatabase()
+    const stmt = db.prepare('SELECT * FROM anime WHERE bangumi_id = ?')
+    const row = stmt.get(req.params.bangumiId)
+    
+    if (!row) {
+      return res.status(404).json({ message: '动漫不存在' })
+    }
+    
+    // 解析 JSON 字段
+    const result = {
+      ...row,
+      tags: row.tags ? row.tags.split(',') : [],
+      infobox: row.infobox ? JSON.parse(row.infobox) : null,
+      characters: row.characters ? JSON.parse(row.characters) : [],
+      staff: row.staff ? JSON.parse(row.staff) : []
+    }
+    
+    res.json({ data: result })
+  } catch (error) {
+    console.error('获取动漫详情失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
 // 获取关联作品（前作、续作等）
 router.get('/relations/:bangumiId', authenticateToken, async (req, res) => {
   try {
@@ -309,9 +444,10 @@ router.get('/', authenticateToken, async (req, res) => {
     const stmt = db.prepare(sql)
     const rows = stmt.all(params)
 
-    // 解析 JSON 字段
+    // 解析 JSON 字段（列表不返回 cover_image_data，减少响应体）
     const parsedRows = rows.map(row => ({
       ...row,
+      cover_image_data: undefined, // 不返回封面数据，前端按需加载
       tags: row.tags ? row.tags.split(',') : [],
       infobox: row.infobox ? JSON.parse(row.infobox) : null,
       characters: row.characters ? JSON.parse(row.characters) : [],
@@ -345,6 +481,26 @@ router.get('/:id', authenticateToken, async (req, res) => {
     }
     
     res.json({ data: result })
+  } catch (error) {
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 获取动漫封面（按需加载）
+router.get('/:id/cover', authenticateToken, async (req, res) => {
+  try {
+    const db = getDatabase()
+    const stmt = db.prepare('SELECT cover_image_data, cover_image FROM anime WHERE id = ?')
+    const row = stmt.get(req.params.id)
+
+    if (!row) {
+      return res.status(404).json({ message: '动漫不存在' })
+    }
+
+    res.json({
+      cover: row.cover_image_data || null,
+      coverUrl: row.cover_image || null
+    })
   } catch (error) {
     res.status(500).json({ message: '服务器错误' })
   }

@@ -4,16 +4,42 @@
       <p>管理和收藏动漫剧集</p>
     </div>
 
+    <!-- Bangumi Token 失效提醒 -->
+    <t-card v-if="tokenStatus && tokenStatus.hasToken && !tokenStatus.isValid" theme="warning" style="margin-bottom: 16px">
+      <t-space align="center">
+        <t-icon name="error-circle" size="18px" />
+        <span>{{ tokenStatus.message }}</span>
+        <t-button
+          size="small"
+          theme="primary"
+          @click="openTokenPage"
+        >
+          更新 Token
+        </t-button>
+      </t-space>
+    </t-card>
+
     <t-card>
       <t-space>
         <t-input
           v-model="searchKeyword"
           placeholder="搜索 Bangumi..."
           style="width: 300px"
-          @press-enter="handleSearch"
+          @enter="handleSearch"
         >
           <template #suffix-icon>
             <t-icon name="search" />
+          </template>
+        </t-input>
+        <t-input
+          v-model="searchTag"
+          placeholder="标签（如：恋爱、奇幻）"
+          style="width: 180px"
+          @enter="handleSearch"
+          clearable
+        >
+          <template #suffix-icon>
+            <t-icon name="discount" />
           </template>
         </t-input>
         <t-button @click="handleSearch" :loading="searching">搜索</t-button>
@@ -98,6 +124,16 @@
           </div>
         </div>
       </div>
+      <!-- 搜索结果分页 -->
+      <div class="search-pagination" v-if="searchPagination.total > 0">
+        <t-pagination
+          v-model="searchPagination.current"
+          :page-size="searchPagination.pageSize"
+          :total="searchPagination.total"
+          show-page-number
+          @change="handleSearchPageChange"
+        />
+      </div>
     </t-card>
 
     <!-- 我的动漫库 -->
@@ -114,7 +150,7 @@
             </t-select>
             <t-checkbox v-model="filterFavorite" @change="handleFilterChange">只看收藏</t-checkbox>
             <t-divider layout="vertical" />
-            <t-select v-model="sortBy" placeholder="排序" style="width: 120px" @change="handleFilterChange">
+            <t-select v-model="sortBy" placeholder="排序" style="width: 120px" @change="handleSortByChange">
               <t-option value="updated_at" label="更新时间" />
               <t-option value="air_date" label="上映日期" />
               <t-option value="rating" label="总评分" />
@@ -148,19 +184,30 @@
         :loading="loading"
         row-key="id"
         hover
+        :sort="tableSort"
+        @sort-change="handleSortChange"
       >
         <template #coverImage="{ row }">
-          <img
-            :src="getCoverUrl(row)"
-            class="cover-image"
-            @error="handleImageError"
-          />
+          <div class="cover-wrapper" :ref="el => { if (el) observeCover(el, row) }">
+            <img
+              v-if="coverCache[row.id]"
+              :src="coverCache[row.id]"
+              class="cover-image"
+              @error="handleImageError"
+            />
+            <div v-else class="cover-placeholder">
+              <t-icon name="image" size="24px" />
+            </div>
+          </div>
         </template>
         <template #title="{ row }">
           <div class="table-title">
             <span class="main-title">{{ row.title }}</span>
             <span class="sub-title" v-if="row.name_cn && row.name_cn !== row.title">{{ row.name_cn }}</span>
           </div>
+        </template>
+        <template #year="{ row }">
+          <span class="year-cell">{{ row.air_date?.substring(0, 4) || '-' }}</span>
         </template>
         <template #rating="{ row }">
           <div class="rating-cell">
@@ -238,49 +285,180 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onActivated } from 'vue'
+import { ref, computed, onMounted, onActivated, onUnmounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import AnimeDetailDialog from '@/components/AnimeDetailDialog.vue'
+import { initAnimeCoverDB, getAnimeCoverFromCache, saveAnimeCoverToCache } from '@/utils/animeCoverCache'
 
 const loading = ref(false)
 const searching = ref(false)
 const animeList = ref([])
 const searchResults = ref([])
 const searchKeyword = ref('')
+
+// 封面缓存（使用 IndexedDB 持久化）
+const coverCache = ref({})
+const coverLoadingSet = new Set()
+let coverObserver = null
+
+// 初始化封面缓存
+async function initCoverCache() {
+  try {
+    await initAnimeCoverDB()
+    console.log('[动漫封面缓存] IndexedDB 初始化完成')
+  } catch (e) {
+    console.error('[动漫封面缓存] 初始化失败:', e)
+  }
+
+  // 创建 IntersectionObserver 用于懒加载
+  coverObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const animeData = entry.target.__anime__
+        if (animeData && !coverCache.value[animeData.id] && !coverLoadingSet.has(animeData.id)) {
+          loadCover(animeData.id)
+        }
+        coverObserver.unobserve(entry.target)
+      }
+    })
+  }, { rootMargin: '50px' })
+}
+
+// 观察封面元素（懒加载）
+function observeCover(el, anime) {
+  if (!coverObserver) return
+  el.__anime__ = anime
+  if (!coverCache.value[anime.id]) {
+    coverObserver.observe(el)
+  }
+}
+
+// 加载封面（使用 IndexedDB 缓存）
+async function loadCover(id) {
+  if (coverLoadingSet.has(id) || coverCache.value[id]) return
+
+  coverLoadingSet.add(id)
+  try {
+    // 先从 IndexedDB 缓存读取
+    const cached = await getAnimeCoverFromCache(id)
+    if (cached) {
+      coverCache.value[id] = cached
+      return
+    }
+    
+    // 缓存未命中，从服务器获取
+    const response = await api.anime.getCover(id)
+    const cover = response.data.cover || response.data.coverUrl
+    if (cover) {
+      coverCache.value[id] = cover
+      // 如果是base64数据，保存到 IndexedDB 缓存
+      if (response.data.cover) {
+        await saveAnimeCoverToCache(id, cover)
+      }
+    }
+  } catch (error) {
+    console.error('[动漫封面] 加载失败:', error)
+  } finally {
+    coverLoadingSet.delete(id)
+  }
+}
+const searchTag = ref('')
 const filterStatus = ref('')
 const filterFavorite = ref(false)
 const downloadingCovers = ref(false)
 const pagination = ref({ current: 1, pageSize: 15, total: 0 })
+const searchPagination = ref({ current: 1, pageSize: 20, total: 0 })  // 搜索结果分页（匹配 Bangumi API 限制）
 
-// 缓存机制：保存加载状态和筛选条件
-const cacheLoaded = ref(false)
-const lastFilterStatus = ref('')
-const lastFilterFavorite = ref(false)
-const lastSortBy = ref('updated_at')
-const lastSortOrder = ref('DESC')
+// Bangumi Token 状态
+const tokenStatus = ref(null)
 
 // 详情对话框
 const detailVisible = ref(false)
 const selectedBangumiId = ref(null)
 const selectedAnime = ref(null)
 
-const tableColumns = [
+const tableColumns = computed(() => [
   { colKey: 'coverImage', title: '封面', width: 60, align: 'center' },
-  { colKey: 'title', title: '标题', ellipsis: true, minWidth: 250 },
-  { colKey: 'rating', title: '评分', width: 100, align: 'left' },
-  { colKey: 'userRating', title: '我的评分', width: 130, align: 'left' },
-  { colKey: 'status', title: '状态', width: 95, align: 'center' },
+  { colKey: 'title', title: '标题', ellipsis: true, minWidth: 200 },
+  { colKey: 'year', title: '年份', width: 85, align: 'center', sorter: true },
+  { colKey: 'rating', title: '评分', width: 100, align: 'left', sorter: true },
+  { colKey: 'userRating', title: '我的评分', width: 130, align: 'left', sorter: true },
+  { colKey: 'status', title: '状态', width: 95, align: 'center', sorter: true },
   { colKey: 'isFavorite', title: '♥', width: 50, align: 'center' },
   { colKey: 'operation', title: '操作', width: 95, align: 'center' }
-]
+])
+
+// 排序相关
 
 // 排序相关
 const sortBy = ref('updated_at')
 const sortOrder = ref('DESC')
 
+// 字段映射：列 colKey -> 后端字段名
+const sortFieldMap = {
+  'year': 'air_date',
+  'rating': 'rating',
+  'userRating': 'user_rating',
+  'status': 'status'
+}
+
+// 反向映射：后端字段名 -> 列 colKey
+const sortColKeyMap = {
+  'air_date': 'year',
+  'rating': 'rating',
+  'user_rating': 'userRating',
+  'status': 'status'
+}
+
+// 计算表格排序状态（双向同步）
+const tableSort = computed(() => {
+  const colKey = sortColKeyMap[sortBy.value]
+  if (!colKey) {
+    // 下拉栏选择的是表头没有的字段（如 updated_at），清空表头高亮
+    return null
+  }
+  return {
+    sortBy: colKey,
+    descending: sortOrder.value === 'DESC'
+  }
+})
+
 function toggleSortOrder() {
   sortOrder.value = sortOrder.value === 'DESC' ? 'ASC' : 'DESC'
+  pagination.value.current = 1
+  loadAnime()
+}
+
+// 下拉栏排序改变时
+function handleSortByChange() {
+  pagination.value.current = 1
+  loadAnime()
+}
+
+// 处理表头排序变化
+function handleSortChange(context) {
+  console.log('[表头排序] 完整参数:', context)
+  
+  // TDesign 排序参数可能是：{ sort: {...} } 或直接是排序对象
+  // 取消排序时可能是 undefined 或 { sortBy: undefined }
+  const sort = context?.sort || context
+  
+  if (!sort || !sort.sortBy) {
+    console.log('[表头排序] 取消排序，恢复默认排序')
+    // 取消排序时，恢复默认排序（更新时间降序）
+    sortBy.value = 'updated_at'
+    sortOrder.value = 'DESC'
+    pagination.value.current = 1
+    loadAnime()
+    return
+  }
+
+  const field = sortFieldMap[sort.sortBy] || sort.sortBy
+  if (!field) return
+
+  sortBy.value = field
+  sortOrder.value = sort.descending ? 'DESC' : 'ASC'
   pagination.value.current = 1
   loadAnime()
 }
@@ -316,16 +494,7 @@ function handleImageError(e) {
   e.target.src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MCIgaGVpZ2h0PSI4MCIgdmlld0JveD0iMCAwIDYwIDgwIj48cmVjdCB3aWR0aD0iNjAiIGhlaWdodD0iODAiIGZpbGw9IiNlZWUiLz48dGV4dCB4PSIzMCIgeT0iNDAiIGZpbGw9IiM5OTkiIGZvbnQtc2l6ZT0iMTIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj7ml6Dlm77niYc8L3RleHQ+PC9zdmc+'
 }
 
-async function loadAnime(forceReload = false) {
-  // 如果筛选条件没有变化且已缓存，则不重新加载
-  if (!forceReload && cacheLoaded.value && 
-      filterStatus.value === lastFilterStatus.value && 
-      filterFavorite.value === lastFilterFavorite.value &&
-      sortBy.value === lastSortBy.value &&
-      sortOrder.value === lastSortOrder.value) {
-    return
-  }
-
+async function loadAnime() {
   loading.value = true
   try {
     const response = await api.anime.list({
@@ -338,13 +507,6 @@ async function loadAnime(forceReload = false) {
     })
     animeList.value = response.data.data || []
     pagination.value.total = response.data.total || 0
-    
-    // 缓存当前筛选条件
-    lastFilterStatus.value = filterStatus.value
-    lastFilterFavorite.value = filterFavorite.value
-    lastSortBy.value = sortBy.value
-    lastSortOrder.value = sortOrder.value
-    cacheLoaded.value = true
   } catch (error) {
     MessagePlugin.error('加载动漫失败')
   } finally {
@@ -357,21 +519,39 @@ function isInLibrary(bangumiId) {
   return animeList.value.some(anime => anime.bangumi_id === bangumiId)
 }
 
-async function handleSearch() {
-  if (!searchKeyword.value.trim()) {
+// 搜索动漫（带分页）
+async function handleSearch(page = 1) {
+  if (!searchKeyword.value.trim() && !searchTag.value.trim()) {
     searchResults.value = []
+    searchPagination.value.total = 0
     return
   }
 
-  searching.value = true
-  try {
-    const response = await api.anime.search(searchKeyword.value)
-    searchResults.value = response.data.data || []
+    searching.value = true
+    try {
+      const response = await api.anime.search(searchKeyword.value, searchTag.value, page)
+      searchResults.value = response.data.data || []
+      // 限制最多显示5页（100条）
+      const maxTotal = 100
+      searchPagination.value.total = Math.min(response.data.total || 0, maxTotal)
+      searchPagination.value.current = page
   } catch (error) {
-    MessagePlugin.error('搜索失败')
+    // 检查是否是Token失效错误
+    if (error.response?.status === 401 || error.response?.data?.tokenExpired) {
+      MessagePlugin.warning('Bangumi Token已失效，请重新配置')
+      // 刷新Token状态
+      getTokenStatus()
+    } else {
+      MessagePlugin.error('搜索失败')
+    }
   } finally {
     searching.value = false
   }
+}
+
+// 搜索结果分页改变
+function handleSearchPageChange(pageInfo) {
+  handleSearch(pageInfo.current)
 }
 
 async function handleImport(anime) {
@@ -486,8 +666,7 @@ async function handleDelete(id) {
   try {
     await api.anime.delete(id)
     MessagePlugin.success('删除成功')
-    cacheLoaded.value = false // 清除缓存，强制重新加载
-    loadAnime(true)
+    loadAnime()
   } catch (error) {
     MessagePlugin.error('删除失败')
   }
@@ -519,14 +698,37 @@ function getCoverUrl(row) {
   return toHttps(row.cover_image) || toHttps(row.coverImage)
 }
 
-// 组件首次加载
-onMounted(() => loadAnime())
+// 获取Bangumi Token状态
+async function getTokenStatus() {
+  try {
+    const response = await api.anime.getTokenStatus()
+    tokenStatus.value = response.data
+  } catch (error) {
+    console.error('获取Token状态失败:', error)
+  }
+}
 
-// 组件激活时（从缓存中恢复），仅在需要时重新加载
+// 打开Bangumi Token配置页面
+function openTokenPage() {
+  window.open('https://next.bgm.tv/demo/access-token', '_blank')
+}
+
+// 组件首次加载
+onMounted(async () => {
+  await initCoverCache() // 初始化封面缓存（IndexedDB）
+  loadAnime()
+  getTokenStatus()
+})
+
+// 组件激活时（从缓存中恢复）
 onActivated(() => {
-  // 如果缓存有效，不重新加载
-  if (!cacheLoaded.value) {
-    loadAnime()
+  loadAnime()
+})
+
+// 组件卸载时清理
+onUnmounted(() => {
+  if (coverObserver) {
+    coverObserver.disconnect()
   }
 })
 </script>
@@ -736,6 +938,26 @@ onActivated(() => {
   border-radius: 4px;
 }
 
+/* 表格封面容器 */
+.anime .t-table .cover-wrapper {
+  width: 50px;
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cover-placeholder {
+  width: 50px;
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5;
+  border-radius: 4px;
+  color: #bbb;
+}
+
 .table-title {
   display: flex;
   flex-direction: column;
@@ -766,6 +988,34 @@ onActivated(() => {
 .rating-cell .count {
   font-size: 12px;
   color: #999;
+}
+
+.year-cell {
+  font-size: 14px;
+  color: #666;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+/* 可排序列样式 */
+:deep(.sortable-col) {
+  cursor: pointer;
+}
+
+:deep(.sortable-col:hover) {
+  background-color: rgba(0, 82, 217, 0.05);
+}
+
+/* 确保表头单元格允许点击 */
+::v-deep(.t-table-th) {
+  user-select: none !important;
+}
+
+/* 搜索结果分页 */
+.search-pagination {
+  margin-top: 16px;
+  display: flex;
+  justify-content: center;
 }
 
 .pagination-wrapper {

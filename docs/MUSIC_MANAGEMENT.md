@@ -99,6 +99,21 @@
 
 ### 1. 音乐列表
 
+- **搜索过滤**：
+  - 关键词搜索（标题、艺术家、专辑）
+  - 艺术家筛选
+  - 专辑筛选
+
+- **排序方式**：
+  - 添加时间（降序）
+  - 歌名（升序）
+  - 艺术家（升序）
+  - 专辑（升序）
+  - 时长（降序）
+  - **智能排序方向**：不同字段有不同的默认排序方向
+
+- **批量操作**：多选、批量删除、批量添加到歌单
+
 - **搜索筛选**：
   - 关键词搜索
   - 艺术家筛选
@@ -165,7 +180,42 @@
 
 ## 五、技术实现细节
 
-### 1. 分片上传实现
+### 1. 智能排序实现
+
+```javascript
+// 排序方向映射（常量）
+const sortOrderMap = {
+  'created_at': 'DESC',  // 添加时间降序（最新在前）
+  'title': 'ASC',        // 歌名升序（A-Z）
+  'artist': 'ASC',       // 艺术家升序（A-Z）
+  'album': 'ASC',        // 专辑升序（A-Z）
+  'duration': 'DESC'     // 时长降序（最长在前）
+}
+
+// 加载音乐列表
+async function loadMusic() {
+  const sortOrder = sortOrderMap[sortBy.value] || 'DESC'
+
+  const response = await api.music.list({
+    keyword: searchKeyword.value,
+    artist: filterArtist.value,
+    album: filterAlbum.value,
+    sortBy: sortBy.value,
+    sortOrder: sortOrder,
+    page: pagination.value.current,
+    pageSize: pagination.value.pageSize
+  })
+}
+```
+
+**特点**：
+- 无需用户手动选择升序/降序
+- 不同字段有合理的默认排序方向
+- 简化用户操作
+
+---
+
+### 2. 分片上传实现
 
 ```javascript
 // 分片大小：10MB
