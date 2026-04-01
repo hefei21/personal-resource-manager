@@ -170,6 +170,9 @@
         :selected-row-keys="selectedRowKeys"
         @select-change="handleSelectChange"
       >
+        <template #title="{ row }">
+          <span class="book-title-text" :title="row.title">{{ row.title }}</span>
+        </template>
         <template #progress="{ row }">
           <t-progress
             :percentage="Math.round(row.progress * 100) / 100"
@@ -418,7 +421,7 @@
       :header="currentBook?.title || '阅读器'"
       width="1300px"
       :footer="false"
-      top="10px"
+      top="5px"
       :close-on-overlay-click="false"
       @close="handleReaderClose"
     >
@@ -442,10 +445,9 @@
                 :key="index"
                 class="toc-item"
                 :class="{ 'toc-active': currentChapterIndex === chapter.chapterIndex }"
-                :title="chapter.title"
                 @click="jumpToChapter(chapter)"
               >
-                {{ chapter.title }}
+                <span :title="chapter.title">{{ chapter.title }}</span>
               </div>
             </div>
           </div>
@@ -594,7 +596,7 @@ let isProgressLoaded = false // 进度是否已加载完成
 // 表格列
 const columns = [
   { colKey: 'row-select', type: 'multiple', width: 50 },
-  { colKey: 'title', title: '书名', width: 200, ellipsis: true },
+  { colKey: 'title', title: '书名', width: 200 },
   { colKey: 'author', title: '作者', width: 120 },
   { colKey: 'year', title: '年份', width: 80 },
   { colKey: 'progress', title: '阅读进度', width: 150 },
@@ -1661,7 +1663,7 @@ onUnmounted(() => {
 /* 阅读器样式 */
 .reader-wrapper {
   display: flex;
-  height: 75vh;
+  height: 82vh;
   overflow: hidden;
 }
 

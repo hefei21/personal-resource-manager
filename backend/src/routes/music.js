@@ -4,11 +4,21 @@ import path from 'path'
 import fs from 'fs'
 import { exec } from 'child_process'
 import { promisify } from 'util'
+import axios from 'axios'
+import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
 import { authenticateToken } from '../middlewares/auth.js'
 
 const execAsync = promisify(exec)
+
+// 创建代理 agent
+const httpsAgent = process.env.HTTP_PROXY
+  ? new HttpsProxyAgent(process.env.HTTP_PROXY)
+  : undefined
+
+// 歌词批量下载任务存储
+const lyricTasks = new Map()
 
 // ========== 上传取消管理 ==========
 // 使用 Set 存储已取消的 fileId，实现实时取消功能
@@ -1592,6 +1602,914 @@ router.put('/playlists/:id/songs/reorder', authenticateToken, async (req, res) =
     res.json({ message: '排序更新成功' })
   } catch (error) {
     console.error('更新排序失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// ========== 歌词管理 ==========
+
+// 歌词源配置（按优先级顺序）
+const LYRIC_SOURCES = [
+  {
+    name: '网易云音乐',
+    search: searchNeteaseMusic,
+    getLyric: getNeteaseLyric
+  },
+  {
+    name: 'QQ音乐',
+    search: searchQQMusic,
+    getLyric: getQQMusicLyric
+  },
+  {
+    name: '酷狗音乐',
+    search: searchKugouMusic,
+    getLyric: getKugouLyric
+  }
+]
+
+// ========== 网易云音乐 ==========
+const NETEASE_API_BASE = 'https://music.163.com/api'
+
+// 计算字符串相似度（Levenshtein距离）
+function stringSimilarity(s1, s2) {
+  const s1Lower = s1.toLowerCase()
+  const s2Lower = s2.toLowerCase()
+  
+  if (s1Lower === s2Lower) return 1.0
+  
+  const len1 = s1Lower.length
+  const len2 = s2Lower.length
+  
+  if (len1 === 0 || len2 === 0) return 0.0
+  
+  const dp = Array(len1 + 1).fill(null).map(() => Array(len2 + 1).fill(0))
+  
+  for (let i = 0; i <= len1; i++) dp[i][0] = i
+  for (let j = 0; j <= len2; j++) dp[0][j] = j
+  
+  for (let i = 1; i <= len1; i++) {
+    for (let j = 1; j <= len2; j++) {
+      const cost = s1Lower[i - 1] === s2Lower[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      )
+    }
+  }
+  
+  const maxLen = Math.max(len1, len2)
+  return (maxLen - dp[len1][len2]) / maxLen
+}
+
+// 计算歌曲匹配度
+function calculateSongMatchScore(song, targetTitle, targetArtist) {
+  const songName = song.name || ''
+  const songArtists = song.artists ? song.artists.map(a => a.name).join('') : ''
+  
+  // 标题匹配度（权重0.7）
+  const titleScore = stringSimilarity(songName, targetTitle) * 0.7
+  
+  // 艺术家匹配度（权重0.3）
+  let artistScore = 0
+  if (targetArtist) {
+    artistScore = stringSimilarity(songArtists, targetArtist) * 0.3
+    // 如果艺术家包含目标艺术家，加分
+    if (songArtists.toLowerCase().includes(targetArtist.toLowerCase())) {
+      artistScore = 0.3
+    }
+  } else {
+    artistScore = 0.15 // 无目标艺术家时给一半分数
+  }
+  
+  return titleScore + artistScore
+}
+
+async function searchNeteaseMusic(title, artist) {
+  try {
+    // 第一次搜索：标题 + 艺术家
+    let keyword = artist ? `${title} ${artist}` : title
+    let searchUrl = `${NETEASE_API_BASE}/search/get`
+    
+    console.log(`[网易云音乐] 第一次搜索: ${keyword}`)
+    
+    let response = await axios.get(searchUrl, {
+      params: {
+        s: keyword,
+        type: 1, // 单曲
+        offset: 0,
+        limit: 10
+      },
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://music.163.com',
+        'Accept': 'application/json'
+      }
+    })
+
+    let songs = response.data?.result?.songs || []
+    
+    // 如果第一次搜索没有结果，且艺术家不为空，尝试只用标题搜索
+    if (songs.length === 0 && artist) {
+      keyword = title
+      console.log(`[网易云音乐] 第二次搜索（仅标题）: ${keyword}`)
+      
+      response = await axios.get(searchUrl, {
+        params: {
+          s: keyword,
+          type: 1,
+          offset: 0,
+          limit: 10
+        },
+        httpsAgent,
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://music.163.com',
+          'Accept': 'application/json'
+        }
+      })
+      
+      songs = response.data?.result?.songs || []
+    }
+    
+    if (songs.length > 0) {
+      // 计算每首歌曲的匹配度并排序
+      const songsWithScore = songs.map(song => ({
+        song,
+        score: calculateSongMatchScore(song, title, artist)
+      }))
+      
+      // 按匹配度排序
+      songsWithScore.sort((a, b) => b.score - a.score)
+      
+      const bestMatch = songsWithScore[0]
+      console.log(`[网易云音乐] 最佳匹配: "${bestMatch.song.name}" - "${bestMatch.song.artists?.map(a => a.name).join('/')}" (匹配度: ${(bestMatch.score * 100).toFixed(1)}%)`)
+      
+      return {
+        id: bestMatch.song.id,
+        name: bestMatch.song.name,
+        artists: bestMatch.song.artists ? bestMatch.song.artists.map(a => a.name).join('/') : '',
+        album: bestMatch.song.album ? bestMatch.song.album.name : '',
+        matchScore: bestMatch.score
+      }
+    }
+
+    console.log('[网易云音乐] 未找到匹配的歌曲')
+    return null
+  } catch (error) {
+    console.error('[网易云音乐] 搜索失败:', error.message)
+    return null
+  }
+}
+
+// 合并原文歌词和翻译歌词（双语显示）
+function mergeLrcWithTranslation(originalLrc, translationLrc) {
+  if (!originalLrc) return null
+  
+  // 如果没有翻译，直接返回原文
+  if (!translationLrc) return originalLrc
+  
+  // 解析歌词为时间戳映射
+  const parseLrcToMap = (lrcText) => {
+    const map = new Map()
+    const lines = lrcText.split('\n')
+    
+    for (const line of lines) {
+      // 匹配时间标签 [mm:ss.xx] 或 [mm:ss.xxx]
+      const match = line.match(/\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/)
+      if (match) {
+        const minutes = parseInt(match[1])
+        const seconds = parseInt(match[2])
+        const ms = match[3].length === 2 ? parseInt(match[3]) * 10 : parseInt(match[3])
+        const time = minutes * 60 + seconds + ms / 1000
+        const text = match[4].trim()
+        
+        // 只保留第一个时间标签（同一行可能有多个时间标签）
+        if (text && !map.has(time)) {
+          map.set(time, text)
+        }
+      }
+    }
+    return map
+  }
+  
+  const originalMap = parseLrcToMap(originalLrc)
+  const translationMap = parseLrcToMap(translationLrc)
+  
+  // 合并歌词
+  const mergedLines = []
+  const sortedTimes = Array.from(originalMap.keys()).sort((a, b) => a - b)
+  
+  for (const time of sortedTimes) {
+    const originalText = originalMap.get(time)
+    const translatedText = translationMap.get(time)
+    
+    // 格式化时间戳
+    const minutes = Math.floor(time / 60)
+    const seconds = Math.floor(time % 60)
+    const ms = Math.round((time - Math.floor(time)) * 1000)
+    const timeTag = `[${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}]`
+    
+    mergedLines.push(`${timeTag}${originalText}`)
+    
+    // 如果有翻译，在下一行添加翻译（不带标记）
+    if (translatedText) {
+      mergedLines.push(`${timeTag}${translatedText}`)
+    }
+  }
+  
+  return mergedLines.join('\n')
+}
+
+async function getNeteaseLyric(songId) {
+  try {
+    const lyricUrl = `${NETEASE_API_BASE}/song/lyric`
+
+    console.log(`[网易云音乐] 获取歌词: songId=${songId}`)
+
+    const response = await axios.get(lyricUrl, {
+      params: {
+        id: songId,
+        lv: 1,
+        kv: 1,
+        tv: -1
+      },
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://music.163.com',
+        'Accept': 'application/json'
+      }
+    })
+
+    // 获取原文歌词
+    const originalLrc = response.data?.lrc?.lyric || null
+    // 获取翻译歌词（如果有）
+    const translationLrc = response.data?.tlyric?.lyric || null
+    
+    // 合并原文和翻译（双语显示）
+    const mergedLrc = mergeLrcWithTranslation(originalLrc, translationLrc)
+    
+    if (mergedLrc) {
+      console.log(`[网易云音乐] 歌词获取成功${translationLrc ? '（含翻译）' : ''}`)
+    }
+
+    return mergedLrc
+  } catch (error) {
+    console.error('[网易云音乐] 获取歌词失败:', error.message)
+    return null
+  }
+}
+
+// ========== QQ音乐 ==========
+const QQ_MUSIC_API_BASE = 'https://c.y.qq.com/soso/fcgi-bin'
+
+async function searchQQMusic(title, artist) {
+  try {
+    const searchUrl = `${QQ_MUSIC_API_BASE}/client_search_cp`
+    
+    // 第一次搜索：标题 + 艺术家
+    let keyword = artist ? `${title} ${artist}` : title
+    console.log(`[QQ音乐] 第一次搜索: ${keyword}`)
+
+    let response = await axios.get(searchUrl, {
+      params: {
+        format: 'json',
+        w: keyword,
+        p: 1,
+        n: 10,
+        aggr: 1,
+        lossless: 0,
+        cr: 1,
+        new_json: 1
+      },
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://y.qq.com',
+        'Accept': 'application/json'
+      }
+    })
+
+    let songs = response.data?.data?.song?.list || []
+    
+    // 如果第一次搜索没有结果，且艺术家不为空，尝试只用标题搜索
+    if (songs.length === 0 && artist) {
+      keyword = title
+      console.log(`[QQ音乐] 第二次搜索（仅标题）: ${keyword}`)
+      
+      response = await axios.get(searchUrl, {
+        params: {
+          format: 'json',
+          w: keyword,
+          p: 1,
+          n: 10,
+          aggr: 1,
+          lossless: 0,
+          cr: 1,
+          new_json: 1
+        },
+        httpsAgent,
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://y.qq.com',
+          'Accept': 'application/json'
+        }
+      })
+      
+      songs = response.data?.data?.song?.list || []
+    }
+
+    if (songs.length > 0) {
+      // 计算每首歌曲的匹配度并排序
+      const songsWithScore = songs.map(song => {
+        const songName = song.name || ''
+        const songArtists = song.singer ? song.singer.map(s => s.name).join('') : ''
+        
+        // 标题匹配度
+        const titleScore = stringSimilarity(songName, title) * 0.7
+        
+        // 艺术家匹配度
+        let artistScore = 0
+        if (artist) {
+          artistScore = stringSimilarity(songArtists, artist) * 0.3
+          if (songArtists.toLowerCase().includes(artist.toLowerCase())) {
+            artistScore = 0.3
+          }
+        } else {
+          artistScore = 0.15
+        }
+        
+        return {
+          song,
+          score: titleScore + artistScore
+        }
+      })
+      
+      // 按匹配度排序
+      songsWithScore.sort((a, b) => b.score - a.score)
+      
+      const bestMatch = songsWithScore[0]
+      console.log(`[QQ音乐] 最佳匹配: "${bestMatch.song.name}" - "${bestMatch.song.singer?.map(s => s.name).join('/')}" (匹配度: ${(bestMatch.score * 100).toFixed(1)}%)`)
+      
+      return {
+        id: bestMatch.song.mid,
+        name: bestMatch.song.name,
+        artists: bestMatch.song.singer ? bestMatch.song.singer.map(s => s.name).join('/') : '',
+        album: bestMatch.song.album ? bestMatch.song.album.name : '',
+        matchScore: bestMatch.score
+      }
+    }
+
+    console.log('[QQ音乐] 未找到匹配的歌曲')
+    return null
+  } catch (error) {
+    console.error('[QQ音乐] 搜索失败:', error.message)
+    return null
+  }
+}
+
+async function getQQMusicLyric(songMid) {
+  try {
+    const lyricUrl = 'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg'
+
+    console.log(`[QQ音乐] 获取歌词: songMid=${songMid}`)
+
+    const response = await axios.get(lyricUrl, {
+      params: {
+        songmid: songMid,
+        format: 'json',
+        nobase64: 1
+      },
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://y.qq.com',
+        'Accept': 'application/json'
+      }
+    })
+
+    if (response.data && response.data.lyric) {
+      return response.data.lyric
+    }
+
+    return null
+  } catch (error) {
+    console.error('[QQ音乐] 获取歌词失败:', error.message)
+    return null
+  }
+}
+
+// ========== 酷狗音乐 ==========
+const KUGOU_API_BASE = 'https://songsearch.kugou.com'
+
+async function searchKugouMusic(title, artist) {
+  try {
+    const searchUrl = `${KUGOU_API_BASE}/song_search_v2`
+    
+    // 第一次搜索：标题 + 艺术家
+    let keyword = artist ? `${title} ${artist}` : title
+    console.log(`[酷狗音乐] 第一次搜索: ${keyword}`)
+
+    let response = await axios.get(searchUrl, {
+      params: {
+        keyword: keyword,
+        platform: 'WebFilter',
+        format: 'json',
+        page: 1,
+        pagesize: 10
+      },
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.kugou.com',
+        'Accept': 'application/json'
+      }
+    })
+
+    let songs = response.data?.data?.lists || []
+    
+    // 如果第一次搜索没有结果，且艺术家不为空，尝试只用标题搜索
+    if (songs.length === 0 && artist) {
+      keyword = title
+      console.log(`[酷狗音乐] 第二次搜索（仅标题）: ${keyword}`)
+      
+      response = await axios.get(searchUrl, {
+        params: {
+          keyword: keyword,
+          platform: 'WebFilter',
+          format: 'json',
+          page: 1,
+          pagesize: 10
+        },
+        httpsAgent,
+        timeout: 10000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Referer': 'https://www.kugou.com',
+          'Accept': 'application/json'
+        }
+      })
+      
+      songs = response.data?.data?.lists || []
+    }
+
+    if (songs.length > 0) {
+      // 计算每首歌曲的匹配度并排序
+      const songsWithScore = songs.map(song => {
+        const songName = song.SongName || ''
+        const songArtists = song.SingerName || ''
+        
+        // 标题匹配度
+        const titleScore = stringSimilarity(songName, title) * 0.7
+        
+        // 艺术家匹配度
+        let artistScore = 0
+        if (artist) {
+          artistScore = stringSimilarity(songArtists, artist) * 0.3
+          if (songArtists.toLowerCase().includes(artist.toLowerCase())) {
+            artistScore = 0.3
+          }
+        } else {
+          artistScore = 0.15
+        }
+        
+        return {
+          song,
+          score: titleScore + artistScore
+        }
+      })
+      
+      // 按匹配度排序
+      songsWithScore.sort((a, b) => b.score - a.score)
+      
+      const bestMatch = songsWithScore[0]
+      console.log(`[酷狗音乐] 最佳匹配: "${bestMatch.song.SongName}" - "${bestMatch.song.SingerName}" (匹配度: ${(bestMatch.score * 100).toFixed(1)}%)`)
+      
+      return {
+        id: bestMatch.song.ID,
+        hash: bestMatch.song.FileHash,
+        name: bestMatch.song.SongName,
+        artists: bestMatch.song.SingerName,
+        album: bestMatch.song.AlbumName,
+        matchScore: bestMatch.score
+      }
+    }
+
+    console.log('[酷狗音乐] 未找到匹配的歌曲')
+    return null
+  } catch (error) {
+    console.error('[酷狗音乐] 搜索失败:', error.message)
+    return null
+  }
+}
+
+async function getKugouLyric(hash) {
+  try {
+    const lyricUrl = 'https://www.kugou.com/yy/index.php'
+
+    console.log(`[酷狗音乐] 获取歌词: hash=${hash}`)
+
+    const response = await axios.get(lyricUrl, {
+      params: {
+        r: 'play/getdata',
+        hash: hash
+      },
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.kugou.com',
+        'Accept': 'application/json'
+      }
+    })
+
+    if (response.data && response.data.data && response.data.data.lyrics) {
+      return response.data.data.lyrics
+    }
+
+    return null
+  } catch (error) {
+    console.error('[酷狗音乐] 获取歌词失败:', error.message)
+    return null
+  }
+}
+
+// 搜索歌词（按优先级尝试多个歌词源）
+async function searchLyricsFromSources(title, artist) {
+  console.log(`[歌词搜索] 开始搜索: ${title} - ${artist || '未知'}`)
+
+  // 按优先级顺序尝试每个歌词源
+  for (const source of LYRIC_SOURCES) {
+    try {
+      console.log(`[歌词搜索] 尝试 ${source.name}...`)
+
+      const songInfo = await source.search(title, artist)
+
+      if (songInfo) {
+        console.log(`[${source.name}] 找到歌曲: ${songInfo.name} - ${songInfo.artists}`)
+
+        const lyric = await source.getLyric(songInfo.id || songInfo.hash)
+
+        if (lyric) {
+          console.log(`[${source.name}] 成功获取歌词`)
+          return {
+            source: source.name,
+            lrc: lyric,
+            songInfo
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`[${source.name}] 失败:`, error.message)
+      continue // 继续尝试下一个源
+    }
+  }
+
+  // 所有源都失败，返回 null
+  console.log('[歌词搜索] 所有歌词源均失败，未找到歌词')
+  return null
+}
+
+// 搜索歌词
+router.get('/lyrics/search', authenticateToken, async (req, res) => {
+  try {
+    const { title, artist } = req.query
+
+    if (!title) {
+      return res.status(400).json({ message: '缺少歌曲标题' })
+    }
+
+    const result = await searchLyricsFromSources(title, artist || '')
+
+    res.json({
+      success: true,
+      source: result.source,
+      lyrics: result.lrc
+    })
+  } catch (error) {
+    console.error('搜索歌词失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 批量下载歌词（异步任务）
+router.post('/lyrics/batch-download', authenticateToken, async (req, res) => {
+  try {
+    const { musicIds, force = false } = req.body
+
+    if (!musicIds || !Array.isArray(musicIds)) {
+      return res.status(400).json({ message: '无效的音乐ID列表' })
+    }
+
+    // 生成任务ID
+    const taskId = `lyric_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+    // 初始化任务状态
+    const task = {
+      id: taskId,
+      status: 'pending',
+      progress: 0,
+      total: musicIds.length,
+      success: 0,
+      failed: 0,
+      results: [],
+      startTime: Date.now()
+    }
+
+    lyricTasks.set(taskId, task)
+
+    // 立即返回任务ID
+    res.json({
+      success: true,
+      taskId,
+      message: `开始下载 ${musicIds.length} 首歌曲的歌词`
+    })
+
+    // 异步执行下载任务
+    executeLyricDownloadTask(taskId, musicIds, force)
+
+  } catch (error) {
+    console.error('批量下载歌词失败:', error)
+    res.status(500).json({ message: '服务器错误', error: error.message })
+  }
+})
+
+// 异步执行歌词下载任务
+async function executeLyricDownloadTask(taskId, musicIds, force = false) {
+  const task = lyricTasks.get(taskId)
+  if (!task) return
+
+  const db = getDatabase()
+
+  // 检查数据库字段
+  const columns = db.prepare("PRAGMA table_info(music)").all()
+  const columnNames = columns.map(c => c.name)
+
+  const hasLyricsField = columnNames.includes('lyrics')
+  const hasLyricsSourceField = columnNames.includes('lyrics_source')
+  const hasHasLyricsField = columnNames.includes('has_lyrics')
+
+  if (!hasLyricsField) {
+    task.status = 'failed'
+    task.error = '数据库未升级'
+    return
+  }
+
+  task.status = 'running'
+
+  for (let i = 0; i < musicIds.length; i++) {
+    const musicId = musicIds[i]
+
+    try {
+      // 获取音乐信息（包含歌词状态）
+      const music = db.prepare('SELECT id, title, artist, lyrics, has_lyrics FROM music WHERE id = ?').get(musicId)
+
+      if (!music) {
+        task.failed++
+        task.results.push({ musicId, success: false, error: '音乐不存在' })
+        task.progress = i + 1
+        continue
+      }
+
+      // 跳过已有歌词的歌曲（除非强制下载）
+      if (!force && (music.has_lyrics || music.lyrics)) {
+        console.log(`[歌词下载] 跳过已有歌词: ${music.title} - ${music.artist}`)
+        task.skipped = (task.skipped || 0) + 1
+        task.results.push({ musicId, success: true, skipped: true, reason: '已有歌词' })
+        task.progress = i + 1
+        continue
+      }
+
+      // 搜索歌词
+      const searchResult = await searchLyricsFromSources(music.title, music.artist || '')
+
+      if (searchResult && searchResult.lrc) {
+        // 更新数据库
+        const updateFields = ['lyrics = ?', 'lyrics_updated_at = CURRENT_TIMESTAMP']
+        const params = [searchResult.lrc]
+
+        if (hasLyricsSourceField) {
+          updateFields.push('lyrics_source = ?')
+          params.push(searchResult.source)
+        }
+
+        if (hasHasLyricsField) {
+          updateFields.push('has_lyrics = 1')
+        }
+
+        params.push(musicId)
+
+        db.prepare(`
+          UPDATE music
+          SET ${updateFields.join(', ')}
+          WHERE id = ?
+        `).run(...params)
+
+        task.success++
+        task.results.push({
+          musicId,
+          success: true,
+          title: music.title,
+          artist: music.artist,
+          source: searchResult.source
+        })
+        console.log(`[歌词下载] 成功: ${music.title}`)
+      } else {
+        task.failed++
+        task.results.push({
+          musicId,
+          success: false,
+          title: music.title,
+          artist: music.artist,
+          error: '未找到歌词'
+        })
+      }
+
+      task.progress = i + 1
+
+    } catch (err) {
+      task.failed++
+      task.results.push({ musicId, success: false, error: err.message })
+      task.progress = i + 1
+    }
+  }
+
+  // 任务完成
+  task.status = 'completed'
+  task.endTime = Date.now()
+  console.log(`[任务完成] 成功: ${task.success}, 失败: ${task.failed}`)
+}
+
+// 查询歌词下载任务进度
+router.get('/lyrics/task/:taskId', authenticateToken, async (req, res) => {
+  try {
+    const { taskId } = req.params
+    const task = lyricTasks.get(taskId)
+
+    if (!task) {
+      return res.status(404).json({ message: '任务不存在' })
+    }
+
+    res.json({
+      success: true,
+      task: {
+        id: task.id,
+        status: task.status,
+        progress: task.progress,
+        total: task.total,
+        success: task.success,
+        failed: task.failed,
+        results: task.results,
+        startTime: task.startTime,
+        endTime: task.endTime
+      }
+    })
+
+  } catch (error) {
+    console.error('查询任务失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 获取单个音乐的歌词
+router.get('/:id/lyrics', authenticateToken, async (req, res) => {
+  try {
+    const db = getDatabase()
+    
+    // 检查字段是否存在
+    const columns = db.prepare("PRAGMA table_info(music)").all()
+    const columnNames = columns.map(c => c.name)
+    
+    if (!columnNames.includes('lyrics')) {
+      return res.json({ lyrics: null, message: '数据库未升级' })
+    }
+    
+    const music = db.prepare('SELECT lyrics, lyrics_source, has_lyrics FROM music WHERE id = ?').get(req.params.id)
+    
+    if (!music) {
+      return res.status(404).json({ message: '音乐不存在' })
+    }
+    
+    res.json({ 
+      lyrics: music.lyrics,
+      source: music.lyrics_source || null,
+      hasLyrics: music.has_lyrics === 1
+    })
+    
+  } catch (error) {
+    console.error('获取歌词失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 更新歌词（手动上传或纠正）
+router.put('/:id/lyrics', authenticateToken, async (req, res) => {
+  try {
+    const { lyrics, source } = req.body
+    const db = getDatabase()
+    
+    // 检查字段是否存在
+    const columns = db.prepare("PRAGMA table_info(music)").all()
+    const columnNames = columns.map(c => c.name)
+    
+    if (!columnNames.includes('lyrics')) {
+      return res.status(500).json({ message: '数据库未升级' })
+    }
+    
+    const updateFields = ['lyrics = ?', 'lyrics_updated_at = CURRENT_TIMESTAMP']
+    const params = [lyrics || '']
+    
+    if (columnNames.includes('lyrics_source')) {
+      updateFields.push('lyrics_source = ?')
+      params.push(source || '手动上传')
+    }
+    
+    if (columnNames.includes('has_lyrics')) {
+      updateFields.push('has_lyrics = ?')
+      params.push(lyrics ? 1 : 0)
+    }
+    
+    params.push(req.params.id)
+    
+    db.prepare(`
+      UPDATE music 
+      SET ${updateFields.join(', ')}
+      WHERE id = ?
+    `).run(...params)
+    
+    res.json({ message: '歌词更新成功' })
+    
+  } catch (error) {
+    console.error('更新歌词失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 检测并清理示例歌词
+router.post('/clean-sample-lyrics', authenticateToken, async (req, res) => {
+  try {
+    const db = getDatabase()
+    
+    // 检查字段是否存在
+    const columns = db.prepare("PRAGMA table_info(music)").all()
+    const columnNames = columns.map(c => c.name)
+    
+    if (!columnNames.includes('lyrics') || !columnNames.includes('lyrics_source')) {
+      return res.status(500).json({ message: '数据库未升级' })
+    }
+    
+    // 查找所有标记为"示例数据"的歌词
+    const sampleLyrics = db.prepare(`
+      SELECT id, title, artist, lyrics 
+      FROM music 
+      WHERE lyrics_source = '示例数据' 
+         OR lyrics LIKE '%暂无歌词%'
+         OR lyrics LIKE '%请在音乐平台搜索并上传歌词%'
+    `).all()
+    
+    if (sampleLyrics.length === 0) {
+      return res.json({
+        message: '未发现示例歌词',
+        cleanedCount: 0,
+        totalCount: 0
+      })
+    }
+    
+    // 清理示例歌词（设置为 NULL）
+    const ids = sampleLyrics.map(m => m.id)
+    const placeholders = ids.map(() => '?').join(',')
+    
+    db.prepare(`
+      UPDATE music 
+      SET lyrics = NULL, 
+          lyrics_source = NULL, 
+          has_lyrics = 0,
+          lyrics_updated_at = CURRENT_TIMESTAMP
+      WHERE id IN (${placeholders})
+    `).run(...ids)
+    
+    res.json({
+      message: `成功清理 ${sampleLyrics.length} 首歌曲的示例歌词`,
+      cleanedCount: sampleLyrics.length,
+      totalCount: sampleLyrics.length,
+      cleanedSongs: sampleLyrics.map(s => ({
+        id: s.id,
+        title: s.title,
+        artist: s.artist
+      }))
+    })
+    
+  } catch (error) {
+    console.error('清理示例歌词失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
 })

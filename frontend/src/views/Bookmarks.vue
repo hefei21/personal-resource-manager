@@ -78,11 +78,9 @@
               @error="handleIconError"
               alt=""
             />
-            <t-link :href="row.url" target="_blank" class="bookmark-title-link">
-              <t-tooltip :content="row.title" placement="top" :disabled="!shouldTruncate(row.title)">
-                <span class="bookmark-title-text">{{ row.title }}</span>
-              </t-tooltip>
-            </t-link>
+            <a :href="row.url" target="_blank" rel="noopener noreferrer" class="bookmark-title-link">
+              <span class="bookmark-title-text" :title="row.title">{{ row.title }}</span>
+            </a>
           </div>
         </template>
         <template #operation="{ row }">
@@ -176,9 +174,9 @@ const formData = ref({
 
 const columns = [
   { colKey: 'row-select', type: 'multiple', width: 50 },
-  { colKey: 'title', title: '标题', ellipsis: true },
-  { colKey: 'tags', title: '标签', width: 200 },
-  { colKey: 'operation', title: '操作', width: 150 }
+  { colKey: 'title', title: '标题' },
+  { colKey: 'tags', title: '标签', width: 150 },
+  { colKey: 'operation', title: '操作', align: 'right', width: 150 }
 ]
 
 // 获取图标URL
@@ -219,10 +217,7 @@ function handleIconError(e) {
   img.style.display = 'none'
 }
 
-// 判断是否需要截断
-function shouldTruncate(title) {
-  return title && title.length > 50
-}
+
 
 // 自动获取标题和图标
 // 自动获取标题和图标
@@ -409,7 +404,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 100%;
+  width: 100%;
 }
 
 .bookmark-icon {
@@ -422,11 +417,22 @@ onMounted(() => {
 .bookmark-title-link {
   flex: 1;
   min-width: 0;
+  color: #333;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.bookmark-title-link:hover {
+  text-decoration: underline;
+}
+
+.bookmark-title-link:visited {
+  color: #333;
 }
 
 .bookmark-title-text {
-  display: inline-block;
-  max-width: 100%;
+  display: block;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

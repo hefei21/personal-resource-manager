@@ -93,6 +93,17 @@
 | POST | `/playlists/:id/songs/batch-remove` | 批量移除歌曲 | `{ songIds }` |
 | PUT | `/playlists/:id/songs/reorder` | 歌单歌曲排序 | `{ songOrders }` |
 
+### 歌词管理 API
+
+| 方法 | 路由 | 功能 | 参数 |
+|------|------|------|------|
+| GET | `/lyrics/search` | 搜索歌词 | `title, artist` |
+| POST | `/lyrics/batch-download` | 批量下载歌词（异步） | `{ musicIds, force }` |
+| GET | `/lyrics/task/:taskId` | 查询任务进度 | - |
+| GET | `/:id/lyrics` | 获取单个音乐的歌词 | - |
+| PUT | `/:id/lyrics` | 更新歌词（手动编辑） | `{ lyrics, source }` |
+| POST | `/clean-sample-lyrics` | 清理示例歌词 | - |
+
 ---
 
 ## 四、前端页面功能
@@ -175,6 +186,23 @@
 - **歌单 CRUD**：创建、编辑、删除歌单
 - **歌曲管理**：添加、移除、排序
 - **拖拽排序**：支持拖拽调整歌曲顺序
+
+### 5. 歌词功能
+
+**多源歌词搜索**：
+- 支持 3 个歌词源（网易云、QQ音乐、酷狗）
+- 按优先级依次尝试，自动降级
+- 双语歌词支持（网易云）
+
+**批量下载**：
+- 异步任务机制，实时进度显示
+- 支持强制重新下载
+- 自动跳过已有歌词
+
+**歌词窗口**：
+- 网易云风格全屏显示
+- 歌词同步高亮
+- 手动编辑功能
 
 ---
 
@@ -426,3 +454,4 @@ async function restoreUploadProgress() {
    - 上传进度保存 60 分钟
 5. **中文排序**：使用拼音排序，支持中文和英文混合
 6. **封面提取**：自动提取嵌入的封面图片，存储为 base64
+7. **悬停提示**：使用浏览器原生 title 属性显示完整标题，避免重复悬停框问题

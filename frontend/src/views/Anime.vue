@@ -62,12 +62,10 @@
               <span class="count">{{ anime.rating_count || anime.rating?.total || 0 }}人</span>
             </div>
           </div>
-          <div class="card-content">
+              <div class="card-content">
             <div class="title-row">
               <h4 class="title-cn" :title="anime.name_cn || anime.name">{{ anime.name_cn || anime.name }}</h4>
-              <h5 class="title-original" v-if="anime.name && anime.name_cn && anime.name !== anime.name_cn" :title="anime.name">
-                {{ anime.name }}
-              </h5>
+              <h5 v-if="anime.name && anime.name_cn && anime.name !== anime.name_cn" class="title-original" :title="anime.name">{{ anime.name }}</h5>
             </div>
             <div class="meta-info">
               <div class="meta-row" v-if="anime.air_date">
@@ -145,7 +143,8 @@
             <t-select v-model="filterStatus" placeholder="状态筛选" style="width: 120px" clearable @change="handleFilterChange">
               <t-option value="" label="全部" />
               <t-option value="none" label="未标记" />
-              <t-option value="watching" label="想看" />
+              <t-option value="want_to_watch" label="想看" />
+              <t-option value="watching" label="在看" />
               <t-option value="watched" label="看过" />
             </t-select>
             <t-checkbox v-model="filterFavorite" @change="handleFilterChange">只看收藏</t-checkbox>
@@ -175,6 +174,24 @@
               <template #icon><t-icon name="download" /></template>
               批量下载封面
             </t-button>
+            <t-button
+              variant="outline"
+              size="small"
+              :loading="testingResources"
+              @click="testResourceSites"
+              class="test-resources-btn"
+            >
+              <template #icon><t-icon name="link-unlink" /></template>
+              测试资源站点
+            </t-button>
+            <t-select
+              v-model="resourceSearchMode"
+              style="width: 140px;"
+              placeholder="搜索模式"
+            >
+              <t-option value="parallel" label="同时多源搜索" />
+              <t-option value="sequential" label="顺序优先搜索" />
+            </t-select>
           </t-space>
         </div>
       </template>
@@ -202,8 +219,8 @@
         </template>
         <template #title="{ row }">
           <div class="table-title">
-            <span class="main-title">{{ row.title }}</span>
-            <span class="sub-title" v-if="row.name_cn && row.name_cn !== row.title">{{ row.name_cn }}</span>
+            <span class="main-title" :title="row.title">{{ row.title }}</span>
+            <span v-if="row.name_cn && row.name_cn !== row.title" class="sub-title" :title="row.name_cn">{{ row.name_cn }}</span>
           </div>
         </template>
         <template #year="{ row }">
@@ -228,12 +245,14 @@
         </template>
         <template #status="{ row }">
           <t-dropdown trigger="hover">
-            <t-tag v-if="row.status === 'watching'" theme="primary" variant="light" style="cursor: pointer;">想看</t-tag>
+            <t-tag v-if="row.status === 'want_to_watch'" theme="warning" variant="light" style="cursor: pointer;">想看</t-tag>
+            <t-tag v-else-if="row.status === 'watching'" theme="primary" variant="light" style="cursor: pointer;">在看</t-tag>
             <t-tag v-else-if="row.status === 'watched'" theme="success" variant="light" style="cursor: pointer;">看过</t-tag>
             <t-tag v-else theme="default" variant="light" style="cursor: pointer;">未标记</t-tag>
             <t-dropdown-menu>
               <t-dropdown-item @click="updateStatus(row, 'none')">未标记</t-dropdown-item>
-              <t-dropdown-item @click="updateStatus(row, 'watching')">想看</t-dropdown-item>
+              <t-dropdown-item @click="updateStatus(row, 'want_to_watch')">想看</t-dropdown-item>
+              <t-dropdown-item @click="updateStatus(row, 'watching')">在看</t-dropdown-item>
               <t-dropdown-item @click="updateStatus(row, 'watched')">看过</t-dropdown-item>
             </t-dropdown-menu>
           </t-dropdown>
@@ -285,7 +304,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onActivated, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onActivated, onUnmounted, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import AnimeDetailDialog from '@/components/AnimeDetailDialog.vue'
@@ -367,6 +386,10 @@ const searchTag = ref('')
 const filterStatus = ref('')
 const filterFavorite = ref(false)
 const downloadingCovers = ref(false)
+const testingResources = ref(false)
+const resourceTestResults = ref(null)
+const showResourceTestDialog = ref(false)
+const resourceSearchMode = ref(localStorage.getItem('resourceSearchMode') || 'parallel') // 资源搜索模式
 const pagination = ref({ current: 1, pageSize: 15, total: 0 })
 const searchPagination = ref({ current: 1, pageSize: 20, total: 0 })  // 搜索结果分页（匹配 Bangumi API 限制）
 
@@ -380,7 +403,7 @@ const selectedAnime = ref(null)
 
 const tableColumns = computed(() => [
   { colKey: 'coverImage', title: '封面', width: 60, align: 'center' },
-  { colKey: 'title', title: '标题', ellipsis: true, minWidth: 200 },
+  { colKey: 'title', title: '标题', minWidth: 200 },
   { colKey: 'year', title: '年份', width: 85, align: 'center', sorter: true },
   { colKey: 'rating', title: '评分', width: 100, align: 'left', sorter: true },
   { colKey: 'userRating', title: '我的评分', width: 130, align: 'left', sorter: true },
@@ -634,7 +657,11 @@ function handleOpenRelation(data) {
 async function updateStatus(row, status) {
   try {
     await api.anime.updateStatus(row.id, status)
-    row.status = status
+    // 立即更新本地数据，确保响应式更新
+    const index = animeList.value.findIndex(item => item.id === row.id)
+    if (index !== -1) {
+      animeList.value[index].status = status
+    }
     MessagePlugin.success('更新成功')
   } catch (error) {
     MessagePlugin.error('更新失败')
@@ -644,7 +671,11 @@ async function updateStatus(row, status) {
 async function updateUserRating(row, rating) {
   try {
     await api.anime.updateRating(row.id, rating)
-    row.user_rating = rating
+    // 立即更新本地数据，确保响应式更新
+    const index = animeList.value.findIndex(item => item.id === row.id)
+    if (index !== -1) {
+      animeList.value[index].user_rating = rating
+    }
     MessagePlugin.success('评分成功')
   } catch (error) {
     MessagePlugin.error('评分失败')
@@ -654,8 +685,12 @@ async function updateUserRating(row, rating) {
 async function toggleFavorite(row) {
   try {
     await api.anime.toggleFavorite(row.id)
-    row.is_favorite = !row.is_favorite
-    row.isFavorite = row.is_favorite
+    // 立即更新本地数据，确保响应式更新
+    const index = animeList.value.findIndex(item => item.id === row.id)
+    if (index !== -1) {
+      animeList.value[index].is_favorite = !animeList.value[index].is_favorite
+      row.isFavorite = animeList.value[index].is_favorite
+    }
     MessagePlugin.success(row.is_favorite ? '已收藏' : '已取消收藏')
   } catch (error) {
     MessagePlugin.error('操作失败')
@@ -686,6 +721,30 @@ async function handleBatchDownloadCovers() {
   }
 }
 
+// 测试资源站点连通性
+async function testResourceSites() {
+  testingResources.value = true
+  try {
+    const response = await api.anime.testResources()
+    resourceTestResults.value = response.data
+    showResourceTestDialog.value = true
+    
+    const successCount = response.data.summary.success
+    const failedCount = response.data.summary.total - successCount
+    
+    if (failedCount === 0) {
+      MessagePlugin.success(`所有站点连接正常 (${successCount}/${response.data.summary.total})`)
+    } else {
+      MessagePlugin.warning(`${successCount} 个站点正常，${failedCount} 个站点失败`)
+    }
+  } catch (error) {
+    MessagePlugin.error('测试资源站点失败')
+    console.error(error)
+  } finally {
+    testingResources.value = false
+  }
+}
+
 // HTTP 转 HTTPS
 function toHttps(url) {
   if (!url) return url
@@ -712,6 +771,11 @@ async function getTokenStatus() {
 function openTokenPage() {
   window.open('https://next.bgm.tv/demo/access-token', '_blank')
 }
+
+// 监听搜索模式配置变化，保存到 localStorage
+watch(resourceSearchMode, (newMode) => {
+  localStorage.setItem('resourceSearchMode', newMode)
+})
 
 // 组件首次加载
 onMounted(async () => {
@@ -1022,5 +1086,32 @@ onUnmounted(() => {
   margin-top: 16px;
   display: flex;
   justify-content: center;
+}
+
+/* Tooltip 样式覆盖 - 确保白色文字 */
+::v-deep(.t-tooltip),
+::v-deep(.t-popup__content),
+::v-deep(.t-ellipsis) {
+  color: #fff !important;
+}
+
+::v-deep(.t-tooltip .t-tooltip__content),
+::v-deep(.t-popup .t-popup__content) {
+  color: #fff !important;
+  background-color: rgba(0, 0, 0, 0.85) !important;
+}
+
+/* Ellipsis组件的tooltip */
+::v-deep(.t-ellipsis__text) {
+  color: #fff !important;
+}
+
+/* 测试资源站点按钮图标颜色 */
+.test-resources-btn {
+  color: #333 !important;
+}
+
+.test-resources-btn .t-icon {
+  color: #333 !important;
 }
 </style>

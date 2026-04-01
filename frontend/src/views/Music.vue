@@ -77,6 +77,10 @@
             <template #icon><t-icon name="filter" /></template>
             去重
           </t-button>
+          <t-button theme="success" variant="outline" @click="batchDownloadLyrics" :loading="downloadingAllLyrics">
+            <template #icon><t-icon name="download" /></template>
+            批量获取歌词
+          </t-button>
           <t-button theme="primary" @click="showUploadDialog = true">
             <template #icon><t-icon name="upload" /></template>
             上传音乐
@@ -165,6 +169,15 @@
           >
             {{ currentPlaylist ? '从歌单移除' : '删除' }}
           </t-button>
+          <t-button 
+            size="small" 
+            variant="outline"
+            @click="batchDownloadLyricsForSelected"
+            :loading="downloadingLyrics"
+          >
+            <template #icon><t-icon name="download" /></template>
+            下载歌词
+          </t-button>
           <t-button size="small" variant="text" @click="selectedSongs = []">取消选择</t-button>
         </div>
 
@@ -188,20 +201,14 @@
                 <t-icon name="music" v-if="!coverCache[row.id]" />
                 <img v-else :src="coverCache[row.id]" alt="cover" />
               </div>
-              <t-tooltip :content="row.title" placement="top" :disabled="row.title?.length <= 30">
-                <span class="title-text">{{ row.title }}</span>
-              </t-tooltip>
+              <span class="title-text" :title="row.title">{{ row.title }}</span>
             </div>
           </template>
           <template #artist="{ row }">
-            <t-tooltip :content="row.artist || '未知艺术家'" placement="top" :disabled="!row.artist || row.artist.length <= 20">
-              <span class="artist-text">{{ row.artist || '未知艺术家' }}</span>
-            </t-tooltip>
+            <span class="artist-text" :title="row.artist || '未知艺术家'">{{ row.artist || '未知艺术家' }}</span>
           </template>
           <template #album="{ row }">
-            <t-tooltip :content="row.album || '-'" placement="top" :disabled="!row.album || row.album.length <= 20">
-              <span class="album-text">{{ row.album || '-' }}</span>
-            </t-tooltip>
+            <span class="album-text" :title="row.album || '-'">{{ row.album || '-' }}</span>
           </template>
           <template #duration="{ row }">
             <span>{{ formatDuration(row.duration) }}</span>
@@ -535,12 +542,68 @@
         </div>
       </div>
     </t-dialog>
+
+    <!-- 歌词下载进度对话框 -->
+    <t-dialog
+      v-model:visible="showLyricsProgressDialog"
+      header="批量获取歌词"
+      width="600px"
+      :footer="false"
+      :close-on-overlay-click="false"
+      :close-on-esc-keydown="false"
+    >
+      <div class="lyrics-progress-container">
+        <div class="progress-header">
+          <t-progress
+            :percentage="lyricsProgress.total > 0 ? Math.round((lyricsProgress.progress / lyricsProgress.total) * 100) : 0"
+            :theme="lyricsProgress.status === 'completed' ? 'success' : 'default'"
+            size="large"
+          />
+          <div class="progress-stats">
+            <span>总计: {{ lyricsProgress.total }} 首</span>
+            <span class="success-text">成功: {{ lyricsProgress.success }}</span>
+            <span class="failed-text">失败: {{ lyricsProgress.failed }}</span>
+          </div>
+        </div>
+
+        <div class="progress-status" v-if="lyricsProgress.status === 'running'">
+          <t-icon name="loading" size="20px" spin />
+          <span>正在下载歌词... ({{ lyricsProgress.progress }} / {{ lyricsProgress.total }})</span>
+        </div>
+
+        <div class="progress-results" v-if="lyricsProgress.results.filter(r => !r.skipped).length > 0">
+          <t-divider>下载结果</t-divider>
+          <div class="results-list">
+            <div
+              v-for="(result, idx) in lyricsProgress.results.filter(r => !r.skipped)"
+              :key="idx"
+              class="result-item"
+              :class="{ 'success': result.success, 'failed': !result.success }"
+            >
+              <div class="result-info">
+                <t-icon :name="result.success ? 'check-circle' : 'close-circle'" size="16px" />
+                <span class="result-title">{{ result.title || `歌曲 ${result.musicId}` }}</span>
+                <span class="result-artist" v-if="result.artist">{{ result.artist }}</span>
+              </div>
+              <div class="result-meta">
+                <t-tag v-if="result.success" theme="success" variant="light" size="small">{{ result.source }}</t-tag>
+                <span v-else class="result-error">{{ result.error }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="progress-actions" v-if="lyricsProgress.status === 'completed'">
+          <t-button theme="primary" @click="showLyricsProgressDialog = false">关闭</t-button>
+        </div>
+      </div>
+    </t-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import { initCoverDB, getCoverFromCache, saveCoverToCache } from '@/utils/coverCache'
 import { initUploadDB, saveUploadState, getAllPendingUploads, deleteUploadState, cleanExpiredUploads } from '@/utils/uploadState'
@@ -611,6 +674,20 @@ const showDuplicatesDialog = ref(false)
 const checkingDuplicates = ref(false)
 const removingDuplicates = ref(false)
 const duplicates = ref([])
+
+// 歌词下载相关
+const downloadingLyrics = ref(false)
+const downloadingAllLyrics = ref(false)
+const showLyricsProgressDialog = ref(false)
+const lyricsTaskId = ref(null)
+const lyricsProgress = ref({
+  status: 'pending',
+  progress: 0,
+  total: 0,
+  success: 0,
+  failed: 0,
+  results: []
+})
 
 // 封面缓存（使用 IndexedDB 持久化）
 const coverCache = ref({})
@@ -683,9 +760,9 @@ async function loadCover(id) {
 
 // 表格列定义
 const columns = [
-  { colKey: 'title', title: '标题', ellipsis: true },
-  { colKey: 'artist', title: '艺术家', width: 150, ellipsis: true },
-  { colKey: 'album', title: '专辑', width: 150, ellipsis: true },
+  { colKey: 'title', title: '标题' },
+  { colKey: 'artist', title: '艺术家', width: 150 },
+  { colKey: 'album', title: '专辑', width: 150 },
   { colKey: 'duration', title: '时长', width: 80 },
   { colKey: 'fileSize', title: '大小', width: 100 },
   { colKey: 'operation', title: '操作', width: 150 }
@@ -1573,6 +1650,55 @@ async function batchDeleteFromPlaylist() {
   }
 }
 
+// 批量下载选中歌曲的歌词
+async function batchDownloadLyricsForSelected() {
+  if (selectedSongs.value.length === 0) {
+    MessagePlugin.warning('请先选择音乐')
+    return
+  }
+  
+  const confirmed = await DialogPlugin.confirm({
+    header: '批量下载歌词',
+    body: `将为 ${selectedSongs.value.length} 首音乐搜索并下载歌词，是否继续？`,
+    confirmBtn: '开始下载',
+    cancelBtn: '取消'
+  })
+  
+  if (!confirmed) return
+  
+  downloadingLyrics.value = true
+  
+  try {
+    const response = await api.music.downloadLyrics(selectedSongs.value)
+    
+    if (response.data.success) {
+      // 异步任务，显示进度对话框
+      lyricsTaskId.value = response.data.taskId
+      showLyricsProgressDialog.value = true
+      
+      // 重置进度
+      lyricsProgress.value = {
+        status: 'pending',
+        progress: 0,
+        total: selectedSongs.value.length,
+        success: 0,
+        failed: 0,
+        results: []
+      }
+      
+      // 开始轮询进度
+      pollLyricsProgress()
+    } else {
+      MessagePlugin.error('启动下载任务失败')
+    }
+  } catch (error) {
+    console.error('批量下载歌词失败:', error)
+    MessagePlugin.error('批量下载歌词失败')
+  } finally {
+    downloadingLyrics.value = false
+  }
+}
+
 // 歌单编辑管理
 function onPlaylistSelect(playlistId) {
   if (!playlistId) {
@@ -1712,6 +1838,93 @@ async function checkDuplicates() {
     console.error(error)
   } finally {
     checkingDuplicates.value = false
+  }
+}
+
+// 批量获取歌词
+async function batchDownloadLyrics() {
+  try {
+    // 获取所有没有歌词的音乐
+    const response = await api.music.list({ pageSize: 1000 })
+    const allMusic = response.data.data || []
+
+    // 筛选没有歌词的音乐
+    const musicWithoutLyrics = allMusic.filter(m => !m.has_lyrics)
+
+    if (musicWithoutLyrics.length === 0) {
+      MessagePlugin.success('所有音乐都已有歌词')
+      return
+    }
+
+    downloadingAllLyrics.value = true
+    showLyricsProgressDialog.value = true
+
+    // 重置进度
+    lyricsProgress.value = {
+      status: 'pending',
+      progress: 0,
+      total: musicWithoutLyrics.length,
+      success: 0,
+      failed: 0,
+      results: []
+    }
+
+    // 启动批量下载任务
+    const musicIds = musicWithoutLyrics.map(m => m.id)
+    const taskResponse = await api.music.downloadLyrics(musicIds)
+
+    if (taskResponse.data.success) {
+      lyricsTaskId.value = taskResponse.data.taskId
+
+      // 开始轮询进度
+      pollLyricsProgress()
+    } else {
+      MessagePlugin.error('启动下载任务失败')
+      downloadingAllLyrics.value = false
+      showLyricsProgressDialog.value = false
+    }
+  } catch (error) {
+    MessagePlugin.error('批量获取歌词失败')
+    console.error(error)
+    downloadingAllLyrics.value = false
+    showLyricsProgressDialog.value = false
+  }
+}
+
+// 轮询歌词下载进度
+async function pollLyricsProgress() {
+  if (!lyricsTaskId.value) return
+
+  try {
+    const response = await api.music.getLyricsTask(lyricsTaskId.value)
+    const task = response.data.task
+
+    lyricsProgress.value = {
+      status: task.status,
+      progress: task.progress,
+      total: task.total,
+      success: task.success,
+      failed: task.failed,
+      results: task.results
+    }
+
+    // 如果任务还在进行中，继续轮询
+    if (task.status === 'pending' || task.status === 'running') {
+      setTimeout(pollLyricsProgress, 1000)
+    } else if (task.status === 'completed') {
+      downloadingAllLyrics.value = false
+      MessagePlugin.success(`歌词下载完成：成功 ${task.success}，失败 ${task.failed}`)
+
+      // 刷新音乐列表
+      searchMusic()
+    } else {
+      downloadingAllLyrics.value = false
+      MessagePlugin.error('歌词下载失败')
+    }
+  } catch (error) {
+    console.error('查询进度失败:', error)
+    downloadingAllLyrics.value = false
+    MessagePlugin.error('查询进度失败')
   }
 }
 

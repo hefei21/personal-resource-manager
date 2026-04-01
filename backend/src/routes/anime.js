@@ -541,7 +541,7 @@ router.post('/:id/favorite', authenticateToken, async (req, res) => {
 router.post('/:id/status', authenticateToken, async (req, res) => {
   try {
     const { status } = req.body
-    const validStatuses = ['none', 'watching', 'watched']
+    const validStatuses = ['none', 'want_to_watch', 'watching', 'watched']
 
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ message: '无效的状态' })
@@ -554,6 +554,7 @@ router.post('/:id/status', authenticateToken, async (req, res) => {
     stmt.run(status, req.params.id)
     res.json({ message: '更新成功' })
   } catch (error) {
+    console.error('更新状态失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
 })
@@ -576,6 +577,109 @@ router.post('/:id/rating', authenticateToken, async (req, res) => {
     res.json({ message: '评分成功' })
   } catch (error) {
     res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 刷新动漫信息（从 Bangumi API 重新获取并更新）
+router.post('/:id/refresh', authenticateToken, async (req, res) => {
+  try {
+    const db = getDatabase()
+    
+    // 获取当前动漫信息
+    const stmt = db.prepare('SELECT bangumi_id FROM anime WHERE id = ?')
+    const anime = stmt.get(req.params.id)
+    
+    if (!anime) {
+      return res.status(404).json({ message: '动漫不存在' })
+    }
+    
+    const bangumiId = anime.bangumi_id
+    
+    // 从 Bangumi API 重新获取详细信息
+    const detail = await getAnimeDetail(bangumiId)
+    const animeInfo = detail.subject
+    const characters = detail.characters || []
+    const staff = detail.persons || []
+    
+    // 提取标签
+    const tags = animeInfo.tags ? animeInfo.tags.map(t => t.name).join(',') : ''
+    
+    // 从 infobox 提取详细信息
+    const infobox = animeInfo.infobox || []
+    const author = extractFromInfobox(infobox, '作者') || extractFromInfobox(infobox, '原作')
+    const director = extractFromInfobox(infobox, '导演') || extractFromInfobox(infobox, '监督')
+    const studio = extractFromInfobox(infobox, '动画制作') || extractFromInfobox(infobox, '制作')
+    
+    // 下载封面图片并转换为base64
+    const coverImageUrl = animeInfo.images?.large || animeInfo.images?.common
+    console.log('[刷新动漫] 下载封面图片:', coverImageUrl)
+    const coverImageData = await downloadImageAsBase64(coverImageUrl)
+    console.log('[刷新动漫] 封面图片下载:', coverImageData ? '成功' : '失败')
+    
+    // 更新数据库
+    const updateStmt = db.prepare(`
+      UPDATE anime SET
+        title = ?,
+        name_cn = ?,
+        name_original = ?,
+        summary = ?,
+        cover_image = ?,
+        cover_image_data = ?,
+        rating = ?,
+        rating_count = ?,
+        tags = ?,
+        air_date = ?,
+        eps = ?,
+        eps_total = ?,
+        author = ?,
+        director = ?,
+        studio = ?,
+        infobox = ?,
+        characters = ?,
+        staff = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `)
+    
+    updateStmt.run(
+      animeInfo.name,
+      animeInfo.name_cn,
+      animeInfo.name,
+      animeInfo.summary,
+      coverImageUrl,
+      coverImageData,
+      animeInfo.rating?.score || 0,
+      animeInfo.rating?.total || 0,
+      tags,
+      animeInfo.date || animeInfo.air_date,
+      animeInfo.eps || 0,
+      animeInfo.eps_count || animeInfo.total_episodes || 0,
+      author,
+      director,
+      studio,
+      JSON.stringify(infobox),
+      JSON.stringify(characters),
+      JSON.stringify(staff),
+      req.params.id
+    )
+    
+    // 返回更新后的数据
+    const resultStmt = db.prepare('SELECT * FROM anime WHERE id = ?')
+    const result = resultStmt.get(req.params.id)
+    
+    res.json({
+      message: '刷新成功',
+      data: {
+        ...result,
+        tags: result.tags ? result.tags.split(',') : [],
+        infobox: result.infobox ? JSON.parse(result.infobox) : null,
+        characters: result.characters ? JSON.parse(result.characters) : [],
+        staff: result.staff ? JSON.parse(result.staff) : []
+      }
+    })
+  } catch (error) {
+    console.error('刷新动漫失败:', error)
+    res.status(500).json({ message: error.message || '刷新失败' })
   }
 })
 
@@ -641,15 +745,11 @@ router.post('/batch-download-covers', authenticateToken, async (req, res) => {
   }
 })
 
-// Nyaa 搜索动漫资源
-router.get('/resources/search', authenticateToken, async (req, res) => {
-  try {
-    const { keyword } = req.query
-    if (!keyword) {
-      return res.status(400).json({ message: '请提供搜索关键词' })
-    }
+// 搜索动漫资源（多源）
 
-    // Nyaa 搜索（动漫分类 1_0 - 动漫）
+// 1. Nyaa（主站）
+async function searchNyaa(keyword) {
+  try {
     const nyaaDomain = 'nyaa.si'
     const searchUrl = `https://${nyaaDomain}/?f=0&c=1_0&q=${encodeURIComponent(keyword)}`
 
@@ -674,10 +774,7 @@ router.get('/resources/search', authenticateToken, async (req, res) => {
       const title = titleLink.attr('title') || titleLink.text().trim()
       const detailUrl = titleLink.attr('href')
 
-      // 获取磁力链接
       const magnetLink = $el.find('a[href^="magnet:"]').attr('href')
-
-      // 获取大小、日期等信息
       const size = $el.find('td:nth-child(4)').text().trim()
       const date = $el.find('td:nth-child(5)').text().trim()
       const seeders = $el.find('td:nth-child(6)').text().trim()
@@ -693,12 +790,403 @@ router.get('/resources/search', authenticateToken, async (req, res) => {
           seeders,
           leechers,
           downloads,
-          detailUrl: detailUrl ? `https://${nyaaDomain}${detailUrl}` : null
+          detailUrl: detailUrl ? `https://${nyaaDomain}${detailUrl}` : null,
+          source: 'Nyaa'
         })
       }
     })
 
-    res.json({ data: results.slice(0, 20) }) // 最多返回20条
+    return results
+  } catch (error) {
+    console.error('[Nyaa] 搜索失败:', error.message)
+    return []
+  }
+}
+
+// 2. 动漫花园 (使用 AnimeGarden API)
+async function searchDMHY(keyword) {
+  try {
+    // 使用 AnimeGarden API: https://api.animes.garden
+    const searchUrl = `https://api.animes.garden/resources?search=${encodeURIComponent(keyword)}&pageSize=20`
+
+    const response = await axios.get(searchUrl, {
+      httpsAgent,
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'PersonalResourceManager/1.0',
+        'Accept': 'application/json'
+      }
+    })
+
+    const results = []
+    const resources = response.data.resources || []
+
+    for (const item of resources) {
+      // AnimeGarden API 返回的数据结构
+      const title = item.title || item.name || ''
+      const magnetLink = item.magnet || item.magnetLink || ''
+
+      if (title && magnetLink) {
+        results.push({
+          title,
+          magnetLink,
+          size: item.size || '-',
+          date: item.date || item.createdAt || '-',
+          seeders: item.seeders || '-',
+          leechers: item.leechers || '-',
+          downloads: item.downloads || '-',
+          detailUrl: item.url || null,
+          source: '动漫花园',
+          fansub: item.fansub || item.publisher || null
+        })
+      }
+    }
+
+    console.log(`[动漫花园-AnimeGarden] 找到 ${results.length} 条结果`)
+    return results.slice(0, 20)
+  } catch (error) {
+    console.error('[动漫花园-AnimeGarden] 搜索失败:', error.message)
+    return []
+  }
+}
+
+// 3. ACG.RIP
+async function searchACGRip(keyword) {
+  try {
+    const searchUrl = `https://acg.rip/search/${encodeURIComponent(keyword)}/`
+    
+    const response = await axios.get(searchUrl, {
+      httpsAgent,
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    })
+
+    const cheerio = await import('cheerio')
+    const $ = cheerio.load(response.data)
+    const results = []
+
+    // ACG.RIP 的表格结构
+    $('tbody tr').each((index, element) => {
+      const $el = $(element)
+      const titleLink = $el.find('td:nth-child(2) a')
+      const title = titleLink.text().trim()
+      
+      const magnetLink = $el.find('a[href^="magnet:"]').attr('href')
+      const size = $el.find('td:nth-child(3)').text().trim()
+      const date = $el.find('td:nth-child(4)').text().trim()
+
+      if (title && magnetLink) {
+        results.push({
+          title,
+          magnetLink,
+          size,
+          date,
+          seeders: '-',
+          leechers: '-',
+          downloads: '-',
+          detailUrl: null,
+          source: 'ACG.RIP'
+        })
+      }
+    })
+
+    console.log(`[ACG.RIP] 找到 ${results.length} 条结果`)
+    return results.slice(0, 20)
+  } catch (error) {
+    console.error('[ACG.RIP] 搜索失败:', error.message)
+    return []
+  }
+}
+
+// 4. 蜜柑计划
+async function searchMikan(keyword) {
+  try {
+    const searchUrl = `https://mikanani.me/Home/Search?searchstr=${encodeURIComponent(keyword)}`
+    
+    const response = await axios.get(searchUrl, {
+      httpsAgent,
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    })
+
+    const cheerio = await import('cheerio')
+    const $ = cheerio.load(response.data)
+    const results = []
+
+    // 蜜柑计划的结构
+    $('.magnet-link-wrap, tr').each((index, element) => {
+      const $el = $(element)
+      const titleLink = $el.find('a').first()
+      const title = titleLink.attr('title') || titleLink.text().trim()
+      
+      const magnetLink = $el.find('a[href^="magnet:"]').attr('href')
+      const size = $el.find('.size, td:nth-child(3)').text().trim()
+      const date = $el.find('.date, td:nth-child(4)').text().trim()
+
+      if (title && magnetLink) {
+        results.push({
+          title,
+          magnetLink,
+          size,
+          date,
+          seeders: '-',
+          leechers: '-',
+          downloads: '-',
+          detailUrl: null,
+          source: '蜜柑计划'
+        })
+      }
+    })
+
+    console.log(`[蜜柑计划] 找到 ${results.length} 条结果`)
+    return results.slice(0, 20)
+  } catch (error) {
+    console.error('[蜜柑计划] 搜索失败:', error.message)
+    return []
+  }
+}
+
+// 测试资源站点连通性
+router.get('/resources/test', authenticateToken, async (req, res) => {
+  const results = []
+  
+  // 测试 Nyaa
+  try {
+    console.log('[连通性测试] 测试 Nyaa...')
+    const startTime = Date.now()
+    const response = await axios.get('https://nyaa.si/', {
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    })
+    const responseTime = Date.now() - startTime
+    results.push({
+      name: 'Nyaa',
+      url: 'https://nyaa.si/',
+      status: 'ok',
+      responseTime: `${responseTime}ms`,
+      httpStatus: response.status
+    })
+    console.log('[连通性测试] Nyaa: OK')
+  } catch (error) {
+    results.push({
+      name: 'Nyaa',
+      url: 'https://nyaa.si/',
+      status: 'failed',
+      error: error.message
+    })
+    console.error('[连通性测试] Nyaa: FAILED -', error.message)
+  }
+
+  // 测试 动漫花园 (使用 AnimeGarden API)
+  try {
+    console.log('[连通性测试] 测试 动漫花园...')
+    const startTime = Date.now()
+    const response = await axios.get('https://api.animes.garden/resources?pageSize=1', {
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'PersonalResourceManager/1.0',
+        'Accept': 'application/json'
+      }
+    })
+    const responseTime = Date.now() - startTime
+    results.push({
+      name: '动漫花园',
+      url: 'https://api.animes.garden/',
+      status: 'ok',
+      responseTime: `${responseTime}ms`,
+      httpStatus: response.status
+    })
+    console.log('[连通性测试] 动漫花园: OK')
+  } catch (error) {
+    results.push({
+      name: '动漫花园',
+      url: 'https://api.animes.garden/',
+      status: 'failed',
+      error: error.message
+    })
+    console.error('[连通性测试] 动漫花园: FAILED -', error.message)
+  }
+
+  // 测试 ACG.RIP
+  try {
+    console.log('[连通性测试] 测试 ACG.RIP...')
+    const startTime = Date.now()
+    const response = await axios.get('https://acg.rip/', {
+      httpsAgent,
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    })
+    const responseTime = Date.now() - startTime
+    results.push({
+      name: 'ACG.RIP',
+      url: 'https://acg.rip/',
+      status: 'ok',
+      responseTime: `${responseTime}ms`,
+      httpStatus: response.status
+    })
+    console.log('[连通性测试] ACG.RIP: OK')
+  } catch (error) {
+    results.push({
+      name: 'ACG.RIP',
+      url: 'https://acg.rip/',
+      status: 'failed',
+      error: error.message
+    })
+    console.error('[连通性测试] ACG.RIP: FAILED -', error.message)
+  }
+
+  // 测试 蜜柑计划
+  try {
+    console.log('[连通性测试] 测试 蜜柑计划...')
+    const startTime = Date.now()
+    // 尝试多个可能的域名
+    const mikanDomains = [
+      'https://mikanani.me/',
+      'https://mikanime.tv/',
+      'https://mikan.tv/'
+    ]
+    let lastError = null
+    let success = false
+
+    for (const domain of mikanDomains) {
+      try {
+        const response = await axios.get(domain, {
+          httpsAgent,
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        })
+        const responseTime = Date.now() - startTime
+        results.push({
+          name: '蜜柑计划',
+          url: domain,
+          status: 'ok',
+          responseTime: `${responseTime}ms`,
+          httpStatus: response.status
+        })
+        console.log(`[连通性测试] 蜜柑计划: OK (${domain})`)
+        success = true
+        break
+      } catch (e) {
+        lastError = e
+        continue
+      }
+    }
+
+    if (!success) {
+      throw lastError
+    }
+  } catch (error) {
+    results.push({
+      name: '蜜柑计划',
+      url: 'https://mikanani.me/',
+      status: 'failed',
+      error: error.message
+    })
+    console.error('[连通性测试] 蜜柑计划: FAILED -', error.message)
+  }
+
+  const summary = {
+    total: results.length,
+    success: results.filter(r => r.status === 'ok').length,
+    failed: results.filter(r => r.status === 'failed').length
+  }
+
+  res.json({
+    message: '连通性测试完成',
+    summary,
+    results
+  })
+})
+
+// 搜索动漫资源（整合多源）
+// mode: 'parallel' = 同时多源搜索, 'sequential' = 顺序匹配（按优先级）
+router.get('/resources/search', authenticateToken, async (req, res) => {
+  try {
+    const { keyword, mode = 'parallel' } = req.query
+    if (!keyword) {
+      return res.status(400).json({ message: '请提供搜索关键词' })
+    }
+
+    // 资源源优先级配置（可扩展）
+    const sourcePriority = [
+      { name: 'Nyaa', search: searchNyaa },
+      { name: '动漫花园', search: searchDMHY },
+      { name: 'ACG.RIP', search: searchACGRip },
+      { name: '蜜柑计划', search: searchMikan }
+    ]
+
+    console.log(`[资源搜索] 开始搜索: ${keyword}, 模式: ${mode}`)
+
+    let allResults = []
+
+    if (mode === 'sequential') {
+      // 顺序匹配模式：按优先级依次搜索，第一个源有结果就停止
+      for (const source of sourcePriority) {
+        console.log(`[资源搜索-顺序模式] 搜索 ${source.name}...`)
+        try {
+          const results = await source.search(keyword)
+          if (results.length > 0) {
+            allResults = results
+            console.log(`[资源搜索-顺序模式] ${source.name} 找到 ${results.length} 条，停止搜索后续源`)
+            break // 第一个源有结果就停止
+          }
+        } catch (error) {
+          console.error(`[资源搜索-顺序模式] ${source.name} 失败:`, error.message)
+        }
+      }
+    } else {
+      // 并行搜索模式（默认）
+      const searchPromises = sourcePriority.map(source => 
+        source.search(keyword).catch(error => {
+          console.error(`[资源搜索-并行模式] ${source.name} 失败:`, error.message)
+          return []
+        })
+      )
+      const results = await Promise.all(searchPromises)
+      allResults = results.flat()
+    }
+
+    // 去重（根据标题前50字符）
+    const uniqueResults = []
+    const seen = new Set()
+    for (const result of allResults) {
+      const key = result.title.toLowerCase().substring(0, 50)
+      if (!seen.has(key)) {
+        seen.add(key)
+        uniqueResults.push(result)
+      }
+    }
+
+    // 按种子数排序（Nyaa结果优先）
+    uniqueResults.sort((a, b) => {
+      if (a.source === 'Nyaa' && b.source !== 'Nyaa') return -1
+      if (b.source === 'Nyaa' && a.source !== 'Nyaa') return 1
+      const seedersA = parseInt(a.seeders) || 0
+      const seedersB = parseInt(b.seeders) || 0
+      return seedersB - seedersA
+    })
+
+    console.log(`[资源搜索] 找到 ${uniqueResults.length} 条结果`)
+
+    res.json({ 
+      data: uniqueResults.slice(0, 50),
+      mode,
+      sources: sourcePriority.map(s => s.name)
+    })
   } catch (error) {
     console.error('搜索资源失败:', error.message)
     res.status(500).json({ message: '搜索资源失败' })

@@ -117,7 +117,7 @@ app.get('/api/stats', authenticateToken, (req, res) => {
       },
       anime: {
         total: db.prepare('SELECT COUNT(*) as count FROM anime').get()?.count || 0,
-        favorite: db.prepare('SELECT COUNT(*) as count FROM anime WHERE is_favorite = 1').get()?.count || 0,
+        want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'want_to_watch'").get()?.count || 0,
         watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watching'").get()?.count || 0,
         watched: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watched'").get()?.count || 0
       }

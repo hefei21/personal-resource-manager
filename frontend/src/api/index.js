@@ -102,10 +102,17 @@ export default {
     updatePlaylist: (id, data) => api.put(`/music/playlists/${id}`, data),
     deletePlaylist: (id) => api.delete(`/music/playlists/${id}`),
     getPlaylistSongs: (id) => api.get(`/music/playlists/${id}/songs`),
-    addPlaylistSongs: (id, songIds) => api.post(`/music/playlists/${id}/songs`, { songIds }),
-    removePlaylistSong: (playlistId, songId) => api.delete(`/music/playlists/${playlistId}/songs/${songId}`),
-    batchRemoveFromPlaylist: (playlistId, songIds) => api.post(`/music/playlists/${playlistId}/songs/batch-remove`, { songIds }),
-    reorderPlaylistSongs: (id, songOrders) => api.put(`/music/playlists/${id}/songs/reorder`, { songOrders })
+    addSongsToPlaylist: (id, songIds) => api.post(`/music/playlists/${id}/songs`, { songIds }),
+    removeSongFromPlaylist: (playlistId, songId) => api.delete(`/music/playlists/${playlistId}/songs/${songId}`),
+    batchRemoveSongsFromPlaylist: (playlistId, songIds) => api.post(`/music/playlists/${playlistId}/songs/batch-remove`, { songIds }),
+    reorderPlaylistSongs: (playlistId, songOrders) => api.put(`/music/playlists/${playlistId}/songs/reorder`, { songOrders }),
+    // 歌词管理
+    searchLyrics: (title, artist) => api.get('/music/lyrics/search', { params: { title, artist } }),
+    downloadLyrics: (musicIds, force = false) => api.post('/music/lyrics/batch-download', { musicIds, force }),
+    getLyricsTask: (taskId) => api.get(`/music/lyrics/task/${taskId}`),
+    getLyrics: (id) => api.get(`/music/${id}/lyrics`),
+    updateLyrics: (id, lyrics, source) => api.put(`/music/${id}/lyrics`, { lyrics, source }),
+    cleanSampleLyrics: () => api.post('/music/clean-sample-lyrics')
   },
   books: {
     list: (params) => api.get('/ebooks', { params }),
@@ -155,6 +162,7 @@ export default {
     getCommits: (id, limit) => api.get(`/code/${id}/commits`, { params: { limit } }),
     getCommitDetail: (id, hash) => api.get(`/code/${id}/commit/${hash}`),
     sync: (id) => api.post(`/code/${id}/sync`),
+    getSyncStatus: (id) => api.get(`/code/${id}/sync-status`),
     getCloneStatus: (id) => api.get(`/code/${id}/clone-status`),
     getGithubInfo: (url) => api.get('/code/github-info', { params: { url } })
   },
@@ -182,7 +190,9 @@ export default {
     toggleFavorite: (id) => api.post(`/anime/${id}/favorite`),
     updateStatus: (id, status) => api.post(`/anime/${id}/status`, { status }),
     updateRating: (id, rating) => api.post(`/anime/${id}/rating`, { rating }),
-    searchResources: (keyword) => api.get('/anime/resources/search', { params: { keyword } }),
+    refresh: (id) => api.post(`/anime/${id}/refresh`),
+    searchResources: (keyword, mode = 'parallel') => api.get('/anime/resources/search', { params: { keyword, mode } }),
+    testResources: () => api.get('/anime/resources/test'),
     batchDownloadCovers: () => api.post('/anime/batch-download-covers'),
     getTokenStatus: () => api.get('/anime/token-status')
   },

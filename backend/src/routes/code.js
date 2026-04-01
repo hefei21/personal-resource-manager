@@ -214,6 +214,7 @@ router.post('/', authenticateToken, async (req, res) => {
 
 // 克隆任务管理器
 const cloneTasks = new Map()
+const syncTasks = new Map() // 同步任务进度跟踪
 
 // 获取克隆任务状态
 router.get('/:id/clone-status', authenticateToken, (req, res) => {
@@ -940,28 +941,67 @@ router.post('/:id/sync', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
+    // 初始化同步任务状态
+    const taskId = String(repo.id)
+    syncTasks.set(taskId, {
+      id: taskId,
+      status: 'syncing',
+      message: '准备同步...',
+      progress: 0,
+      startTime: Date.now()
+    })
+
     if (!fs.existsSync(repo.local_path)) {
       // 如果目录不存在，重新克隆
+      syncTasks.get(taskId).message = '目录不存在，开始重新克隆...'
       cloneRepository(repo.id, repo.url, repo.local_path, repo.type, repo.name)
-      return res.json({ message: '开始重新克隆仓库...' })
+      return res.json({ message: '开始重新克隆仓库...', taskId })
     }
 
     // 异步更新仓库
-    updateRepository(repo.id, repo.local_path, repo.type, repo.name)
+    updateRepository(repo.id, repo.local_path, repo.type, repo.name, taskId)
 
-    res.json({ message: '开始同步仓库...' })
+    res.json({ message: '开始同步仓库...', taskId })
   } catch (error) {
     console.error('同步仓库失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
 })
 
-// 更新仓库的异步函数
-async function updateRepository(id, localPath, type, name) {
+// 获取同步状态
+router.get('/:id/sync-status', authenticateToken, async (req, res) => {
+  try {
+    const taskId = String(req.params.id)
+    const task = syncTasks.get(taskId)
+    
+    if (!task) {
+      return res.json({ 
+        data: { 
+          status: 'idle', 
+          message: '无同步任务' 
+        } 
+      })
+    }
+    
+    res.json({ data: task })
+  } catch (error) {
+    console.error('获取同步状态失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 更新仓库的异步函数（带进度跟踪）
+async function updateRepository(id, localPath, type, name, taskId) {
   const db = getDatabase()
+  const task = syncTasks.get(taskId)
   
   try {
     console.log(`[仓库 ${name}] 开始同步`)
+    
+    if (task) {
+      task.message = '正在同步...'
+      task.progress = 30
+    }
     
     if (type === 'svn') {
       await execAsync(`svn update "${localPath}"`, { timeout: 300000 })
@@ -969,10 +1009,33 @@ async function updateRepository(id, localPath, type, name) {
       await execAsync(`git -C "${localPath}" pull`, { timeout: 300000 })
     }
     
+    if (task) {
+      task.message = '同步完成，更新数据库...'
+      task.progress = 80
+    }
+    
     db.prepare('UPDATE code_repositories SET last_sync = CURRENT_TIMESTAMP WHERE id = ?').run(id)
     console.log(`[仓库 ${name}] 同步完成`)
+    
+    if (task) {
+      task.status = 'completed'
+      task.message = '同步完成'
+      task.progress = 100
+    }
   } catch (error) {
     console.error(`[仓库 ${name}] 同步失败:`, error.message)
+    if (task) {
+      task.status = 'failed'
+      task.message = '同步失败: ' + error.message
+      task.progress = 0
+    }
+  }
+  
+  // 10分钟后清理任务记录
+  if (task) {
+    setTimeout(() => {
+      syncTasks.delete(taskId)
+    }, 600000)
   }
 }
 

@@ -417,8 +417,8 @@ function initDatabase() {
         )
       `)
       database.exec(`
-        INSERT INTO documents_new (id, title, category, tags, file_path, version, created_at, updated_at)
-        SELECT id, title, category, tags, file_path, CAST(version AS REAL), created_at, updated_at
+        INSERT INTO documents_new (id, title, category, subcategory, tags, file_path, version, created_at, updated_at)
+        SELECT id, title, category, subcategory, tags, file_path, CAST(version AS REAL), created_at, updated_at
         FROM documents
       `)
       database.exec('DROP TABLE documents')
@@ -532,7 +532,11 @@ function initDatabase() {
       { name: 'duration', sql: 'ALTER TABLE music ADD COLUMN duration INTEGER DEFAULT 0' },
       { name: 'file_size', sql: 'ALTER TABLE music ADD COLUMN file_size INTEGER DEFAULT 0' },
       { name: 'file_type', sql: 'ALTER TABLE music ADD COLUMN file_type TEXT' },
-      { name: 'cover_image', sql: 'ALTER TABLE music ADD COLUMN cover_image TEXT' }
+      { name: 'cover_image', sql: 'ALTER TABLE music ADD COLUMN cover_image TEXT' },
+      { name: 'lyrics', sql: 'ALTER TABLE music ADD COLUMN lyrics TEXT' },
+      { name: 'lyrics_source', sql: 'ALTER TABLE music ADD COLUMN lyrics_source TEXT' },
+      { name: 'has_lyrics', sql: 'ALTER TABLE music ADD COLUMN has_lyrics INTEGER DEFAULT 0' },
+      { name: 'lyrics_updated_at', sql: 'ALTER TABLE music ADD COLUMN lyrics_updated_at TEXT' }
     ]
 
     for (const field of musicNewFields) {
@@ -542,6 +546,14 @@ function initDatabase() {
         database.exec(field.sql)
         console.log(`✓ ${field.name} 字段添加成功`)
       }
+    }
+
+    // 创建歌词索引
+    try {
+      database.exec('CREATE INDEX IF NOT EXISTS idx_music_has_lyrics ON music(has_lyrics)')
+      console.log('✓ 歌词索引创建完成')
+    } catch (e) {
+      console.log('[索引创建] 警告:', e.message)
     }
 
     // 检查并迁移代码仓库表结构
@@ -592,6 +604,34 @@ function initDatabase() {
       console.log('✓ 已删除 code_versions 表')
     } catch (e) {
       // 表可能不存在，忽略错误
+    }
+
+    // 创建迁移版本表（用于跟踪已执行的迁移）
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version TEXT PRIMARY KEY,
+        executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `)
+
+    // 检查是否已执行过动漫状态迁移
+    const migrationVersion = 'anime_status_v1'
+    const migrationExecuted = database.prepare(
+      'SELECT version FROM schema_migrations WHERE version = ?'
+    ).get(migrationVersion)
+
+    if (!migrationExecuted) {
+      // 仅执行一次：迁移动漫状态（之前的 'watching' 表示"想看"，现在应该改为 'want_to_watch'）
+      try {
+        console.log('执行一次性迁移：动漫状态（watching -> want_to_watch）...')
+        database.exec("UPDATE anime SET status = 'want_to_watch' WHERE status = 'watching'")
+        database.prepare('INSERT INTO schema_migrations (version) VALUES (?)').run(migrationVersion)
+        console.log('✓ 动漫状态迁移完成，此迁移仅执行一次')
+      } catch (e) {
+        console.log('[动漫状态迁移] 警告:', e.message)
+      }
+    } else {
+      console.log('✓ 动漫状态迁移已执行过，跳过')
     }
   } catch (error) {
     console.error('数据库字段更新失败:', error)

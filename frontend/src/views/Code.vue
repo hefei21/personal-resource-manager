@@ -47,10 +47,10 @@
                 </div>
               </div>
               <div class="repo-actions">
-                <t-button theme="default" size="small" @click.stop="editRepo(repo)" :disabled="isCloning(repo.id)">
+                <t-button theme="default" size="small" @click.stop="editRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id)">
                   <template #icon><t-icon name="edit" /></template>
                 </t-button>
-                <t-button theme="default" size="small" @click.stop="syncRepo(repo)" :disabled="isCloning(repo.id)">
+                <t-button theme="default" size="small" @click.stop="syncRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id)">
                   <template #icon><t-icon name="refresh" /></template>
                 </t-button>
                 <t-popconfirm content="确定删除吗？这将同时删除本地代码文件。" @confirm="deleteRepo(repo.id)">
@@ -273,6 +273,53 @@ const addDialogVisible = ref(false)
 
 // 克隆状态管理
 const cloneStatuses = ref(new Map())
+const syncStatuses = ref(new Map())
+let syncPollInterval = null
+
+// 检查是否正在同步
+function isSyncing(repoId) {
+  const status = syncStatuses.value.get(String(repoId))
+  return status && status.status === 'syncing'
+}
+
+// 获取同步进度
+function syncProgress(repoId) {
+  const status = syncStatuses.value.get(String(repoId))
+  return status ? status.progress : 0
+}
+
+// 轮询同步状态
+function startSyncPolling(repoId, taskId) {
+  syncStatuses.value.set(String(repoId), { status: 'syncing', progress: 0, message: '准备中...' })
+
+  if (syncPollInterval) {
+    clearInterval(syncPollInterval)
+  }
+
+  syncPollInterval = setInterval(async () => {
+    try {
+      const response = await api.code.getSyncStatus(repoId)
+      const data = response.data?.data
+
+      if (data) {
+        syncStatuses.value.set(String(repoId), data)
+
+        if (data.status === 'completed') {
+          clearInterval(syncPollInterval)
+          syncPollInterval = null
+          MessagePlugin.success('同步成功')
+          loadRepos() // 刷新列表
+        } else if (data.status === 'failed') {
+          clearInterval(syncPollInterval)
+          syncPollInterval = null
+          MessagePlugin.error(data.message || '同步失败')
+        }
+      }
+    } catch (e) {
+      console.error('获取同步状态失败:', e)
+    }
+  }, 1000) // 每秒轮询一次
+}
 
 // 当前浏览的仓库
 const currentRepo = ref(null)
@@ -659,8 +706,13 @@ async function deleteRepo(id) {
 // 同步仓库
 async function syncRepo(repo) {
   try {
-    await api.code.sync(repo.id)
+    const response = await api.code.sync(repo.id)
     MessagePlugin.success('开始同步仓库...')
+    
+    // 开始轮询同步进度
+    if (response.data?.taskId) {
+      startSyncPolling(repo.id, response.data.taskId)
+    }
   } catch (error) {
     MessagePlugin.error('同步失败')
   }

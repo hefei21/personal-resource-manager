@@ -83,25 +83,25 @@
       <t-col :span="12">
         <t-card title="动漫详情" hover-shadow>
           <t-row :gutter="16">
-            <t-col :span="6">
+            <t-col :span="3">
               <div class="stat-item">
                 <div class="stat-value">{{ stats.anime.total }}</div>
                 <div class="stat-label">动漫总数</div>
               </div>
             </t-col>
-            <t-col :span="6">
+            <t-col :span="3">
               <div class="stat-item">
-                <div class="stat-value">{{ stats.anime.favorite }}</div>
-                <div class="stat-label">收藏</div>
-              </div>
-            </t-col>
-            <t-col :span="6">
-              <div class="stat-item">
-                <div class="stat-value">{{ stats.anime.watching }}</div>
+                <div class="stat-value">{{ stats.anime.want_to_watch }}</div>
                 <div class="stat-label">想看</div>
               </div>
             </t-col>
-            <t-col :span="6">
+            <t-col :span="3">
+              <div class="stat-item">
+                <div class="stat-value">{{ stats.anime.watching }}</div>
+                <div class="stat-label">在看</div>
+              </div>
+            </t-col>
+            <t-col :span="3">
               <div class="stat-item">
                 <div class="stat-value">{{ stats.anime.watched }}</div>
                 <div class="stat-label">看过</div>
@@ -179,27 +179,27 @@
               @keyup.enter="(e) => handleTodoEnter(todo, e)"
               class="todo-input"
             />
-            <t-button 
-              v-if="!todo.confirmed"
-              variant="outline" 
+            <t-button
+              v-if="!todo.confirmed && !todo.editing"
+              variant="outline"
               size="small"
               theme="success"
               @click="confirmTodo(todo)"
             >
               确认
             </t-button>
-            <t-button 
+            <t-button
               v-if="todo.confirmed && !todo.editing"
-              variant="outline" 
+              variant="outline"
               size="small"
               theme="primary"
               @click="editTodo(todo)"
             >
               编辑
             </t-button>
-            <t-button 
+            <t-button
               v-if="todo.editing"
-              variant="outline" 
+              variant="outline"
               size="small"
               theme="success"
               @click="saveEdit(todo)"
@@ -220,7 +220,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
 import { ChevronLeftIcon, ChevronRightIcon, AddIcon, DeleteIcon } from 'tdesign-icons-vue-next'
 import { Solar } from 'lunar-javascript'
@@ -460,9 +460,19 @@ function addTodo() {
     completed: 0,
     confirmed: 0,
     date: selectedDate.value,
-    isNew: true
+    isNew: true,
+    editing: false // 不自动进入编辑状态，直接显示确认按钮
   }
   todos.value.push(newTodo)
+
+  // 自动聚焦到新添加的输入框
+  nextTick(() => {
+    const inputs = document.querySelectorAll('.todo-input')
+    if (inputs.length > 0) {
+      const lastInput = inputs[inputs.length - 1]
+      lastInput.focus()
+    }
+  })
 }
 
 // 确认待办（锁定内容，不可编辑）
@@ -507,9 +517,16 @@ async function handleBlur(todo) {
   await updateTodo(todo)
 }
 
-// 处理回车键：有内容则确认，无内容则删除
+// 处理回车键：编辑状态保存，新增状态确认，无内容则删除
 async function handleTodoEnter(todo, e) {
   const text = (todo.text || '').trim()
+  
+  // 如果正在编辑已确认的待办，保存编辑
+  if (todo.confirmed && todo.editing) {
+    await saveEdit(todo)
+    return
+  }
+  
   if (text) {
     // 有内容：执行确认操作
     await confirmTodo(todo)
@@ -614,7 +631,7 @@ async function loadStats() {
     stats.value.code = data.code || 0
     stats.value.bookmarks = data.bookmarks || 0
     stats.value.blog = data.blog || { total: 0, published: 0, draft: 0 }
-    stats.value.anime = data.anime || { total: 0, favorite: 0, watching: 0, watched: 0 }
+    stats.value.anime = data.anime || { total: 0, want_to_watch: 0, watching: 0, watched: 0 }
   } catch (error) {
     console.error('Failed to load stats:', error)
   }

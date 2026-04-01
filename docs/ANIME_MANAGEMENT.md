@@ -688,8 +688,52 @@ function openRelationDetail(rel) {
 }
 ```
 
-### 4. Nyaa 资源搜索
+### 4. 多源资源搜索
 
+**支持的资源源（按优先级）**：
+1. **Nyaa**（日本）- 主要资源源
+2. **动漫花园**（DMHY）- 备选源
+3. **ACG.RIP** - 备选源
+4. **蜜柑计划** - 备选源
+
+**搜索模式**：
+- **并行模式**（默认）：同时搜索所有源，合并结果并去重
+- **顺序模式**：按优先级依次搜索，第一个源有结果就停止
+
+**实现原理**：
+```javascript
+// 资源源优先级配置
+const sourcePriority = [
+  { name: 'Nyaa', search: searchNyaa },
+  { name: '动漫花园', search: searchDMHY },
+  { name: 'ACG.RIP', search: searchACGRip },
+  { name: '蜜柑计划', search: searchMikan }
+]
+
+// 顺序匹配模式
+if (mode === 'sequential') {
+  for (const source of sourcePriority) {
+    const results = await source.search(keyword)
+    if (results.length > 0) {
+      allResults = results
+      break // 第一个源有结果就停止
+    }
+  }
+}
+
+// 并行搜索模式（默认）
+const searchPromises = sourcePriority.map(source => source.search(keyword))
+const results = await Promise.all(searchPromises)
+allResults = results.flat()
+```
+
+**优化策略**：
+- 自动去重（根据标题前50字符）
+- 智能排序（Nyaa结果优先 + 种子数降序）
+- 错误容错（单个源失败不影响整体）
+- 最多返回 50 条结果
+
+**Nyaa 搜索实现示例**：
 ```javascript
 // 使用 cheerio 解析 HTML
 const $ = cheerio.load(response.data)
@@ -707,12 +751,10 @@ $('tr.default, tr.success, tr.danger').each((index, element) => {
     size: $el.find('td:nth-child(4)').text().trim(),
     seeders: $el.find('td:nth-child(6)').text().trim(),
     leechers: $el.find('td:nth-child(7)').text().trim(),
-    downloads: $el.find('td:nth-child(8)').text().trim()
+    downloads: $el.find('td:nth-child(8)').text().trim(),
+    source: 'Nyaa'
   })
 })
-
-// 最多返回 20 条
-res.json({ data: results.slice(0, 20) })
 ```
 
 ### 5. 前端数据处理
@@ -910,3 +952,8 @@ services:
    - 使用 Nyaa.si 网站
    - 需要网络访问
    - 结果最多 20 条
+
+6. **悬停提示**：
+   - 表格标题列使用浏览器原生 title 属性
+   - 搜索结果卡片使用原生 title 属性
+   - 避免重复悬停框和样式冲突问题

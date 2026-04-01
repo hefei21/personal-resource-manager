@@ -1,39 +1,64 @@
 <template>
-  <Transition name="player-slide">
-    <div 
-      v-if="currentSong" 
-      class="media-player"
-      :class="{ 'sidebar-mode': isSidebarMode }"
-    >
-      <div class="player-content">
-        <!-- 歌曲信息 -->
-        <div class="song-info">
-          <div class="song-cover">
-            <t-icon name="music" v-if="!currentSong.has_cover || coverLoadFailed || !playerCoverData" />
-            <img 
-              v-else 
-              :src="playerCoverData" 
-              alt="cover" 
-              @error="handleCoverError"
-            />
-          </div>
-          <div class="song-meta">
-            <div class="song-title-wrapper">
-              <div class="song-title" :class="{ 'scrolling': currentSong.title && currentSong.title.length > 15 }">
-                <span class="song-title-text">{{ currentSong.title }}</span>
-              </div>
+  <div>
+    <!-- 歌词窗口 -->
+    <LyricsWindow
+      :visible="showLyricsWindow"
+      :current-song="currentSong"
+      :is-playing="isPlaying"
+      :current-time="currentTime"
+      :duration="duration"
+      :volume="volume"
+      :is-muted="isMuted"
+      :play-mode="playMode"
+      :has-prev="hasPrev"
+      :has-next="hasNext"
+      @close="closeLyricsWindow"
+      @toggle-play="togglePlay"
+      @prev="playPrev"
+      @next="playNext"
+      @seek="seekToTime"
+      @volume-change="changeVolume"
+      @toggle-mute="toggleMute"
+      @toggle-play-mode="togglePlayMode"
+    />
+    
+    <!-- 原有播放器 -->
+    <Transition name="player-slide">
+      <div 
+        v-if="currentSong && !showLyricsWindow" 
+        class="media-player"
+        :class="{ 'sidebar-mode': isSidebarMode }"
+      >
+        <div class="player-content">
+          <!-- 歌曲信息 -->
+          <div class="song-info">
+            <div class="song-cover" @click="openLyricsWindow" style="cursor: pointer;">
+              <t-icon name="music" v-if="!currentSong.has_cover || coverLoadFailed || !playerCoverData" />
+              <img 
+                v-else 
+                :src="playerCoverData" 
+                alt="cover" 
+                @error="handleCoverError"
+              />
             </div>
-            <div class="song-artist">{{ currentSong.artist || '未知艺术家' }}</div>
+            <div class="song-meta">
+              <div class="song-title-wrapper">
+                <div class="song-title" :class="{ 'scrolling': currentSong.title && currentSong.title.length > 15 }" @click="openLyricsWindow" style="cursor: pointer;">
+                  <span class="song-title-text">{{ currentSong.title }}</span>
+                </div>
+              </div>
+              <div class="song-artist">{{ currentSong.artist || '未知艺术家' }}</div>
+            </div>
+            <t-button 
+              v-if="isSidebarMode" 
+              size="small" 
+              variant="text"
+              class="close-btn-white"
+              @click="closePlayer"
+            >
+              <t-icon name="close" />
+            </t-button>
           </div>
-          <t-button 
-            v-if="isSidebarMode" 
-            size="small" 
-            variant="text"
-            @click="closePlayer"
-          >
-            <t-icon name="close" />
-          </t-button>
-        </div>
 
         <!-- 播放控制 -->
         <div class="player-controls">
@@ -134,61 +159,63 @@
           </button>
         </div>
       </div>
-
-      <!-- 播放列表 -->
-      <Transition name="slide-up">
-        <div v-if="showPlaylist && !isSidebarMode" class="playlist-panel">
-          <div class="playlist-header">
-            <span>播放列表 ({{ playlist.length }} 首)</span>
-            <t-button size="small" variant="text" @click="clearPlaylist">清空</t-button>
-          </div>
-          <div class="playlist-songs">
-            <div 
-              v-for="(song, index) in playlist"
-              :key="song.id"
-              class="playlist-item"
-              :class="{ active: currentSong?.id === song.id }"
-              @click="playSongAtIndex(index)"
-            >
-              <div class="item-index">
-                <span v-if="currentSong?.id !== song.id">{{ index + 1 }}</span>
-                <t-icon v-else name="volume" class="playing-icon" />
-              </div>
-              <div class="item-info">
-                <div class="item-title">{{ song.title }}</div>
-                <div class="item-artist">{{ song.artist || '未知艺术家' }}</div>
-              </div>
-              <t-button 
-                size="small" 
-                variant="text"
-                @click.stop="removeFromPlaylist(index)"
-              >
-                <t-icon name="close" />
-              </t-button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-
-      <!-- 音频元素 -->
-      <audio
-        ref="audioRef"
-        @timeupdate="handleTimeUpdate"
-        @ended="handleEnded"
-        @loadedmetadata="handleLoaded"
-        @error="handleError"
-        @play="isPlaying = true"
-        @pause="isPlaying = false"
-        @canplay="handleCanPlay"
-      />
     </div>
   </Transition>
+
+  <!-- 播放列表 -->
+  <Transition name="slide-up">
+    <div v-if="showPlaylist && !isSidebarMode" class="playlist-panel">
+      <div class="playlist-header">
+        <span>播放列表 ({{ playlist.length }} 首)</span>
+        <t-button size="small" variant="text" @click="clearPlaylist">清空</t-button>
+      </div>
+      <div class="playlist-songs">
+        <div 
+          v-for="(song, index) in playlist"
+          :key="song.id"
+          class="playlist-item"
+          :class="{ active: currentSong?.id === song.id }"
+          @click="playSongAtIndex(index)"
+        >
+          <div class="item-index">
+            <span v-if="currentSong?.id !== song.id">{{ index + 1 }}</span>
+            <t-icon v-else name="volume" class="playing-icon" />
+          </div>
+          <div class="item-info">
+            <div class="item-title">{{ song.title }}</div>
+            <div class="item-artist">{{ song.artist || '未知艺术家' }}</div>
+          </div>
+          <t-button 
+            size="small" 
+            variant="text"
+            @click.stop="removeFromPlaylist(index)"
+          >
+            <t-icon name="close" />
+          </t-button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- 音频元素 -->
+  <audio
+    ref="audioRef"
+    @timeupdate="handleTimeUpdate"
+    @ended="handleEnded"
+    @loadedmetadata="handleLoaded"
+    @error="handleError"
+    @play="isPlaying = true"
+    @pause="isPlaying = false"
+    @canplay="handleCanPlay"
+  />
+</div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '@/api'
 import { getCoverFromCache, saveCoverToCache, initCoverDB } from '@/utils/coverCache'
+import LyricsWindow from './LyricsWindow.vue'
 
 // 状态
 const audioRef = ref(null)
@@ -198,13 +225,14 @@ const currentIndex = ref(-1)
 const isPlaying = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
-const volume = ref(80)
+const volume = ref(parseInt(localStorage.getItem('playerVolume')) || 80) // 从localStorage读取音量，默认80
 const isMuted = ref(false)
 const playMode = ref(localStorage.getItem('playMode') || 'sequence') // sequence, loop, shuffle - 从localStorage读取
 const showPlaylist = ref(false)
 const isSidebarMode = ref(false)
 const coverLoadFailed = ref(false) // 封面加载失败标志
 const playerCoverData = ref(null) // 当前播放歌曲的封面数据
+const showLyricsWindow = ref(false) // 歌词窗口显示状态
 
 // 计算属性
 const progress = computed(() => {
@@ -376,6 +404,23 @@ function togglePlayMode() {
   localStorage.setItem('playMode', playMode.value)
 }
 
+// 歌词窗口控制
+function openLyricsWindow() {
+  if (currentSong.value) {
+    showLyricsWindow.value = true
+  }
+}
+
+function closeLyricsWindow() {
+  showLyricsWindow.value = false
+}
+
+function seekToTime(time) {
+  if (audioRef.value) {
+    audioRef.value.currentTime = time
+  }
+}
+
 // 进度控制
 function handleTimeUpdate() {
   if (audioRef.value) {
@@ -416,9 +461,15 @@ function seekTo(e) {
 }
 
 // 音量控制
-function changeVolume() {
+function changeVolume(vol) {
+  // 支持从歌词窗口传递音量值
+  if (vol !== undefined) {
+    volume.value = vol
+  }
   if (audioRef.value) {
     audioRef.value.volume = volume.value / 100
+    // 保存音量到localStorage
+    localStorage.setItem('playerVolume', volume.value)
   }
 }
 
@@ -923,5 +974,15 @@ onUnmounted(() => {
 .slide-up-leave-to {
   transform: translateY(20px);
   opacity: 0;
+}
+
+/* 侧边栏模式关闭按钮白色样式 */
+.close-btn-white {
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.close-btn-white:hover {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.1) !important;
 }
 </style>

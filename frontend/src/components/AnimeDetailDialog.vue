@@ -177,6 +177,10 @@
         </t-button>
         <!-- 已收藏状态下的操作 -->
         <template v-if="isImported && localAnime">
+          <t-button variant="outline" @click="refreshAnime" :loading="refreshing">
+            <template #icon><t-icon name="refresh" /></template>
+            刷新
+          </t-button>
           <t-select v-model="localAnime.status" style="width: 100px" @change="updateStatus">
             <t-option value="none" label="未标记" />
             <t-option value="watching" label="想看" />
@@ -250,6 +254,7 @@ const importing = ref(false)
 const searchingResources = ref(false)
 const showResources = ref(false)
 const resources = ref([])
+const refreshing = ref(false)
 
 // 标签列表
 const tags = computed(() => {
@@ -344,6 +349,11 @@ async function loadDetail() {
   isImported.value = false
   localAnime.value = null
   relations.value = []
+
+  // 重置资源搜索状态
+  showResources.value = false
+  resources.value = []
+  searchingResources.value = false
 
   try {
     // 如果传入的是本地数据（有 id 字段），直接使用
@@ -469,11 +479,17 @@ async function searchResources() {
   showResources.value = true
   resources.value = []
 
+  // 从 localStorage 获取搜索模式配置
+  const searchMode = localStorage.getItem('resourceSearchMode') || 'parallel'
+
   try {
-    const response = await api.anime.searchResources(keyword)
+    const response = await api.anime.searchResources(keyword, searchMode)
     resources.value = response.data.data || []
     if (resources.value.length === 0) {
       MessagePlugin.info('未找到相关资源')
+    } else {
+      const modeText = searchMode === 'sequential' ? '顺序优先' : '同时多源'
+      MessagePlugin.success(`找到 ${resources.value.length} 条资源 (${modeText}模式)`)
     }
   } catch (error) {
     MessagePlugin.error('搜索资源失败')
@@ -534,6 +550,29 @@ async function handleDelete() {
     emit('deleted')
   } catch (error) {
     MessagePlugin.error('删除失败')
+  }
+}
+
+// 刷新动漫信息
+async function refreshAnime() {
+  if (!localAnime.value) return
+  
+  refreshing.value = true
+  try {
+    const response = await api.anime.refresh(localAnime.value.id)
+    MessagePlugin.success('刷新成功')
+    
+    // 更新本地数据
+    anime.value = response.data.data
+    localAnime.value = response.data.data
+    characters.value = response.data.data.characters || []
+    staff.value = response.data.data.staff || []
+    
+    emit('updated')
+  } catch (error) {
+    MessagePlugin.error(error.response?.data?.message || '刷新失败')
+  } finally {
+    refreshing.value = false
   }
 }
 
