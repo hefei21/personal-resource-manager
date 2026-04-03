@@ -73,15 +73,15 @@
         </div>
 
         <div class="toolbar-right">
-          <t-button theme="warning" variant="outline" @click="checkDuplicates" :loading="checkingDuplicates">
+          <t-button theme="warning" variant="outline" @click="checkDuplicates" :loading="checkingDuplicates" :disabled="isGuest">
             <template #icon><t-icon name="filter" /></template>
             去重
           </t-button>
-          <t-button theme="success" variant="outline" @click="batchDownloadLyrics" :loading="downloadingAllLyrics">
+          <t-button theme="success" variant="outline" @click="batchDownloadLyrics" :loading="downloadingAllLyrics" :disabled="isGuest">
             <template #icon><t-icon name="download" /></template>
             批量获取歌词
           </t-button>
-          <t-button theme="primary" @click="showUploadDialog = true">
+          <t-button theme="primary" @click="showUploadDialog = true" :disabled="isGuest">
             <template #icon><t-icon name="upload" /></template>
             上传音乐
           </t-button>
@@ -101,10 +101,11 @@
               variant="text" 
               @click="showPlaylistManageDialog = true"
               title="编辑歌单"
+              :disabled="isGuest"
             >
               <t-icon name="edit" />
             </t-button>
-            <t-button size="small" variant="text" @click="showCreatePlaylistDialog = true" title="创建歌单">
+            <t-button size="small" variant="text" @click="showCreatePlaylistDialog = true" title="创建歌单" :disabled="isGuest">
               <t-icon name="add" />
             </t-button>
           </div>
@@ -159,13 +160,14 @@
           <t-button size="small" @click="toggleSelectAll" :loading="selectAllLoading">
             {{ selectedSongs.length === total && total > 0 ? '取消全选' : '全选' }}
           </t-button>
-          <t-button size="small" @click="addToPlaylist">
+          <t-button size="small" @click="addToPlaylist" :disabled="isGuest">
             添加到歌单 {{ selectedSongs.length > 0 ? `(${selectedSongs.length})` : '' }}
           </t-button>
           <t-button 
             size="small" 
             theme="danger" 
             @click="currentPlaylist ? batchDeleteFromPlaylist() : batchDelete()"
+            :disabled="isGuest"
           >
             {{ currentPlaylist ? '从歌单移除' : '删除' }}
           </t-button>
@@ -174,6 +176,7 @@
             variant="outline"
             @click="batchDownloadLyricsForSelected"
             :loading="downloadingLyrics"
+            :disabled="isGuest"
           >
             <template #icon><t-icon name="download" /></template>
             下载歌词
@@ -190,6 +193,12 @@
           @row-click="handleRowClick"
           @row-dblclick="handleRowDblClick"
         >
+          <template #headerCell="{ col }">
+            <div v-if="col.colKey === 'title'" class="title-header">
+              <span>标题</span>
+            </div>
+            <span v-else>{{ col.title }}</span>
+          </template>
           <template #title="{ row }">
             <div class="song-title">
               <t-checkbox
@@ -197,11 +206,13 @@
                 @change="(val) => toggleSelect(row.id, val)"
                 @click.stop
               />
-              <div class="song-cover-small" :ref="el => { if (el) observeCover(el, row) }">
-                <t-icon name="music" v-if="!coverCache[row.id]" />
-                <img v-else :src="coverCache[row.id]" alt="cover" />
+              <div class="song-title-content">
+                <div class="song-cover-small" :ref="el => { if (el) observeCover(el, row) }">
+                  <t-icon name="music" v-if="!coverCache[row.id]" />
+                  <img v-else :src="coverCache[row.id]" alt="cover" />
+                </div>
+                <span class="title-text" :title="row.title">{{ row.title }}</span>
               </div>
-              <span class="title-text" :title="row.title">{{ row.title }}</span>
             </div>
           </template>
           <template #artist="{ row }">
@@ -221,11 +232,11 @@
               <t-button theme="primary" variant="outline" size="small" @click.stop="playSong(row)">
                 <t-icon name="play-circle" />
               </t-button>
-              <t-button theme="default" size="small" @click.stop="editSong(row)">
+              <t-button theme="default" size="small" @click.stop="editSong(row)" :disabled="isGuest">
                 <t-icon name="edit" />
               </t-button>
               <t-popconfirm :content="currentPlaylist ? '确定从歌单移除吗？' : '确定删除吗？'" @confirm="deleteSong(row.id)">
-                <t-button theme="danger" variant="outline" size="small" @click.stop>
+                <t-button theme="danger" variant="outline" size="small" @click.stop :disabled="isGuest">
                   <t-icon name="delete" />
                 </t-button>
               </t-popconfirm>
@@ -446,11 +457,11 @@
 
           <!-- 操作按钮 -->
           <div class="playlist-edit-actions">
-            <t-button theme="primary" @click="savePlaylistEdit">
+            <t-button theme="primary" @click="savePlaylistEdit" :disabled="isGuest">
               保存修改
             </t-button>
             <t-popconfirm content="确定删除该歌单吗？歌曲源文件不会被删除。" @confirm="deletePlaylistFromEdit">
-              <t-button theme="danger" variant="outline">
+              <t-button theme="danger" variant="outline" :disabled="isGuest">
                 删除歌单
               </t-button>
             </t-popconfirm>
@@ -459,7 +470,7 @@
 
         <!-- 创建新歌单入口 -->
         <t-divider />
-        <t-button theme="primary" variant="outline" block @click="showCreatePlaylistDialog = true">
+        <t-button theme="primary" variant="outline" block @click="showCreatePlaylistDialog = true" :disabled="isGuest">
           <template #icon><t-icon name="add" /></template>
           创建新歌单
         </t-button>
@@ -607,6 +618,9 @@ import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import { initCoverDB, getCoverFromCache, saveCoverToCache } from '@/utils/coverCache'
 import { initUploadDB, saveUploadState, getAllPendingUploads, deleteUploadState, cleanExpiredUploads } from '@/utils/uploadState'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 
 // 状态
 const loading = ref(false)
@@ -760,12 +774,12 @@ async function loadCover(id) {
 
 // 表格列定义
 const columns = [
-  { colKey: 'title', title: '标题' },
-  { colKey: 'artist', title: '艺术家', width: 150 },
-  { colKey: 'album', title: '专辑', width: 150 },
-  { colKey: 'duration', title: '时长', width: 80 },
-  { colKey: 'fileSize', title: '大小', width: 100 },
-  { colKey: 'operation', title: '操作', width: 150 }
+  { colKey: 'title', title: '标题', width: 350, align: 'left' },
+  { colKey: 'artist', title: '艺术家', width: 120, align: 'left' },
+  { colKey: 'album', title: '专辑', width: 120, align: 'left' },
+  { colKey: 'duration', title: '时长', width: 70, align: 'left' },
+  { colKey: 'fileSize', title: '大小', width: 80, align: 'left' },
+  { colKey: 'operation', title: '操作', width: 130, align: 'left' }
 ]
 
 // 计算是否全选
@@ -2080,6 +2094,17 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
+/* 表格列样式优化 */
+::deep(.t-table) {
+  table-layout: auto;
+}
+
+::deep(.t-table td) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .toolbar-card {
   margin-bottom: 16px;
 }
@@ -2167,6 +2192,7 @@ onUnmounted(() => {
 .music-list-container {
   flex: 1;
   min-width: 0;
+  padding-right: 16px;
 }
 
 .batch-actions {
@@ -2179,10 +2205,24 @@ onUnmounted(() => {
   margin-bottom: 12px;
 }
 
+/* 标题表头对齐封面 */
+.title-header {
+  display: inline-block;
+  margin-left: 32px; /* 选择框宽度(24px) + 间隙(8px)，与封面左对齐 */
+}
+
 .song-title {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.song-title-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  overflow: hidden;
 }
 
 .song-cover-small {
@@ -2215,6 +2255,26 @@ onUnmounted(() => {
 
 .artist-text, .album-text {
   color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 110px;
+  display: inline-block;
+}
+
+/* 音乐表格右侧留白 */
+:deep(.t-table .t-table__body) {
+  padding-right: 24px;
+}
+
+/* 艺术家和专辑列deep选择器样式 */
+:deep(.t-table .artist-text),
+:deep(.t-table .album-text) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  max-width: 110px;
 }
 
 .pagination-wrapper {
@@ -2468,5 +2528,30 @@ onUnmounted(() => {
   font-size: 11px;
   width: 140px;
   text-align: right;
+}
+
+/* 第10项：条目不换行 */
+::deep(.t-table td) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+::deep(.t-table .title-text) {
+  max-width: 300px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+
+/* 第12项：音乐库列位置调整 */
+::deep(.t-table) {
+  table-layout: fixed;
+}
+
+::deep(.t-table .col-key-album),
+::deep(.t-table .col-key-artist) {
+  padding-left: 20px;
 }
 </style>

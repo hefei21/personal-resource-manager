@@ -1,0 +1,23 @@
+{
+  "name": "_auto_02608b70c1bf45dcb67dab7653cfd46c",
+  "leadAgentId": "02608b70c1bf45dcb67dab7653cfd46c",
+  "workspacePath": "c:\\Users\\Administrator\\CodeBuddy\\20260311110640",
+  "createdAt": "2026-04-01T10:25:20.198Z",
+  "options": {
+    "workspacePath": "c:\\Users\\Administrator\\CodeBuddy\\20260311110640",
+    "isAutoTeam": true
+  },
+  "members": [
+    {
+      "memberId": "team-lead@_auto_02608b70c1bf45dcb67dab7653cfd46c",
+      "name": "team-lead",
+      "role": "Team Lead - coordinates the team and interacts with the user"
+    },
+    {
+      "memberId": "frontend-permission-completion@_auto_02608b70c1bf45dcb67dab7653cfd46c",
+      "name": "frontend-permission-completion",
+      "role": "完成剩余前端模块权限控制"
+    }
+  ],
+  "isAutoTeam": true
+}

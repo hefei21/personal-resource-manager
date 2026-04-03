@@ -35,7 +35,7 @@
           <t-option value="updated_at" label="按添加时间" />
           <t-option value="title" label="按标题名" />
         </t-select>
-        <t-button theme="primary" @click="handleAdd">
+        <t-button theme="primary" @click="handleAdd" :disabled="isGuest">
           <template #icon><t-icon name="add" /></template>
           添加书签
         </t-button>
@@ -44,6 +44,7 @@
           variant="outline"
           :loading="downloadingIcons"
           @click="handleBatchDownloadIcons"
+          :disabled="isGuest"
         >
           <template #icon><t-icon name="download" /></template>
           批量下载图标
@@ -51,7 +52,7 @@
         <t-button
           theme="danger"
           variant="outline"
-          :disabled="selectedRows.length === 0"
+          :disabled="selectedRows.length === 0 || isGuest"
           @click="handleBatchDelete"
         >
           <template #icon><t-icon name="delete" /></template>
@@ -85,9 +86,9 @@
         </template>
         <template #operation="{ row }">
           <t-space>
-            <t-button theme="default" size="small" @click="handleEdit(row)">编辑</t-button>
+            <t-button theme="default" size="small" @click="handleEdit(row)" :disabled="isGuest">编辑</t-button>
             <t-popconfirm content="确定删除吗？" @confirm="handleDelete(row.id)">
-              <t-button theme="danger" size="small">删除</t-button>
+              <t-button theme="danger" size="small" :disabled="isGuest">删除</t-button>
             </t-popconfirm>
           </t-space>
         </template>
@@ -142,7 +143,9 @@
 import { ref, onMounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
+import { usePermission } from '@/composables/usePermission'
 
+const { isGuest } = usePermission()
 const loading = ref(false)
 const bookmarks = ref([])
 const dialogVisible = ref(false)
@@ -176,7 +179,7 @@ const columns = [
   { colKey: 'row-select', type: 'multiple', width: 50 },
   { colKey: 'title', title: '标题' },
   { colKey: 'tags', title: '标签', width: 150 },
-  { colKey: 'operation', title: '操作', align: 'right', width: 150 }
+  { colKey: 'operation', title: '操作', align: 'left', width: 150 }
 ]
 
 // 获取图标URL
@@ -436,6 +439,18 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 第10项：条目不换行 */
+::deep(.t-table td) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 第12项：操作列左对齐 */
+::deep(.t-table .t-table__body td:last-child) {
+  text-align: left;
 }
 
 .pagination-wrapper {

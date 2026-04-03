@@ -99,6 +99,7 @@
             v-if="selectedRowKeys.length > 0"
             theme="primary"
             @click="handleBatchEdit"
+            :disabled="isGuest"
           >
             <template #icon><t-icon name="edit" /></template>
             批量更改 ({{ selectedRowKeys.length }})
@@ -108,7 +109,7 @@
             content="确定删除选中的文档吗？"
             @confirm="handleBatchDelete"
           >
-            <t-button theme="danger" variant="outline">
+            <t-button theme="danger" variant="outline" :disabled="isGuest">
               <template #icon><t-icon name="delete" /></template>
               批量删除 ({{ selectedRowKeys.length }})
             </t-button>
@@ -118,6 +119,7 @@
             v-if="viewMode === 'category' && !currentCategoryId"
             theme="default"
             @click="handleCreateCategory"
+            :disabled="isGuest"
           >
             <template #icon><t-icon name="folder-add" /></template>
             创建分类
@@ -127,6 +129,7 @@
             v-if="viewMode === 'category' && currentCategoryId"
             theme="default"
             @click="handleCreateSubcategory"
+            :disabled="isGuest"
           >
             <template #icon><t-icon name="folder-add" /></template>
             创建子分类
@@ -136,6 +139,7 @@
             v-if="viewMode === 'category' && currentCategoryId"
             theme="primary"
             @click="handleUpload"
+            :disabled="isGuest"
           >
             <template #icon><t-icon name="add" /></template>
             上传文档
@@ -153,12 +157,16 @@
 
     <!-- 分类浏览模式 -->
     <t-card v-if="viewMode === 'category'" class="category-view">
+      <!-- 加载状态 -->
+      <div v-if="loading" class="content-loading">
+        <t-loading size="small" />
+      </div>
       <!-- 空状态：没有分类 -->
-      <div v-if="categories.length === 0" class="empty-categories">
+      <div v-else-if="categories.length === 0" class="empty-categories">
         <t-icon name="folder-open" size="64px" />
         <h3>还没有分类</h3>
         <p>创建第一个分类来开始管理文档</p>
-        <t-button theme="primary" size="large" @click="handleCreateCategory">
+        <t-button theme="primary" size="large" @click="handleCreateCategory" :disabled="isGuest">
           <template #icon><t-icon name="folder-add" /></template>
           创建第一个分类
         </t-button>
@@ -172,14 +180,14 @@
             :key="cat.id"
             class="category-card"
             :class="{ 'drag-over': draggedCategoryId === cat.id }"
-            draggable="true"
+            :draggable="!isGuest"
             @click="enterCategory(cat)"
             @mouseenter="handleCategoryHover(cat.id)"
             @mouseleave="handleCategoryLeave"
-            @dragstart="handleDragStart($event, cat, index)"
-            @dragover.prevent="handleDragOver($event, cat)"
+            @dragstart="!isGuest && handleDragStart($event, cat, index)"
+            @dragover.prevent="!isGuest && handleDragOver($event, cat)"
             @dragleave="handleDragLeave"
-            @drop="handleDrop($event, cat, index)"
+            @drop="!isGuest && handleDrop($event, cat, index)"
             @dragend="handleDragEnd"
           >
             <t-icon name="folder" size="48px" />
@@ -187,13 +195,13 @@
             <div v-if="hoveredCategoryId === cat.id && categoryFileCount[cat.id] !== undefined" class="file-count-tooltip">
               {{ categoryFileCount[cat.id] }} 个文件
             </div>
-            <div class="drag-handle" @click.stop>
+            <div class="drag-handle" @click.stop v-if="!isGuest">
               <t-icon name="move" size="16px" />
             </div>
-            <div class="rename-handle" @click.stop="handleRenameCategory(cat)">
+            <div class="rename-handle" @click.stop="handleRenameCategory(cat)" v-if="!isGuest">
               <t-icon name="edit" size="14px" />
             </div>
-            <div class="delete-handle" @click.stop="handleDeleteCategory(cat)">
+            <div class="delete-handle" @click.stop="handleDeleteCategory(cat)" v-if="!isGuest">
               <t-icon name="close" size="16px" />
             </div>
           </div>
@@ -213,14 +221,14 @@
           :key="cat.id"
           class="category-card"
           :class="{ 'drag-over': draggedCategoryId === cat.id }"
-          draggable="true"
+          :draggable="!isGuest"
           @click="enterCategory(cat)"
           @mouseenter="handleCategoryHover(cat.id)"
           @mouseleave="handleCategoryLeave"
-          @dragstart="handleDragStart($event, cat, index)"
-          @dragover.prevent="handleDragOver($event, cat)"
+          @dragstart="!isGuest && handleDragStart($event, cat, index)"
+          @dragover.prevent="!isGuest && handleDragOver($event, cat)"
           @dragleave="handleDragLeave"
-          @drop="handleDrop($event, cat, index)"
+          @drop="!isGuest && handleDrop($event, cat, index)"
           @dragend="handleDragEnd"
         >
           <t-icon name="folder" size="48px" />
@@ -228,13 +236,13 @@
           <div v-if="hoveredCategoryId === cat.id && cat.fileCount !== undefined" class="file-count-tooltip">
               {{ cat.fileCount }} 个文件
             </div>
-          <div class="drag-handle" @click.stop>
+          <div class="drag-handle" @click.stop v-if="!isGuest">
             <t-icon name="move" size="16px" />
           </div>
-          <div class="rename-handle" @click.stop="handleRenameCategory(cat)">
+          <div class="rename-handle" @click.stop="handleRenameCategory(cat)" v-if="!isGuest">
             <t-icon name="edit" size="14px" />
           </div>
-          <div class="delete-handle" @click.stop="handleDeleteCategory(cat)">
+          <div class="delete-handle" @click.stop="handleDeleteCategory(cat)" v-if="!isGuest">
             <t-icon name="close" size="16px" />
           </div>
         </div>
@@ -266,20 +274,21 @@
             <t-button theme="primary" variant="outline" size="small" @click="handleView(row)">
               <t-icon name="browse" /> 预览
             </t-button>
-            <t-button theme="primary" size="small" @click="handleChangeSingle(row)">
+            <t-button theme="primary" size="small" @click="handleChangeSingle(row)" :disabled="!canWrite">
               <t-icon name="edit" /> 更改
             </t-button>
             <t-button theme="primary" size="small" @click="handleViewVersions(row)">
               <t-icon name="history" /> 版本
             </t-button>
-            <t-button theme="default" size="small" @click="handleEdit(row)" :disabled="!canEditFile(row.filePath)">
+            <t-button theme="default" size="small" @click="handleEdit(row)" :disabled="!canWrite || !canEditFile(row.filePath)">
               <t-icon name="edit" /> 编辑
             </t-button>
             <t-popconfirm
               content="确定删除吗？"
               @confirm="handleDelete(row.id)"
+              :disabled="!canWrite"
             >
-              <t-button theme="danger" variant="outline" size="small">
+              <t-button theme="danger" variant="outline" size="small" :disabled="!canWrite">
                 <t-icon name="delete" /> 删除
               </t-button>
             </t-popconfirm>
@@ -302,8 +311,8 @@
       </div>
     </t-card>
 
-    <!-- 空状态（私密空间不显示） -->
-    <t-card v-if="documents.length === 0 && !loading && !currentCategoryId && viewMode !== 'private'" class="empty-state">
+    <!-- 空状态（私密空间不显示）- 仅在加载完成且无数据时显示 -->
+    <t-card v-if="documents.length === 0 && !loading && !currentCategoryId && viewMode !== 'private' && viewMode !== 'category'" class="empty-state">
       <t-icon name="file" size="64px" />
       <p>暂无文档</p>
     </t-card>
@@ -695,11 +704,11 @@
       <div class="private-header">
         <h3>私密文件列表</h3>
         <t-space>
-          <t-button theme="primary" @click="handlePrivateUpload">
+          <t-button theme="primary" @click="handlePrivateUpload" :disabled="isGuest">
             <template #icon><t-icon name="upload" /></template>
             上传文件
           </t-button>
-          <t-button theme="default" @click="openChangePrivatePassword">
+          <t-button theme="default" @click="openChangePrivatePassword" :disabled="isGuest">
             <template #icon><t-icon name="lock-on" /></template>
             修改密码
           </t-button>
@@ -762,8 +771,8 @@
           @page-size-change="handlePrivatePageSizeChange"
         />
       </div>
-
     </t-card>
+
   </div>
 </template>
 
@@ -775,6 +784,9 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest, canWrite } = usePermission()
 
 // 动态加载 PDF.js (不使用本地 pdfjs-dist,避免版本冲突)
 let pdfjsLib = null
@@ -842,6 +854,7 @@ const viewMode = ref('category') // category, list
 const categories = ref([])
 const currentCategoryId = ref(null) // 当前选中的分类ID
 const categoryPath = ref([]) // 当前分类路径
+const categoryFileCount = ref({}) // 分类文件数量缓存
 const currentCategoryName = computed(() => {
   if (categoryPath.value.length === 0) return ''
   return categoryPath.value[categoryPath.value.length - 1].name
@@ -1152,9 +1165,11 @@ function resetAdvancedSearch() {
 }
 
 function findCategoryById(categories, id) {
+  if (!Array.isArray(categories)) return null
   for (const cat of categories) {
+    if (!cat) continue
     if (cat.id === id) return cat
-    if (cat.subcategories && cat.subcategories.length > 0) {
+    if (cat.subcategories && Array.isArray(cat.subcategories) && cat.subcategories.length > 0) {
       const found = findCategoryById(cat.subcategories, id)
       if (found) return found
     }
@@ -1300,6 +1315,14 @@ function handleViewModeChange() {
 
   // 处理私密空间 - 每次进入都要重新验证密码
   if (viewMode.value === 'private') {
+    // 游客无权访问私密空间
+    if (isGuest.value) {
+      MessagePlugin.warning('游客无权访问私密空间')
+      viewMode.value = 'category'  // 重置为分类浏览模式
+      loadDocuments()  // 重新加载文档列表
+      return
+    }
+    
     // 重置授权状态
     privateAccessGranted.value = false
     // 显示密码验证对话框
@@ -1323,10 +1346,12 @@ async function handlePrivatePasswordConfirm() {
       loadPrivateDocuments()
     } else {
       privatePasswordError.value = '密码错误'
+      privatePasswordInput.value = ''
     }
   } catch (error) {
     console.error('密码验证失败:', error)
     privatePasswordError.value = error.response?.data?.message || '密码验证失败'
+    privatePasswordInput.value = ''
   }
 }
 
@@ -1723,7 +1748,7 @@ async function handleUploadConfirm() {
 }
 
 function handleView(row) {
-  const token = localStorage.getItem('token')
+  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
   console.log('预览文件，row数据:', row)
   console.log('文件路径:', row.filePath)
 
@@ -2402,6 +2427,14 @@ onMounted(() => {
 <style scoped>
 .documents {
   padding: 0;
+}
+
+/* 内容区域加载状态 */
+.content-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
 }
 
 .page-header {
@@ -3332,5 +3365,26 @@ onMounted(() => {
   margin: 0;
   padding-bottom: 8px;
   border-bottom: 2px solid #e34d59;
+}
+
+/* 第10项：条目不换行 */
+::deep(.t-table td) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+::deep(.t-table .title-cell),
+::deep(.t-table .tags-cell) {
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+
+/* 第12项：操作列左对齐 */
+::deep(.t-table .t-table__body td:last-child) {
+  text-align: left;
 }
 </style>

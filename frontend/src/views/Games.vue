@@ -22,19 +22,19 @@
             :disabled="!editMode"
           />
           <t-space>
-            <t-button v-if="!editMode && !hasConfig" theme="primary" @click="editMode = true">
+            <t-button v-if="!editMode && !hasConfig" theme="primary" @click="editMode = true" :disabled="isGuest">
               配置 Steam
             </t-button>
-            <t-button v-if="editMode" theme="primary" @click="saveConfig" :loading="saving">
+            <t-button v-if="editMode" theme="primary" @click="saveConfig" :loading="saving" :disabled="isGuest">
               保存
             </t-button>
             <t-button v-if="editMode" theme="default" @click="cancelEdit">
               取消
             </t-button>
-            <t-button v-if="hasConfig && !editMode" theme="primary" @click="syncGames" :loading="syncing">
+            <t-button v-if="hasConfig && !editMode" theme="primary" @click="syncGames" :loading="syncing" :disabled="isGuest">
               {{ syncing ? `同步中 ${syncProgress}%` : '同步游戏库' }}
             </t-button>
-            <t-button v-if="hasConfig && !editMode" theme="default" variant="outline" @click="editMode = true">
+            <t-button v-if="hasConfig && !editMode" theme="default" variant="outline" @click="editMode = true" :disabled="isGuest">
               修改配置
             </t-button>
           </t-space>
@@ -64,6 +64,7 @@
           size="small"
           :loading="downloadingCovers"
           @click="handleBatchDownloadCovers"
+          :disabled="isGuest"
         >
           <template #icon><t-icon name="download" /></template>
           批量下载封面
@@ -73,6 +74,7 @@
           size="small"
           theme="warning"
           @click="handleClearCovers"
+          :disabled="isGuest"
         >
           <template #icon><t-icon name="delete" /></template>
           清除封面
@@ -80,8 +82,13 @@
       </t-space>
     </t-card>
 
+    <!-- 加载状态 -->
+    <div v-if="loading" class="content-loading">
+      <t-loading size="small" />
+    </div>
+
     <!-- 游戏列表 -->
-    <div class="games-list">
+    <div v-else class="games-list">
       <div
         v-for="game in games"
         :key="game.id"
@@ -133,7 +140,7 @@
     </div>
 
     <!-- 分页 -->
-    <div class="pagination-wrapper" v-if="pagination.total > 0">
+    <div class="pagination-wrapper" v-if="!loading && pagination.total > 0">
       <t-pagination
         v-model="pagination.current"
         v-model:page-size="pagination.pageSize"
@@ -176,6 +183,7 @@
               :loading="refreshingCover"
               @click="handleRefreshCover"
               class="refresh-cover-btn"
+              :disabled="isGuest"
             >
               <template #icon><t-icon name="refresh" /></template>
               更新封面
@@ -225,6 +233,7 @@
               variant="outline"
               :loading="loadingAchievements"
               @click="fetchAchievementsForGame(currentGame.id)"
+              :disabled="isGuest"
             >
               <template #icon><t-icon name="refresh" /></template>
               刷新成就
@@ -284,7 +293,9 @@
 import { ref, onMounted } from 'vue'
 import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
 import api from '@/api'
+import { usePermission } from '@/composables/usePermission'
 
+const { isGuest } = usePermission()
 const loading = ref(false)
 const games = ref([])
 const pagination = ref({ current: 1, pageSize: 15, total: 0 })
@@ -637,6 +648,15 @@ onMounted(() => {
 <style scoped>
 .games {
   padding: 0;
+}
+
+/* 内容区域加载状态 */
+.content-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  width: 100%;
 }
 
 .page-header {
@@ -1032,6 +1052,23 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* 第10项：条目不换行 */
+::deep(.t-table td) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #333;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .global-percent {

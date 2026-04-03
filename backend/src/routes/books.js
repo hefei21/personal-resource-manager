@@ -5,7 +5,7 @@ import fs from 'fs'
 import AdmZip from 'adm-zip'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 
 const router = express.Router()
 
@@ -471,7 +471,7 @@ router.get('/categories', authenticateToken, async (req, res) => {
 })
 
 // 创建分类
-router.post('/categories', authenticateToken, async (req, res) => {
+router.post('/categories', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { name } = req.body
     if (!name || !name.trim()) {
@@ -533,7 +533,7 @@ router.put('/categories/:id', authenticateToken, async (req, res) => {
 })
 
 // 删除分类
-router.delete('/categories/:id', authenticateToken, async (req, res) => {
+router.delete('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const categoryId = req.params.id
@@ -558,7 +558,7 @@ router.delete('/categories/:id', authenticateToken, async (req, res) => {
 })
 
 // 更新分类排序
-router.put('/categories/reorder', authenticateToken, async (req, res) => {
+router.put('/categories/reorder', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { orders } = req.body
 
@@ -616,7 +616,7 @@ router.post('/upload-chunk', authenticateToken, multer({ dest: chunksDir }).sing
 })
 
 // 合并分片并解析元数据
-router.post('/merge-chunks', authenticateToken, async (req, res) => {
+router.post('/merge-chunks', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { fileId, fileName, totalChunks } = req.body
 
@@ -728,7 +728,7 @@ router.delete('/cancel-upload', authenticateToken, async (req, res) => {
 })
 
 // 解析书籍元数据（上传前预解析）
-router.post('/parse-metadata', authenticateToken, upload.single('file'), async (req, res) => {
+router.post('/parse-metadata', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: '请选择文件' })
@@ -1058,7 +1058,7 @@ router.post('/upload-with-path', authenticateToken, async (req, res) => {
 })
 
 // 删除书籍
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const book = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id)
@@ -1083,7 +1083,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 })
 
 // 批量删除书籍
-router.post('/batch-delete', authenticateToken, async (req, res) => {
+router.post('/batch-delete', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { ids } = req.body
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
@@ -1509,7 +1509,7 @@ router.get('/:id/progress', authenticateToken, async (req, res) => {
 })
 
 // 保存阅读进度
-router.post('/:id/progress', authenticateToken, async (req, res) => {
+router.post('/:id/progress', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { currentPage, scrollPosition, progress, fontSize } = req.body
     const db = getDatabase()
@@ -1568,7 +1568,7 @@ router.get('/download/:id', authenticateToken, async (req, res) => {
   }
 })
 
-// 清除书籍缓存
+// 清除书籍缓存（游客可访问，这是重新解析功能）
 router.delete('/:id/cache', authenticateToken, async (req, res) => {
   try {
     const db = getDatabase()

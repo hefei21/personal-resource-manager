@@ -7,7 +7,8 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token')
+    // 优先从 localStorage 获取，其次从 sessionStorage（游客模式）
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
@@ -20,9 +21,19 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      // 清除 localStorage 和 sessionStorage
       localStorage.removeItem('token')
       localStorage.removeItem('user')
+      sessionStorage.removeItem('token')
+      sessionStorage.removeItem('user')
       window.location.href = '/login'
+    } else if (error.response?.status === 403) {
+      // 处理权限错误
+      const errorCode = error.response?.data?.code
+      if (errorCode === 'GUEST_NO_PERMISSION') {
+        // 游客权限错误，显示友好提示
+        console.warn('游客无权执行此操作')
+      }
     }
     return Promise.reject(error)
   }
@@ -31,8 +42,10 @@ api.interceptors.response.use(
 export default {
   auth: {
     login: (data) => api.post('/auth/login', data),
+    guestLogin: () => api.post('/auth/guest-login'),
     logout: () => api.post('/auth/logout'),
-    check: () => api.get('/auth/check')
+    check: () => api.get('/auth/check'),
+    changePassword: (data) => api.post('/auth/change-password', data)
   },
   documents: {
     list: (params) => api.get('/documents', { params }),
@@ -54,7 +67,7 @@ export default {
     }),
     versions: (id) => api.get(`/documents/${id}/versions`),
     getContent: (id) => {
-      const token = localStorage.getItem('token')
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token')
       return api.get(`/documents/${id}/content`, { params: { token } })
     },
     updateContent: (id, data) => api.put(`/documents/${id}/content`, data),
@@ -67,7 +80,7 @@ export default {
     }),
     deletePrivate: (id) => api.delete(`/documents/private/${id}`),
     getPrivateContent: (id) => {
-      const token = localStorage.getItem('token')
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token')
       return api.get(`/documents/private/${id}/content`, { params: { token } })
     }
   },
@@ -143,7 +156,7 @@ export default {
     delete: (id) => api.delete(`/ebooks/${id}`),
     batchDelete: (data) => api.post('/ebooks/batch-delete', data),
     getContent: (id) => {
-      const token = localStorage.getItem('token')
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token')
       return api.get(`/ebooks/${id}/content`, { params: { token } })
     },
     getProgress: (id) => api.get(`/ebooks/${id}/progress`),
@@ -194,7 +207,8 @@ export default {
     searchResources: (keyword, mode = 'parallel') => api.get('/anime/resources/search', { params: { keyword, mode } }),
     testResources: () => api.get('/anime/resources/test'),
     batchDownloadCovers: () => api.post('/anime/batch-download-covers'),
-    getTokenStatus: () => api.get('/anime/token-status')
+    getTokenStatus: () => api.get('/anime/token-status'),
+    toggleHidden: (id) => api.put(`/anime/${id}/toggle-hidden`)
   },
   search: {
     global: (keyword) => api.get('/search', { params: { keyword } })

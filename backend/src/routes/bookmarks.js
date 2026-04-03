@@ -2,7 +2,7 @@ import express from 'express'
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 
 const router = express.Router()
 
@@ -243,7 +243,7 @@ router.get('/', authenticateToken, async (req, res) => {
 })
 
 // 创建书签
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { title, url, icon, iconData, category, tags, description } = req.body
     const db = getDatabase()
@@ -259,7 +259,7 @@ router.post('/', authenticateToken, async (req, res) => {
 })
 
 // 更新书签
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { title, url, icon, iconData, category, tags, description } = req.body
     const db = getDatabase()
@@ -288,7 +288,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 })
 
 // 批量删除书签
-router.post('/batch-delete', authenticateToken, async (req, res) => {
+router.post('/batch-delete', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { ids } = req.body
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
@@ -306,7 +306,7 @@ router.post('/batch-delete', authenticateToken, async (req, res) => {
 })
 
 // 批量下载图标
-router.post('/batch-download-icons', authenticateToken, async (req, res) => {
+router.post('/batch-download-icons', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     

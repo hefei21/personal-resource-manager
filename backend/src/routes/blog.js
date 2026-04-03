@@ -1,5 +1,6 @@
 import express from 'express'
 import { getDatabase } from '../config/database.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 
 const router = express.Router()
 
@@ -136,7 +137,7 @@ router.get('/posts/:id', (req, res) => {
 })
 
 // 创建文章
-router.post('/posts', (req, res) => {
+router.post('/posts', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { title, content, category_id, tags, status = 'draft', is_top = false } = req.body
@@ -185,7 +186,7 @@ router.post('/posts', (req, res) => {
 })
 
 // 更新文章
-router.put('/posts/:id', (req, res) => {
+router.put('/posts/:id', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -264,7 +265,7 @@ router.put('/posts/:id', (req, res) => {
 })
 
 // 删除文章
-router.delete('/posts/:id', (req, res) => {
+router.delete('/posts/:id', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -352,7 +353,7 @@ router.get('/categories/all', (req, res) => {
 })
 
 // 创建分类
-router.post('/categories', (req, res) => {
+router.post('/categories', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { name, parent_id, sort_order = 0 } = req.body
@@ -379,7 +380,7 @@ router.post('/categories', (req, res) => {
 })
 
 // 更新分类
-router.put('/categories/:id', (req, res) => {
+router.put('/categories/:id', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -430,7 +431,7 @@ router.put('/categories/:id', (req, res) => {
 })
 
 // 删除分类
-router.delete('/categories/:id', (req, res) => {
+router.delete('/categories/:id', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -495,7 +496,7 @@ router.get('/tags', (req, res) => {
 })
 
 // 创建标签
-router.post('/tags', (req, res) => {
+router.post('/tags', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { name, color } = req.body
@@ -528,7 +529,7 @@ router.post('/tags', (req, res) => {
 })
 
 // 更新标签
-router.put('/tags/:id', (req, res) => {
+router.put('/tags/:id', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -575,7 +576,7 @@ router.put('/tags/:id', (req, res) => {
 })
 
 // 删除标签
-router.delete('/tags/:id', (req, res) => {
+router.delete('/tags/:id', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params

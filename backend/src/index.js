@@ -102,6 +102,9 @@ app.get('/api/stats', authenticateToken, (req, res) => {
   try {
     const db = getDatabase()
     
+    // 判断是否为游客：游客不显示已隐藏的动漫
+    const isGuest = req.user?.isGuest || false
+    
     // 使用 COUNT 查询，性能远高于加载全部数据
     const stats = {
       documents: db.prepare('SELECT COUNT(*) as count FROM documents').get()?.count || 0,
@@ -115,7 +118,14 @@ app.get('/api/stats', authenticateToken, (req, res) => {
         published: db.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'published'").get()?.count || 0,
         draft: db.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'draft'").get()?.count || 0
       },
-      anime: {
+      anime: isGuest ? {
+        // 游客：过滤已隐藏的动漫
+        total: db.prepare('SELECT COUNT(*) as count FROM anime WHERE is_hidden = 0 OR is_hidden IS NULL').get()?.count || 0,
+        want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'want_to_watch' AND (is_hidden = 0 OR is_hidden IS NULL)").get()?.count || 0,
+        watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watching' AND (is_hidden = 0 OR is_hidden IS NULL)").get()?.count || 0,
+        watched: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watched' AND (is_hidden = 0 OR is_hidden IS NULL)").get()?.count || 0
+      } : {
+        // 管理员：显示所有动漫（包括隐藏的）
         total: db.prepare('SELECT COUNT(*) as count FROM anime').get()?.count || 0,
         want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'want_to_watch'").get()?.count || 0,
         watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watching'").get()?.count || 0,

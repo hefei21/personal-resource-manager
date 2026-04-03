@@ -43,6 +43,7 @@
                 @click="downloadLyrics"
                 :loading="downloadingLyrics"
                 class="white-text-btn"
+                :disabled="isGuest"
               >
                 <template #icon><t-icon name="download" /></template>
                 获取歌词
@@ -52,6 +53,7 @@
                 variant="text"
                 @click="showUploadLyricsDialog = true"
                 class="white-text-btn"
+                :disabled="isGuest"
               >
                 <template #icon><t-icon name="upload" /></template>
                 上传歌词
@@ -61,6 +63,7 @@
                 size="small"
                 variant="text"
                 @click="showLyricsEditor = true"
+                :disabled="isGuest"
               >
                 <template #icon><t-icon name="edit" /></template>
                 编辑
@@ -119,10 +122,17 @@
         
         <div class="progress-section">
           <span class="time">{{ formatTime(currentTime) }}</span>
-          <div class="progress-bar" @click="seekTo">
+          <div
+            class="progress-bar"
+            :class="{ dragging: isDraggingProgress }"
+            @mousedown="handleProgressMouseDown"
+            @mousemove="handleProgressMouseMove"
+            @mouseup="handleProgressMouseUp"
+            @mouseleave="handleProgressMouseLeave"
+          >
             <div class="progress-track">
-              <div class="progress-fill" :style="{ width: `${progress}%` }"></div>
-              <div class="progress-thumb" :style="{ left: `${progress}%` }"></div>
+              <div class="progress-fill" :style="{ width: `${displayProgress}%` }"></div>
+              <div class="progress-thumb" :style="{ left: `${displayProgress}%` }"></div>
             </div>
           </div>
           <span class="time">{{ formatTime(duration) }}</span>
@@ -210,6 +220,9 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '../api'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 
 // Props
 const props = defineProps({
@@ -280,12 +293,19 @@ const lyricsText = ref('')
 const lyricsFile = ref([])
 const userScrolling = ref(false)
 const localVolume = ref(props.volume) // 本地音量状态，避免 props 响应式冲突
+const isDraggingProgress = ref(false) // 是否正在拖动进度条
+const dragProgress = ref(0) // 拖动时的临时进度
 let scrollTimer = null
 
 // 计算属性
 const progress = computed(() => {
   if (!props.duration) return 0
   return (props.currentTime / props.duration) * 100
+})
+
+// 显示进度（拖动时显示拖动进度，否则显示实际进度）
+const displayProgress = computed(() => {
+  return isDraggingProgress.value ? dragProgress.value : progress.value
 })
 
 const playModeText = computed(() => {
@@ -598,6 +618,39 @@ function seekTo(e) {
   emit('seek', percent * props.duration)
 }
 
+// 进度条拖动相关函数
+function handleProgressMouseDown(e) {
+  isDraggingProgress.value = true
+  updateDragProgress(e)
+}
+
+function handleProgressMouseMove(e) {
+  if (isDraggingProgress.value) {
+    updateDragProgress(e)
+  }
+}
+
+function handleProgressMouseUp(e) {
+  if (isDraggingProgress.value) {
+    isDraggingProgress.value = false
+    const rect = e.currentTarget.getBoundingClientRect()
+    const percent = (e.clientX - rect.left) / rect.width
+    emit('seek', percent * props.duration)
+  }
+}
+
+function handleProgressMouseLeave() {
+  if (isDraggingProgress.value) {
+    isDraggingProgress.value = false
+  }
+}
+
+function updateDragProgress(e) {
+  const rect = e.currentTarget.getBoundingClientRect()
+  const percent = ((e.clientX - rect.left) / rect.width) * 100
+  dragProgress.value = Math.max(0, Math.min(100, percent))
+}
+
 function changeVolume(e) {
   const vol = parseInt(e.target.value)
   localVolume.value = vol
@@ -626,6 +679,54 @@ function formatTime(seconds) {
   const secs = Math.floor(seconds % 60)
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
 }
+
+// 键盘快捷键支持
+function handleKeyDown(e) {
+  // 只在歌词窗口可见时响应
+  if (!props.visible) return
+
+  switch (e.code) {
+    case 'ArrowLeft':
+      // 后退5秒
+      e.preventDefault()
+      emit('seek', Math.max(0, props.currentTime - 5))
+      break
+    case 'ArrowRight':
+      // 前进5秒
+      e.preventDefault()
+      emit('seek', Math.min(props.duration, props.currentTime + 5))
+      break
+    case 'ArrowUp':
+      // 增加音量 5%
+      e.preventDefault()
+      const newVolUp = Math.min(100, localVolume.value + 5)
+      localVolume.value = newVolUp
+      emit('volume-change', newVolUp)
+      break
+    case 'ArrowDown':
+      // 降低音量 5%
+      e.preventDefault()
+      const newVolDown = Math.max(0, localVolume.value - 5)
+      localVolume.value = newVolDown
+      emit('volume-change', newVolDown)
+      break
+    case 'Space':
+      // 暂停/播放
+      e.preventDefault()  // 防止页面滚动
+      emit('toggle-play')
+      break
+  }
+}
+
+// 组件挂载时添加键盘事件监听
+onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown)
+})
+
+// 组件卸载时移除键盘事件监听
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown)
+})
 </script>
 
 <style scoped>
@@ -933,6 +1034,20 @@ function formatTime(seconds) {
 
 .progress-bar:hover .progress-thumb {
   opacity: 1;
+}
+
+/* 拖拽时进度条样式 */
+.progress-bar:active .progress-thumb,
+.progress-bar.dragging .progress-thumb {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.2);
+  box-shadow: 0 0 8px rgba(24, 144, 255, 0.6);
+}
+
+.progress-bar:active .progress-fill,
+.progress-bar.dragging .progress-fill {
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  box-shadow: 0 0 12px rgba(102, 126, 234, 0.6);
 }
 
 .extra-controls {

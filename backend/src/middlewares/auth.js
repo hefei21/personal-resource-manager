@@ -25,10 +25,33 @@ export function authenticateToken(req, res, next) {
   })
 }
 
-export function generateToken(user) {
+/**
+ * 要求写权限 - 拒绝游客的所有写操作
+ * 必须在 authenticateToken 之后使用
+ */
+export function requireWritePermission(req, res, next) {
+  if (!req.user) {
+    return res.status(401).json({ message: '需要认证' })
+  }
+  
+  if (req.user.isGuest) {
+    return res.status(403).json({ 
+      message: '游客无权执行此操作',
+      code: 'GUEST_NO_PERMISSION'
+    })
+  }
+  
+  next()
+}
+
+export function generateToken(user, isGuest = false) {
   return jwt.sign(
-    { id: user.id, username: user.username },
+    { 
+      id: user.id, 
+      username: user.username,
+      isGuest: isGuest  // 在 token 中标记是否为游客
+    },
     JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE || '7d' }
+    { expiresIn: isGuest ? '24h' : (process.env.JWT_EXPIRE || '7d') }  // 游客 token 24小时过期
   )
 }

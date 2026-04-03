@@ -38,6 +38,16 @@
             登录
           </t-button>
         </t-form-item>
+        <t-form-item>
+          <t-button
+            theme="default"
+            size="large"
+            block
+            @click="handleGuestLogin"
+          >
+            游客访问
+          </t-button>
+        </t-form-item>
       </t-form>
       <t-alert v-if="error" theme="error" :message="error" />
     </div>
@@ -88,6 +98,26 @@ async function handleSubmit() {
     }
   } catch (err) {
     error.value = '登录失败，请检查用户名和密码'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleGuestLogin() {
+  try {
+    loading.value = true
+    error.value = ''
+    
+    const result = await authStore.guestLogin()
+    
+    if (result.success) {
+      MessagePlugin.info('欢迎游客访问')
+      window.location.href = '/'
+    } else {
+      error.value = result.message || '游客登录失败'
+    }
+  } catch (err) {
+    error.value = '游客登录失败'
   } finally {
     loading.value = false
   }
@@ -212,5 +242,15 @@ async function handleSubmit() {
 .login-form :deep(.t-input:focus) {
   border-color: #764ba2;
   box-shadow: 0 0 0 3px rgba(118, 75, 162, 0.1);
+}
+
+/* 按钮容器居中 */
+.login-form :deep(.t-form-item:last-child .t-form-item__content) {
+  justify-content: center;
+}
+
+.login-form :deep(.t-space) {
+  width: 100%;
+  justify-content: center;
 }
 </style>

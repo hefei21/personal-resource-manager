@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-tunnel
+    restart: unless-stopped
+    # 【重要】将 YOUR_TUNNEL_TOKEN 替换为你在 Cloudflare 创建 Tunnel 时获取的 Token
+    command: tunnel --no-autoupdate run --token YOUR_TUNNEL_TOKEN
+    networks:
+      - pr-network
+
+networks:
+  pr-network:
+    external: true
+    name: personal-resource-manager_pr-network

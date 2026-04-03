@@ -1,6 +1,6 @@
 import express from 'express'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 
 const router = express.Router()
 
@@ -46,7 +46,7 @@ router.get('/month', authenticateToken, (req, res) => {
 })
 
 // 创建待办事项
-router.post('/', authenticateToken, (req, res) => {
+router.post('/', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const { text, date, completed = 0, confirmed = 0 } = req.body
     const db = getDatabase()
@@ -63,7 +63,7 @@ router.post('/', authenticateToken, (req, res) => {
 })
 
 // 更新待办事项
-router.put('/:id', authenticateToken, (req, res) => {
+router.put('/:id', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const { text, completed, confirmed } = req.body
     const db = getDatabase()
@@ -80,7 +80,7 @@ router.put('/:id', authenticateToken, (req, res) => {
 })
 
 // 删除待办事项
-router.delete('/:id', authenticateToken, (req, res) => {
+router.delete('/:id', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     const stmt = db.prepare('DELETE FROM todos WHERE id = ?')

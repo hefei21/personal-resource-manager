@@ -2,7 +2,7 @@ import express from 'express'
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 
 const router = express.Router()
 const BANGUMI_API_BASE = process.env.BANGUMI_API_BASE || 'https://api.bgm.tv'
@@ -250,7 +250,7 @@ router.get('/search', authenticateToken, async (req, res) => {
 })
 
 // 导入动漫（支持前端传递数据或后端获取）
-router.post('/import', authenticateToken, async (req, res) => {
+router.post('/import', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { bangumiId, animeData } = req.body
 
@@ -401,7 +401,7 @@ router.get('/relations/:bangumiId', authenticateToken, async (req, res) => {
 // 获取动漫列表
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { status, favorite, sortBy = 'updated_at', sortOrder = 'DESC', page = 1, pageSize = 15 } = req.query
+    const { status, favorite, sortBy = 'updated_at', sortOrder = 'DESC', page = 1, pageSize = 15, hideHidden } = req.query
     const db = getDatabase()
 
     let sql = 'SELECT * FROM anime WHERE 1=1'
@@ -414,6 +414,11 @@ router.get('/', authenticateToken, async (req, res) => {
 
     if (favorite === 'true') {
       sql += ' AND is_favorite = 1'
+    }
+
+    // 游客模式下隐藏已标记为隐藏的动漫
+    if (hideHidden === 'true') {
+      sql += ' AND (is_hidden = 0 OR is_hidden IS NULL)'
     }
 
     // 排序支持
@@ -507,7 +512,7 @@ router.get('/:id/cover', authenticateToken, async (req, res) => {
 })
 
 // 更新动漫信息
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { status, isFavorite } = req.body
     const db = getDatabase()
@@ -523,7 +528,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 })
 
 // 切换收藏状态
-router.post('/:id/favorite', authenticateToken, async (req, res) => {
+router.post('/:id/favorite', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
 
@@ -538,7 +543,7 @@ router.post('/:id/favorite', authenticateToken, async (req, res) => {
 })
 
 // 更新观看状态
-router.post('/:id/status', authenticateToken, async (req, res) => {
+router.post('/:id/status', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { status } = req.body
     const validStatuses = ['none', 'want_to_watch', 'watching', 'watched']
@@ -581,7 +586,7 @@ router.post('/:id/rating', authenticateToken, async (req, res) => {
 })
 
 // 刷新动漫信息（从 Bangumi API 重新获取并更新）
-router.post('/:id/refresh', authenticateToken, async (req, res) => {
+router.post('/:id/refresh', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     
@@ -683,8 +688,35 @@ router.post('/:id/refresh', authenticateToken, async (req, res) => {
   }
 })
 
+// 切换动漫隐藏状态
+router.put('/:id/toggle-hidden', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const db = getDatabase()
+    const { id } = req.params
+
+    // 获取当前状态
+    const anime = db.prepare('SELECT is_hidden FROM anime WHERE id = ?').get(id)
+    if (!anime) {
+      return res.status(404).json({ message: '动漫不存在' })
+    }
+
+    // 切换状态
+    const newHiddenStatus = anime.is_hidden === 1 ? 0 : 1
+    const stmt = db.prepare('UPDATE anime SET is_hidden = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    stmt.run(newHiddenStatus, id)
+
+    res.json({ 
+      message: newHiddenStatus === 1 ? '已隐藏' : '已取消隐藏',
+      is_hidden: newHiddenStatus 
+    })
+  } catch (error) {
+    console.error('切换隐藏状态失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
 // 删除动漫
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
 
@@ -697,7 +729,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 })
 
 // 批量下载动漫封面
-router.post('/batch-download-covers', authenticateToken, async (req, res) => {
+router.post('/batch-download-covers', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
 

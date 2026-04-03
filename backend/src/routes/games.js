@@ -2,7 +2,7 @@ import express from 'express'
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 
 const router = express.Router()
 
@@ -151,7 +151,7 @@ router.get('/steam/config', authenticateToken, (req, res) => {
 })
 
 // 保存 Steam 配置
-router.post('/steam/config', authenticateToken, async (req, res) => {
+router.post('/steam/config', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { steamId, apiKey } = req.body
     const db = getDatabase()
@@ -188,7 +188,7 @@ router.post('/steam/config', authenticateToken, async (req, res) => {
 })
 
 // 删除 Steam 配置
-router.delete('/steam/config', authenticateToken, (req, res) => {
+router.delete('/steam/config', authenticateToken, requireWritePermission, (req, res) => {
   try {
     const db = getDatabase()
     db.prepare('DELETE FROM steam_config WHERE id = 1').run()
@@ -374,7 +374,7 @@ async function executeSyncTask(taskId, steamId, apiKey) {
 }
 
 // 开始同步（异步）- 只同步游戏列表，成就按需获取
-router.post('/steam/sync', authenticateToken, async (req, res) => {
+router.post('/steam/sync', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const config = db.prepare('SELECT steam_id, api_key FROM steam_config WHERE id = 1').get()
@@ -544,7 +544,7 @@ router.get('/:id/achievements', authenticateToken, async (req, res) => {
 })
 
 // 按需获取/刷新游戏成就数据
-router.post('/:id/fetch-achievements', authenticateToken, async (req, res) => {
+router.post('/:id/fetch-achievements', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     
@@ -685,7 +685,7 @@ router.post('/:id/fetch-achievements', authenticateToken, async (req, res) => {
 })
 
 // 更新游戏信息
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { status, isFavorite, userRating, notes } = req.body
     const db = getDatabase()
@@ -707,7 +707,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 })
 
 // 删除游戏
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const stmt = db.prepare('DELETE FROM games WHERE id = ?')
@@ -719,7 +719,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 })
 
 // 切换收藏状态
-router.post('/:id/favorite', authenticateToken, async (req, res) => {
+router.post('/:id/favorite', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const stmt = db.prepare(`
@@ -733,7 +733,7 @@ router.post('/:id/favorite', authenticateToken, async (req, res) => {
 })
 
 // 更新游戏状态
-router.post('/:id/status', authenticateToken, async (req, res) => {
+router.post('/:id/status', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { status } = req.body
     const validStatuses = ['unplayed', 'playing', 'played', 'dropped', 'wishlist']
@@ -754,7 +754,7 @@ router.post('/:id/status', authenticateToken, async (req, res) => {
 })
 
 // 更新评分
-router.post('/:id/rating', authenticateToken, async (req, res) => {
+router.post('/:id/rating', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { rating } = req.body
     const db = getDatabase()
@@ -774,7 +774,7 @@ router.post('/:id/rating', authenticateToken, async (req, res) => {
 })
 
 // 批量下载封面（优化：已有可用封面则跳过）
-router.post('/batch-download-covers', authenticateToken, async (req, res) => {
+router.post('/batch-download-covers', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
 
@@ -868,7 +868,7 @@ router.post('/batch-download-covers', authenticateToken, async (req, res) => {
 })
 
 // 清除所有封面数据（用于重新下载）
-router.post('/clear-covers', authenticateToken, async (req, res) => {
+router.post('/clear-covers', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     db.prepare('UPDATE games SET cover_image = NULL, cover_image_data = NULL').run()
@@ -879,7 +879,7 @@ router.post('/clear-covers', authenticateToken, async (req, res) => {
 })
 
 // 单独更新某个游戏的封面
-router.post('/:id/refresh-cover', authenticateToken, async (req, res) => {
+router.post('/:id/refresh-cover', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const game = db.prepare('SELECT id, title, steam_appid FROM games WHERE id = ?').get(req.params.id)

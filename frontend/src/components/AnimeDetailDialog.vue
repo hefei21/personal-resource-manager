@@ -177,11 +177,11 @@
         </t-button>
         <!-- 已收藏状态下的操作 -->
         <template v-if="isImported && localAnime">
-          <t-button variant="outline" @click="refreshAnime" :loading="refreshing">
+          <t-button variant="outline" @click="refreshAnime" :loading="refreshing" :disabled="isGuest">
             <template #icon><t-icon name="refresh" /></template>
             刷新
           </t-button>
-          <t-select v-model="localAnime.status" style="width: 100px" @change="updateStatus">
+          <t-select v-model="localAnime.status" style="width: 100px" @change="updateStatus" v-if="!isGuest">
             <t-option value="none" label="未标记" />
             <t-option value="watching" label="想看" />
             <t-option value="watched" label="看过" />
@@ -190,11 +190,12 @@
             :theme="localAnime.is_favorite ? 'danger' : 'default'"
             variant="outline"
             @click="toggleFavorite"
+            :disabled="isGuest"
           >
             <template #icon><t-icon :name="localAnime.is_favorite ? 'heart-filled' : 'heart'" /></template>
             {{ localAnime.is_favorite ? '取消收藏' : '收藏' }}
           </t-button>
-          <t-popconfirm content="确定删除吗？" @confirm="handleDelete">
+          <t-popconfirm content="确定删除吗？" @confirm="handleDelete" v-if="!isGuest">
             <t-button theme="danger" variant="outline">
               <template #icon><t-icon name="delete" /></template>
               删除
@@ -203,11 +204,11 @@
         </template>
         <t-button variant="outline" @click="visible = false">关闭</t-button>
         <!-- 添加按钮：未收藏显示添加，已收藏显示已添加 -->
-        <t-button theme="primary" @click="handleImport" v-if="!isImported && !localAnime" :disabled="importing">
+        <t-button theme="primary" @click="handleImport" v-if="!isImported" :disabled="importing || isGuest">
           <template #icon><t-icon name="add" /></template>
           添加到收藏
         </t-button>
-        <t-button v-else-if="isImported && localAnime" disabled>
+        <t-button v-else disabled>
           <template #icon><t-icon name="check" /></template>
           已添加
         </t-button>
@@ -220,6 +221,9 @@
 import { ref, computed, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '../api'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 
 const props = defineProps({
   modelValue: {
@@ -356,8 +360,9 @@ async function loadDetail() {
   searchingResources.value = false
 
   try {
-    // 如果传入的是本地数据（有 id 字段），直接使用
-    if (props.animeData?.id) {
+    // 如果传入的是本地数据（有 bangumi_id 字段），直接使用
+    // 注意：搜索结果数据只有 id（Bangumi ID），没有 bangumi_id 字段
+    if (props.animeData?.bangumi_id) {
       anime.value = props.animeData
       characters.value = props.animeData.characters || []
       staff.value = props.animeData.staff || []
@@ -365,13 +370,11 @@ async function loadDetail() {
       localAnime.value = props.animeData
 
       // 获取关联作品
-      if (props.animeData.bangumi_id) {
-        try {
-          const relRes = await api.anime.getRelations(props.animeData.bangumi_id)
-          relations.value = relRes.data.data || []
-        } catch {
-          relations.value = []
-        }
+      try {
+        const relRes = await api.anime.getRelations(props.animeData.bangumi_id)
+        relations.value = relRes.data.data || []
+      } catch {
+        relations.value = []
       }
       loading.value = false
       return

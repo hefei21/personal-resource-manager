@@ -5,7 +5,7 @@ import fs from 'fs'
 import bcrypt from 'bcryptjs'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 
 const router = express.Router()
 
@@ -41,7 +41,7 @@ const upload = multer({
 })
 
 // 创建分类
-router.post('/categories', authenticateToken, async (req, res) => {
+router.post('/categories', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { name, parentId } = req.body
     if (!name || !name.trim()) {
@@ -173,7 +173,7 @@ function parseCategoryPath(path) {
 }
 
 // 删除分类
-router.delete('/categories/:id', authenticateToken, async (req, res) => {
+router.delete('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const categoryId = req.params.id
@@ -287,7 +287,7 @@ router.delete('/categories/:id', authenticateToken, async (req, res) => {
 })
 
 // 更新分类排序 - 注意：必须放在 /categories/:id 之前，否则会被 :id 匹配
-router.put('/categories/reorder', authenticateToken, async (req, res) => {
+router.put('/categories/reorder', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { orders } = req.body // orders 是一个数组，格式：[{ id: 1, sortOrder: 0 }, { id: 2, sortOrder: 1 }, ...]
 
@@ -315,7 +315,7 @@ router.put('/categories/reorder', authenticateToken, async (req, res) => {
 })
 
 // 更新分类名称
-router.put('/categories/:id', authenticateToken, async (req, res) => {
+router.put('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { name } = req.body
     const categoryId = req.params.id
@@ -670,7 +670,7 @@ router.get('/', authenticateToken, async (req, res) => {
 })
 
 // 上传文档
-router.post('/upload', authenticateToken, upload.single('file'), async (req, res) => {
+router.post('/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
   try {
     console.log('文档上传请求:', {
       body: req.body,
@@ -823,7 +823,7 @@ router.get('/:id/content', async (req, res) => {
 })
 
 // 更新文档内容
-router.put('/:id/content', authenticateToken, async (req, res) => {
+router.put('/:id/content', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { content, versionNote, newVersion } = req.body
     if (!content) {
@@ -932,7 +932,7 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
 })
 
 // 更新文档
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { title, category, subcategory, tags } = req.body
     const db = getDatabase()
@@ -950,7 +950,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 })
 
 // 批量更新文档
-router.put('/batch/update', authenticateToken, async (req, res) => {
+router.put('/batch/update', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { ids, category, subcategory, tags } = req.body
     if (!ids || !Array.isArray(ids) || ids.length === 0) {
@@ -1201,7 +1201,7 @@ router.get('/private/list', authenticateToken, async (req, res) => {
 })
 
 // 上传私密文件
-router.post('/private/upload', authenticateToken, upload.single('file'), async (req, res) => {
+router.post('/private/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
   try {
     const { title } = req.body
     const filePath = req.file.path
@@ -1277,7 +1277,7 @@ router.get('/download/private/:id', async (req, res) => {
 })
 
 // 删除私密文件
-router.delete('/private/:id', authenticateToken, async (req, res) => {
+router.delete('/private/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')

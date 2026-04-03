@@ -18,7 +18,7 @@
               <t-icon name="search" />
             </template>
           </t-input>
-          <t-button theme="primary" @click="showAddDialog">
+          <t-button theme="primary" @click="showAddDialog" :disabled="isGuest">
             <template #icon><t-icon name="add" /></template>
             添加仓库
           </t-button>
@@ -26,43 +26,49 @@
       </t-card>
 
       <t-card style="margin-top: 16px">
-        <t-list v-if="repoList.length > 0" :split="true">
-          <t-list-item v-for="repo in repoList" :key="repo.id">
-            <div class="repo-item">
-              <div class="repo-info" @click="openRepo(repo)">
-                <div class="repo-name">
-                  <t-icon :name="repo.type === 'svn' ? 'folder' : 'git'" />
-                  {{ repo.name }}
-                  <t-tag v-if="isCloning(repo.id)" theme="warning" variant="light">克隆中 {{ cloneProgress(repo.id) }}%</t-tag>
-                  <t-tag v-else-if="!repo.last_sync" theme="warning" variant="light">等待克隆</t-tag>
+        <!-- 加载状态 -->
+        <div v-if="loading" class="content-loading">
+          <t-loading size="small" />
+        </div>
+        <template v-else>
+          <t-list v-if="repoList.length > 0" :split="true">
+            <t-list-item v-for="repo in repoList" :key="repo.id">
+              <div class="repo-item">
+                <div class="repo-info" @click="openRepo(repo)">
+                  <div class="repo-name">
+                    <t-icon :name="repo.type === 'svn' ? 'folder' : 'git'" />
+                    {{ repo.name }}
+                    <t-tag v-if="isCloning(repo.id)" theme="warning" variant="light">克隆中 {{ cloneProgress(repo.id) }}%</t-tag>
+                    <t-tag v-else-if="!repo.last_sync" theme="warning" variant="light">等待克隆</t-tag>
+                  </div>
+                  <div class="repo-desc">{{ repo.description || '暂无描述' }}</div>
+                  <div v-if="isCloning(repo.id)" class="clone-progress-bar">
+                    <div class="clone-progress-fill" :style="{ width: cloneProgress(repo.id) + '%' }"></div>
+                  </div>
+                  <div class="repo-meta">
+                    <span>{{ repo.type.toUpperCase() }}</span>
+                    <span v-if="repo.last_sync">同步: {{ formatDate(repo.last_sync) }}</span>
+                    <span v-if="repo.size !== undefined" class="repo-size">{{ formatSize(repo.size) }}</span>
+                  </div>
                 </div>
-                <div class="repo-desc">{{ repo.description || '暂无描述' }}</div>
-                <div v-if="isCloning(repo.id)" class="clone-progress-bar">
-                  <div class="clone-progress-fill" :style="{ width: cloneProgress(repo.id) + '%' }"></div>
-                </div>
-                <div class="repo-meta">
-                  <span>{{ repo.type.toUpperCase() }}</span>
-                  <span v-if="repo.last_sync">同步: {{ formatDate(repo.last_sync) }}</span>
-                  <span v-if="repo.size !== undefined" class="repo-size">{{ formatSize(repo.size) }}</span>
-                </div>
-              </div>
-              <div class="repo-actions">
-                <t-button theme="default" size="small" @click.stop="editRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id)">
-                  <template #icon><t-icon name="edit" /></template>
-                </t-button>
-                <t-button theme="default" size="small" @click.stop="syncRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id)">
-                  <template #icon><t-icon name="refresh" /></template>
-                </t-button>
-                <t-popconfirm content="确定删除吗？这将同时删除本地代码文件。" @confirm="deleteRepo(repo.id)">
-                  <t-button theme="danger" size="small">
-                    <template #icon><t-icon name="delete" /></template>
+                <div class="repo-actions">
+                  <t-button theme="default" size="small" @click.stop="editRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id) || isGuest">
+                    <template #icon><t-icon name="edit" /></template>
                   </t-button>
-                </t-popconfirm>
+                  <t-button theme="default" size="small" @click.stop="syncRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id) || isGuest">
+                    <template #icon><t-icon name="refresh" /></template>
+                  </t-button>
+                  <t-popconfirm content="确定删除吗？这将同时删除本地代码文件。" @confirm="deleteRepo(repo.id)">
+                    <t-button theme="danger" size="small" :disabled="isGuest">
+                      <template #icon><t-icon name="delete" /></template>
+                    </t-button>
+                  </t-popconfirm>
+                </div>
               </div>
-            </div>
-          </t-list-item>
-        </t-list>
-        <t-empty v-else description="暂无代码仓库，请添加一个仓库" />
+            </t-list-item>
+          </t-list>
+          <t-empty v-else description="暂无代码仓库，请添加一个仓库" />
+        </template>
       </t-card>
     </div>
 
@@ -78,7 +84,7 @@
           {{ currentRepo.name }}
         </div>
         <t-space>
-          <t-button theme="default" size="small" @click="refreshRepo">
+          <t-button theme="default" size="small" @click="refreshRepo" v-if="!isGuest">
             <template #icon><t-icon name="refresh" /></template>
             刷新
           </t-button>
@@ -264,6 +270,9 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 import 'highlight.js/styles/github.css'
 
 const repoList = ref([])
@@ -960,6 +969,14 @@ onMounted(() => loadRepos())
   padding: 0;
 }
 
+/* 内容区域加载状态 */
+.content-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+}
+
 .page-header {
   margin-bottom: 20px;
 }
@@ -1072,12 +1089,15 @@ onMounted(() => loadRepos())
   border-radius: 8px;
   height: calc(100% - 60px);
   overflow: hidden;
+  display: flex;
 }
 
 .file-sidebar {
   width: 280px;
+  min-width: 280px;  /* 防止被挤压 */
   border-right: 1px solid #e7e7e7;
   overflow-y: auto;
+  flex-shrink: 0;  /* 不允许收缩 */
 }
 
 .sidebar-header {
@@ -1090,6 +1110,8 @@ onMounted(() => loadRepos())
   padding: 16px;
   overflow-y: auto;
   position: relative;
+  flex: 1;
+  min-width: 400px;  /* 最小宽度 */
 }
 
 .readme-panel {

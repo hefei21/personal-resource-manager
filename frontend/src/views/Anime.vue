@@ -43,6 +43,14 @@
           </template>
         </t-input>
         <t-button @click="handleSearch" :loading="searching">搜索</t-button>
+        <t-select
+          v-model="resourceSearchMode"
+          style="width: 140px;"
+          placeholder="搜索模式"
+        >
+          <t-option value="parallel" label="同时多源搜索" />
+          <t-option value="sequential" label="顺序优先搜索" />
+        </t-select>
       </t-space>
     </t-card>
 
@@ -104,16 +112,16 @@
               <span v-if="anime.tags.length > 4" class="more-tags">+{{ anime.tags.length - 4 }}</span>
             </div>
             <div class="card-actions">
-              <t-button
-                size="small"
-                :disabled="isInLibrary(anime.id)"
-                :theme="isInLibrary(anime.id) ? 'default' : 'primary'"
-                @click.stop="handleImport(anime)"
-                :loading="anime.importing"
-              >
-                <template #icon><t-icon :name="isInLibrary(anime.id) ? 'check' : 'add'" /></template>
-                {{ isInLibrary(anime.id) ? '已添加' : '添加' }}
-              </t-button>
+            <t-button
+              size="small"
+              :disabled="isInLibrary(anime.id) || isGuest"
+              :theme="isInLibrary(anime.id) ? 'default' : 'primary'"
+              @click.stop="handleImport(anime)"
+              :loading="anime.importing"
+            >
+              <template #icon><t-icon :name="isInLibrary(anime.id) ? 'check' : 'add'" /></template>
+              {{ isInLibrary(anime.id) ? '已添加' : '添加' }}
+            </t-button>
               <t-button size="small" variant="outline" @click.stop="showDetail(anime)">
                 <template #icon><t-icon name="view-list" /></template>
                 详情
@@ -170,6 +178,7 @@
               size="small"
               :loading="downloadingCovers"
               @click="handleBatchDownloadCovers"
+              :disabled="isGuest"
             >
               <template #icon><t-icon name="download" /></template>
               批量下载封面
@@ -180,18 +189,11 @@
               :loading="testingResources"
               @click="testResourceSites"
               class="test-resources-btn"
+              :disabled="isGuest"
             >
               <template #icon><t-icon name="link-unlink" /></template>
               测试资源站点
             </t-button>
-            <t-select
-              v-model="resourceSearchMode"
-              style="width: 140px;"
-              placeholder="搜索模式"
-            >
-              <t-option value="parallel" label="同时多源搜索" />
-              <t-option value="sequential" label="顺序优先搜索" />
-            </t-select>
           </t-space>
         </div>
       </template>
@@ -239,12 +241,13 @@
               :count="5"
               allow-half
               size="small"
-              @change="(val) => updateUserRating(row, val * 2)"
+              :disabled="isGuest"
+              @change="(val) => !isGuest && updateUserRating(row, val * 2)"
             />
           </div>
         </template>
         <template #status="{ row }">
-          <t-dropdown trigger="hover">
+          <t-dropdown trigger="hover" v-if="!isGuest">
             <t-tag v-if="row.status === 'want_to_watch'" theme="warning" variant="light" style="cursor: pointer;">想看</t-tag>
             <t-tag v-else-if="row.status === 'watching'" theme="primary" variant="light" style="cursor: pointer;">在看</t-tag>
             <t-tag v-else-if="row.status === 'watched'" theme="success" variant="light" style="cursor: pointer;">看过</t-tag>
@@ -256,11 +259,15 @@
               <t-dropdown-item @click="updateStatus(row, 'watched')">看过</t-dropdown-item>
             </t-dropdown-menu>
           </t-dropdown>
+          <t-tag v-else-if="row.status === 'want_to_watch'" theme="warning" variant="light">想看</t-tag>
+          <t-tag v-else-if="row.status === 'watching'" theme="primary" variant="light">在看</t-tag>
+          <t-tag v-else-if="row.status === 'watched'" theme="success" variant="light">看过</t-tag>
+          <t-tag v-else theme="default" variant="light">未标记</t-tag>
         </template>
         <template #isFavorite="{ row }">
-          <span class="favorite-icon" @click.stop="toggleFavorite(row)">
-            <t-icon v-if="row.is_favorite || row.isFavorite" name="heart-filled" style="color: #e34d59; cursor: pointer;" />
-            <t-icon v-else name="heart" style="color: #bbb; cursor: pointer;" />
+          <span class="favorite-icon" @click.stop="!isGuest && toggleFavorite(row)">
+            <t-icon v-if="row.is_favorite || row.isFavorite" name="heart-filled" :style="{ color: '#e34d59', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
+            <t-icon v-else name="heart" :style="{ color: '#bbb', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
           </span>
         </template>
         <template #operation="{ row }">
@@ -268,7 +275,17 @@
             <t-button size="small" variant="text" @click.stop="showLocalDetail({ row })">
               <t-icon name="view-list" />
             </t-button>
-            <t-popconfirm content="确定删除吗？" @confirm="handleDelete(row.id)">
+            <t-tooltip :content="row.is_hidden ? '取消隐藏' : '隐藏'" placement="top" v-if="!isGuest">
+              <t-button 
+                size="small" 
+                variant="text" 
+                :theme="row.is_hidden ? 'warning' : 'default'"
+                @click.stop="handleToggleHidden(row)"
+              >
+                <t-icon :name="row.is_hidden ? 'browse-off' : 'browse'" />
+              </t-button>
+            </t-tooltip>
+            <t-popconfirm content="确定删除吗？" @confirm="handleDelete(row.id)" v-if="!isGuest">
               <t-button theme="danger" size="small" variant="text" @click.stop>
                 <t-icon name="delete" />
               </t-button>
@@ -309,6 +326,9 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import AnimeDetailDialog from '@/components/AnimeDetailDialog.vue'
 import { initAnimeCoverDB, getAnimeCoverFromCache, saveAnimeCoverToCache } from '@/utils/animeCoverCache'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 
 const loading = ref(false)
 const searching = ref(false)
@@ -389,7 +409,7 @@ const downloadingCovers = ref(false)
 const testingResources = ref(false)
 const resourceTestResults = ref(null)
 const showResourceTestDialog = ref(false)
-const resourceSearchMode = ref(localStorage.getItem('resourceSearchMode') || 'parallel') // 资源搜索模式
+const resourceSearchMode = ref(localStorage.getItem('resourceSearchMode') || 'sequential') // 资源搜索模式（默认顺序优先）
 const pagination = ref({ current: 1, pageSize: 15, total: 0 })
 const searchPagination = ref({ current: 1, pageSize: 20, total: 0 })  // 搜索结果分页（匹配 Bangumi API 限制）
 
@@ -401,16 +421,26 @@ const detailVisible = ref(false)
 const selectedBangumiId = ref(null)
 const selectedAnime = ref(null)
 
-const tableColumns = computed(() => [
-  { colKey: 'coverImage', title: '封面', width: 60, align: 'center' },
-  { colKey: 'title', title: '标题', minWidth: 200 },
-  { colKey: 'year', title: '年份', width: 85, align: 'center', sorter: true },
-  { colKey: 'rating', title: '评分', width: 100, align: 'left', sorter: true },
-  { colKey: 'userRating', title: '我的评分', width: 130, align: 'left', sorter: true },
-  { colKey: 'status', title: '状态', width: 95, align: 'center', sorter: true },
-  { colKey: 'isFavorite', title: '♥', width: 50, align: 'center' },
-  { colKey: 'operation', title: '操作', width: 95, align: 'center' }
-])
+const tableColumns = computed(() => {
+  const baseColumns = [
+    { colKey: 'coverImage', title: '封面', width: 42, align: 'left' },
+    { colKey: 'title', title: '标题', width: 250, align: 'left' },
+    { colKey: 'year', title: '年份', width: 85, align: 'left', sorter: true },
+    { colKey: 'rating', title: '评分', width: 95, align: 'left', sorter: true },
+    { colKey: 'userRating', title: '我的评分', width: 120, align: 'left', sorter: true },
+    { colKey: 'status', title: '状态', width: 90, align: 'left', sorter: true },
+    { colKey: 'isFavorite', title: '♥', width: 45, align: 'center' }
+  ]
+
+  // 游客模式下操作列宽度更小
+  if (isGuest.value) {
+    baseColumns.push({ colKey: 'operation', title: '操作', width: 60, align: 'left' })
+  } else {
+    baseColumns.push({ colKey: 'operation', title: '操作', width: 120, align: 'left' })
+  }
+
+  return baseColumns
+})
 
 // 排序相关
 
@@ -526,7 +556,8 @@ async function loadAnime() {
       sortBy: sortBy.value,
       sortOrder: sortOrder.value,
       page: pagination.value.current,
-      pageSize: pagination.value.pageSize
+      pageSize: pagination.value.pageSize,
+      hideHidden: isGuest.value ? 'true' : undefined // 游客模式下隐藏已标记为隐藏的动画
     })
     animeList.value = response.data.data || []
     pagination.value.total = response.data.total || 0
@@ -707,6 +738,20 @@ async function handleDelete(id) {
   }
 }
 
+// 切换动漫隐藏状态
+async function handleToggleHidden(row) {
+  try {
+    const response = await api.anime.toggleHidden(row.id)
+    MessagePlugin.success(response.data.message)
+    // 更新本地状态
+    row.is_hidden = response.data.is_hidden
+    // 重新加载列表以保持一致性
+    loadAnime()
+  } catch (error) {
+    MessagePlugin.error('操作失败')
+  }
+}
+
 // 批量下载封面
 async function handleBatchDownloadCovers() {
   downloadingCovers.value = true
@@ -749,12 +794,6 @@ async function testResourceSites() {
 function toHttps(url) {
   if (!url) return url
   return url.replace(/^http:\/\//, 'https://')
-}
-
-// 获取封面图片URL（优先使用本地存储的base64数据）
-function getCoverUrl(row) {
-  if (row.cover_image_data) return row.cover_image_data
-  return toHttps(row.cover_image) || toHttps(row.coverImage)
 }
 
 // 获取Bangumi Token状态
@@ -1026,16 +1065,39 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow: hidden;
+}
+
+/* 减少标题列左侧内边距 - 表头和内容 */
+::v-deep(.t-table tr td:nth-child(2)),
+::v-deep(.t-table th:nth-child(2)) {
+  padding-left: 0 !important;
+}
+
+/* 表头标题与内容对齐 */
+::v-deep(.t-table th:nth-child(2) .t-table__th-cell-inner) {
+  justify-content: flex-start !important;
 }
 
 .main-title {
   font-weight: 500;
   color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sub-title {
   font-size: 12px;
   color: #999;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 表格自适应布局 */
+::deep(.t-table) {
+  table-layout: auto;
 }
 
 .rating-cell {
@@ -1107,11 +1169,11 @@ onUnmounted(() => {
 }
 
 /* 测试资源站点按钮图标颜色 */
-.test-resources-btn {
+.test-resources-btn:not(:disabled) {
   color: #333 !important;
 }
 
-.test-resources-btn .t-icon {
+.test-resources-btn:not(:disabled) .t-icon {
   color: #333 !important;
 }
 </style>

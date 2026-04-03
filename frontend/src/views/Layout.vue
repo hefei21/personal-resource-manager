@@ -1,5 +1,10 @@
 <template>
   <div class="layout-container">
+    <!-- 全局路由切换Loading -->
+    <div v-if="routeLoading" class="global-loading-overlay">
+      <t-loading size="small" />
+    </div>
+
     <!-- 固定侧边栏 -->
     <aside class="fixed-aside">
       <div class="logo">雨的空间</div>
@@ -71,7 +76,14 @@
       <div class="header-content">
         <h2>{{ pageTitle }}</h2>
         <div class="user-info">
-          <span>{{ authStore.user?.username || '用户' }}</span>
+          <t-tooltip v-if="!authStore.isGuest()" content="修改密码" placement="bottom">
+            <span class="username-link" @click="showPasswordDialog = true">
+              {{ authStore.user?.username || '用户' }}
+            </span>
+          </t-tooltip>
+          <span v-else class="username-text">
+            {{ authStore.user?.username || '用户' }}
+          </span>
           <t-button theme="default" size="small" @click="handleLogout">
             退出
           </t-button>
@@ -86,20 +98,116 @@
 
     <!-- 音乐播放器 -->
     <MediaPlayer />
+
+    <!-- 修改密码对话框 -->
+    <t-dialog
+      v-model:visible="showPasswordDialog"
+      header="修改密码"
+      :confirm-btn="{ content: '确认修改', loading: passwordLoading }"
+      @confirm="handlePasswordChange"
+      @close="resetPasswordForm"
+    >
+      <t-form :data="passwordForm" :rules="passwordRules" ref="passwordFormRef">
+        <t-form-item label="旧密码" name="oldPassword">
+          <t-input
+            v-model="passwordForm.oldPassword"
+            type="password"
+            placeholder="请输入旧密码"
+            clearable
+          />
+        </t-form-item>
+        <t-form-item label="新密码" name="newPassword">
+          <t-input
+            v-model="passwordForm.newPassword"
+            type="password"
+            placeholder="请输入新密码"
+            clearable
+          />
+        </t-form-item>
+        <t-form-item label="确认密码" name="confirmPassword">
+          <t-input
+            v-model="passwordForm.confirmPassword"
+            type="password"
+            placeholder="请再次输入新密码"
+            clearable
+          />
+        </t-form-item>
+      </t-form>
+    </t-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { MessagePlugin } from 'tdesign-vue-next'
 import MediaPlayer from '@/components/MediaPlayer.vue'
+import api from '@/api'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 
 const activeMenu = ref(route.name?.toLowerCase())
+const routeLoading = ref(false)
+let routeLoadingTimer = null
+
+// 路由切换前延迟显示全局loading，让播放栏动画先执行
+const beforeRouteChange = router.beforeEach((_to, _from, next) => {
+  // 延迟300ms显示全局loading，给播放栏动画留出时间
+  routeLoadingTimer = setTimeout(() => {
+    routeLoading.value = true
+  }, 300)
+  next()
+})
+
+// 路由切换后隐藏全局loading
+const afterRouteChange = router.afterEach(() => {
+  // 清除未完成的定时器
+  if (routeLoadingTimer) {
+    clearTimeout(routeLoadingTimer)
+    routeLoadingTimer = null
+  }
+  // 延迟一点关闭，确保页面已经开始渲染
+  setTimeout(() => {
+    routeLoading.value = false
+  }, 100)
+})
+
+onUnmounted(() => {
+  beforeRouteChange()
+  afterRouteChange()
+  if (routeLoadingTimer) {
+    clearTimeout(routeLoadingTimer)
+  }
+})
+
+// 修改密码相关
+const showPasswordDialog = ref(false)
+const passwordLoading = ref(false)
+const passwordFormRef = ref(null)
+const passwordForm = ref({
+  oldPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
+
+const passwordRules = {
+  oldPassword: [{ required: true, message: '请输入旧密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, message: '密码长度至少6位', trigger: 'blur' }
+  ],
+  confirmPassword: [
+    { required: true, message: '请确认新密码', trigger: 'blur' },
+    {
+      validator: (val) => val === passwordForm.value.newPassword,
+      message: '两次输入的密码不一致',
+      trigger: 'blur'
+    }
+  ]
+}
 
 const pageTitle = computed(() => {
   const titles = {
@@ -123,6 +231,45 @@ function handleMenuChange(value) {
 function handleLogout() {
   authStore.logout()
   router.push('/login')
+}
+
+function resetPasswordForm() {
+  passwordForm.value = {
+    oldPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+  }
+  passwordFormRef.value?.reset()
+}
+
+async function handlePasswordChange() {
+  const valid = await passwordFormRef.value?.validate()
+  if (valid !== true) {
+    return false
+  }
+
+  passwordLoading.value = true
+  try {
+    const response = await api.auth.changePassword({
+      oldPassword: passwordForm.value.oldPassword,
+      newPassword: passwordForm.value.newPassword
+    })
+
+    if (response.data.message) {
+      MessagePlugin.success('密码修改成功，请重新登录')
+      showPasswordDialog.value = false
+      resetPasswordForm()
+      // 修改成功后自动退出登录
+      setTimeout(() => {
+        handleLogout()
+      }, 1500)
+    }
+  } catch (error) {
+    MessagePlugin.error(error.response?.data?.message || '修改密码失败')
+    return false
+  } finally {
+    passwordLoading.value = false
+  }
 }
 </script>
 
@@ -317,6 +464,25 @@ function handleLogout() {
   color: #667eea;
 }
 
+.username-link {
+  cursor: pointer;
+  transition: all 0.3s ease;
+  padding: 4px 12px;
+  border-radius: 4px;
+}
+
+.username-link:hover {
+  color: #764ba2;
+  background: rgba(102, 126, 234, 0.1);
+  transform: translateY(-1px);
+}
+
+.username-text {
+  font-weight: 500;
+  color: #667eea;
+  padding: 4px 12px;
+}
+
 .user-info :deep(.t-button) {
   transition: all 0.3s ease;
 }
@@ -324,5 +490,31 @@ function handleLogout() {
 .user-info :deep(.t-button:hover) {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+/* 全局路由loading覆盖层 */
+.global-loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 240px;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(4px);
+}
+
+.global-loading-overlay :deep(.t-loading) {
+  color: #667eea;
+}
+
+.global-loading-overlay :deep(.t-loading__text) {
+  color: #667eea;
+  font-size: 16px;
+  font-weight: 500;
+  margin-top: 12px;
 }
 </style>

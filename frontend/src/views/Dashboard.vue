@@ -153,7 +153,7 @@
       <div class="todo-section">
         <div class="todo-header">
           <h4>{{ formatSelectedDate }} 的待办事项</h4>
-          <t-button theme="primary" size="small" @click="addTodo">
+          <t-button theme="primary" size="small" @click="addTodo" :disabled="isGuest">
             <template #icon><AddIcon /></template>
             添加待办
           </t-button>
@@ -166,6 +166,7 @@
             :class="{ completed: !!todo.completed, confirmed: !!todo.confirmed, editing: !!todo.editing }"
           >
             <t-checkbox 
+              v-if="!isGuest"
               :model-value="!!todo.completed"
               @change="(val) => { todo.completed = val ? 1 : 0; updateTodo(todo) }"
             />
@@ -185,6 +186,7 @@
               size="small"
               theme="success"
               @click="confirmTodo(todo)"
+              :disabled="isGuest"
             >
               确认
             </t-button>
@@ -194,6 +196,7 @@
               size="small"
               theme="primary"
               @click="editTodo(todo)"
+              :disabled="isGuest"
             >
               编辑
             </t-button>
@@ -203,10 +206,11 @@
               size="small"
               theme="success"
               @click="saveEdit(todo)"
+              :disabled="isGuest"
             >
               保存
             </t-button>
-            <t-button variant="text" theme="danger" @click="deleteTodo(todo.id)">
+            <t-button variant="text" theme="danger" @click="deleteTodo(todo.id)" :disabled="isGuest">
               <template #icon><DeleteIcon /></template>
             </t-button>
           </div>
@@ -224,6 +228,9 @@ import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
 import { ChevronLeftIcon, ChevronRightIcon, AddIcon, DeleteIcon } from 'tdesign-icons-vue-next'
 import { Solar } from 'lunar-javascript'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 
 const stats = ref({
   documents: 0,
@@ -454,6 +461,8 @@ const creatingTodos = new Set()
 
 // 添加待办
 function addTodo() {
+  if (isGuest.value) return
+  
   const newTodo = {
     id: `new-${Date.now()}`, // 使用字符串 ID
     text: '',

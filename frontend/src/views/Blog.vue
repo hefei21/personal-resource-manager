@@ -12,7 +12,7 @@
             <t-radio-group v-model="statusFilter" variant="default-filled" @change="handleStatusFilterChange">
               <t-radio-button value="">全部</t-radio-button>
               <t-radio-button value="published">已发布</t-radio-button>
-              <t-radio-button value="draft">草稿</t-radio-button>
+              <t-radio-button v-if="!isGuest" value="draft">草稿</t-radio-button>
             </t-radio-group>
 
             <t-input
@@ -40,23 +40,28 @@
           </t-space>
 
           <t-space>
-            <t-button theme="primary" @click="handleCreate">
+            <t-button theme="primary" @click="handleCreate" :disabled="isGuest">
               <template #icon><t-icon name="add" /></template>
               新建文章
             </t-button>
-            <t-button theme="default" @click="showCategoryManager = true">
+            <t-button theme="default" @click="showCategoryManager = true" :disabled="isGuest">
               <template #icon><t-icon name="folder" /></template>
               分类管理
             </t-button>
-            <t-button theme="default" @click="showTagManager = true">
+            <t-button theme="default" @click="showTagManager = true" :disabled="isGuest">
               <template #icon><t-icon name="discount" /></template>
               标签管理
             </t-button>
           </t-space>
         </div>
 
+        <!-- 加载状态 -->
+        <div v-if="loading" class="content-loading">
+          <t-loading size="small" />
+        </div>
+
         <!-- 文章列表 -->
-        <div class="posts-list" v-if="posts.length > 0">
+        <div v-else-if="posts.length > 0" class="posts-list">
           <div
             v-for="post in posts"
             :key="post.id"
@@ -88,11 +93,11 @@
               <t-button size="small" variant="text" class="action-btn view-btn" @click="handlePreview(post)">
                 <t-icon name="browse" />
               </t-button>
-              <t-button size="small" variant="text" class="action-btn edit-btn" @click="handleEdit(post)">
+              <t-button size="small" variant="text" class="action-btn edit-btn" @click="handleEdit(post)" :disabled="isGuest">
                 <t-icon name="edit" />
               </t-button>
               <t-popconfirm content="确定删除这篇文章吗？" @confirm="handleDelete(post.id)">
-                <t-button size="small" variant="text" class="action-btn delete-btn">
+                <t-button size="small" variant="text" class="action-btn delete-btn" :disabled="isGuest">
                   <t-icon name="delete" />
                 </t-button>
               </t-popconfirm>
@@ -101,17 +106,17 @@
         </div>
 
         <!-- 空状态 -->
-        <div v-else-if="!loading" class="empty-state">
+        <div v-else class="empty-state">
           <t-icon name="file" size="64px" />
           <p>暂无文章</p>
-          <t-button theme="primary" @click="handleCreate">
+          <t-button theme="primary" @click="handleCreate" :disabled="isGuest">
             <template #icon><t-icon name="add" /></template>
             写第一篇文章
           </t-button>
         </div>
 
         <!-- 分页 -->
-        <div v-if="total > 0" class="pagination-wrapper">
+        <div v-if="!loading && total > 0" class="pagination-wrapper">
           <t-pagination
             v-model="pagination.current"
             v-model:page-size="pagination.pageSize"
@@ -246,7 +251,7 @@
             style="flex: 1"
             @enter="handleCreateCategory"
           />
-          <t-button theme="primary" @click="handleCreateCategory">
+          <t-button theme="primary" @click="handleCreateCategory" :disabled="isGuest">
             <template #icon><t-icon name="add" /></template>
             添加
           </t-button>
@@ -260,11 +265,11 @@
               <t-tag size="small" variant="light">{{ cat.post_count || 0 }} 篇</t-tag>
             </div>
             <t-space>
-              <t-button size="small" variant="text" @click="handleEditCategory(cat)">
+              <t-button size="small" variant="text" @click="handleEditCategory(cat)" :disabled="isGuest">
                 <t-icon name="edit" />
               </t-button>
               <t-popconfirm content="确定删除此分类吗？" @confirm="handleDeleteCategory(cat.id)">
-                <t-button size="small" variant="text" theme="danger">
+                <t-button size="small" variant="text" theme="danger" :disabled="isGuest">
                   <t-icon name="delete" />
                 </t-button>
               </t-popconfirm>
@@ -295,7 +300,7 @@
             :show-primary-color-preview="false"
             style="width: 100px"
           />
-          <t-button theme="primary" @click="handleCreateTag">
+          <t-button theme="primary" @click="handleCreateTag" :disabled="isGuest">
             <template #icon><t-icon name="add" /></template>
             添加
           </t-button>
@@ -312,11 +317,11 @@
               <t-tag size="small" variant="light">{{ tag.post_count || 0 }} 篇</t-tag>
             </div>
             <t-space>
-              <t-button size="small" variant="text" @click="handleEditTag(tag)">
+              <t-button size="small" variant="text" @click="handleEditTag(tag)" :disabled="isGuest">
                 <t-icon name="edit" />
               </t-button>
               <t-popconfirm content="确定删除此标签吗？" @confirm="handleDeleteTag(tag.id)">
-                <t-button size="small" variant="text" theme="danger">
+                <t-button size="small" variant="text" theme="danger" :disabled="isGuest">
                   <t-icon name="delete" />
                 </t-button>
               </t-popconfirm>
@@ -369,6 +374,9 @@ import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import { MdEditor, MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 import 'md-editor-v3/lib/style.css'
 import 'md-editor-v3/lib/preview.css'
 
@@ -753,6 +761,14 @@ onMounted(() => {
   padding: 0;
 }
 
+/* 内容区域加载状态 */
+.content-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+}
+
 .page-header {
   margin-bottom: 20px;
 }
@@ -766,8 +782,9 @@ onMounted(() => {
 
 .page-header p {
   font-size: 16px;
-  color: #666;
+  color: #333;
   margin: 0;
+  font-weight: 500;
 }
 
 .toolbar {

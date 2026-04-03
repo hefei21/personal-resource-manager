@@ -11,7 +11,7 @@
       <!-- 配置区域 -->
       <div class="config-section">
         <t-space align="center">
-          <t-button size="small" variant="outline" @click="showConfigDialog = true">
+          <t-button size="small" variant="outline" @click="showConfigDialog = true" :disabled="isGuest">
             <template #icon><t-icon name="setting" /></template>
             域名配置
           </t-button>
@@ -207,6 +207,9 @@
 import { ref, computed, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 
 // Props
 const props = defineProps({

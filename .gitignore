@@ -65,6 +65,8 @@ coverage/
 
 # ==================== Docker 相关 ====================
 docker-compose.override.yml
+# 【重要】Tunnel Token 是敏感信息，不要提交到 Git
+docker-compose.tunnel.yml
 
 # ==================== 项目特定 ====================
 # 会话历史文件

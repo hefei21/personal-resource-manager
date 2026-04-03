@@ -1,6 +1,6 @@
 import express from 'express'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 import { exec, spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
@@ -424,7 +424,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 })
 
 // 更新代码仓库信息
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { name, description } = req.body
     const db = getDatabase()
@@ -932,7 +932,7 @@ function parseSvnLog(logOutput) {
 }
 
 // 手动同步仓库
-router.post('/:id/sync', authenticateToken, async (req, res) => {
+router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const repo = db.prepare('SELECT * FROM code_repositories WHERE id = ?').get(req.params.id)

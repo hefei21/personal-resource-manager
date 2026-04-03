@@ -8,7 +8,7 @@ import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 
 const execAsync = promisify(exec)
 
@@ -380,7 +380,7 @@ async function parseMusicMetadata(filePath, originalName) {
 // ========== 分片上传 ==========
 
 // 上传分片
-router.post('/upload-chunk', authenticateToken, upload.single('chunk'), async (req, res) => {
+router.post('/upload-chunk', authenticateToken, requireWritePermission, upload.single('chunk'), async (req, res) => {
   try {
     const { fileId, chunkIndex, totalChunks, fileName } = req.body
     const chunkIdx = parseInt(chunkIndex)
@@ -496,7 +496,7 @@ router.post('/check-duplicate', authenticateToken, async (req, res) => {
 })
 
 // 合并分片
-router.post('/merge-chunks', authenticateToken, async (req, res) => {
+router.post('/merge-chunks', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { fileId, fileName, totalChunks, skipDuplicate } = req.body
     const db = getDatabase()
@@ -731,7 +731,7 @@ router.get('/upload-progress', authenticateToken, async (req, res) => {
 })
 
 // 开始上传会话（保存文件元数据）
-router.post('/start-upload', authenticateToken, async (req, res) => {
+router.post('/start-upload', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { fileId, fileName, fileSize, totalChunks } = req.body
     
@@ -1042,7 +1042,7 @@ router.get('/albums', authenticateToken, async (req, res) => {
 })
 
 // 重新解析音乐元数据
-router.post('/:id/reparse', authenticateToken, async (req, res) => {
+router.post('/:id/reparse', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const music = db.prepare('SELECT * FROM music WHERE id = ?').get(req.params.id)
@@ -1123,7 +1123,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 })
 
 // 删除音乐
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM music WHERE id = ?')
@@ -1147,7 +1147,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 })
 
 // 批量删除音乐
-router.post('/batch-delete', authenticateToken, async (req, res) => {
+router.post('/batch-delete', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { ids } = req.body
     const db = getDatabase()
@@ -1411,7 +1411,7 @@ router.get('/playlists', authenticateToken, async (req, res) => {
 })
 
 // 创建歌单
-router.post('/playlists', authenticateToken, async (req, res) => {
+router.post('/playlists', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { name, description } = req.body
     const db = getDatabase()
@@ -1458,7 +1458,7 @@ router.put('/playlists/:id', authenticateToken, async (req, res) => {
 })
 
 // 删除歌单
-router.delete('/playlists/:id', authenticateToken, async (req, res) => {
+router.delete('/playlists/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     db.prepare('DELETE FROM playlists WHERE id = ?').run(req.params.id)
@@ -1544,7 +1544,7 @@ router.post('/playlists/:id/songs', authenticateToken, async (req, res) => {
 })
 
 // 从歌单移除歌曲
-router.delete('/playlists/:id/songs/:songId', authenticateToken, async (req, res) => {
+router.delete('/playlists/:id/songs/:songId', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     db.prepare('DELETE FROM playlist_songs WHERE playlist_id = ? AND music_id = ?').run(
@@ -1581,7 +1581,7 @@ router.post('/playlists/:id/songs/batch-remove', authenticateToken, async (req, 
 })
 
 // 歌单歌曲排序
-router.put('/playlists/:id/songs/reorder', authenticateToken, async (req, res) => {
+router.put('/playlists/:id/songs/reorder', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { songOrders } = req.body // [{ musicId: 1, sortOrder: 0 }, ...]
     const playlistId = parseInt(req.params.id)
@@ -2202,7 +2202,7 @@ router.get('/lyrics/search', authenticateToken, async (req, res) => {
 })
 
 // 批量下载歌词（异步任务）
-router.post('/lyrics/batch-download', authenticateToken, async (req, res) => {
+router.post('/lyrics/batch-download', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { musicIds, force = false } = req.body
 
@@ -2412,7 +2412,7 @@ router.get('/:id/lyrics', authenticateToken, async (req, res) => {
 })
 
 // 更新歌词（手动上传或纠正）
-router.put('/:id/lyrics', authenticateToken, async (req, res) => {
+router.put('/:id/lyrics', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { lyrics, source } = req.body
     const db = getDatabase()
@@ -2455,7 +2455,7 @@ router.put('/:id/lyrics', authenticateToken, async (req, res) => {
 })
 
 // 检测并清理示例歌词
-router.post('/clean-sample-lyrics', authenticateToken, async (req, res) => {
+router.post('/clean-sample-lyrics', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     

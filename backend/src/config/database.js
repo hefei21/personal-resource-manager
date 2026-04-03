@@ -461,7 +461,8 @@ function initDatabase() {
       { name: 'infobox', sql: 'ALTER TABLE anime ADD COLUMN infobox TEXT' },
       { name: 'characters', sql: 'ALTER TABLE anime ADD COLUMN characters TEXT' },
       { name: 'staff', sql: 'ALTER TABLE anime ADD COLUMN staff TEXT' },
-      { name: 'user_rating', sql: 'ALTER TABLE anime ADD COLUMN user_rating INTEGER DEFAULT 0' }
+      { name: 'user_rating', sql: 'ALTER TABLE anime ADD COLUMN user_rating INTEGER DEFAULT 0' },
+      { name: 'is_hidden', sql: 'ALTER TABLE anime ADD COLUMN is_hidden INTEGER DEFAULT 0' }
     ]
 
     for (const field of animeNewFields) {

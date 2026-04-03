@@ -85,10 +85,17 @@
         <!-- 进度条 -->
         <div class="progress-section">
           <span class="time">{{ formatTime(currentTime) }}</span>
-          <div class="progress-bar" @click="seekTo">
+          <div
+            class="progress-bar"
+            :class="{ dragging: isDraggingProgress }"
+            @mousedown="handleProgressMouseDown"
+            @mousemove="handleProgressMouseMove"
+            @mouseup="handleProgressMouseUp"
+            @mouseleave="handleProgressMouseLeave"
+          >
             <div class="progress-track">
-              <div class="progress-fill" :style="{ width: `${progress}%` }"></div>
-              <div class="progress-thumb" :style="{ left: `${progress}%` }"></div>
+              <div class="progress-fill" :style="{ width: `${displayProgress}%` }"></div>
+              <div class="progress-thumb" :style="{ left: `${displayProgress}%` }"></div>
             </div>
           </div>
           <span class="time">{{ formatTime(duration) }}</span>
@@ -109,8 +116,8 @@
               type="range"
               min="0"
               max="100"
-              v-model="volume"
-              @input="changeVolume"
+              :value="volume"
+              @input="e => changeVolume(Number(e.target.value))"
               class="volume-slider"
             />
             <!-- 侧边栏模式：播放模式按钮在音量条右侧 -->
@@ -146,10 +153,10 @@
             <span class="mode-text">{{ playModeText }}</span>
           </button>
 
-          <button 
+          <button
             v-if="!isSidebarMode"
-            class="icon-btn mode-btn" 
-            @click="showPlaylist = !showPlaylist" 
+            class="icon-btn mode-btn"
+            @click="showPlaylist = !showPlaylist"
             title="播放列表"
           >
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
@@ -158,41 +165,41 @@
             <span class="mode-text">{{ playlist.length }}</span>
           </button>
         </div>
-      </div>
-    </div>
-  </Transition>
 
-  <!-- 播放列表 -->
-  <Transition name="slide-up">
-    <div v-if="showPlaylist && !isSidebarMode" class="playlist-panel">
-      <div class="playlist-header">
-        <span>播放列表 ({{ playlist.length }} 首)</span>
-        <t-button size="small" variant="text" @click="clearPlaylist">清空</t-button>
-      </div>
-      <div class="playlist-songs">
-        <div 
-          v-for="(song, index) in playlist"
-          :key="song.id"
-          class="playlist-item"
-          :class="{ active: currentSong?.id === song.id }"
-          @click="playSongAtIndex(index)"
-        >
-          <div class="item-index">
-            <span v-if="currentSong?.id !== song.id">{{ index + 1 }}</span>
-            <t-icon v-else name="volume" class="playing-icon" />
+        <!-- 播放列表 -->
+        <Transition name="slide-up">
+          <div v-if="showPlaylist" class="playlist-panel">
+            <div class="playlist-header">
+              <span>播放列表 ({{ playlist.length }} 首)</span>
+              <t-button size="small" variant="text" @click="clearPlaylist">清空</t-button>
+            </div>
+            <div class="playlist-songs">
+              <div
+                v-for="(song, index) in playlist"
+                :key="song.id"
+                class="playlist-item"
+                :class="{ active: currentSong?.id === song.id }"
+                @click="playSongAtIndex(index)"
+              >
+                <div class="item-index">
+                  <span v-if="currentSong?.id !== song.id">{{ index + 1 }}</span>
+                  <t-icon v-else name="volume" class="playing-icon" />
+                </div>
+                <div class="item-info">
+                  <div class="item-title">{{ song.title }}</div>
+                  <div class="item-artist">{{ song.artist || '未知艺术家' }}</div>
+                </div>
+                <t-button
+                  size="small"
+                  variant="text"
+                  @click.stop="removeFromPlaylist(index)"
+                >
+                  <t-icon name="close" />
+                </t-button>
+              </div>
+            </div>
           </div>
-          <div class="item-info">
-            <div class="item-title">{{ song.title }}</div>
-            <div class="item-artist">{{ song.artist || '未知艺术家' }}</div>
-          </div>
-          <t-button 
-            size="small" 
-            variant="text"
-            @click.stop="removeFromPlaylist(index)"
-          >
-            <t-icon name="close" />
-          </t-button>
-        </div>
+        </Transition>
       </div>
     </div>
   </Transition>
@@ -216,6 +223,9 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '@/api'
 import { getCoverFromCache, saveCoverToCache, initCoverDB } from '@/utils/coverCache'
 import LyricsWindow from './LyricsWindow.vue'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 
 // 状态
 const audioRef = ref(null)
@@ -225,19 +235,28 @@ const currentIndex = ref(-1)
 const isPlaying = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
-const volume = ref(parseInt(localStorage.getItem('playerVolume')) || 80) // 从localStorage读取音量，默认80
+// 先使用默认值初始化，在onMounted中根据isGuest调整
+const volume = ref(parseInt(localStorage.getItem('playerVolume')) || 80)
 const isMuted = ref(false)
-const playMode = ref(localStorage.getItem('playMode') || 'sequence') // sequence, loop, shuffle - 从localStorage读取
+// 先使用默认值初始化，在onMounted中根据isGuest调整
+const playMode = ref(localStorage.getItem('playMode') || 'sequence')
 const showPlaylist = ref(false)
 const isSidebarMode = ref(false)
 const coverLoadFailed = ref(false) // 封面加载失败标志
 const playerCoverData = ref(null) // 当前播放歌曲的封面数据
 const showLyricsWindow = ref(false) // 歌词窗口显示状态
+const isDraggingProgress = ref(false) // 是否正在拖动进度条
+const dragProgress = ref(0) // 拖动时的临时进度
 
 // 计算属性
 const progress = computed(() => {
   if (!duration.value) return 0
   return (currentTime.value / duration.value) * 100
+})
+
+// 显示进度（拖动时显示拖动进度，否则显示实际进度）
+const displayProgress = computed(() => {
+  return isDraggingProgress.value ? dragProgress.value : progress.value
 })
 
 const hasPrev = computed(() => playlist.value.length > 1)
@@ -332,7 +351,7 @@ function handleCoverError() {
 function loadAndPlay() {
   if (!currentSong.value || !audioRef.value) return
 
-  const token = localStorage.getItem('token')
+  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
   audioRef.value.src = `/api/music/play/${currentSong.value.id}?token=${token}`
   audioRef.value.volume = volume.value / 100
 
@@ -400,8 +419,10 @@ function togglePlayMode() {
   const modes = ['sequence', 'loop', 'shuffle']
   const currentModeIndex = modes.indexOf(playMode.value)
   playMode.value = modes[(currentModeIndex + 1) % modes.length]
-  // 保存播放模式到localStorage
-  localStorage.setItem('playMode', playMode.value)
+  // 游客不保存播放模式
+  if (!isGuest.value) {
+    localStorage.setItem('playMode', playMode.value)
+  }
 }
 
 // 歌词窗口控制
@@ -452,6 +473,40 @@ function handleError(e) {
   console.error('音频加载错误:', e)
 }
 
+// 进度条拖动相关函数
+function handleProgressMouseDown(e) {
+  isDraggingProgress.value = true
+  updateDragProgress(e)
+}
+
+function handleProgressMouseMove(e) {
+  if (isDraggingProgress.value) {
+    updateDragProgress(e)
+  }
+}
+
+function handleProgressMouseUp(e) {
+  if (isDraggingProgress.value) {
+    isDraggingProgress.value = false
+    // 应用拖动的进度
+    if (audioRef.value && duration.value) {
+      audioRef.value.currentTime = (dragProgress.value / 100) * duration.value
+    }
+  }
+}
+
+function handleProgressMouseLeave() {
+  if (isDraggingProgress.value) {
+    isDraggingProgress.value = false
+  }
+}
+
+function updateDragProgress(e) {
+  const rect = e.currentTarget.getBoundingClientRect()
+  const percent = ((e.clientX - rect.left) / rect.width) * 100
+  dragProgress.value = Math.max(0, Math.min(100, percent))
+}
+
 function seekTo(e) {
   if (!audioRef.value) return
   
@@ -468,8 +523,10 @@ function changeVolume(vol) {
   }
   if (audioRef.value) {
     audioRef.value.volume = volume.value / 100
-    // 保存音量到localStorage
-    localStorage.setItem('playerVolume', volume.value)
+    // 游客不保存音量
+    if (!isGuest.value) {
+      localStorage.setItem('playerVolume', volume.value)
+    }
   }
 }
 
@@ -569,16 +626,27 @@ onMounted(async () => {
   } catch (e) {
     console.error('[MediaPlayer] 初始化封面缓存失败:', e)
   }
-  
+
+  // 根据用户类型设置音量和播放模式
+  if (isGuest.value) {
+    // 游客使用默认值
+    volume.value = 80
+    playMode.value = 'sequence'
+  } else {
+    // 管理员从localStorage读取
+    volume.value = parseInt(localStorage.getItem('playerVolume')) || 80
+    playMode.value = localStorage.getItem('playMode') || 'sequence'
+  }
+
   window.addEventListener('play-music', handlePlayMusic)
   window.addEventListener('remove-music', handleRemoveMusic)
-  
+
   // 初始检查
   checkRouteChange()
-  
+
   // 监听路由变化（用于 SPA 路由）
   window.addEventListener('popstate', checkRouteChange)
-  
+
   // 定期检查路径变化
   setInterval(checkRouteChange, 500)
 })
@@ -768,6 +836,19 @@ onUnmounted(() => {
   opacity: 1;
 }
 
+/* 拖拽时进度条样式 */
+.progress-bar:active .progress-thumb,
+.progress-bar.dragging .progress-thumb {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.2);
+  box-shadow: 0 0 8px rgba(24, 144, 255, 0.6);
+}
+
+.progress-bar:active .progress-fill,
+.progress-bar.dragging .progress-fill {
+  background: #40a9ff;
+}
+
 /* 额外控制 */
 .extra-controls {
   display: flex;
@@ -869,6 +950,7 @@ onUnmounted(() => {
   border-radius: 8px 8px 0 0;
   overflow: hidden;
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+  z-index: 1001;
 }
 
 .playlist-header {

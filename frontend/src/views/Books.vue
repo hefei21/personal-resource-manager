@@ -71,7 +71,7 @@
             content="确定删除选中的书籍吗？"
             @confirm="handleBatchDelete"
           >
-            <t-button theme="danger" variant="outline">
+            <t-button theme="danger" variant="outline" :disabled="isGuest">
               <template #icon><t-icon name="delete" /></template>
               批量删除 ({{ selectedRowKeys.length }})
             </t-button>
@@ -82,6 +82,7 @@
             v-if="!currentCategoryId"
             theme="default"
             @click="handleCreateCategory"
+            :disabled="isGuest"
           >
             <template #icon><t-icon name="folder-add" /></template>
             创建分类
@@ -92,6 +93,7 @@
             v-if="!currentCategoryId"
             theme="primary"
             @click="handleUpload"
+            :disabled="isGuest"
           >
             <template #icon><t-icon name="add" /></template>
             上传书籍
@@ -103,6 +105,7 @@
             theme="warning"
             variant="outline"
             @click="showBookSearch = true"
+            :disabled="isGuest"
           >
             <template #icon><t-icon name="search" /></template>
             查找资源
@@ -118,11 +121,15 @@
 
     <!-- 分类浏览 -->
     <t-card v-if="!currentCategoryId" class="category-view">
-      <div v-if="categories.length === 0" class="empty-categories">
+      <!-- 加载状态 -->
+      <div v-if="loading" class="content-loading">
+        <t-loading size="small" />
+      </div>
+      <div v-else-if="categories.length === 0" class="empty-categories">
         <t-icon name="folder-open" size="64px" />
         <h3>还没有分类</h3>
         <p>创建第一个分类来开始管理书籍</p>
-        <t-button theme="primary" size="large" @click="handleCreateCategory">
+        <t-button theme="primary" size="large" @click="handleCreateCategory" :disabled="isGuest">
           <template #icon><t-icon name="folder-add" /></template>
           创建第一个分类
         </t-button>
@@ -142,10 +149,10 @@
           <t-icon name="folder" size="48px" />
           <h3>{{ cat.name }}</h3>
           <div class="book-count">{{ cat.bookCount }} 本书</div>
-          <div class="rename-handle" @click.stop="handleRenameCategory(cat)">
+          <div class="rename-handle" @click.stop="handleRenameCategory(cat)" v-if="!isGuest">
             <t-icon name="edit" size="14px" />
           </div>
-          <div class="delete-handle" @click.stop="handleDeleteCategory(cat)">
+          <div class="delete-handle" @click.stop="handleDeleteCategory(cat)" v-if="!isGuest">
             <t-icon name="close" size="16px" />
           </div>
         </div>
@@ -186,17 +193,17 @@
             <t-button theme="primary" size="small" @click="handleRead(row)">
               <t-icon name="book" /> 阅读
             </t-button>
-            <t-button theme="default" size="small" @click="handleEditBook(row)">
+            <t-button theme="default" size="small" @click="handleEditBook(row)" :disabled="isGuest">
               <t-icon name="edit" /> 编辑
             </t-button>
-            <t-button theme="default" size="small" @click="handleDownload(row)">
+            <t-button theme="default" size="small" @click="handleDownload(row)" :disabled="isGuest">
               <t-icon name="download" /> 下载
             </t-button>
             <t-popconfirm
               content="确定删除吗？"
               @confirm="handleDelete(row.id)"
             >
-              <t-button theme="danger" variant="outline" size="small">
+              <t-button theme="danger" variant="outline" size="small" :disabled="isGuest">
                 <t-icon name="delete" /> 删除
               </t-button>
             </t-popconfirm>
@@ -246,14 +253,14 @@
             </div>
           </div>
           <div class="book-actions">
-            <t-button size="small" @click.stop="handleEditBook(book)">
+            <t-button size="small" @click.stop="handleEditBook(book)" :disabled="isGuest">
               <t-icon name="edit" />
             </t-button>
             <t-popconfirm
               content="确定删除吗？"
               @confirm="handleDelete(book.id)"
             >
-              <t-button size="small" theme="danger" variant="outline" @click.stop>
+              <t-button size="small" theme="danger" variant="outline" @click.stop :disabled="isGuest">
                 <t-icon name="delete" />
               </t-button>
             </t-popconfirm>
@@ -266,12 +273,12 @@
     <t-card v-if="books.length === 0 && !loading && currentCategoryId" class="empty-state">
       <t-icon name="book" size="64px" />
       <p>当前分类下暂无书籍</p>
-      <t-button theme="primary" @click="handleUpload">上传第一本书</t-button>
+      <t-button theme="primary" @click="handleUpload" :disabled="isGuest">上传第一本书</t-button>
     </t-card>
     <t-card v-else-if="books.length === 0 && !loading && !currentCategoryId && categories.length > 0" class="empty-state">
       <t-icon name="book" size="64px" />
       <p>暂无书籍</p>
-      <t-button theme="primary" @click="handleUpload">上传第一本书</t-button>
+      <t-button theme="primary" @click="handleUpload" :disabled="isGuest">上传第一本书</t-button>
     </t-card>
 
     <!-- 创建分类对话框 -->
@@ -526,6 +533,9 @@ import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import BookSearchDialog from '@/components/BookSearchDialog.vue'
+import { usePermission } from '@/composables/usePermission'
+
+const { isGuest } = usePermission()
 
 const loading = ref(false)
 const books = ref([])
@@ -1167,16 +1177,20 @@ async function handleRead(row) {
       console.warn('⚠️ 书籍内容为空')
     }
 
-    // 获取阅读进度
-    const progressResponse = await api.books.getProgress(row.id)
-    if (progressResponse.data?.currentPage !== undefined) {
-      currentChapterIndex.value = Math.min(progressResponse.data.currentPage, bookChapters.value.length - 1)
-      scrollPosition.value = progressResponse.data.scrollPosition || 0
-      console.log('📖 阅读进度已加载:', {
-        章节: currentChapterIndex.value + 1,
-        总章节: bookChapters.value.length,
-        滚动位置: (scrollPosition.value * 100).toFixed(1) + '%'
-      })
+    // 获取阅读进度（游客不加载进度，每次从开头阅读）
+    if (!isGuest) {
+      const progressResponse = await api.books.getProgress(row.id)
+      if (progressResponse.data?.currentPage !== undefined) {
+        currentChapterIndex.value = Math.min(progressResponse.data.currentPage, bookChapters.value.length - 1)
+        scrollPosition.value = progressResponse.data.scrollPosition || 0
+        console.log('📖 阅读进度已加载:', {
+          章节: currentChapterIndex.value + 1,
+          总章节: bookChapters.value.length,
+          滚动位置: (scrollPosition.value * 100).toFixed(1) + '%'
+        })
+      }
+    } else {
+      console.log('📖 游客模式：不加载阅读进度，从开头开始阅读')
     }
 
     // 进度加载完成后再设置 currentBook，避免保存初始值
@@ -1377,6 +1391,12 @@ function scrollToTop() {
 
 // 保存阅读进度
 async function saveProgress() {
+  // 游客不保存进度
+  if (isGuest) {
+    console.log('📖 游客模式：不保存阅读进度')
+    return
+  }
+  
   // 只在进度加载完成后才保存
   if (!currentBook.value || !isProgressLoaded) return
 
@@ -1507,6 +1527,14 @@ onUnmounted(() => {
 <style scoped>
 .books {
   padding: 0;
+}
+
+/* 内容区域加载状态 */
+.content-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
 }
 
 .page-header {
@@ -1972,6 +2000,21 @@ onUnmounted(() => {
 
 .book-progress {
   margin-top: 4px;
+}
+
+/* 第10项：条目不换行 */
+::deep(.t-table td) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+::deep(.t-table .book-title-text) {
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
 }
 
 .book-actions {
