@@ -224,7 +224,7 @@ export default {
     saveSteamConfig: (data) => api.post('/games/steam/config', data),
     deleteSteamConfig: () => api.delete('/games/steam/config'),
     syncSteam: () => api.post('/games/steam/sync'), // 同步游戏列表（成就按需获取）
-    fetchAchievements: (id) => api.post(`/games/${id}/fetch-achievements`), // 按需获取成就
+    fetchAchievements: (id) => api.post(`/games/${id}/fetch-achievements`, {}, { timeout: 60000 }), // 按需获取成就（延长超时）
     getSyncStatus: (taskId) => api.get(`/games/steam/sync/${taskId}`), // 查询同步状态
     list: (params) => api.get('/games', { params }),
     get: (id) => api.get(`/games/${id}`),

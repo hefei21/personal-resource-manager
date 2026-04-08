@@ -48,6 +48,13 @@
                   <div class="repo-meta">
                     <span>{{ repo.type.toUpperCase() }}</span>
                     <span v-if="repo.last_sync">同步: {{ formatDate(repo.last_sync) }}</span>
+                  </div>
+                  <div v-if="repo.size !== undefined || (repo.languages && repo.languages.length > 0)" class="repo-stats">
+                    <span v-if="repo.languages && repo.languages.length > 0" class="repo-langs">
+                      <span v-for="(lang, idx) in repo.languages.slice(0, 3)" :key="idx" class="lang-tag">
+                        {{ lang.name }} {{ lang.percentage }}%
+                      </span>
+                    </span>
                     <span v-if="repo.size !== undefined" class="repo-size">{{ formatSize(repo.size) }}</span>
                   </div>
                 </div>
@@ -144,7 +151,14 @@
                   <!-- 当前选择的文件 -->
                   <template v-if="currentFile">
                     <!-- Markdown 文件预览 -->
-                    <div v-if="isMarkdownFile(currentFile.name)" class="markdown-preview markdown-body" v-html="renderedFileContent"></div>
+                    <MdPreview
+                      v-if="isMarkdownFile(currentFile.name)"
+                      :modelValue="currentFile.content"
+                      :theme="editorTheme"
+                      :previewTheme="previewTheme"
+                      :codeTheme="codeTheme"
+                      class="markdown-preview"
+                    />
                     <!-- 文本/代码文件预览（带语法高亮） -->
                     <pre v-else-if="currentFile.type === 'text'" class="code-content"><code :class="'language-' + getLanguageFromFilename(currentFile.name)" v-html="highlightedCode"></code></pre>
                     <!-- 二进制文件 -->
@@ -156,7 +170,14 @@
                   </template>
                   <!-- 默认显示 README -->
                   <template v-else>
-                    <div v-if="readmeContent" class="markdown-preview markdown-body" v-html="renderedReadme"></div>
+                    <MdPreview
+                      v-if="readmeContent"
+                      :modelValue="readmeContent"
+                      :theme="editorTheme"
+                      :previewTheme="previewTheme"
+                      :codeTheme="codeTheme"
+                      class="markdown-preview"
+                    />
                     <t-empty v-else description="该仓库暂无 README 文件" />
                   </template>
                 </div>
@@ -265,15 +286,22 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { usePermission } from '@/composables/usePermission'
+import { MdPreview } from 'md-editor-v3'
+import 'md-editor-v3/lib/style.css'
+import 'highlight.js/styles/github.css'
 
 const { isGuest } = usePermission()
-import 'highlight.js/styles/github.css'
+
+// Markdown预览主题配置
+const editorTheme = ref('light')
+const previewTheme = ref('default')
+const codeTheme = ref('atom')
 
 const repoList = ref([])
 const searchKeyword = ref('')
@@ -575,18 +603,6 @@ marked.setOptions({
   langPrefix: 'hljs language-'
 })
 
-// 渲染 Markdown
-const renderedReadme = computed(() => {
-  if (!readmeContent.value) return ''
-  return marked(readmeContent.value)
-})
-
-// 渲染当前文件的 Markdown 内容
-const renderedFileContent = computed(() => {
-  if (!currentFile.value?.content) return ''
-  return marked(currentFile.value.content)
-})
-
 // 高亮后的代码内容
 const highlightedCode = computed(() => {
   if (!currentFile.value?.content) return ''
@@ -824,30 +840,129 @@ async function onTreeClick(context) {
 // 加载文件内容
 async function loadFile(path) {
   if (!currentRepo.value) return
+  console.log('========== 开始加载文件 ==========', path)
   try {
     const response = await api.code.getFile(currentRepo.value.id, path)
     currentFile.value = response.data.data
+    console.log('文件加载完成:', {
+      name: currentFile.value?.name,
+      type: currentFile.value?.type,
+      contentLength: currentFile.value?.content?.length
+    })
     
-    // 延迟重置滚动条到顶部和处理Markdown链接（等待DOM渲染）
-    if (isMarkdownFile(path)) {
-      setTimeout(() => {
-        const markdownPanel = document.querySelector('.markdown-preview')
-        if (markdownPanel) {
-          markdownPanel.scrollTop = 0
-        }
-        bindMarkdownLinks()
-      }, 100)
-    } else {
-      setTimeout(() => {
-        const codePanel = document.querySelector('.code-content')
-        if (codePanel) {
-          codePanel.scrollTop = 0
-        }
-      }, 100)
-    }
+    // 等待 Vue DOM 更新完成后再重置滚动条
+    await nextTick()
+    console.log('nextTick 完成，准备重置滚动条')
+    
+    // 多次重置以确保生效（立即 + 延迟）
+    console.log('--- 第一次重置滚动条 ---')
+    resetScrollPosition('第一次')
+    setTimeout(() => {
+      console.log('--- 第二次重置滚动条（延迟100ms） ---')
+      resetScrollPosition('第二次')
+      
+      // 如果是Markdown文件，绑定链接点击事件
+      if (isMarkdownFile(path)) {
+        setTimeout(() => {
+          bindMarkdownLinks()
+        }, 200)
+      }
+    }, 100)
   } catch (error) {
+    console.error('加载文件失败:', error)
     MessagePlugin.error('加载文件失败')
   }
+}
+
+// 重置滚动位置
+function resetScrollPosition(label = '') {
+  console.log(`[${label}] 开始重置滚动位置`)
+  
+  // 重置外层 .file-content 容器
+  const fileContentPanel = document.querySelector('.file-content')
+  console.log(`[${label}] .file-content 容器:`, fileContentPanel ? '找到' : '未找到')
+  if (fileContentPanel) {
+    console.log(`[${label}] .file-content 当前滚动位置:`, {
+      scrollTop: fileContentPanel.scrollTop,
+      scrollLeft: fileContentPanel.scrollLeft,
+      scrollHeight: fileContentPanel.scrollHeight,
+      clientHeight: fileContentPanel.clientHeight
+    })
+    fileContentPanel.scrollTop = 0
+    fileContentPanel.scrollLeft = 0
+    console.log(`[${label}] .file-content 重置后滚动位置:`, {
+      scrollTop: fileContentPanel.scrollTop,
+      scrollLeft: fileContentPanel.scrollLeft
+    })
+  }
+  
+  // 重置 Markdown 预览容器
+  const markdownPanel = document.querySelector('.markdown-preview')
+  console.log(`[${label}] .markdown-preview 容器:`, markdownPanel ? '找到' : '未找到')
+  if (markdownPanel) {
+    console.log(`[${label}] .markdown-preview 当前滚动位置:`, {
+      scrollTop: markdownPanel.scrollTop,
+      scrollLeft: markdownPanel.scrollLeft,
+      scrollHeight: markdownPanel.scrollHeight,
+      clientHeight: markdownPanel.clientHeight
+    })
+    markdownPanel.scrollTop = 0
+    markdownPanel.scrollLeft = 0
+    console.log(`[${label}] .markdown-preview 重置后滚动位置:`, {
+      scrollTop: markdownPanel.scrollTop,
+      scrollLeft: markdownPanel.scrollLeft
+    })
+    
+    // 尝试找到 MdPreview 内部的滚动容器
+    const innerScroll = markdownPanel.querySelector('.md-preview-wrapper')
+    console.log(`[${label}] .md-preview-wrapper 容器:`, innerScroll ? '找到' : '未找到')
+    if (innerScroll) {
+      console.log(`[${label}] .md-preview-wrapper 当前滚动位置:`, {
+        scrollTop: innerScroll.scrollTop,
+        scrollLeft: innerScroll.scrollLeft
+      })
+      innerScroll.scrollTop = 0
+      innerScroll.scrollLeft = 0
+    }
+  }
+  
+  // 重置代码预览容器
+  const codePanel = document.querySelector('.code-content')
+  console.log(`[${label}] .code-content 容器:`, codePanel ? '找到' : '未找到')
+  if (codePanel) {
+    console.log(`[${label}] .code-content 当前滚动位置:`, {
+      scrollTop: codePanel.scrollTop,
+      scrollLeft: codePanel.scrollLeft,
+      scrollHeight: codePanel.scrollHeight,
+      clientHeight: codePanel.clientHeight
+    })
+    codePanel.scrollTop = 0
+    codePanel.scrollLeft = 0
+    console.log(`[${label}] .code-content 重置后滚动位置:`, {
+      scrollTop: codePanel.scrollTop,
+      scrollLeft: codePanel.scrollLeft
+    })
+  }
+  
+  // 重置 content-area 容器（可能是真正的滚动容器）
+  const contentArea = document.querySelector('.content-area')
+  console.log(`[${label}] .content-area 容器:`, contentArea ? '找到' : '未找到')
+  if (contentArea) {
+    console.log(`[${label}] .content-area 当前滚动位置:`, {
+      scrollTop: contentArea.scrollTop,
+      scrollLeft: contentArea.scrollLeft,
+      scrollHeight: contentArea.scrollHeight,
+      clientHeight: contentArea.clientHeight
+    })
+    contentArea.scrollTop = 0
+    contentArea.scrollLeft = 0
+    console.log(`[${label}] .content-area 重置后滚动位置:`, {
+      scrollTop: contentArea.scrollTop,
+      scrollLeft: contentArea.scrollLeft
+    })
+  }
+  
+  console.log(`[${label}] 滚动位置重置完成`)
 }
 
 // 绑定Markdown链接点击事件，阻止默认跳转，改为新标签页打开
@@ -1032,6 +1147,30 @@ onMounted(() => loadRepos())
   display: flex;
   gap: 16px;
   padding-left: 24px;
+}
+
+.repo-stats {
+  font-size: 12px;
+  color: #666;
+  display: flex;
+  gap: 16px;
+  padding-left: 24px;
+  margin-top: 6px;
+  align-items: center;
+}
+
+.repo-langs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lang-tag {
+  padding: 2px 8px;
+  background: #e8f4ff;
+  border-radius: 4px;
+  color: #0052d9;
+  font-size: 11px;
 }
 
 .clone-progress-bar {
@@ -1449,95 +1588,5 @@ onMounted(() => loadRepos())
   padding: 20px;
   overflow: auto;
   background: #fff;
-  line-height: 1.6;
-}
-
-.markdown-preview :deep(h1),
-.markdown-preview :deep(h2),
-.markdown-preview :deep(h3),
-.markdown-preview :deep(h4),
-.markdown-preview :deep(h5),
-.markdown-preview :deep(h6) {
-  margin-top: 24px;
-  margin-bottom: 16px;
-  font-weight: 600;
-  line-height: 1.25;
-  color: #333;
-}
-
-.markdown-preview :deep(p) {
-  margin-bottom: 16px;
-  color: #333;
-}
-
-.markdown-preview :deep(code) {
-  background: #f5f5f5;
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-  font-size: 14px;
-}
-
-.markdown-preview :deep(pre) {
-  background: #f5f5f5;
-  padding: 16px;
-  border-radius: 6px;
-  overflow-x: auto;
-  margin-bottom: 16px;
-}
-
-.markdown-preview :deep(pre code) {
-  background: none;
-  padding: 0;
-}
-
-.markdown-preview :deep(ul),
-.markdown-preview :deep(ol) {
-  margin-bottom: 16px;
-  padding-left: 24px;
-}
-
-.markdown-preview :deep(li) {
-  margin-bottom: 4px;
-}
-
-.markdown-preview :deep(blockquote) {
-  border-left: 4px solid #ddd;
-  padding-left: 16px;
-  margin-left: 0;
-  color: #666;
-}
-
-.markdown-preview :deep(img) {
-  max-width: 100%;
-  height: auto;
-  border-radius: 4px;
-}
-
-.markdown-preview :deep(table) {
-  border-collapse: collapse;
-  width: 100%;
-  margin-bottom: 16px;
-}
-
-.markdown-preview :deep(th),
-.markdown-preview :deep(td) {
-  border: 1px solid #ddd;
-  padding: 8px 12px;
-  text-align: left;
-}
-
-.markdown-preview :deep(th) {
-  background: #f5f5f5;
-  font-weight: 600;
-}
-
-.markdown-preview :deep(a) {
-  color: #0052d9;
-  text-decoration: none;
-}
-
-.markdown-preview :deep(a:hover) {
-  text-decoration: underline;
 }
 </style>

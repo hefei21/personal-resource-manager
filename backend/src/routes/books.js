@@ -3,9 +3,12 @@ import multer from 'multer'
 import path from 'path'
 import fs from 'fs'
 import AdmZip from 'adm-zip'
+import sharp from 'sharp'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
+import { compressImage } from '../utils/imageCompress.js'
 
 const router = express.Router()
 
@@ -445,6 +448,13 @@ const upload = multer({
 // 获取分类列表
 router.get('/categories', authenticateToken, async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = CacheKeys.BOOK_CATEGORIES
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM book_categories ORDER BY sort_order, name')
     const rows = stmt.all()
@@ -462,6 +472,9 @@ router.get('/categories', authenticateToken, async (req, res) => {
       const result = countStmt.get(cat.id)
       cat.bookCount = result.count
     }
+
+    // 缓存结果（10分钟）
+    await cache.set(cacheKey, categories, CacheTTL.LONG)
 
     res.json({ data: categories })
   } catch (error) {
@@ -893,11 +906,15 @@ router.post('/upload', authenticateToken, upload.single('file'), async (req, res
         if (!fs.existsSync(coversDir)) {
           fs.mkdirSync(coversDir, { recursive: true })
         }
-        // 保存封面图片
-        const coverFileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${cover.ext}`
+        
+        // 压缩封面图片
+        const compressedData = await compressImage(cover.data, { maxWidth: 500, maxHeight: 500, quality: 85 })
+        
+        // 保存封面图片（统一转为 .jpg 格式以节省空间）
+        const coverFileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}.jpg`
         coverImagePath = path.join(coversDir, coverFileName)
-        fs.writeFileSync(coverImagePath, cover.data)
-        console.log(`✅ 封面提取成功: ${coverFileName} (${(cover.data.length / 1024).toFixed(2)}KB)`)
+        fs.writeFileSync(coverImagePath, compressedData)
+        console.log(`✅ 封面提取成功: ${coverFileName} (原始: ${(cover.data.length / 1024).toFixed(2)}KB → 压缩后: ${(compressedData.length / 1024).toFixed(2)}KB)`)
       } else {
         console.log(`⚠️ 封面提取失败，将使用默认占位图`)
       }
@@ -1010,10 +1027,15 @@ router.post('/upload-with-path', authenticateToken, async (req, res) => {
         if (!fs.existsSync(coversDir)) {
           fs.mkdirSync(coversDir, { recursive: true })
         }
-        const coverFileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}${cover.ext}`
+        
+        // 压缩封面图片
+        const compressedData = await compressImage(cover.data, { maxWidth: 500, maxHeight: 500, quality: 85 })
+        
+        // 保存封面图片（统一转为 .jpg 格式以节省空间）
+        const coverFileName = `${Date.now()}-${Math.round(Math.random() * 1E9)}.jpg`
         coverImagePath = path.join(coversDir, coverFileName)
-        fs.writeFileSync(coverImagePath, cover.data)
-        console.log(`✅ 封面提取成功: ${coverFileName} (${(cover.data.length / 1024).toFixed(2)}KB)`)
+        fs.writeFileSync(coverImagePath, compressedData)
+        console.log(`✅ 封面提取成功: ${coverFileName} (原始: ${(cover.data.length / 1024).toFixed(2)}KB → 压缩后: ${(compressedData.length / 1024).toFixed(2)}KB)`)
       }
     }
 

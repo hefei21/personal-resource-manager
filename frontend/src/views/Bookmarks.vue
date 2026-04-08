@@ -50,10 +50,11 @@
           批量下载图标
         </t-button>
         <t-button
+          v-if="selectedRows.length > 0"
           theme="danger"
           variant="outline"
-          :disabled="selectedRows.length === 0 || isGuest"
           @click="handleBatchDelete"
+          :disabled="isGuest"
         >
           <template #icon><t-icon name="delete" /></template>
           批量删除 ({{ selectedRows.length }})

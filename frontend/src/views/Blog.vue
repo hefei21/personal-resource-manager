@@ -37,6 +37,16 @@
             >
               <t-option v-for="cat in flatCategories" :key="cat.id" :value="cat.id" :label="cat.name" />
             </t-select>
+
+            <t-select
+              v-model="tagFilter"
+              placeholder="选择标签"
+              clearable
+              @change="loadPosts"
+              style="width: 160px"
+            >
+              <t-option v-for="tag in tags" :key="tag.id" :value="tag.id" :label="tag.name" />
+            </t-select>
           </t-space>
 
           <t-space>
@@ -47,10 +57,6 @@
             <t-button theme="default" @click="showCategoryManager = true" :disabled="isGuest">
               <template #icon><t-icon name="folder" /></template>
               分类管理
-            </t-button>
-            <t-button theme="default" @click="showTagManager = true" :disabled="isGuest">
-              <template #icon><t-icon name="discount" /></template>
-              标签管理
             </t-button>
           </t-space>
         </div>
@@ -400,6 +406,7 @@ const pagination = ref({ current: 1, pageSize: 30 })
 const searchKeyword = ref('')
 const statusFilter = ref('')
 const categoryFilter = ref(null)
+const tagFilter = ref(null)
 
 // 分类和标签
 const categories = ref([])
@@ -461,6 +468,7 @@ async function loadPosts() {
     if (searchKeyword.value) params.keyword = searchKeyword.value
     if (statusFilter.value) params.status = statusFilter.value
     if (categoryFilter.value) params.category_id = categoryFilter.value
+    if (tagFilter.value) params.tag_id = tagFilter.value
 
     const response = await api.blog.getPosts(params)
     posts.value = response.data.data || []

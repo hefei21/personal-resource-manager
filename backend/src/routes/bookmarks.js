@@ -49,6 +49,14 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'URL不能为空' })
     }
 
+    // 尝试从缓存获取
+    const cacheKey = `bookmark:title:${url}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log(`[书签管理] 命中标题缓存: ${url}`)
+      return res.json(cached)
+    }
+
     const urlObj = new URL(url)
     
     // 配置代理
@@ -79,7 +87,10 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
     const defaultFavicon = `${urlObj.protocol}//${urlObj.host}/favicon.ico`
     iconData = await downloadImageAsBase64(defaultFavicon)
     if (iconData) {
-      res.json({ title, icon: defaultFavicon, iconData })
+      const result = { title, icon: defaultFavicon, iconData }
+      // 缓存结果（1小时）
+      await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
+      res.json(result)
       return
     }
     
@@ -108,7 +119,9 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
     // 如果是 data URL，直接使用（但检查大小）
     if (iconUrl && iconUrl.startsWith('data:')) {
       if (iconUrl.length < 100 * 1024 * 1.37) { // base64 约比原数据大 37%
-        res.json({ title, icon: iconUrl, iconData: iconUrl })
+        const result = { title, icon: iconUrl, iconData: iconUrl }
+        await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
+        res.json(result)
         return
       }
     }
@@ -117,7 +130,9 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
     if (iconUrl) {
       iconData = await downloadImageAsBase64(iconUrl)
       if (iconData) {
-        res.json({ title, icon: iconUrl, iconData })
+        const result = { title, icon: iconUrl, iconData }
+        await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
+        res.json(result)
         return
       }
     }
@@ -137,13 +152,17 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
       }
       iconData = await downloadImageAsBase64(appleIconUrl, 50) // 更严格的大小限制
       if (iconData) {
-        res.json({ title, icon: appleIconUrl, iconData })
+        const result = { title, icon: appleIconUrl, iconData }
+        await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
+        res.json(result)
         return
       }
     }
     
     // 没有找到合适的图标
-    res.json({ title, icon: '', iconData: null })
+    const result = { title, icon: '', iconData: null }
+    await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
+    res.json(result)
   } catch (error) {
     // 失败时返回空数据
     try {
@@ -158,7 +177,7 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
 })
 
 // 获取所有标签
-router.get('/tags', authenticateToken, (req, res) => {
+router.get('/tags', authenticateToken, async (req, res) => {
   try {
     console.log('获取书签标签...')
     const db = getDatabase()
@@ -184,6 +203,10 @@ router.get('/tags', authenticateToken, (req, res) => {
     
     const tags = Array.from(tagsSet).sort()
     console.log('返回标签:', tags.length, '个')
+    
+    // 缓存结果（30分钟）
+    await cache.set(cacheKey, tags, CacheTTL.LONG)
+    
     res.json({ data: tags })
   } catch (error) {
     console.error('获取标签失败:', error.message)
@@ -299,6 +322,10 @@ router.post('/batch-delete', authenticateToken, requireWritePermission, async (r
     const placeholders = ids.map(() => '?').join(',')
     const stmt = db.prepare(`DELETE FROM bookmarks WHERE id IN (${placeholders})`)
     stmt.run(ids)
+    
+    // 清除标签缓存
+    await cache.del('bookmark:tags')
+    
     res.json({ message: '批量删除成功', deletedCount: ids.length })
   } catch (error) {
     res.status(500).json({ message: '服务器错误' })

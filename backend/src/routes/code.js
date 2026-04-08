@@ -6,6 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import { promisify } from 'util'
 import axios from 'axios'
+import { cache, CacheTTL } from '../utils/cache.js'
 
 const router = express.Router()
 const execAsync = promisify(exec)
@@ -107,7 +108,7 @@ router.get('/', authenticateToken, async (req, res) => {
     const { keyword } = req.query
     const db = getDatabase()
 
-    let sql = 'SELECT id, name, url, description, type, local_path, last_sync, created_at FROM code_repositories WHERE 1=1'
+    let sql = 'SELECT id, name, url, description, type, local_path, last_sync, languages, created_at FROM code_repositories WHERE 1=1'
     const params = []
 
     if (keyword) {
@@ -126,7 +127,14 @@ router.get('/', authenticateToken, async (req, res) => {
       if (repo.local_path && fs.existsSync(repo.local_path)) {
         size = getDirectorySize(repo.local_path)
       }
-      return { ...repo, size }
+      // 解析languages字段
+      let languages = []
+      if (repo.languages) {
+        try {
+          languages = JSON.parse(repo.languages)
+        } catch (e) {}
+      }
+      return { ...repo, size, languages }
     })
     
     res.json({ data: reposWithSize, total: reposWithSize.length })
@@ -242,6 +250,13 @@ router.get('/github-info', authenticateToken, async (req, res) => {
 
     const [, owner, repo] = githubMatch
 
+    // 尝试从缓存获取
+    const cacheKey = `code:github:${owner}/${repo}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+
     // 调用GitHub API
     try {
       const apiUrl = `https://api.github.com/repos/${owner}/${repo}`
@@ -253,21 +268,51 @@ router.get('/github-info', authenticateToken, async (req, res) => {
       })
 
       const data = response.data
-      res.json({
-        data: {
-          name: data.name,
-          fullName: data.full_name,
-          description: data.description || '',
-          homepage: data.homepage || '',
-          stars: data.stargazers_count,
-          forks: data.forks_count,
-          language: data.language,
-          topics: data.topics || [],
-          defaultBranch: data.default_branch,
-          createdAt: data.created_at,
-          updatedAt: data.updated_at
+      
+      // 获取语言统计
+      let languages = {}
+      try {
+        const langResponse = await axios.get(`${apiUrl}/languages`, {
+          timeout: 10000,
+          headers: {
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        })
+        const langData = langResponse.data
+        
+        // 计算百分比
+        const total = Object.values(langData).reduce((sum, val) => sum + val, 0)
+        if (total > 0) {
+          languages = Object.entries(langData)
+            .map(([lang, bytes]) => ({
+              name: lang,
+              percentage: Math.round((bytes / total) * 100)
+            }))
+            .sort((a, b) => b.percentage - a.percentage)
         }
-      })
+      } catch (langError) {
+        console.error('获取语言统计失败:', langError.message)
+      }
+      
+      const result = {
+        name: data.name,
+        fullName: data.full_name,
+        description: data.description || '',
+        homepage: data.homepage || '',
+        stars: data.stargazers_count,
+        forks: data.forks_count,
+        language: data.language,
+        languages,
+        topics: data.topics || [],
+        defaultBranch: data.default_branch,
+        createdAt: data.created_at,
+        updatedAt: data.updated_at
+      }
+
+      // 缓存结果（30分钟）
+      await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
+
+      res.json({ data: result })
     } catch (apiError) {
       console.error('GitHub API调用失败:', apiError.message)
       if (apiError.response?.status === 404) {
@@ -312,6 +357,10 @@ async function cloneRepository(id, url, localPath, type, name) {
     
     // 更新同步时间
     db.prepare('UPDATE code_repositories SET last_sync = CURRENT_TIMESTAMP WHERE id = ?').run(id)
+    
+    // 获取并保存语言统计（如果是GitHub仓库）
+    await fetchAndSaveLanguages(id, url)
+    
     task.status = 'completed'
     task.message = '克隆完成'
     task.progress = 100
@@ -577,8 +626,18 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
 // 获取README内容（处理图片路径）
 router.get('/:id/readme', authenticateToken, async (req, res) => {
   try {
+    const { id } = req.params
+    
+    // 尝试从缓存获取
+    const cacheKey = `code:readme:${id}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log(`[代码仓库] 命中README缓存: ${id}`)
+      return res.json({ data: cached })
+    }
+    
     const db = getDatabase()
-    const repo = db.prepare('SELECT local_path, url FROM code_repositories WHERE id = ?').get(req.params.id)
+    const repo = db.prepare('SELECT local_path, url FROM code_repositories WHERE id = ?').get(id)
     
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
@@ -607,12 +666,15 @@ router.get('/:id/readme', authenticateToken, async (req, res) => {
     
     console.log('README 图片路径转换完成')
     
-    res.json({ 
-      data: {
-        name: path.basename(readmePath),
-        content
-      }
-    })
+    const result = {
+      name: path.basename(readmePath),
+      content
+    }
+    
+    // 缓存结果（10分钟）
+    await cache.set(cacheKey, result, CacheTTL.MEDIUM)
+    
+    res.json({ data: result })
   } catch (error) {
     console.error('获取README失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -727,8 +789,18 @@ function convertImagePathsToBase64(content, repoPath, mdFilePath = null) {
 router.get('/:id/commits', authenticateToken, async (req, res) => {
   try {
     const { limit = 20 } = req.query
+    const { id } = req.params
+    
+    // 尝试从缓存获取
+    const cacheKey = `code:commits:${id}:${limit}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log(`[代码仓库] 命中提交历史缓存: ${id}`)
+      return res.json({ data: cached })
+    }
+    
     const db = getDatabase()
-    const repo = db.prepare('SELECT local_path, type FROM code_repositories WHERE id = ?').get(req.params.id)
+    const repo = db.prepare('SELECT local_path, type FROM code_repositories WHERE id = ?').get(id)
     
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
@@ -773,6 +845,9 @@ router.get('/:id/commits', authenticateToken, async (req, res) => {
       }
     }
 
+    // 缓存结果（5分钟）
+    await cache.set(cacheKey, commits, CacheTTL.MEDIUM)
+    
     res.json({ data: commits })
   } catch (error) {
     console.error('获取提交历史失败:', error)
@@ -845,6 +920,9 @@ router.get('/:id/commit/:hash', authenticateToken, async (req, res) => {
       }
     }
 
+    // 缓存结果（10分钟）
+    await cache.set(cacheKey, commitDetail, CacheTTL.MEDIUM)
+    
     res.json({ data: commitDetail })
   } catch (error) {
     console.error('获取提交详情失败:', error)
@@ -959,7 +1037,7 @@ router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, 
     }
 
     // 异步更新仓库
-    updateRepository(repo.id, repo.local_path, repo.type, repo.name, taskId)
+    updateRepository(repo.id, repo.url, repo.local_path, repo.type, repo.name, taskId)
 
     res.json({ message: '开始同步仓库...', taskId })
   } catch (error) {
@@ -991,7 +1069,7 @@ router.get('/:id/sync-status', authenticateToken, async (req, res) => {
 })
 
 // 更新仓库的异步函数（带进度跟踪）
-async function updateRepository(id, localPath, type, name, taskId) {
+async function updateRepository(id, url, localPath, type, name, taskId) {
   const db = getDatabase()
   const task = syncTasks.get(taskId)
   
@@ -1015,6 +1093,10 @@ async function updateRepository(id, localPath, type, name, taskId) {
     }
     
     db.prepare('UPDATE code_repositories SET last_sync = CURRENT_TIMESTAMP WHERE id = ?').run(id)
+    
+    // 获取并保存语言统计（如果是GitHub仓库）
+    await fetchAndSaveLanguages(id, url)
+    
     console.log(`[仓库 ${name}] 同步完成`)
     
     if (task) {
@@ -1063,5 +1145,47 @@ router.get('/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ message: '服务器错误' })
   }
 })
+
+// 获取并保存语言统计
+async function fetchAndSaveLanguages(repoId, repoUrl) {
+  try {
+    // 检查是否是GitHub仓库
+    const githubMatch = repoUrl.match(/github\.com\/([^\/]+)\/([^\/\.]+)/)
+    if (!githubMatch) return
+    
+    const [, owner, repo] = githubMatch
+    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/languages`
+    
+    console.log(`[仓库] 获取语言统计: ${owner}/${repo}`)
+    
+    const response = await axios.get(apiUrl, {
+      timeout: 10000,
+      headers: {
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    })
+    
+    const langData = response.data
+    const total = Object.values(langData).reduce((sum, val) => sum + val, 0)
+    
+    if (total > 0) {
+      const languages = Object.entries(langData)
+        .map(([lang, bytes]) => ({
+          name: lang,
+          percentage: Math.round((bytes / total) * 100)
+        }))
+        .sort((a, b) => b.percentage - a.percentage)
+        .slice(0, 5) // 只保留前5种语言
+      
+      const db = getDatabase()
+      db.prepare('UPDATE code_repositories SET languages = ? WHERE id = ?')
+        .run(JSON.stringify(languages), repoId)
+      
+      console.log(`[仓库] 语言统计已保存:`, languages.map(l => `${l.name} ${l.percentage}%`).join(', '))
+    }
+  } catch (error) {
+    console.error('[仓库] 获取语言统计失败:', error.message)
+  }
+}
 
 export default router

@@ -98,8 +98,24 @@ services:
       - BANGUMI_ACCESS_TOKEN=请在这里粘贴你的Token
       # 方式2：使用.env文件（取消注释下一行，注释上一行）
       # - BANGUMI_ACCESS_TOKEN=${BANGUMI_ACCESS_TOKEN}
+      
+      # Redis 缓存配置
+      - REDIS_URL=redis://redis:6379
     
     # 网络配置（如果使用 Clash 代理，需要连接到 pr-network）
+    networks:
+      - pr-network
+
+  # ==================== Redis 缓存服务 ====================
+  redis:
+    image: redis:7-alpine
+    container_name: pr-manager-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --appendonly yes
     networks:
       - pr-network
 

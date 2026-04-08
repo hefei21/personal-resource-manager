@@ -10,6 +10,8 @@ dotenv.config()
 // 导入配置
 import { initDatabase } from './config/database.js'
 import { ensureDirectories } from './config/storage.js'
+import { initRedis, closeRedis } from './utils/redis.js'
+import { migrateCompressCovers } from './utils/migration.js'
 
 // 导入路由
 import authRoutes from './routes/auth.js'
@@ -154,6 +156,36 @@ app.use('/api/book-search', bookSearchRoutes)  // 电子书搜索
 app.use('/api/todos', todosRoutes)  // 待办事项
 app.use('/api/blog', blogRoutes)  // 博客管理
 
+// Redis缓存监控接口
+app.get('/api/cache/stats', authenticateToken, async (req, res) => {
+  try {
+    const { cache } = await import('./utils/cache.js')
+    const stats = await cache.getStats()
+    res.json({
+      success: true,
+      data: stats
+    })
+  } catch (error) {
+    console.error('获取缓存状态失败:', error)
+    res.status(500).json({ success: false, message: '获取缓存状态失败' })
+  }
+})
+
+// 清空缓存接口（需要管理员权限）
+app.post('/api/cache/clear', authenticateToken, async (req, res) => {
+  try {
+    const { cache } = await import('./utils/cache.js')
+    await cache.clear()
+    res.json({
+      success: true,
+      message: '缓存已清空'
+    })
+  } catch (error) {
+    console.error('清空缓存失败:', error)
+    res.status(500).json({ success: false, message: '清空缓存失败' })
+  }
+})
+
 // 错误处理中间件
 app.use((err, req, res, next) => {
   console.error('Error:', err)
@@ -164,7 +196,7 @@ app.use((err, req, res, next) => {
 })
 
 // 初始化数据库和目录
-function initialize() {
+async function initialize() {
   try {
     // 确保必要目录存在
     ensureDirectories()
@@ -173,6 +205,17 @@ function initialize() {
     initDatabase()
 
     console.log('✓ 数据库初始化完成')
+
+    // 执行封面图片压缩迁移（只执行一次）
+    await migrateCompressCovers()
+
+    // 初始化 Redis（可选，失败不影响主功能）
+    try {
+      await initRedis()
+      console.log('✓ Redis 缓存初始化完成')
+    } catch (error) {
+      console.log('⚠ Redis 初始化失败，缓存功能降级为内存模式:', error.message)
+    }
 
     // 启动服务器
     app.listen(PORT, () => {
@@ -185,5 +228,18 @@ function initialize() {
     process.exit(1)
   }
 }
+
+// 优雅关闭
+process.on('SIGTERM', async () => {
+  console.log('收到 SIGTERM 信号，正在关闭服务器...')
+  await closeRedis()
+  process.exit(0)
+})
+
+process.on('SIGINT', async () => {
+  console.log('收到 SIGINT 信号，正在关闭服务器...')
+  await closeRedis()
+  process.exit(0)
+})
 
 initialize()

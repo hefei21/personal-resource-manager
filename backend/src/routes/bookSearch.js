@@ -294,12 +294,17 @@ router.get('/search', async (req, res) => {
   
   const totalResults = results.annaArchive.length + results.nyaa.length
   
-  res.json({
+  const response = {
     success: true,
     keyword,
     total: totalResults,
     data: results
-  })
+  }
+  
+  // 缓存结果（30分钟）
+  await cache.set(cacheKey, response, CacheTTL.LONG)
+  
+  res.json(response)
 })
 
 export default router

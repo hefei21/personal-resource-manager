@@ -508,6 +508,21 @@ async function confirmTodo(todo) {
 function editTodo(todo) {
   todo.editing = true
   todo._originalText = todo.text // 保存原始内容，用于取消时恢复
+  
+  // 等待DOM更新后，聚焦并选中文本，光标移到末尾
+  nextTick(() => {
+    const todoItems = document.querySelectorAll('.todo-item')
+    const todoIndex = todos.value.findIndex(t => t.id === todo.id)
+    if (todoIndex !== -1 && todoItems[todoIndex]) {
+      const input = todoItems[todoIndex].querySelector('.todo-input')
+      if (input) {
+        input.focus()
+        // 选中文本并将光标移到末尾
+        const textLength = (todo.text || '').length
+        input.setSelectionRange(textLength, textLength)
+      }
+    }
+  })
 }
 
 // 保存编辑

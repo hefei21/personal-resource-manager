@@ -1,7 +1,7 @@
 <template>
   <div class="layout-container">
     <!-- 全局路由切换Loading -->
-    <div v-if="routeLoading" class="global-loading-overlay">
+    <div v-if="routeLoading || initialLoading" class="global-loading-overlay">
       <t-loading size="small" />
     </div>
 
@@ -138,7 +138,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { MessagePlugin } from 'tdesign-vue-next'
@@ -151,7 +151,23 @@ const authStore = useAuthStore()
 
 const activeMenu = ref(route.name?.toLowerCase())
 const routeLoading = ref(false)
+const initialLoading = ref(true)  // 首次加载loading
 let routeLoadingTimer = null
+
+// 组件挂载后关闭初始loading（等待路由组件渲染完成）
+onMounted(() => {
+  // 延长等待时间，确保路由组件内容已渲染
+  setTimeout(() => {
+    initialLoading.value = false
+  }, 500)
+})
+
+// 监听路由变化，同步侧边栏状态
+watch(() => route.name, (newName) => {
+  if (newName) {
+    activeMenu.value = newName.toLowerCase()
+  }
+})
 
 // 路由切换前延迟显示全局loading，让播放栏动画先执行
 const beforeRouteChange = router.beforeEach((_to, _from, next) => {

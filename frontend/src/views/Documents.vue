@@ -422,8 +422,19 @@
       @dragover.prevent
       @dragleave.prevent="handleDialogDragLeave"
       @drop.prevent="handleFileDrop"
+      :confirm-btn="{ content: '上传', loading: uploading, disabled: uploading }"
+      :close-btn="!uploading"
     >
       <t-form :data="uploadForm" :rules="uploadRules">
+        <!-- 上传进度显示 -->
+        <div v-if="uploading" class="upload-progress">
+          <t-icon name="loading" spin size="24px" />
+          <div class="progress-text">
+            <div class="progress-title">正在上传文件...</div>
+            <div class="progress-info">请稍候，不要关闭对话框</div>
+          </div>
+        </div>
+        
         <t-form-item label="文件" required>
           <div class="upload-area">
             <t-upload
@@ -434,20 +445,22 @@
               :auto-upload="false"
               @change="onFileChange"
               :drag="{ content: '拖拽文件到此处或点击上传' }"
+              :disabled="uploading"
             />
           </div>
         </t-form-item>
         <t-form-item label="标题" name="title" required>
-          <t-input v-model="uploadForm.title" placeholder="文档标题" />
+          <t-input v-model="uploadForm.title" placeholder="文档标题" :disabled="uploading" />
         </t-form-item>
         <t-form-item label="标签" name="tags">
-          <t-input v-model="uploadForm.tags" placeholder="用逗号分隔" />
+          <t-input v-model="uploadForm.tags" placeholder="用逗号分隔" :disabled="uploading" />
         </t-form-item>
         <t-form-item label="版本说明" name="versionNote">
           <t-textarea
             v-model="uploadForm.versionNote"
             placeholder="本次更新的说明"
             :maxlength="500"
+            :disabled="uploading"
           />
         </t-form-item>
       </t-form>
@@ -553,7 +566,14 @@
         </div>
 
         <!-- Markdown 预览 -->
-        <div v-else-if="previewType === 'markdown'" class="markdown-preview" v-html="renderedMarkdown"></div>
+        <MdPreview
+          v-else-if="previewType === 'markdown'"
+          :modelValue="previewContent"
+          :theme="editorTheme"
+          :previewTheme="previewTheme"
+          :codeTheme="codeTheme"
+          class="markdown-preview"
+        />
 
         <!-- 代码预览 -->
         <div v-else-if="previewType === 'code'" class="code-preview">
@@ -785,6 +805,8 @@ import hljs from 'highlight.js'
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 import { usePermission } from '@/composables/usePermission'
+import { MdPreview } from 'md-editor-v3'
+import 'md-editor-v3/lib/style.css'
 
 const { isGuest, canWrite } = usePermission()
 
@@ -883,11 +905,17 @@ const jumpPageNum = ref(1)
 const hoveredCategoryId = ref(null)
 // fileCount 现在从后端分类数据中获取，不再需要额外的状态存储
 
+// Markdown预览主题配置
+const editorTheme = ref('light')
+const previewTheme = ref('default')
+const codeTheme = ref('atom')
+
 // 拖拽相关状态
 const draggedCategoryId = ref(null)
 const draggedCategoryIndex = ref(null)
 const draggedCategoryData = ref(null)
 const isDraggingFile = ref(false) // 上传对话框拖拽状态
+const uploading = ref(false) // 上传进度状态
 
 const uploadForm = ref({
   file: [],
@@ -1109,6 +1137,8 @@ async function handleBatchEditConfirm() {
     // 清除文件数量缓存，以便悬停时重新加载
     categoryFileCount.value = {}
     loadDocuments()
+    // 重新加载标签列表
+    loadAllTags()
   } catch (error) {
     console.error('更新失败:', error)
     MessagePlugin.error('更新失败')
@@ -1207,11 +1237,6 @@ const versionColumns = [
 const lineCount = computed(() => {
   if (!editForm.value || !editForm.value.content) return 0
   return editForm.value.content.split('\n').length
-})
-
-const renderedMarkdown = computed(() => {
-  if (!previewContent.value || previewType.value !== 'markdown') return ''
-  return marked.parse(previewContent.value)
 })
 
 const highlightedCode = computed(() => {
@@ -1714,6 +1739,9 @@ async function handleUploadConfirm() {
     console.log('文件URL:', file.url)
     console.log('文件名称:', file.name)
 
+    // 开始上传，设置loading状态
+    uploading.value = true
+
     const formData = new FormData()
     const fileToUpload = file.raw || file.originFileObj || file
     formData.append('file', fileToUpload)
@@ -1744,6 +1772,8 @@ async function handleUploadConfirm() {
     console.error('上传错误:', error)
     console.error('错误详情:', error.response?.data)
     MessagePlugin.error(error.response?.data?.message || '上传失败')
+  } finally {
+    uploading.value = false
   }
 }
 
@@ -2168,6 +2198,8 @@ async function prevPage() {
   if (currentPage.value > 1) {
     currentPage.value--
     await renderPage(currentPage.value)
+    // 滚动到PDF预览区域顶部
+    scrollToPdfTop()
   }
 }
 
@@ -2176,6 +2208,8 @@ async function nextPage() {
     currentPage.value++
     jumpPageNum.value = currentPage.value
     await renderPage(currentPage.value)
+    // 滚动到PDF预览区域顶部
+    scrollToPdfTop()
   }
 }
 
@@ -2184,8 +2218,18 @@ async function handleJumpPageConfirm() {
   if (pageNum >= 1 && pageNum <= totalPages.value) {
     currentPage.value = pageNum
     await renderPage(currentPage.value)
+    // 滚动到PDF预览区域顶部
+    scrollToPdfTop()
   } else {
     MessagePlugin.warning(`请输入有效的页码（1-${totalPages.value}）`)
+  }
+}
+
+// 滚动到PDF预览区域顶部
+function scrollToPdfTop() {
+  const pdfPreview = document.querySelector('.pdf-preview')
+  if (pdfPreview) {
+    pdfPreview.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 }
 
@@ -2427,6 +2471,38 @@ onMounted(() => {
 <style scoped>
 .documents {
   padding: 0;
+}
+
+/* 上传进度显示 */
+.upload-progress {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  margin-bottom: 20px;
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+  border-radius: 8px;
+  border-left: 4px solid #2196f3;
+}
+
+.upload-progress .t-icon {
+  color: #2196f3;
+}
+
+.progress-text {
+  flex: 1;
+}
+
+.progress-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: #1976d2;
+  margin-bottom: 4px;
+}
+
+.progress-info {
+  font-size: 14px;
+  color: #64b5f6;
 }
 
 /* 内容区域加载状态 */
@@ -2867,126 +2943,7 @@ onMounted(() => {
   padding: 20px;
   background: #fff;
   border-radius: 8px;
-  line-height: 1.8;
-  color: #333;
   overflow-x: auto;
-}
-
-.markdown-preview h1,
-.markdown-preview h2,
-.markdown-preview h3,
-.markdown-preview h4,
-.markdown-preview h5,
-.markdown-preview h6 {
-  margin-top: 24px;
-  margin-bottom: 16px;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.markdown-preview h1 {
-  font-size: 28px;
-  border-bottom: 2px solid #eaecef;
-  padding-bottom: 10px;
-}
-
-.markdown-preview h2 {
-  font-size: 24px;
-  border-bottom: 1px solid #eaecef;
-  padding-bottom: 8px;
-}
-
-.markdown-preview h3 {
-  font-size: 20px;
-}
-
-.markdown-preview h4 {
-  font-size: 18px;
-}
-
-.markdown-preview h5 {
-  font-size: 16px;
-}
-
-.markdown-preview h6 {
-  font-size: 14px;
-  color: #666;
-}
-
-.markdown-preview p {
-  margin: 16px 0;
-}
-
-.markdown-preview ul,
-.markdown-preview ol {
-  margin: 16px 0;
-  padding-left: 2em;
-}
-
-.markdown-preview li {
-  margin: 8px 0;
-}
-
-.markdown-preview code {
-  background: #f6f8fa;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-  font-size: 14px;
-}
-
-.markdown-preview pre {
-  background: #f6f8fa;
-  border-radius: 8px;
-  padding: 16px;
-  overflow-x: auto;
-  margin: 16px 0;
-}
-
-.markdown-preview pre code {
-  background: none;
-  padding: 0;
-  font-size: 14px;
-}
-
-.markdown-preview blockquote {
-  border-left: 4px solid #dfe2e5;
-  padding-left: 16px;
-  margin: 16px 0;
-  color: #666;
-}
-
-.markdown-preview table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 16px 0;
-}
-
-.markdown-preview th,
-.markdown-preview td {
-  border: 1px solid #dfe2e5;
-  padding: 8px 12px;
-  text-align: left;
-}
-
-.markdown-preview th {
-  background: #f6f8fa;
-  font-weight: 600;
-}
-
-.markdown-preview a {
-  color: #0066cc;
-  text-decoration: none;
-}
-
-.markdown-preview a:hover {
-  text-decoration: underline;
-}
-
-.markdown-preview img {
-  max-width: 100%;
-  height: auto;
-  border-radius: 4px;
 }
 
 /* 代码预览样式 */

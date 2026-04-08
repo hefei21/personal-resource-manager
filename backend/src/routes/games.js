@@ -3,6 +3,8 @@ import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import { cache, CacheTTL } from '../utils/cache.js'
+import { compressBase64Image } from '../utils/imageCompress.js'
 
 const router = express.Router()
 
@@ -14,7 +16,7 @@ const httpsAgent = process.env.HTTP_PROXY
 // Steam API 不需要代理（国内可直接访问）
 const steamAgent = undefined
 
-// 下载图片并转换为base64
+// 下载图片并转换为base64（带压缩）
 async function downloadImageAsBase64(imageUrl) {
   if (!imageUrl) return null
   try {
@@ -25,7 +27,10 @@ async function downloadImageAsBase64(imageUrl) {
     })
     const base64 = Buffer.from(response.data, 'binary').toString('base64')
     const contentType = response.headers['content-type'] || 'image/jpeg'
-    return `data:${contentType};base64,${base64}`
+    const rawBase64 = `data:${contentType};base64,${base64}`
+    
+    // 压缩图片
+    return await compressBase64Image(rawBase64, { maxWidth: 500, maxHeight: 500, quality: 85 })
   } catch (error) {
     console.error('下载图片失败:', error.message)
     return null
@@ -495,10 +500,20 @@ router.get('/:id', authenticateToken, async (req, res) => {
 // 获取游戏成就详情
 router.get('/:id/achievements', authenticateToken, async (req, res) => {
   try {
+    const { id } = req.params
+    
+    // 尝试从缓存获取
+    const cacheKey = `game:achievements:${id}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log(`[游戏管理] 命中成就缓存: ${id}`)
+      return res.json({ data: cached })
+    }
+    
     const db = getDatabase()
     
     // 获取游戏信息
-    const game = db.prepare('SELECT * FROM games WHERE id = ?').get(req.params.id)
+    const game = db.prepare('SELECT * FROM games WHERE id = ?').get(id)
     if (!game) {
       return res.status(404).json({ message: '游戏不存在' })
     }
@@ -519,24 +534,27 @@ router.get('/:id/achievements', authenticateToken, async (req, res) => {
       ORDER BY is_achieved DESC, global_percent DESC
     `).all(game.id)
 
-    res.json({ 
-      data: {
-        game: {
-          id: game.id,
-          title: game.title,
-          steam_appid: game.steam_appid,
-          cover_image: game.cover_image,
-          cover_image_data: game.cover_image_data,
-          playtime_forever: game.playtime_forever,
-          playtime_2weeks: game.playtime_2weeks,
-          last_played: game.last_played,
-          achievements_total: game.achievements_total,
-          achievements_completed: game.achievements_completed,
-          has_achievements_data: achievements.length > 0
-        },
-        achievements
-      }
-    })
+    const result = {
+      game: {
+        id: game.id,
+        title: game.title,
+        steam_appid: game.steam_appid,
+        cover_image: game.cover_image,
+        cover_image_data: game.cover_image_data,
+        playtime_forever: game.playtime_forever,
+        playtime_2weeks: game.playtime_2weeks,
+        last_played: game.last_played,
+        achievements_total: game.achievements_total,
+        achievements_completed: game.achievements_completed,
+        has_achievements_data: achievements.length > 0
+      },
+      achievements
+    }
+    
+    // 缓存结果（10分钟）
+    await cache.set(cacheKey, result, CacheTTL.MEDIUM)
+
+    res.json({ data: result })
   } catch (error) {
     console.error('获取成就详情失败:', error.message || error)
     res.status(500).json({ message: '服务器错误' })
@@ -578,7 +596,7 @@ router.post('/:id/fetch-achievements', authenticateToken, requireWritePermission
     const playerAchievementsUrl = `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key=${apiKey}&steamid=${steamId}&appid=${game.steam_appid}`
     let achResponse
     try {
-      achResponse = await axios.get(playerAchievementsUrl, { httpsAgent: steamAgent, proxy: false, timeout: 15000 })
+      achResponse = await axios.get(playerAchievementsUrl, { httpsAgent: steamAgent, proxy: false, timeout: 30000 })
     } catch (e) {
       if (e.response?.status === 403) {
         return res.status(200).json({ message: '该游戏没有成就或您未拥有此游戏', data: { achievements: [] } })
@@ -598,7 +616,7 @@ router.post('/:id/fetch-achievements', authenticateToken, requireWritePermission
     let achievementDefs = []
     try {
       const schemaUrl = `https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key=${apiKey}&appid=${game.steam_appid}`
-      const schemaResponse = await axios.get(schemaUrl, { httpsAgent: steamAgent, proxy: false, timeout: 15000 })
+      const schemaResponse = await axios.get(schemaUrl, { httpsAgent: steamAgent, proxy: false, timeout: 30000 })
       achievementDefs = schemaResponse.data.game?.availableGameStats?.achievements || []
     } catch (e) {
       console.log(`获取成就定义失败: ${game.title}`)
@@ -608,7 +626,7 @@ router.post('/:id/fetch-achievements', authenticateToken, requireWritePermission
     let globalPercents = {}
     try {
       const globalUrl = `https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid=${game.steam_appid}`
-      const globalResponse = await axios.get(globalUrl, { httpsAgent: steamAgent, proxy: false, timeout: 15000 })
+      const globalResponse = await axios.get(globalUrl, { httpsAgent: steamAgent, proxy: false, timeout: 30000 })
       const achList = globalResponse.data.achievementpercentages?.achievements || []
       globalPercents = achList.reduce((acc, a) => { acc[a.name] = a.percent; return acc }, {})
     } catch (e) {
@@ -916,6 +934,13 @@ router.post('/:id/refresh-cover', authenticateToken, requireWritePermission, asy
 // 获取统计数据
 router.get('/stats', authenticateToken, async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = 'game:stats'
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+
     const db = getDatabase()
 
     const stats = {
@@ -924,6 +949,9 @@ router.get('/stats', authenticateToken, async (req, res) => {
       playedGames: db.prepare('SELECT COUNT(*) as count FROM games WHERE status IN (?, ?, ?)').get('playing', 'played', 'dropped').count,
       favoriteGames: db.prepare('SELECT COUNT(*) as count FROM games WHERE is_favorite = 1').get().count
     }
+
+    // 缓存结果（2分钟）
+    await cache.set(cacheKey, stats, CacheTTL.SHORT * 2)
 
     res.json({ data: stats })
   } catch (error) {

@@ -1,6 +1,7 @@
 import express from 'express'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import { cache, CacheTTL } from '../utils/cache.js'
 
 const router = express.Router()
 
@@ -15,10 +16,18 @@ function convertToUTC8(dateString) {
 // ==================== 文章相关 ====================
 
 // 获取文章列表
-router.get('/posts', (req, res) => {
+router.get('/posts', async (req, res) => {
   try {
+    const { status, category_id, tag_id, keyword, page = 1, pageSize = 30 } = req.query
+    
+    // 尝试从缓存获取
+    const cacheKey = `blog:posts:${status || 'all'}:${category_id || 'all'}:${tag_id || 'all'}:${keyword || 'all'}:${page}:${pageSize}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json(cached)
+    }
+    
     const db = getDatabase()
-    const { status, category_id, keyword, page = 1, pageSize = 30 } = req.query
     const offset = (parseInt(page) - 1) * parseInt(pageSize)
     
     let sql = `
@@ -45,6 +54,11 @@ router.get('/posts', (req, res) => {
       params.push(category_id)
     }
 
+    if (tag_id) {
+      sql += ` AND pt.tag_id = ?`
+      params.push(tag_id)
+    }
+
     if (keyword) {
       sql += ` AND p.title LIKE ?`
       params.push(`%${keyword}%`)
@@ -55,12 +69,29 @@ router.get('/posts', (req, res) => {
     // 排序：置顶优先，然后按更新时间倒序
     sql += ` ORDER BY p.is_top DESC, p.updated_at DESC`
 
-    // 获取总数
-    const countSql = `SELECT COUNT(DISTINCT p.id) as total FROM blog_posts p WHERE 1=1${status ? ' AND p.status = ?' : ''}${category_id ? ' AND p.category_id = ?' : ''}${keyword ? ' AND p.title LIKE ?' : ''}`
+    // 获取总数 - 需要包含 tag_id 过滤
+    let countSql = `SELECT COUNT(DISTINCT p.id) as total FROM blog_posts p`
     const countParams = []
-    if (status) countParams.push(status)
-    if (category_id) countParams.push(category_id)
-    if (keyword) countParams.push(`%${keyword}%`)
+    if (tag_id) {
+      countSql += ` LEFT JOIN blog_post_tags pt ON p.id = pt.post_id`
+    }
+    countSql += ` WHERE 1=1`
+    if (status) {
+      countSql += ` AND p.status = ?`
+      countParams.push(status)
+    }
+    if (category_id) {
+      countSql += ` AND p.category_id = ?`
+      countParams.push(category_id)
+    }
+    if (tag_id) {
+      countSql += ` AND pt.tag_id = ?`
+      countParams.push(tag_id)
+    }
+    if (keyword) {
+      countSql += ` AND p.title LIKE ?`
+      countParams.push(`%${keyword}%`)
+    }
     const totalResult = db.prepare(countSql).get(...countParams)
     const total = totalResult.total
 
@@ -80,13 +111,18 @@ router.get('/posts', (req, res) => {
       updated_at: convertToUTC8(post.updated_at)
     }))
 
-    res.json({
+    const response = {
       success: true,
       data: result,
       total,
       page: parseInt(page),
       pageSize: parseInt(pageSize)
-    })
+    }
+    
+    // 缓存结果（5分钟）
+    await cache.set(cacheKey, response, CacheTTL.MEDIUM)
+
+    res.json(response)
   } catch (error) {
     console.error('获取文章列表失败:', error)
     res.status(500).json({ success: false, message: '获取文章列表失败' })
@@ -94,10 +130,21 @@ router.get('/posts', (req, res) => {
 })
 
 // 获取单篇文章
-router.get('/posts/:id', (req, res) => {
+router.get('/posts/:id', async (req, res) => {
   try {
-    const db = getDatabase()
     const { id } = req.params
+    
+    // 尝试从缓存获取
+    const cacheKey = `blog:post:${id}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached
+      })
+    }
+    
+    const db = getDatabase()
 
     const post = db.prepare(`
       SELECT 
@@ -118,17 +165,22 @@ router.get('/posts/:id', (req, res) => {
       return res.status(404).json({ success: false, message: '文章不存在' })
     }
 
+    const result = {
+      ...post,
+      category_name: post.category_name || null,
+      tag_ids: post.tag_ids ? post.tag_ids.split(',').map(Number) : [],
+      tags: post.tags ? post.tags.split(',') : [],
+      tag_colors: post.tag_colors ? post.tag_colors.split(',') : [],
+      created_at: convertToUTC8(post.created_at),
+      updated_at: convertToUTC8(post.updated_at)
+    }
+    
+    // 缓存结果（10分钟）
+    await cache.set(cacheKey, result, CacheTTL.MEDIUM)
+
     res.json({
       success: true,
-      data: {
-        ...post,
-        category_name: post.category_name || null,
-        tag_ids: post.tag_ids ? post.tag_ids.split(',').map(Number) : [],
-        tags: post.tags ? post.tags.split(',') : [],
-        tag_colors: post.tag_colors ? post.tag_colors.split(',') : [],
-        created_at: convertToUTC8(post.created_at),
-        updated_at: convertToUTC8(post.updated_at)
-      }
+      data: result
     })
   } catch (error) {
     console.error('获取文章失败:', error)
@@ -137,7 +189,7 @@ router.get('/posts/:id', (req, res) => {
 })
 
 // 创建文章
-router.post('/posts', authenticateToken, requireWritePermission, (req, res) => {
+router.post('/posts', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const { title, content, category_id, tags, status = 'draft', is_top = false } = req.body
@@ -179,6 +231,9 @@ router.post('/posts', authenticateToken, requireWritePermission, (req, res) => {
       data: { id: postId },
       message: '创建成功'
     })
+    
+    // 清除文章列表缓存
+    await cache.delPattern('blog:posts:*')
   } catch (error) {
     console.error('创建文章失败:', error)
     res.status(500).json({ success: false, message: '创建文章失败' })
@@ -186,7 +241,7 @@ router.post('/posts', authenticateToken, requireWritePermission, (req, res) => {
 })
 
 // 更新文章
-router.put('/posts/:id', authenticateToken, requireWritePermission, (req, res) => {
+router.put('/posts/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -258,6 +313,9 @@ router.put('/posts/:id', authenticateToken, requireWritePermission, (req, res) =
       success: true,
       message: '更新成功'
     })
+    
+    // 清除文章列表缓存
+    await cache.delPattern('blog:posts:*')
   } catch (error) {
     console.error('更新文章失败:', error)
     res.status(500).json({ success: false, message: '更新文章失败' })
@@ -265,7 +323,7 @@ router.put('/posts/:id', authenticateToken, requireWritePermission, (req, res) =
 })
 
 // 删除文章
-router.delete('/posts/:id', authenticateToken, requireWritePermission, (req, res) => {
+router.delete('/posts/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -281,6 +339,9 @@ router.delete('/posts/:id', authenticateToken, requireWritePermission, (req, res
       success: true,
       message: '删除成功'
     })
+    
+    // 清除文章列表缓存
+    await cache.delPattern('blog:posts:*')
   } catch (error) {
     console.error('删除文章失败:', error)
     res.status(500).json({ success: false, message: '删除文章失败' })
@@ -290,8 +351,18 @@ router.delete('/posts/:id', authenticateToken, requireWritePermission, (req, res
 // ==================== 分类相关 ====================
 
 // 获取分类列表（树形）
-router.get('/categories', (req, res) => {
+router.get('/categories', async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = 'blog:categories'
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached
+      })
+    }
+
     const db = getDatabase()
     
     // 获取所有分类
@@ -315,6 +386,9 @@ router.get('/categories', (req, res) => {
     }
 
     const tree = buildTree(categories)
+
+    // 缓存结果（30分钟）
+    await cache.set(cacheKey, tree, CacheTTL.VERY_LONG)
 
     res.json({
       success: true,
@@ -468,8 +542,18 @@ router.delete('/categories/:id', authenticateToken, requireWritePermission, (req
 // ==================== 标签相关 ====================
 
 // 获取标签列表
-router.get('/tags', (req, res) => {
+router.get('/tags', async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = 'blog:tags'
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({
+        success: true,
+        data: cached
+      })
+    }
+    
     const db = getDatabase()
     
     const tags = db.prepare(`
@@ -482,12 +566,17 @@ router.get('/tags', (req, res) => {
       ORDER BY post_count DESC, t.name ASC
     `).all()
 
+    const result = tags.map(t => ({
+      ...t,
+      post_count: t.post_count || 0
+    }))
+    
+    // 缓存结果（30分钟）
+    await cache.set(cacheKey, result, CacheTTL.LONG)
+
     res.json({
       success: true,
-      data: tags.map(t => ({
-        ...t,
-        post_count: t.post_count || 0
-      }))
+      data: result
     })
   } catch (error) {
     console.error('获取标签列表失败:', error)
@@ -576,7 +665,7 @@ router.put('/tags/:id', authenticateToken, requireWritePermission, (req, res) =>
 })
 
 // 删除标签
-router.delete('/tags/:id', authenticateToken, requireWritePermission, (req, res) => {
+router.delete('/tags/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -592,6 +681,9 @@ router.delete('/tags/:id', authenticateToken, requireWritePermission, (req, res)
       success: true,
       message: '删除成功'
     })
+    
+    // 清除标签缓存
+    await cache.del('blog:tags')
   } catch (error) {
     console.error('删除标签失败:', error)
     res.status(500).json({ success: false, message: '删除标签失败' })

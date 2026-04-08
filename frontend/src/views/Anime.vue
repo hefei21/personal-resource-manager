@@ -55,7 +55,20 @@
     </t-card>
 
     <!-- Bangumi 搜索结果 -->
-    <t-card v-if="searchResults.length > 0" title="搜索结果" style="margin-top: 16px">
+    <t-card v-if="searchResults.length > 0" style="margin-top: 16px">
+      <template #title>
+        <div class="search-result-title">
+          <span>搜索结果</span>
+          <t-button
+            size="small"
+            variant="text"
+            @click="clearSearchResults"
+            title="关闭搜索结果"
+          >
+            <template #icon><t-icon name="close" /></template>
+          </t-button>
+        </div>
+      </template>
       <div class="search-grid">
         <div
           v-for="anime in searchResults"
@@ -608,6 +621,14 @@ function handleSearchPageChange(pageInfo) {
   handleSearch(pageInfo.current)
 }
 
+// 清空搜索结果
+function clearSearchResults() {
+  searchResults.value = []
+  searchKeyword.value = ''
+  searchTag.value = ''
+  searchPagination.value = { current: 1, pageSize: 20, total: 0 }
+}
+
 async function handleImport(anime) {
   anime.importing = true
   try {
@@ -888,6 +909,13 @@ onUnmounted(() => {
 }
 
 /* 搜索结果卡片 */
+.search-result-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
 .search-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));

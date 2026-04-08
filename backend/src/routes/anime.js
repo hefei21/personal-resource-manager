@@ -3,17 +3,12 @@ import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import { cache, CacheTTL } from '../utils/cache.js'
+import { compressBase64Image } from '../utils/imageCompress.js'
 
 const router = express.Router()
 const BANGUMI_API_BASE = process.env.BANGUMI_API_BASE || 'https://api.bgm.tv'
 const BANGUMI_API_V0 = 'https://api.bgm.tv/v0'
-
-// Token状态缓存（避免频繁验证）
-let tokenStatusCache = {
-  isValid: null,
-  lastCheck: 0,
-  ttl: 3600000 // 1小时缓存
-}
 
 // Bangumi API 要求自定义 User-Agent
 // 如果提供了Access Token，可以获取更多搜索结果（避免limit=10的限制）
@@ -29,7 +24,7 @@ const httpsAgent = process.env.HTTP_PROXY
   ? new HttpsProxyAgent(process.env.HTTP_PROXY)
   : undefined
 
-// 下载图片并转换为base64
+// 下载图片并转换为base64（带压缩）
 async function downloadImageAsBase64(imageUrl) {
   if (!imageUrl) return null
   try {
@@ -40,7 +35,10 @@ async function downloadImageAsBase64(imageUrl) {
     })
     const base64 = Buffer.from(response.data, 'binary').toString('base64')
     const contentType = response.headers['content-type'] || 'image/jpeg'
-    return `data:${contentType};base64,${base64}`
+    const rawBase64 = `data:${contentType};base64,${base64}`
+    
+    // 压缩图片
+    return await compressBase64Image(rawBase64, { maxWidth: 500, maxHeight: 500, quality: 85 })
   } catch (error) {
     console.error('下载图片失败:', error.message)
     return null
@@ -49,6 +47,18 @@ async function downloadImageAsBase64(imageUrl) {
 
 // 获取动漫详情（包含角色和制作人员）
 async function getAnimeDetail(bangumiId) {
+  // 尝试从缓存获取
+  const cacheKey = `anime:detail:${bangumiId}`
+  try {
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log(`[Redis] 命中缓存: ${cacheKey}`)
+      return cached
+    }
+  } catch (e) {
+    console.error('[动漫详情] 读取缓存失败:', e)
+  }
+
   try {
     // 并行请求基本信息、角色、制作人员
     const [subjectRes, charactersRes, personsRes] = await Promise.all([
@@ -57,11 +67,16 @@ async function getAnimeDetail(bangumiId) {
       axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}/persons`, { httpsAgent, timeout: 15000, headers: BANGUMI_HEADERS })
     ])
 
-    return {
+    const result = {
       subject: subjectRes.data,
       characters: charactersRes.data.data || [],
       persons: personsRes.data.data || []
     }
+
+    // 缓存结果（1小时）
+    await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
+
+    return result
   } catch (error) {
     console.error('获取动漫详情失败:', error.message)
     throw new Error('获取详情失败')
@@ -91,10 +106,15 @@ async function validateToken() {
     return false
   }
 
-  // 使用缓存（1小时内不重复验证）
-  const now = Date.now()
-  if (tokenStatusCache.isValid !== null && (now - tokenStatusCache.lastCheck) < tokenStatusCache.ttl) {
-    return tokenStatusCache.isValid
+  // 使用Redis缓存（1小时内不重复验证）
+  const cacheKey = 'anime:token_status'
+  try {
+    const cached = await cache.get(cacheKey)
+    if (cached !== null) {
+      return cached.isValid
+    }
+  } catch (e) {
+    console.error('[Token验证] 读取缓存失败:', e)
   }
 
   try {
@@ -108,7 +128,10 @@ async function validateToken() {
 
     // 如果返回401，说明Token无效
     const isValid = response.status !== 401
-    tokenStatusCache = { isValid, lastCheck: now, ttl: 3600000 }
+    
+    // 缓存结果（1小时）
+    await cache.set(cacheKey, { isValid, lastCheck: Date.now() }, CacheTTL.VERY_LONG)
+    
     return isValid
   } catch (error) {
     console.error('[Token验证] 验证失败:', error.message)
@@ -156,6 +179,14 @@ router.get('/search', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: '请输入搜索关键词或标签' })
     }
 
+    // 尝试从缓存获取
+    const cacheKey = `anime:search:${keyword || ''}:${tag || ''}:${page}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log('[Redis] 命中缓存:', cacheKey)
+      return res.json(cached)
+    }
+
     // 构建 Bangumi API 搜索请求体
     // Bangumi v0 API: POST /v0/search/subjects
     // filter 中包含 type, tag, air_date 等筛选条件
@@ -192,14 +223,16 @@ router.get('/search', authenticateToken, async (req, res) => {
     }).catch(error => {
       if (error.response?.status === 401) {
         console.error('[Bangumi搜索] Token已失效（401）')
-        tokenStatusCache = { isValid: false, lastCheck: Date.now(), ttl: 3600000 }
+        // 清除Token缓存
+        cache.del('anime:token_status')
       }
       throw error
     })
 
     if (response.status === 401) {
       console.error('[Bangumi搜索] Token已失效（401响应）')
-      tokenStatusCache = { isValid: false, lastCheck: Date.now(), ttl: 3600000 }
+      // 清除Token缓存
+      await cache.del('anime:token_status')
       return res.status(401).json({ message: 'Bangumi Token已失效，请重新配置' })
     }
 
@@ -233,7 +266,12 @@ router.get('/search', authenticateToken, async (req, res) => {
       _score: item._score
     }))
 
-    res.json({ data: searchResults, total })
+    const responseData = { data: searchResults, total }
+
+    // 缓存结果（30分钟）
+    await cache.set(cacheKey, responseData, CacheTTL.VERY_LONG)
+
+    res.json(responseData)
   } catch (error) {
     console.error('搜索动漫失败:', error)
 
@@ -375,6 +413,13 @@ router.get('/bangumi/:bangumiId', authenticateToken, async (req, res) => {
 // 获取关联作品（前作、续作等）
 router.get('/relations/:bangumiId', authenticateToken, async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = `anime:relations:${req.params.bangumiId}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+
     const response = await axios.get(`${BANGUMI_API_V0}/subjects/${req.params.bangumiId}/subjects`, {
       httpsAgent,
       timeout: 15000,
@@ -390,6 +435,10 @@ router.get('/relations/:bangumiId', authenticateToken, async (req, res) => {
              relationType.includes('Prequel') ||
              relationType.includes('Sequel')
     })
+
+    // 缓存结果（30分钟）
+    await cache.set(cacheKey, relations, CacheTTL.VERY_LONG)
+
     res.json({ data: relations })
   } catch (error) {
     // Bangumi API 可能不支持某些条目的关联查询，返回空数组而非报错
@@ -1153,6 +1202,14 @@ router.get('/resources/search', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: '请提供搜索关键词' })
     }
 
+    // 尝试从缓存获取
+    const cacheKey = `anime:resources:${mode}:${keyword.toLowerCase()}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log(`[资源搜索] 命中缓存: ${keyword}`)
+      return res.json(cached)
+    }
+
     // 资源源优先级配置（可扩展）
     const sourcePriority = [
       { name: 'Nyaa', search: searchNyaa },
@@ -1214,11 +1271,16 @@ router.get('/resources/search', authenticateToken, async (req, res) => {
 
     console.log(`[资源搜索] 找到 ${uniqueResults.length} 条结果`)
 
-    res.json({ 
+    const result = { 
       data: uniqueResults.slice(0, 50),
       mode,
       sources: sourcePriority.map(s => s.name)
-    })
+    }
+
+    // 缓存结果（30分钟）
+    await cache.set(cacheKey, result, CacheTTL.LONG)
+
+    res.json(result)
   } catch (error) {
     console.error('搜索资源失败:', error.message)
     res.status(500).json({ message: '搜索资源失败' })

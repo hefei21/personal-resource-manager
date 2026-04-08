@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
 
 const router = express.Router()
 
@@ -68,6 +69,9 @@ router.post('/categories', authenticateToken, requireWritePermission, async (req
     )
     const result = stmt.run(name, parentId || null, path, level)
 
+    // 清除分类缓存
+    await cache.del(CacheKeys.DOC_CATEGORIES)
+
     res.json({ id: result.lastInsertRowid, message: '创建成功' })
   } catch (error) {
     console.error('创建分类失败:', error)
@@ -93,6 +97,13 @@ router.get('/categories/tree', authenticateToken, async (req, res) => {
 // 获取分类列表（支持多级嵌套）
 router.get('/categories', authenticateToken, async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = CacheKeys.DOC_CATEGORIES
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+
     const db = getDatabase()
 
     // 计算分类及其子分类下的文件数量
@@ -136,6 +147,9 @@ router.get('/categories', authenticateToken, async (req, res) => {
       fileCount: getCategoryFileCount(row.path),
       subcategories: getSubcategories(row.id)
     }))
+
+    // 缓存结果（5分钟）
+    await cache.set(cacheKey, categories, CacheTTL.MEDIUM)
 
     res.json({ data: categories })
   } catch (error) {
@@ -276,6 +290,9 @@ router.delete('/categories/:id', authenticateToken, requireWritePermission, asyn
       deleteCategoryStmt.run(cat.id)
     }
 
+    // 清除分类缓存
+    await cache.del(CacheKeys.DOC_CATEGORIES)
+
     res.json({
       message: deleteFiles === 'true' ? '分类及相关文件已删除' : '分类已删除，文件已提升到父分类',
       deletedCategories: allCategories.length
@@ -306,6 +323,9 @@ router.put('/categories/reorder', authenticateToken, requireWritePermission, asy
     })
 
     transaction(orders)
+
+    // 清除分类缓存
+    await cache.del(CacheKeys.DOC_CATEGORIES)
 
     res.json({ message: '排序更新成功' })
   } catch (error) {
@@ -395,6 +415,9 @@ router.put('/categories/:id', authenticateToken, requireWritePermission, async (
       const updateChildDocs = db.prepare('UPDATE documents SET subcategory = ? WHERE subcategory LIKE ?')
       updateChildDocs.run(newSubcat + '/%', oldSubcat + '/%')
     }
+
+    // 清除分类缓存
+    await cache.del(CacheKeys.DOC_CATEGORIES)
 
     res.json({ message: '更新成功', newPath })
   } catch (error) {
@@ -495,6 +518,13 @@ function buildCategoryPath(db, categoryId) {
 // 获取标签列表
 router.get('/tags', authenticateToken, async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = CacheKeys.DOC_TAGS
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+
     const db = getDatabase()
     const stmt = db.prepare('SELECT DISTINCT tags FROM documents WHERE tags IS NOT NULL AND tags != \'\'')
     const rows = stmt.all()
@@ -507,7 +537,12 @@ router.get('/tags', authenticateToken, async (req, res) => {
       }
     })
 
-    res.json({ data: Array.from(tags) })
+    const tagArray = Array.from(tags)
+
+    // 缓存结果（10分钟）
+    await cache.set(cacheKey, tagArray, CacheTTL.LONG)
+
+    res.json({ data: tagArray })
   } catch (error) {
     console.error('获取标签失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -720,6 +755,10 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
     console.log('文档上传成功，ID:', result.lastInsertRowid)
     console.log('保存到数据库的路径:', filePath)
     console.log('最终标题:', finalTitle)
+
+    // 清除标签缓存（可能添加了新标签）
+    await cache.del(CacheKeys.DOC_TAGS)
+
     res.json({ id: result.lastInsertRowid, title: finalTitle, message: '上传成功' })
   } catch (error) {
     console.error('文档上传错误:', error)
@@ -942,6 +981,9 @@ router.put('/:id', authenticateToken, requireWritePermission, async (req, res) =
     )
     stmt.run(title, category, subcategory || '', tags, req.params.id)
 
+    // 清除标签缓存（可能修改了标签）
+    await cache.del(CacheKeys.DOC_TAGS)
+
     res.json({ message: '更新成功' })
   } catch (error) {
     console.error('更新失败:', error)
@@ -1085,6 +1127,9 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     const deleteVersionsStmt = db.prepare('DELETE FROM document_versions WHERE document_id = ?')
     deleteVersionsStmt.run(req.params.id)
 
+    // 清除标签缓存（可能删除了带标签的文档）
+    await cache.del(CacheKeys.DOC_TAGS)
+
     res.json({ message: '删除成功' })
   } catch (error) {
     console.error('删除失败:', error)
@@ -1116,7 +1161,7 @@ router.post('/private/verify-password', authenticateToken, async (req, res) => {
     if (isValid) {
       res.json({ success: true })
     } else {
-      res.status(401).json({ message: '密码错误' })
+      res.status(400).json({ message: '密码错误', code: 'PASSWORD_INCORRECT' })
     }
   } catch (error) {
     console.error('验证密码失败:', error)

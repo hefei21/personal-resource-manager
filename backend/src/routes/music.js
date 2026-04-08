@@ -9,6 +9,8 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
+import { compressBase64Image } from '../utils/imageCompress.js'
 
 const execAsync = promisify(exec)
 
@@ -317,8 +319,11 @@ async function parseMusicMetadata(filePath, originalName) {
         )
         
         const mimeType = videoStream.codec_name === 'png' ? 'image/png' : 'image/jpeg'
-        coverImage = `data:${mimeType};base64,${coverData.toString('base64')}`
-        console.log('[FFprobe] 封面提取成功，大小:', coverData.length, '字节')
+        const rawCoverImage = `data:${mimeType};base64,${coverData.toString('base64')}`
+        
+        // 压缩封面图片
+        coverImage = await compressBase64Image(rawCoverImage, { maxWidth: 500, maxHeight: 500, quality: 85 })
+        console.log('[FFprobe] 封面提取成功，原始大小:', coverData.length, '字节')
       } catch (coverError) {
         console.log('[FFprobe] 封面提取失败:', coverError.message)
       }
@@ -894,6 +899,13 @@ router.get('/', authenticateToken, async (req, res) => {
     if (columnNames.includes('cover_image')) {
       selectFields.push("CASE WHEN cover_image IS NOT NULL AND cover_image != '' THEN 1 ELSE 0 END as has_cover")
     }
+    // 添加 has_lyrics 标志位（歌词是否存在）
+    if (columnNames.includes('has_lyrics')) {
+      selectFields.push('has_lyrics')
+    } else if (columnNames.includes('lyrics')) {
+      // 兼容旧版本：通过 lyrics 字段判断
+      selectFields.push("CASE WHEN lyrics IS NOT NULL AND lyrics != '' THEN 1 ELSE 0 END as has_lyrics")
+    }
     selectFields.push('created_at', 'updated_at')
 
     // 构建基础查询条件（不包含排序和分页）
@@ -994,6 +1006,13 @@ router.get('/', authenticateToken, async (req, res) => {
 // 获取所有艺术家列表
 router.get('/artists', authenticateToken, async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = CacheKeys.MUSIC_ARTISTS
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+
     const db = getDatabase()
     // 检查 artist 字段是否存在
     const columns = db.prepare("PRAGMA table_info(music)").all()
@@ -1009,6 +1028,9 @@ router.get('/artists', authenticateToken, async (req, res) => {
     // 按拼音排序（使用 Intl.Collator，支持中文拼音排序）
     const artists = rows.map(r => r.artist).sort((a, b) => zhCollator.compare(a, b))
     
+    // 缓存结果（30分钟）
+    await cache.set(cacheKey, artists, CacheTTL.VERY_LONG)
+
     res.json({ data: artists })
   } catch (error) {
     console.error('获取艺术家列表失败:', error)
@@ -1019,6 +1041,13 @@ router.get('/artists', authenticateToken, async (req, res) => {
 // 获取所有专辑列表
 router.get('/albums', authenticateToken, async (req, res) => {
   try {
+    // 尝试从缓存获取
+    const cacheKey = CacheKeys.MUSIC_ALBUMS
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+
     const db = getDatabase()
     // 检查 album 字段是否存在
     const columns = db.prepare("PRAGMA table_info(music)").all()
@@ -1034,6 +1063,9 @@ router.get('/albums', authenticateToken, async (req, res) => {
     // 按拼音排序（使用 Intl.Collator，支持中文拼音排序）
     const albums = rows.map(r => r.album).sort((a, b) => zhCollator.compare(a, b))
     
+    // 缓存结果（30分钟）
+    await cache.set(cacheKey, albums, CacheTTL.VERY_LONG)
+
     res.json({ data: albums })
   } catch (error) {
     console.error('获取专辑列表失败:', error)
@@ -1115,6 +1147,10 @@ router.put('/:id', authenticateToken, async (req, res) => {
     `)
     stmt.run(title, artist, album, coverImage, req.params.id)
 
+    // 清除艺术家和专辑缓存
+    await cache.del(CacheKeys.MUSIC_ARTISTS)
+    await cache.del(CacheKeys.MUSIC_ALBUMS)
+
     res.json({ message: '更新成功' })
   } catch (error) {
     console.error('更新失败:', error)
@@ -1165,6 +1201,10 @@ router.post('/batch-delete', authenticateToken, requireWritePermission, async (r
     
     transaction()
     
+    // 清除艺术家和专辑缓存
+    await cache.del(CacheKeys.MUSIC_ARTISTS)
+    await cache.del(CacheKeys.MUSIC_ALBUMS)
+
     res.json({ message: '删除成功', count: ids.length })
   } catch (error) {
     console.error('批量删除失败:', error)

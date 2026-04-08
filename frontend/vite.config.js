@@ -25,6 +25,21 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    sourcemap: false
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Vue 核心
+          'vue-vendor': ['vue', 'vue-router', 'pinia'],
+          // TDesign UI 库
+          'tdesign': ['tdesign-vue-next'],
+          // 代码高亮
+          'highlight': ['highlight.js'],
+          // Markdown 编辑器
+          'markdown': ['marked', 'md-editor-v3']
+        }
+      }
+    },
+    chunkSizeWarningLimit: 1000
   }
 })

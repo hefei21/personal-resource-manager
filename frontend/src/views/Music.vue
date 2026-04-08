@@ -1617,12 +1617,13 @@ async function confirmAddToPlaylist() {
   }
   
   try {
-    await api.music.addPlaylistSongs(selectedPlaylistId.value, selectedSongs.value)
+    await api.music.addSongsToPlaylist(selectedPlaylistId.value, selectedSongs.value)
     MessagePlugin.success('添加成功')
     showAddToPlaylistDialog.value = false
     selectedSongs.value = []
     loadPlaylists()
   } catch (error) {
+    console.error('添加到歌单失败:', error)
     MessagePlugin.error('添加失败')
   }
 }

@@ -588,6 +588,14 @@ function initDatabase() {
       console.log('✓ 代码仓库表结构迁移完成')
     }
 
+    // 添加代码统计字段
+    const hasLanguages = codeColumns.some(col => col.name === 'languages')
+    if (!hasLanguages) {
+      console.log('添加 languages 字段到 code_repositories 表...')
+      database.exec('ALTER TABLE code_repositories ADD COLUMN languages TEXT DEFAULT "{}"')
+      console.log('✓ 语言统计字段添加成功')
+    }
+
     // 检查并添加 confirmed 字段到 todos 表
     const todosColumns = database.prepare("PRAGMA table_info(todos)").all()
     console.log('todos 表当前字段:', todosColumns.map(c => c.name).join(', '))

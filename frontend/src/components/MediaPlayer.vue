@@ -164,6 +164,29 @@
             </svg>
             <span class="mode-text">{{ playlist.length }}</span>
           </button>
+
+          <!-- 均衡器按钮（非侧边栏模式） -->
+          <t-popup
+            v-if="!isSidebarMode"
+            v-model="showEqualizer"
+            placement="top"
+            :trigger="'click'"
+            :overlay-style="{ padding: '0' }"
+          >
+            <button
+              class="icon-btn mode-btn"
+              :class="{ active: showEqualizer }"
+              title="均衡器"
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M10 20h4V4h-4v16zm-6 0h4v-8H4v8zM16 9v11h4V9h-4z"/>
+              </svg>
+              <span class="mode-text">均衡器</span>
+            </button>
+            <template #content>
+              <EqualizerPanel />
+            </template>
+          </t-popup>
         </div>
 
         <!-- 播放列表 -->
@@ -223,6 +246,8 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '@/api'
 import { getCoverFromCache, saveCoverToCache, initCoverDB } from '@/utils/coverCache'
 import LyricsWindow from './LyricsWindow.vue'
+import EqualizerPanel from './EqualizerPanel.vue'
+import { equalizer } from '@/utils/Equalizer.js'
 import { usePermission } from '@/composables/usePermission'
 
 const { isGuest } = usePermission()
@@ -247,6 +272,8 @@ const playerCoverData = ref(null) // 当前播放歌曲的封面数据
 const showLyricsWindow = ref(false) // 歌词窗口显示状态
 const isDraggingProgress = ref(false) // 是否正在拖动进度条
 const dragProgress = ref(0) // 拖动时的临时进度
+const showEqualizer = ref(false) // 均衡器面板显示状态
+const equalizerInitialized = ref(false) // 均衡器是否已初始化
 
 // 计算属性
 const progress = computed(() => {
@@ -359,7 +386,24 @@ function loadAndPlay() {
   audioRef.value.load()
 }
 
-function handleCanPlay() {
+async function handleCanPlay() {
+  // 初始化均衡器（只初始化一次）
+  if (!equalizerInitialized.value && audioRef.value) {
+    try {
+      const success = await equalizer.init(audioRef.value)
+      if (success) {
+        equalizerInitialized.value = true
+        // 加载保存的配置
+        const equalizerPanelRef = document.querySelector('.equalizer-panel')
+        if (equalizerPanelRef && equalizerPanelRef.__vueParentComponent) {
+          equalizerPanelRef.__vueParentComponent.ctx.loadConfig()
+        }
+      }
+    } catch (error) {
+      console.error('均衡器初始化失败:', error)
+    }
+  }
+
   // 音频可以播放时，自动开始播放
   if (audioRef.value && currentSong.value) {
     audioRef.value.play().then(() => {
@@ -655,6 +699,11 @@ onUnmounted(() => {
   window.removeEventListener('play-music', handlePlayMusic)
   window.removeEventListener('remove-music', handleRemoveMusic)
   window.removeEventListener('popstate', checkRouteChange)
+
+  // 清理均衡器
+  if (equalizerInitialized.value) {
+    equalizer.destroy()
+  }
 })
 </script>
 
@@ -937,6 +986,11 @@ onUnmounted(() => {
 
 .mode-btn {
   font-size: 12px;
+}
+
+.mode-btn.active {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
 }
 
 /* 播放列表面板白色样式 */

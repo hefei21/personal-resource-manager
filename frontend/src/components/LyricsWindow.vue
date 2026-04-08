@@ -59,38 +59,66 @@
                 上传歌词
               </t-button>
               <t-button
-                v-if="currentSong?.has_lyrics"
+                v-if="lyrics.length > 0"
                 size="small"
                 variant="text"
                 @click="showLyricsEditor = true"
                 :disabled="isGuest"
+                class="white-text-btn"
               >
                 <template #icon><t-icon name="edit" /></template>
-                编辑
+                编辑歌词
               </t-button>
             </t-space>
           </div>
           
-          <div 
-            class="lyrics-content" 
-            ref="lyricsContainer"
-            v-if="lyrics.length > 0"
-            @scroll="handleUserScroll"
-          >
+          <!-- 歌词内容区域 + 时间调整按钮 -->
+          <div class="lyrics-wrapper">
             <div 
-              v-for="(line, index) in lyrics" 
-              :key="index"
-              :class="['lyrics-line', { active: isLineActive(index) }]"
-              @click="seekToLine(line.time)"
+              class="lyrics-content" 
+              ref="lyricsContainer"
+              v-if="lyrics.length > 0"
+              @scroll="handleUserScroll"
             >
-              {{ line.text || '...' }}
+              <div 
+                v-for="(line, index) in lyrics" 
+                :key="index"
+                :class="['lyrics-line', { active: isLineActive(index) }]"
+                @click="seekToLine(line.time)"
+              >
+                {{ line.text || '...' }}
+              </div>
             </div>
-          </div>
-          
-          <div v-else class="lyrics-empty">
-            <t-icon name="file-text" size="48px" />
-            <p>暂无歌词</p>
-            <p class="hint">点击顶部"获取歌词"按钮自动搜索</p>
+            
+            <div v-else class="lyrics-empty">
+              <t-icon name="file-text" size="48px" />
+              <p>暂无歌词</p>
+              <p class="hint">点击顶部"获取歌词"按钮自动搜索</p>
+            </div>
+            
+            <!-- 时间调整按钮（网易云音乐风格） -->
+            <div v-if="lyrics.length > 0" class="time-adjust-buttons">
+              <button
+                class="adjust-btn"
+                @click="adjustLyricTime(-0.5)"
+                :disabled="isGuest"
+                title="-0.5s"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/>
+                </svg>
+              </button>
+              <button
+                class="adjust-btn"
+                @click="adjustLyricTime(0.5)"
+                :disabled="isGuest"
+                title="+0.5s"
+              >
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                  <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/>
+                </svg>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -170,6 +198,24 @@
               <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.16l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
             </svg>
           </button>
+
+          <!-- 均衡器按钮 -->
+          <t-popup
+            v-model="showEqualizer"
+            placement="top"
+            trigger="click"
+            :overlay-style="{ padding: '0', zIndex: 10001 }"
+            attach="body"
+          >
+            <button class="icon-btn mode-btn" :class="{ active: showEqualizer }" title="均衡器">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M10 20h4V4h-4v16zm-6 0h4v-8H4v8zM16 9v11h4V9h-4z"/>
+              </svg>
+            </button>
+            <template #content>
+              <EqualizerPanel />
+            </template>
+          </t-popup>
         </div>
       </div>
       
@@ -220,6 +266,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import api from '../api'
+import EqualizerPanel from './EqualizerPanel.vue'
 import { usePermission } from '@/composables/usePermission'
 
 const { isGuest } = usePermission()
@@ -295,6 +342,7 @@ const userScrolling = ref(false)
 const localVolume = ref(props.volume) // 本地音量状态，避免 props 响应式冲突
 const isDraggingProgress = ref(false) // 是否正在拖动进度条
 const dragProgress = ref(0) // 拖动时的临时进度
+const showEqualizer = ref(false) // 均衡器面板显示状态
 let scrollTimer = null
 
 // 计算属性
@@ -552,6 +600,44 @@ async function saveLyrics() {
   } catch (error) {
     console.error('保存歌词失败:', error)
     MessagePlugin.error('保存失败')
+  }
+}
+
+// 调整歌词时间轴（以0.5秒为单位）
+async function adjustLyricTime(delta) {
+  if (lyrics.value.length === 0 || currentLineIndex.value < 0) return
+  
+  const currentLine = lyrics.value[currentLineIndex.value]
+  if (!currentLine) return
+  
+  // 调整当前行的时间
+  const newTime = Math.max(0, currentLine.time + delta)
+  currentLine.time = newTime
+  
+  // 重新生成LRC文本
+  const newLyricsText = lyrics.value.map(line => {
+    const minutes = Math.floor(line.time / 60)
+    const seconds = Math.floor(line.time % 60)
+    const milliseconds = Math.round((line.time - Math.floor(line.time)) * 100)
+    const timeTag = `[${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(milliseconds).padStart(2, '0')}]`
+    return `${timeTag}${line.text}`
+  }).join('\n')
+  
+  // 保存到后端
+  try {
+    await api.music.updateLyrics(props.currentSong.id, newLyricsText)
+    lyricsText.value = newLyricsText
+    MessagePlugin.success(`时间轴已调整 ${delta > 0 ? '+' : ''}${delta}s`)
+    
+    // 立即跳转到调整后的时间（如果正在播放）
+    if (props.isPlaying) {
+      emit('seek', newTime)
+    }
+  } catch (error) {
+    console.error('调整时间轴失败:', error)
+    MessagePlugin.error('调整失败')
+    // 恢复原始时间
+    currentLine.time -= delta
   }
 }
 
@@ -876,6 +962,14 @@ onUnmounted(() => {
   margin: 0;
 }
 
+/* 歌词包装器：包含歌词内容和右侧调整按钮 */
+.lyrics-wrapper {
+  flex: 1;
+  display: flex;
+  gap: 12px;
+  overflow: hidden;
+}
+
 .lyrics-content {
   flex: 1;
   overflow-y: auto;
@@ -937,6 +1031,50 @@ onUnmounted(() => {
   opacity: 0.6;
 }
 
+/* 时间调整按钮（网易云音乐风格） */
+.time-adjust-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px;
+  flex-shrink: 0;
+}
+
+.adjust-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.adjust-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+  transform: scale(1.15);
+}
+
+.adjust-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.adjust-btn:first-child svg {
+  transform: rotate(-90deg);
+}
+
+.adjust-btn:last-child svg {
+  transform: rotate(90deg);
+}
+
 .bottom-player {
   position: fixed;
   bottom: 0;
@@ -977,6 +1115,19 @@ onUnmounted(() => {
 .icon-btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+.mode-btn {
+  opacity: 0.7;
+}
+
+.mode-btn:hover {
+  opacity: 1;
+}
+
+.mode-btn.active {
+  background: rgba(255, 255, 255, 0.15);
+  opacity: 1;
 }
 
 .progress-section {
