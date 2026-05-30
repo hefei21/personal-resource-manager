@@ -8,6 +8,60 @@ class CacheManager {
     // 内存缓存降级方案
     this.memoryCache = new Map()
     this.memoryCacheExpiry = new Map()
+    
+    // 缓存失效队列：记录删除失败的键
+    this.invalidationQueue = new Set()
+    this.processingQueue = false
+    
+    // 启动定期清理任务（每30秒）
+    this.startInvalidationWorker()
+  }
+  
+  /**
+   * 启动缓存失效队列处理任务
+   */
+  startInvalidationWorker() {
+    setInterval(() => {
+      this.processInvalidationQueue()
+    }, 30000)
+  }
+  
+  /**
+   * 处理缓存失效队列
+   */
+  async processInvalidationQueue() {
+    if (this.processingQueue || this.invalidationQueue.size === 0) {
+      return
+    }
+    
+    if (!isRedisConnected()) {
+      return // Redis未连接，稍后重试
+    }
+    
+    this.processingQueue = true
+    const keys = Array.from(this.invalidationQueue)
+    
+    for (const key of keys) {
+      try {
+        const client = getRedisClient()
+        await client.del(key)
+        this.invalidationQueue.delete(key)
+        console.log(`[Cache] 队列清理成功: ${key}`)
+      } catch (error) {
+        console.error(`[Cache] 队列清理失败: ${key}`, error)
+        // 保留在队列中，下次重试
+      }
+    }
+    
+    this.processingQueue = false
+  }
+  
+  /**
+   * 添加到失效队列
+   */
+  addToInvalidationQueue(key) {
+    this.invalidationQueue.add(key)
+    console.log(`[Cache] 添加到失效队列: ${key}`)
   }
 
   /**
@@ -81,21 +135,30 @@ class CacheManager {
    * @param {string} key - 缓存键
    */
   async del(key) {
+    let redisSuccess = false
+    
     // Redis
     if (isRedisConnected()) {
       try {
         const client = getRedisClient()
         await client.del(key)
         console.log(`[Redis] 删除缓存: ${key}`)
+        redisSuccess = true
       } catch (error) {
-        console.error('[Redis] 删除缓存失败:', error)
+        console.error('[Redis] 删除缓存失败，加入队列:', key, error)
+        // 删除失败，添加到失效队列稍后重试
+        this.addToInvalidationQueue(key)
       }
+    } else {
+      // Redis未连接，添加到失效队列
+      this.addToInvalidationQueue(key)
     }
 
-    // 内存缓存
+    // 内存缓存始终删除
     this.memoryCache.delete(key)
     this.memoryCacheExpiry.delete(key)
-    return true
+    
+    return redisSuccess || true
   }
 
   /**

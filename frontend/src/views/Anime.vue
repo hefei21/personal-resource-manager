@@ -1,37 +1,38 @@
 <template>
-  <div class="anime">
+  <AnimeMobile v-if="isMobile" />
+  <div v-else class="anime">
     <div class="page-header">
       <p>管理和收藏动漫剧集</p>
     </div>
 
     <!-- Bangumi Token 失效提醒 -->
-    <t-card v-if="tokenStatus && tokenStatus.hasToken && !tokenStatus.isValid" theme="warning" style="margin-bottom: 16px">
-      <t-space align="center">
-        <t-icon name="error-circle" size="18px" />
+    <NativeCard v-if="tokenStatus && tokenStatus.hasToken && !tokenStatus.isValid" theme="warning" style="margin-bottom: 16px">
+      <div class="token-alert">
+        <NativeIcon name="warning-circle" size="18" />
         <span>{{ tokenStatus.message }}</span>
-        <t-button
+        <NativeButton
           size="small"
           theme="primary"
           @click="openTokenPage"
         >
           更新 Token
-        </t-button>
-      </t-space>
-    </t-card>
+        </NativeButton>
+      </div>
+    </NativeCard>
 
-    <t-card>
-      <t-space>
-        <t-input
+    <NativeCard>
+      <div class="search-bar">
+        <NativeInput
           v-model="searchKeyword"
           placeholder="搜索 Bangumi..."
           style="width: 300px"
           @enter="handleSearch"
         >
           <template #suffix-icon>
-            <t-icon name="search" />
+            <NativeIcon name="magnifying-glass" />
           </template>
-        </t-input>
-        <t-input
+        </NativeInput>
+        <NativeInput
           v-model="searchTag"
           placeholder="标签（如：恋爱、奇幻）"
           style="width: 180px"
@@ -39,34 +40,38 @@
           clearable
         >
           <template #suffix-icon>
-            <t-icon name="discount" />
+            <NativeIcon name="tag" />
           </template>
-        </t-input>
-        <t-button @click="handleSearch" :loading="searching">搜索</t-button>
-        <t-select
+        </NativeInput>
+        <NativeButton theme="primary" @click="handleSearch" :loading="searching">
+          <template #icon><NativeIcon name="magnifying-glass" /></template>
+          搜索
+        </NativeButton>
+        <NativeSelect
           v-model="resourceSearchMode"
           style="width: 140px;"
           placeholder="搜索模式"
-        >
-          <t-option value="parallel" label="同时多源搜索" />
-          <t-option value="sequential" label="顺序优先搜索" />
-        </t-select>
-      </t-space>
-    </t-card>
+          :options="[
+            { value: 'parallel', label: '同时多源搜索' },
+            { value: 'sequential', label: '顺序优先搜索' }
+          ]"
+        />
+      </div>
+    </NativeCard>
 
     <!-- Bangumi 搜索结果 -->
-    <t-card v-if="searchResults.length > 0" style="margin-top: 16px">
-      <template #title>
+    <NativeCard v-if="searchResults.length > 0" style="margin-top: 16px">
+      <template #header>
         <div class="search-result-title">
           <span>搜索结果</span>
-          <t-button
+          <NativeButton
             size="small"
             variant="text"
             @click="clearSearchResults"
             title="关闭搜索结果"
           >
-            <template #icon><t-icon name="close" /></template>
-          </t-button>
+            <template #icon><NativeIcon name="x" /></template>
+          </NativeButton>
         </div>
       </template>
       <div class="search-grid">
@@ -90,11 +95,11 @@
             </div>
             <div class="meta-info">
               <div class="meta-row" v-if="anime.air_date">
-                <t-icon name="calendar" size="14px" />
+                <NativeIcon name="calendar" size="14" />
                 <span>{{ anime.air_date }}</span>
               </div>
               <div class="meta-row" v-if="anime.eps || anime.eps_total">
-                <t-icon name="video" size="14px" />
+                <NativeIcon name="video" size="14" />
                 <span>{{ anime.eps || '?' }} / {{ anime.eps_total || '?' }} 集</span>
               </div>
             </div>
@@ -113,7 +118,7 @@
               </div>
             </div>
             <div class="tags-row" v-if="anime.tags?.length">
-              <t-tag
+              <NativeTag
                 v-for="tag in anime.tags.slice(0, 4)"
                 :key="tag"
                 size="small"
@@ -121,105 +126,112 @@
                 variant="light"
               >
                 {{ tag.name || tag }}
-              </t-tag>
+              </NativeTag>
               <span v-if="anime.tags.length > 4" class="more-tags">+{{ anime.tags.length - 4 }}</span>
             </div>
             <div class="card-actions">
-            <t-button
+            <NativeButton
               size="small"
               :disabled="isInLibrary(anime.id) || isGuest"
               :theme="isInLibrary(anime.id) ? 'default' : 'primary'"
               @click.stop="handleImport(anime)"
               :loading="anime.importing"
             >
-              <template #icon><t-icon :name="isInLibrary(anime.id) ? 'check' : 'add'" /></template>
+              <template #icon><NativeIcon :name="isInLibrary(anime.id) ? 'check' : 'plus'" /></template>
               {{ isInLibrary(anime.id) ? '已添加' : '添加' }}
-            </t-button>
-              <t-button size="small" variant="outline" @click.stop="showDetail(anime)">
-                <template #icon><t-icon name="view-list" /></template>
+            </NativeButton>
+              <NativeButton size="small" variant="outline" @click.stop="showDetail(anime)">
+                <template #icon><NativeIcon name="list-dashes" /></template>
                 详情
-              </t-button>
+              </NativeButton>
             </div>
           </div>
         </div>
       </div>
       <!-- 搜索结果分页 -->
       <div class="search-pagination" v-if="searchPagination.total > 0">
-        <t-pagination
-          v-model="searchPagination.current"
+        <NativePagination
+          :current="searchPagination.current"
           :page-size="searchPagination.pageSize"
           :total="searchPagination.total"
-          show-page-number
+          :page-size-options="[15, 20, 30, 50]"
+          show-page-size
           @change="handleSearchPageChange"
+          @page-size-change="handleSearchPageSizeChange"
         />
       </div>
-    </t-card>
+    </NativeCard>
 
     <!-- 我的动漫库 -->
-    <t-card style="margin-top: 16px">
-      <template #title>
+    <NativeCard style="margin-top: 16px">
+      <template #header>
         <div class="card-title-row">
           <span class="card-title">我的动漫库</span>
-          <t-space class="filter-bar">
-            <t-select v-model="filterStatus" placeholder="状态筛选" style="width: 120px" clearable @change="handleFilterChange">
-              <t-option value="" label="全部" />
-              <t-option value="none" label="未标记" />
-              <t-option value="want_to_watch" label="想看" />
-              <t-option value="watching" label="在看" />
-              <t-option value="watched" label="看过" />
-            </t-select>
-            <t-checkbox v-model="filterFavorite" @change="handleFilterChange">只看收藏</t-checkbox>
-            <t-divider layout="vertical" />
-            <t-select v-model="sortBy" placeholder="排序" style="width: 120px" @change="handleSortByChange">
-              <t-option value="updated_at" label="更新时间" />
-              <t-option value="air_date" label="上映日期" />
-              <t-option value="rating" label="总评分" />
-              <t-option value="user_rating" label="我的评分" />
-              <t-option value="status" label="标记状态" />
-            </t-select>
-            <t-button
+          <div class="filter-bar">
+            <NativeSelect v-model="filterStatus" class="filter-select-24" placeholder="状态筛选" style="width: 120px;" size="small" clearable @change="handleFilterChange" :options="[
+              { value: '', label: '全部' },
+              { value: 'none', label: '未标记' },
+              { value: 'want_to_watch', label: '想看' },
+              { value: 'watching', label: '在看' },
+              { value: 'watched', label: '看过' }
+            ]" />
+            <NativeCheckbox v-model="filterFavorite" @change="handleFilterChange">只看收藏</NativeCheckbox>
+            <div class="divider-vertical" />
+            <NativeSelect v-model="sortBy" class="filter-select-24" placeholder="排序" style="width: 120px;" size="small" @change="handleSortByChange" :options="[
+              { value: 'updated_at', label: '更新时间' },
+              { value: 'air_date', label: '上映日期' },
+              { value: 'rating', label: '总评分' },
+              { value: 'user_rating', label: '我的评分' },
+              { value: 'status', label: '标记状态' }
+            ]" />
+            <NativeButton
               :variant="sortOrder === 'DESC' ? 'base' : 'outline'"
               size="small"
               @click="toggleSortOrder"
+              style="height: 28px;"
             >
-              <template #icon><t-icon :name="sortOrder === 'DESC' ? 'arrow-down' : 'arrow-up'" /></template>
+              <template #icon><NativeIcon :name="sortOrder === 'DESC' ? 'arrow-down' : 'arrow-up'" /></template>
               {{ sortOrder === 'DESC' ? '降序' : '升序' }}
-            </t-button>
-            <t-divider layout="vertical" />
-            <t-button
+            </NativeButton>
+            <div class="spacer" style="flex: 1;"></div>
+            <NativeButton
               variant="outline"
               size="small"
               :loading="downloadingCovers"
               @click="handleBatchDownloadCovers"
               :disabled="isGuest"
+              class="right-btn"
+              style="height: 28px;"
             >
-              <template #icon><t-icon name="download" /></template>
+              <template #icon><NativeIcon name="download" /></template>
               批量下载封面
-            </t-button>
-            <t-button
+            </NativeButton>
+            <NativeButton
               variant="outline"
               size="small"
               :loading="testingResources"
               @click="testResourceSites"
-              class="test-resources-btn"
+              class="test-resources-btn right-btn"
               :disabled="isGuest"
+              style="height: 28px;"
             >
-              <template #icon><t-icon name="link-unlink" /></template>
+              <template #icon><NativeIcon name="link-break" /></template>
               测试资源站点
-            </t-button>
-          </t-space>
+            </NativeButton>
+          </div>
         </div>
       </template>
-      <t-table
-        :data="animeList"
+      <NativeTable
+        :dataSource="animeList"
         :columns="tableColumns"
         :loading="loading"
-        row-key="id"
+        rowKey="id"
         hover
-        :sort="tableSort"
-        @sort-change="handleSortChange"
+        v-model:sortKey="tableSortKey"
+        v-model:sortOrder="tableSortOrder"
+        @sortChange="handleSortChange"
       >
-        <template #coverImage="{ row }">
+        <template #cell-coverImage="{ row }">
           <div class="cover-wrapper" :ref="el => { if (el) observeCover(el, row) }">
             <img
               v-if="coverCache[row.id]"
@@ -228,29 +240,30 @@
               @error="handleImageError"
             />
             <div v-else class="cover-placeholder">
-              <t-icon name="image" size="24px" />
+              <NativeIcon name="image" size="24" />
             </div>
           </div>
         </template>
-        <template #title="{ row }">
+        <template #cell-title="{ row }">
           <div class="table-title">
-            <span class="main-title" :title="row.title">{{ row.title }}</span>
-            <span v-if="row.name_cn && row.name_cn !== row.title" class="sub-title" :title="row.name_cn">{{ row.name_cn }}</span>
+            <span class="main-title" :title="row.name_cn || row.title">{{ row.name_cn || row.title }}</span>
+            <span v-if="row.title && row.name_cn && row.title !== row.name_cn" class="sub-title" :title="row.title">{{ row.title }}</span>
+            <span v-else-if="row.name_original && row.name_original !== (row.name_cn || row.title)" class="sub-title" :title="row.name_original">{{ row.name_original }}</span>
           </div>
         </template>
-        <template #year="{ row }">
+        <template #cell-year="{ row }">
           <span class="year-cell">{{ row.air_date?.substring(0, 4) || '-' }}</span>
         </template>
-        <template #rating="{ row }">
+        <template #cell-rating="{ row }">
           <div class="rating-cell">
             <span class="score">{{ row.rating?.toFixed(1) || '-' }}</span>
             <span class="count" v-if="row.rating_count">({{ row.rating_count }})</span>
           </div>
         </template>
-        <template #userRating="{ row }">
+        <template #cell-userRating="{ row }">
           <div class="user-rating-cell">
-            <t-rate
-              :value="row.user_rating ? row.user_rating / 2 : 0"
+            <NativeRate
+              :modelValue="row.user_rating ? row.user_rating / 2 : 0"
               :count="5"
               allow-half
               size="small"
@@ -259,66 +272,72 @@
             />
           </div>
         </template>
-        <template #status="{ row }">
-          <t-dropdown trigger="hover" v-if="!isGuest">
-            <t-tag v-if="row.status === 'want_to_watch'" theme="warning" variant="light" style="cursor: pointer;">想看</t-tag>
-            <t-tag v-else-if="row.status === 'watching'" theme="primary" variant="light" style="cursor: pointer;">在看</t-tag>
-            <t-tag v-else-if="row.status === 'watched'" theme="success" variant="light" style="cursor: pointer;">看过</t-tag>
-            <t-tag v-else theme="default" variant="light" style="cursor: pointer;">未标记</t-tag>
-            <t-dropdown-menu>
-              <t-dropdown-item @click="updateStatus(row, 'none')">未标记</t-dropdown-item>
-              <t-dropdown-item @click="updateStatus(row, 'want_to_watch')">想看</t-dropdown-item>
-              <t-dropdown-item @click="updateStatus(row, 'watching')">在看</t-dropdown-item>
-              <t-dropdown-item @click="updateStatus(row, 'watched')">看过</t-dropdown-item>
-            </t-dropdown-menu>
-          </t-dropdown>
-          <t-tag v-else-if="row.status === 'want_to_watch'" theme="warning" variant="light">想看</t-tag>
-          <t-tag v-else-if="row.status === 'watching'" theme="primary" variant="light">在看</t-tag>
-          <t-tag v-else-if="row.status === 'watched'" theme="success" variant="light">看过</t-tag>
-          <t-tag v-else theme="default" variant="light">未标记</t-tag>
+        <template #cell-status="{ row }">
+          <NativeDropdown
+            v-if="!isGuest"
+            trigger="hover"
+            :options="[
+              { value: 'none', label: '未标记' },
+              { value: 'want_to_watch', label: '想看' },
+              { value: 'watching', label: '在看' },
+              { value: 'watched', label: '看过' }
+            ]"
+            @command="(val) => updateStatus(row, val)"
+          >
+            <NativeTag v-if="row.status === 'want_to_watch'" theme="warning" variant="light" style="cursor: pointer;">想看</NativeTag>
+            <NativeTag v-else-if="row.status === 'watching'" theme="primary" variant="light" style="cursor: pointer;">在看</NativeTag>
+            <NativeTag v-else-if="row.status === 'watched'" theme="success" variant="light" style="cursor: pointer;">看过</NativeTag>
+            <NativeTag v-else theme="default" variant="light" style="cursor: pointer;">未标记</NativeTag>
+          </NativeDropdown>
+          <NativeTag v-else-if="row.status === 'want_to_watch'" theme="warning" variant="light">想看</NativeTag>
+          <NativeTag v-else-if="row.status === 'watching'" theme="primary" variant="light">在看</NativeTag>
+          <NativeTag v-else-if="row.status === 'watched'" theme="success" variant="light">看过</NativeTag>
+          <NativeTag v-else theme="default" variant="light">未标记</NativeTag>
         </template>
-        <template #isFavorite="{ row }">
+        <template #cell-isFavorite="{ row }">
           <span class="favorite-icon" @click.stop="!isGuest && toggleFavorite(row)">
-            <t-icon v-if="row.is_favorite || row.isFavorite" name="heart-filled" :style="{ color: '#e34d59', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
-            <t-icon v-else name="heart" :style="{ color: '#bbb', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
+            <NativeIcon v-if="row.is_favorite || row.isFavorite" name="heart-fill" size="16" :style="{ color: '#e34d59', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
+            <NativeIcon v-else name="heart" size="16" :style="{ color: '#bbb', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
           </span>
         </template>
-        <template #operation="{ row }">
-          <t-space size="small">
-            <t-button size="small" variant="text" @click.stop="showLocalDetail({ row })">
-              <t-icon name="view-list" />
-            </t-button>
-            <t-tooltip :content="row.is_hidden ? '取消隐藏' : '隐藏'" placement="top" v-if="!isGuest">
-              <t-button 
-                size="small" 
-                variant="text" 
-                :theme="row.is_hidden ? 'warning' : 'default'"
-                @click.stop="handleToggleHidden(row)"
-              >
-                <t-icon :name="row.is_hidden ? 'browse-off' : 'browse'" />
-              </t-button>
-            </t-tooltip>
-            <t-popconfirm content="确定删除吗？" @confirm="handleDelete(row.id)" v-if="!isGuest">
-              <t-button theme="danger" size="small" variant="text" @click.stop>
-                <t-icon name="delete" />
-              </t-button>
-            </t-popconfirm>
-          </t-space>
+        <template #cell-operation="{ row }">
+          <div class="operation-btns">
+            <NativeButton size="small" variant="text" iconSize="1.2em" @click.stop="showLocalDetail(row)" class="anime-op-btn">
+              <template #icon><NativeIcon name="list-dashes" size="18" weight="bold" /></template>
+            </NativeButton>
+            <NativeButton 
+              size="small" 
+              variant="text"
+              iconSize="1.2em"
+              :theme="row.is_hidden ? 'warning' : 'default'"
+              @click.stop="handleToggleHidden(row)"
+              :title="row.is_hidden ? '取消隐藏' : '隐藏'"
+              v-if="!isGuest"
+              class="anime-op-btn"
+            >
+              <template #icon><NativeIcon :name="row.is_hidden ? 'eye-slash' : 'eye'" size="18" weight="bold" /></template>
+            </NativeButton>
+            <NativePopconfirm content="确定删除吗？" @confirm="handleDelete(row.id)" v-if="!isGuest">
+              <template #trigger>
+                <NativeButton theme="danger" size="small" variant="text" iconSize="1.2em" @click.stop class="anime-op-btn">
+                  <template #icon><NativeIcon name="trash" size="18" weight="bold" /></template>
+                </NativeButton>
+              </template>
+            </NativePopconfirm>
+          </div>
         </template>
-      </t-table>
+      </NativeTable>
       <div class="pagination-wrapper">
-        <t-pagination
-          v-model="pagination.current"
-          v-model:page-size="pagination.pageSize"
+        <NativePagination
+          :current="pagination.current"
+          :page-size="pagination.pageSize"
           :total="pagination.total"
-          show-page-number
-          show-page-size
-          :page-size-options="[15, 30, 50]"
+          :page-size-options="[15, 20, 30, 50]"
           @change="handlePageChange"
           @page-size-change="handlePageSizeChange"
         />
       </div>
-    </t-card>
+    </NativeCard>
 
     <!-- 动漫详情对话框 -->
     <AnimeDetailDialog
@@ -335,17 +354,36 @@
 
 <script setup>
 import { ref, computed, onMounted, onActivated, onUnmounted, watch } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import AnimeDetailDialog from '@/components/AnimeDetailDialog.vue'
+import AnimeMobile from '@/mobile/pages/AnimeMobile.vue'
 import { initAnimeCoverDB, getAnimeCoverFromCache, saveAnimeCoverToCache } from '@/utils/animeCoverCache'
 import { usePermission } from '@/composables/usePermission'
+import { NativeButton, NativeInput, NativeCard, NativeCheckbox, NativeSelect, NativeTag, NativePagination, NativeIcon, NativeTable, NativeRate, NativeDropdown, NativePopconfirm } from '@/components/native'
+import { useToast } from '@/composables/useToast'
 
+// 移动端判断
+const getIsMobile = () => {
+  if (typeof window === 'undefined') return false
+  return window.innerWidth <= 768
+}
+const isMobile = ref(getIsMobile())
+const checkMobile = () => { isMobile.value = getIsMobile() }
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+})
+onUnmounted(() => {
+  window.removeEventListener('resize', checkMobile)
+})
+
+const toast = useToast()
 const { isGuest } = usePermission()
 
 const loading = ref(false)
 const searching = ref(false)
 const animeList = ref([])
+const allBangumiIds = ref(new Set()) // 存储所有的 Bangumi ID，用于判断搜索结果是否已在库中
 const searchResults = ref([])
 const searchKeyword = ref('')
 
@@ -424,7 +462,7 @@ const resourceTestResults = ref(null)
 const showResourceTestDialog = ref(false)
 const resourceSearchMode = ref(localStorage.getItem('resourceSearchMode') || 'sequential') // 资源搜索模式（默认顺序优先）
 const pagination = ref({ current: 1, pageSize: 15, total: 0 })
-const searchPagination = ref({ current: 1, pageSize: 20, total: 0 })  // 搜索结果分页（匹配 Bangumi API 限制）
+const searchPagination = ref({ current: 1, pageSize: 20, total: 0 })  // 搜索结果分页（默认20条，匹配后端）
 
 // Bangumi Token 状态
 const tokenStatus = ref(null)
@@ -435,60 +473,40 @@ const selectedBangumiId = ref(null)
 const selectedAnime = ref(null)
 
 const tableColumns = computed(() => {
+  // 不设置 width，完全由 CSS 控制列宽
   const baseColumns = [
-    { colKey: 'coverImage', title: '封面', width: 42, align: 'left' },
-    { colKey: 'title', title: '标题', width: 250, align: 'left' },
-    { colKey: 'year', title: '年份', width: 85, align: 'left', sorter: true },
-    { colKey: 'rating', title: '评分', width: 95, align: 'left', sorter: true },
-    { colKey: 'userRating', title: '我的评分', width: 120, align: 'left', sorter: true },
-    { colKey: 'status', title: '状态', width: 90, align: 'left', sorter: true },
-    { colKey: 'isFavorite', title: '♥', width: 45, align: 'center' }
+    { key: 'coverImage', title: '封面', align: 'left' },
+    { key: 'title', title: '标题', align: 'left' },
+    { key: 'year', title: '年份', align: 'left', sorter: true },
+    { key: 'rating', title: '评分', align: 'left', sorter: true },
+    { key: 'userRating', title: '我的评分', align: 'left', sorter: true },
+    { key: 'status', title: '状态', align: 'left', sorter: true },
+    { key: 'isFavorite', title: '♥', align: 'center' }
   ]
 
   // 游客模式下操作列宽度更小
   if (isGuest.value) {
-    baseColumns.push({ colKey: 'operation', title: '操作', width: 60, align: 'left' })
+    baseColumns.push({ key: 'operation', title: '操作', align: 'left' })
   } else {
-    baseColumns.push({ colKey: 'operation', title: '操作', width: 120, align: 'left' })
+    baseColumns.push({ key: 'operation', title: '操作', align: 'left' })
   }
 
   return baseColumns
 })
 
 // 排序相关
-
-// 排序相关
 const sortBy = ref('updated_at')
 const sortOrder = ref('DESC')
+const tableSortKey = ref('')
+const tableSortOrder = ref('')
 
-// 字段映射：列 colKey -> 后端字段名
+// 字段映射：列 key -> 后端字段名
 const sortFieldMap = {
   'year': 'air_date',
   'rating': 'rating',
   'userRating': 'user_rating',
   'status': 'status'
 }
-
-// 反向映射：后端字段名 -> 列 colKey
-const sortColKeyMap = {
-  'air_date': 'year',
-  'rating': 'rating',
-  'user_rating': 'userRating',
-  'status': 'status'
-}
-
-// 计算表格排序状态（双向同步）
-const tableSort = computed(() => {
-  const colKey = sortColKeyMap[sortBy.value]
-  if (!colKey) {
-    // 下拉栏选择的是表头没有的字段（如 updated_at），清空表头高亮
-    return null
-  }
-  return {
-    sortBy: colKey,
-    descending: sortOrder.value === 'DESC'
-  }
-})
 
 function toggleSortOrder() {
   sortOrder.value = sortOrder.value === 'DESC' ? 'ASC' : 'DESC'
@@ -502,29 +520,31 @@ function handleSortByChange() {
   loadAnime()
 }
 
-// 处理表头排序变化
+// 处理表头排序变化 (NativeTable)
 function handleSortChange(context) {
-  console.log('[表头排序] 完整参数:', context)
-  
-  // TDesign 排序参数可能是：{ sort: {...} } 或直接是排序对象
-  // 取消排序时可能是 undefined 或 { sortBy: undefined }
-  const sort = context?.sort || context
-  
-  if (!sort || !sort.sortBy) {
+  console.log('[表头排序] 参数:', context)
+
+  // NativeTable 返回 { sortBy, descending }
+  if (!context || !context.sortBy) {
     console.log('[表头排序] 取消排序，恢复默认排序')
     // 取消排序时，恢复默认排序（更新时间降序）
     sortBy.value = 'updated_at'
     sortOrder.value = 'DESC'
+    tableSortKey.value = ''
+    tableSortOrder.value = ''
     pagination.value.current = 1
     loadAnime()
     return
   }
 
-  const field = sortFieldMap[sort.sortBy] || sort.sortBy
+  const field = sortFieldMap[context.sortBy] || context.sortBy
   if (!field) return
 
   sortBy.value = field
-  sortOrder.value = sort.descending ? 'DESC' : 'ASC'
+  sortOrder.value = context.descending ? 'DESC' : 'ASC'
+  // 同步更新 tableSortKey 和 tableSortOrder
+  tableSortKey.value = context.sortBy
+  tableSortOrder.value = context.descending ? 'desc' : 'asc'
   pagination.value.current = 1
   loadAnime()
 }
@@ -575,7 +595,7 @@ async function loadAnime() {
     animeList.value = response.data.data || []
     pagination.value.total = response.data.total || 0
   } catch (error) {
-    MessagePlugin.error('加载动漫失败')
+    toast.error('加载动漫失败')
   } finally {
     loading.value = false
   }
@@ -583,7 +603,17 @@ async function loadAnime() {
 
 // 检查动漫是否已在库中
 function isInLibrary(bangumiId) {
-  return animeList.value.some(anime => anime.bangumi_id === bangumiId)
+  return allBangumiIds.value.has(bangumiId)
+}
+
+// 加载所有 Bangumi ID
+async function loadAllBangumiIds() {
+  try {
+    const response = await api.anime.getAllBangumiIds()
+    allBangumiIds.value = new Set(response.data.data || [])
+  } catch (error) {
+    console.error('加载Bangumi ID列表失败:', error)
+  }
 }
 
 // 搜索动漫（带分页）
@@ -605,11 +635,11 @@ async function handleSearch(page = 1) {
   } catch (error) {
     // 检查是否是Token失效错误
     if (error.response?.status === 401 || error.response?.data?.tokenExpired) {
-      MessagePlugin.warning('Bangumi Token已失效，请重新配置')
+      toast.warning('Bangumi Token已失效，请重新配置')
       // 刷新Token状态
       getTokenStatus()
     } else {
-      MessagePlugin.error('搜索失败')
+      toast.error('搜索失败')
     }
   } finally {
     searching.value = false
@@ -619,6 +649,12 @@ async function handleSearch(page = 1) {
 // 搜索结果分页改变
 function handleSearchPageChange(pageInfo) {
   handleSearch(pageInfo.current)
+}
+
+function handleSearchPageSizeChange(pageSize) {
+  searchPagination.value.pageSize = pageSize
+  searchPagination.value.current = 1
+  handleSearch(1)
 }
 
 // 清空搜索结果
@@ -650,10 +686,12 @@ async function handleImport(anime) {
       studio: anime.studio,
       infobox: anime.infobox
     })
-    MessagePlugin.success('添加成功')
+    toast.success('添加成功')
+    // 刷新动漫列表和 Bangumi ID 列表（确保搜索结果按钮状态更新）
     loadAnime()
+    loadAllBangumiIds()
   } catch (error) {
-    MessagePlugin.error(error.response?.data?.message || '添加失败')
+    toast.error(error.response?.data?.message || '添加失败')
   } finally {
     anime.importing = false
   }
@@ -662,10 +700,10 @@ async function handleImport(anime) {
 // 显示详情（搜索结果）- 直接使用搜索结果数据，不再调用 API
 function showDetail(anime) {
   selectedBangumiId.value = anime.id
-  // 将搜索结果转换为对话框需要的格式
+  // 将搜索结果转换为对话框需要的格式（不设置 bangumi_id，因为这是搜索结果不是本地数据）
   selectedAnime.value = {
     id: anime.id,
-    bangumi_id: anime.id,
+    // 注意：不设置 bangumi_id，让 AnimeDetailDialog 通过 API 检查是否已在库中
     title: anime.name,
     name_cn: anime.name_cn,
     name_original: anime.name,
@@ -714,9 +752,9 @@ async function updateStatus(row, status) {
     if (index !== -1) {
       animeList.value[index].status = status
     }
-    MessagePlugin.success('更新成功')
+    toast.success('更新成功')
   } catch (error) {
-    MessagePlugin.error('更新失败')
+    toast.error('更新失败')
   }
 }
 
@@ -728,9 +766,9 @@ async function updateUserRating(row, rating) {
     if (index !== -1) {
       animeList.value[index].user_rating = rating
     }
-    MessagePlugin.success('评分成功')
+    toast.success('评分成功')
   } catch (error) {
-    MessagePlugin.error('评分失败')
+    toast.error('评分失败')
   }
 }
 
@@ -743,19 +781,19 @@ async function toggleFavorite(row) {
       animeList.value[index].is_favorite = !animeList.value[index].is_favorite
       row.isFavorite = animeList.value[index].is_favorite
     }
-    MessagePlugin.success(row.is_favorite ? '已收藏' : '已取消收藏')
+    toast.success(row.is_favorite ? '已收藏' : '已取消收藏')
   } catch (error) {
-    MessagePlugin.error('操作失败')
+    toast.error('操作失败')
   }
 }
 
 async function handleDelete(id) {
   try {
     await api.anime.delete(id)
-    MessagePlugin.success('删除成功')
+    toast.success('删除成功')
     loadAnime()
   } catch (error) {
-    MessagePlugin.error('删除失败')
+    toast.error('删除失败')
   }
 }
 
@@ -763,13 +801,13 @@ async function handleDelete(id) {
 async function handleToggleHidden(row) {
   try {
     const response = await api.anime.toggleHidden(row.id)
-    MessagePlugin.success(response.data.message)
+    toast.success(response.data.message)
     // 更新本地状态
     row.is_hidden = response.data.is_hidden
     // 重新加载列表以保持一致性
     loadAnime()
   } catch (error) {
-    MessagePlugin.error('操作失败')
+    toast.error('操作失败')
   }
 }
 
@@ -778,10 +816,10 @@ async function handleBatchDownloadCovers() {
   downloadingCovers.value = true
   try {
     const response = await api.anime.batchDownloadCovers()
-    MessagePlugin.success(response.data.message)
+    toast.success(response.data.message)
     loadAnime() // 刷新列表以显示新封面
   } catch (error) {
-    MessagePlugin.error('批量下载封面失败')
+    toast.error('批量下载封面失败')
   } finally {
     downloadingCovers.value = false
   }
@@ -799,12 +837,12 @@ async function testResourceSites() {
     const failedCount = response.data.summary.total - successCount
     
     if (failedCount === 0) {
-      MessagePlugin.success(`所有站点连接正常 (${successCount}/${response.data.summary.total})`)
+      toast.success(`所有站点连接正常 (${successCount}/${response.data.summary.total})`)
     } else {
-      MessagePlugin.warning(`${successCount} 个站点正常，${failedCount} 个站点失败`)
+      toast.warning(`${successCount} 个站点正常，${failedCount} 个站点失败`)
     }
   } catch (error) {
-    MessagePlugin.error('测试资源站点失败')
+    toast.error('测试资源站点失败')
     console.error(error)
   } finally {
     testingResources.value = false
@@ -841,12 +879,14 @@ watch(resourceSearchMode, (newMode) => {
 onMounted(async () => {
   await initCoverCache() // 初始化封面缓存（IndexedDB）
   loadAnime()
+  loadAllBangumiIds() // 加载所有 Bangumi ID
   getTokenStatus()
 })
 
 // 组件激活时（从缓存中恢复）
 onActivated(() => {
   loadAnime()
+  loadAllBangumiIds() // 刷新 Bangumi ID 列表
 })
 
 // 组件卸载时清理
@@ -859,6 +899,39 @@ onUnmounted(() => {
 
 <style scoped>
 .anime {
+  padding: 0;
+}
+
+/* Token 提醒 */
+.token-alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 搜索栏样式 */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 垂直分隔线 */
+.divider-vertical {
+  width: 1px;
+  height: 24px;
+  background: #e0e0e0;
+}
+
+/* 操作按钮组 */
+.operation-btns {
+  display: flex;
+  gap: 4px;
+}
+
+.operation-btns .anime-op-btn {
+  width: 32px;
+  height: 32px;
   padding: 0;
 }
 
@@ -879,21 +952,41 @@ onUnmounted(() => {
 }
 
 .filter-bar {
-  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 20px;  /* 与标题间隔20px */
+  flex-shrink: 0;
+  flex: 1;  /* 占据剩余空间 */
+}
+
+/* 左侧筛选组 */
+.filter-bar > *:not(.test-resources-btn):not([variant="outline"][size="small"]) {
   flex-shrink: 0;
 }
 
+/* 右侧按钮组靠右对齐 */
+.filter-bar .test-resources-btn,
+.filter-bar > [variant="outline"][size="small"]:not(.anime-op-btn) {
+  margin-left: auto;
+}
+
+/* 批量下载和测试资源站点按钮靠右 */
+.filter-bar > .native-button[variant="outline"][size="small"]:nth-last-child(-n+2) {
+  margin-left: 0;
+}
+
 /* 调整复选框对齐 */
-.filter-bar :deep(.t-checkbox) {
+.filter-bar :deep(.native-checkbox) {
   margin-top: 2px;
 }
 
 /* 覆盖 TDesign 卡片标题样式 */
-:deep(.t-card__header) {
+:deep(.native-card__header) {
   width: 100%;
 }
 
-:deep(.t-card__title) {
+:deep(.native-card__title) {
   width: 100%;
 }
 
@@ -1070,7 +1163,7 @@ onUnmounted(() => {
 }
 
 /* 表格封面容器 */
-.anime .t-table .cover-wrapper {
+.anime .native-table .cover-wrapper {
   width: 50px;
   height: 70px;
   display: flex;
@@ -1096,15 +1189,104 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 减少标题列左侧内边距 - 表头和内容 */
-::v-deep(.t-table tr td:nth-child(2)),
-::v-deep(.t-table th:nth-child(2)) {
-  padding-left: 0 !important;
+/* NativeTable 列间距调整 - 所有列固定宽度 */
+.anime :deep(.native-table) {
+  table-layout: fixed !important;
+  width: 100% !important;
 }
 
-/* 表头标题与内容对齐 */
-::v-deep(.t-table th:nth-child(2) .t-table__th-cell-inner) {
-  justify-content: flex-start !important;
+/* 第一列：封面 */
+.anime :deep(.native-table > thead > tr > th:first-child),
+.anime :deep(.native-table > tbody > tr > td:first-child) {
+  width: 58px !important;
+  min-width: 58px !important;
+  max-width: 58px !important;
+  padding: 12px 4px 12px 12px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+/* 第二列：标题 - 自适应剩余空间 */
+.anime :deep(.native-table > thead > tr > th:nth-child(2)),
+.anime :deep(.native-table > tbody > tr > td:nth-child(2)) {
+  width: auto !important;
+  min-width: 200px !important;
+  padding-left: 8px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+/* 第三列：年份 */
+.anime :deep(.native-table > thead > tr > th:nth-child(3)),
+.anime :deep(.native-table > tbody > tr > td:nth-child(3)) {
+  width: 100px !important;
+  min-width: 100px !important;
+  max-width: 100px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  text-align: center !important;
+}
+
+/* 第四列：评分 */
+.anime :deep(.native-table > thead > tr > th:nth-child(4)),
+.anime :deep(.native-table > tbody > tr > td:nth-child(4)) {
+  width: 130px !important;
+  min-width: 130px !important;
+  max-width: 130px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  text-align: center !important;
+}
+
+/* 第五列：我的评分 */
+.anime :deep(.native-table > thead > tr > th:nth-child(5)),
+.anime :deep(.native-table > tbody > tr > td:nth-child(5)) {
+  width: 150px !important;
+  min-width: 150px !important;
+  max-width: 150px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  text-align: center !important;
+}
+
+/* 第六列：状态 */
+.anime :deep(.native-table > thead > tr > th:nth-child(6)),
+.anime :deep(.native-table > tbody > tr > td:nth-child(6)) {
+  width: 100px !important;
+  min-width: 100px !important;
+  max-width: 100px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  text-align: center !important;
+}
+
+/* 第七列：收藏 - 居中，与状态、操作保持等距 */
+.anime :deep(.native-table > thead > tr > th:nth-child(7)),
+.anime :deep(.native-table > tbody > tr > td:nth-child(7)) {
+  width: 80px !important;
+  min-width: 80px !important;
+  max-width: 80px !important;
+  padding: 12px 8px !important;
+  text-align: center !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+/* 第八列：操作 */
+.anime :deep(.native-table > thead > tr > th:nth-child(8)),
+.anime :deep(.native-table > tbody > tr > td:nth-child(8)) {
+  width: 160px !important;
+  min-width: 160px !important;
+  max-width: 180px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+/* 封面图片容器 */
+.anime :deep(.native-table > tbody > tr > td:first-child .cover-wrapper) {
+  width: 42px !important;
+  height: 58px !important;
+  margin: 0 auto !important;
 }
 
 .main-title {
@@ -1123,14 +1305,27 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-/* 表格自适应布局 */
-::deep(.t-table) {
-  table-layout: auto;
+/* 28px 高度的下拉框 - 使用深度选择器覆盖 */
+.filter-select-24 :deep(.native-select__trigger) {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 4px 8px !important;
+  font-size: 13px !important;
+}
+
+/* filter-bar 中的所有按钮统一 28px 高度 */
+.filter-bar :deep(.native-button),
+.filter-bar :deep(.native-button--small) {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 4px 12px !important;
+  font-size: 13px !important;
 }
 
 .rating-cell {
   display: flex;
   align-items: baseline;
+  justify-content: center;
   gap: 4px;
 }
 
@@ -1161,39 +1356,27 @@ onUnmounted(() => {
 }
 
 /* 确保表头单元格允许点击 */
-::v-deep(.t-table-th) {
-  user-select: none !important;
+.native-table th {
+  user-select: none;
 }
 
 /* 搜索结果分页 */
 .search-pagination {
   margin-top: 16px;
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
 }
 
 .pagination-wrapper {
   margin-top: 16px;
   display: flex;
-  justify-content: center;
+  justify-content: flex-end;
 }
 
-/* Tooltip 样式覆盖 - 确保白色文字 */
-::v-deep(.t-tooltip),
-::v-deep(.t-popup__content),
-::v-deep(.t-ellipsis) {
-  color: #fff !important;
-}
-
-::v-deep(.t-tooltip .t-tooltip__content),
-::v-deep(.t-popup .t-popup__content) {
-  color: #fff !important;
-  background-color: rgba(0, 0, 0, 0.85) !important;
-}
-
-/* Ellipsis组件的tooltip */
-::v-deep(.t-ellipsis__text) {
-  color: #fff !important;
+/* NativeTooltip 样式 */
+.native-tooltip {
+  color: #fff;
+  background-color: rgba(0, 0, 0, 0.85);
 }
 
 /* 测试资源站点按钮图标颜色 */
@@ -1201,7 +1384,23 @@ onUnmounted(() => {
   color: #333 !important;
 }
 
-.test-resources-btn:not(:disabled) .t-icon {
+.test-resources-btn:not(:disabled) .native-icon {
   color: #333 !important;
+}
+
+/* 收藏图标强制缩小 */
+.favorite-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.favorite-icon .native-icon {
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  min-height: 14px !important;
 }
 </style>

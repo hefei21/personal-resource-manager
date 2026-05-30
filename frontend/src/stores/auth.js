@@ -74,6 +74,10 @@ export const useAuthStore = defineStore('auth', () => {
     return user.value?.isGuest === true
   }
 
+  function isAdmin() {
+    return user.value?.username === 'admin'
+  }
+
   return {
     token,
     user,
@@ -82,6 +86,7 @@ export const useAuthStore = defineStore('auth', () => {
     guestLogin,
     logout,
     checkAuth,
-    isGuest
+    isGuest,
+    isAdmin
   }
 })

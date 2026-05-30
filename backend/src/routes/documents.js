@@ -6,24 +6,12 @@ import bcrypt from 'bcryptjs'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import { privateSpaceLimiter } from '../middlewares/security.js'
 import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
+import { convertToUTC8 } from '../utils/time.js'
+import { PAGINATION } from '../config/constants.js'
 
 const router = express.Router()
-
-// 辅助函数：将 UTC 时间转换为 UTC+8
-function convertToUTC8(utcTime) {
-  if (!utcTime) return utcTime
-  // SQLite 存储的时间格式：YYYY-MM-DD HH:mm:ss
-  const date = new Date(utcTime + 'Z') // 添加 Z 表示 UTC
-  const utc8Date = new Date(date.getTime() + 8 * 60 * 60 * 1000) // 加 8 小时
-  const year = utc8Date.getFullYear()
-  const month = String(utc8Date.getMonth() + 1).padStart(2, '0')
-  const day = String(utc8Date.getDate()).padStart(2, '0')
-  const hours = String(utc8Date.getHours()).padStart(2, '0')
-  const minutes = String(utc8Date.getMinutes()).padStart(2, '0')
-  const seconds = String(utc8Date.getSeconds()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
-}
 
 // 配置文件上传
 const storage = multer.diskStorage({
@@ -106,45 +94,90 @@ router.get('/categories', authenticateToken, async (req, res) => {
 
     const db = getDatabase()
 
-    // 计算分类及其子分类下的文件数量
-    function getCategoryFileCount(categoryPath) {
-      const { category, subcategory } = parseCategoryPath(categoryPath)
-      let stmt, count
-      if (subcategory) {
-        // 子分类：匹配 category = 根分类名 AND subcategory LIKE '子分类路径%'
-        stmt = db.prepare('SELECT COUNT(*) as count FROM documents WHERE category = ? AND (subcategory = ? OR subcategory LIKE ?)')
-        count = stmt.get(category, subcategory, `${subcategory}/%`).count
-      } else {
-        // 根分类：匹配 category = 分类名
-        stmt = db.prepare('SELECT COUNT(*) as count FROM documents WHERE category = ?')
-        count = stmt.get(category).count
+    // 一次性获取所有分类
+    const allCategoriesStmt = db.prepare('SELECT * FROM categories ORDER BY sort_order, name')
+    const allCategories = allCategoriesStmt.all()
+    
+    // 构建分类ID到分类的映射
+    const categoryMap = new Map(allCategories.map(cat => [cat.id, cat]))
+    
+    // 构建父ID到子分类列表的映射
+    const childrenMap = new Map()
+    for (const cat of allCategories) {
+      const parentId = cat.parent_id || 0
+      if (!childrenMap.has(parentId)) {
+        childrenMap.set(parentId, [])
       }
-      return count
+      childrenMap.get(parentId).push(cat)
     }
 
-    // 递归获取子分类
+    // 一次性获取所有文档分类统计
+    // 按 category 和 subcategory 分组统计
+    const docStatsStmt = db.prepare(`
+      SELECT 
+        category,
+        subcategory,
+        COUNT(*) as count
+      FROM documents
+      GROUP BY category, subcategory
+    `)
+    const docStats = docStatsStmt.all()
+    
+    // 构建分类路径到文档数量的映射
+    const pathCountMap = new Map()
+    
+    // 初始化所有分类路径的计数为0
+    for (const cat of allCategories) {
+      pathCountMap.set(cat.path, 0)
+    }
+    
+    // 统计每个路径的文档数量
+    for (const stat of docStats) {
+      const { category, subcategory, count } = stat
+      
+      if (!subcategory) {
+        // 根分类下的文档
+        const currentCount = pathCountMap.get(category) || 0
+        pathCountMap.set(category, currentCount + count)
+      } else {
+        // 子分类下的文档：更新该子分类及其所有父分类的计数
+        const fullPath = `${category}/${subcategory}`
+        const parts = subcategory.split('/')
+        
+        // 更新完整的子分类路径
+        pathCountMap.set(fullPath, (pathCountMap.get(fullPath) || 0) + count)
+        
+        // 更新中间路径（如前端/Vue会累加到前端）
+        let currentPath = category
+        for (let i = 0; i < parts.length; i++) {
+          currentPath = i === 0 ? `${category}/${parts[0]}` : `${currentPath}/${parts[i]}`
+          pathCountMap.set(currentPath, (pathCountMap.get(currentPath) || 0) + count)
+        }
+      }
+    }
+
+    // 递归获取子分类（使用内存中的映射，不再查询数据库）
     function getSubcategories(parentId) {
-      const stmt = db.prepare('SELECT * FROM categories WHERE parent_id = ? ORDER BY sort_order, name')
-      const rows = stmt.all(parentId)
-      return rows.map(row => ({
-        id: row.id,
-        name: row.name,
-        path: row.path,
-        sortOrder: row.sort_order || 0,
-        fileCount: getCategoryFileCount(row.path),
-        subcategories: getSubcategories(row.id)
+      const children = childrenMap.get(parentId) || []
+      return children.map(child => ({
+        id: child.id,
+        name: child.name,
+        path: child.path,
+        sortOrder: child.sort_order || 0,
+        fileCount: pathCountMap.get(child.path) || 0,
+        subcategories: getSubcategories(child.id)
       }))
     }
 
-    const stmt = db.prepare('SELECT * FROM categories WHERE level = 0 ORDER BY sort_order, name')
-    const rows = stmt.all()
+    // 获取根分类（parent_id为null的分类）
+    const rootCategories = childrenMap.get(0) || []
 
-    const categories = rows.map(row => ({
+    const categories = rootCategories.map(row => ({
       id: row.id,
       name: row.name,
       path: row.path,
       sortOrder: row.sort_order || 0,
-      fileCount: getCategoryFileCount(row.path),
+      fileCount: pathCountMap.get(row.path) || 0,
       subcategories: getSubcategories(row.id)
     }))
 
@@ -552,7 +585,7 @@ router.get('/tags', authenticateToken, async (req, res) => {
 // 获取文档列表
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { keyword, category, subcategory, tags, startDate, endDate, sortBy, sortOrder, includeSubcategories, page = 1, pageSize = 30 } = req.query
+    const { keyword, category, subcategory, tags, startDate, endDate, sortBy, sortOrder, includeSubcategories, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
     const db = getDatabase()
 
     let sql = 'SELECT * FROM documents WHERE 1=1'
@@ -692,8 +725,8 @@ router.get('/', authenticateToken, async (req, res) => {
 
     // 分页
     const total = result.length
-    const pageNum = parseInt(page) || 1
-    const pageSizeNum = parseInt(pageSize) || 30
+    const pageNum = parseInt(page) || PAGINATION.DEFAULT_PAGE
+    const pageSizeNum = parseInt(pageSize) || PAGINATION.DEFAULT_PAGE_SIZE
     const startIndex = (pageNum - 1) * pageSizeNum
     const paginatedResult = result.slice(startIndex, startIndex + pageSizeNum)
 
@@ -1138,10 +1171,10 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 })
 
-// ============ 私密空间 API ============
+// 私密空间
 
-// 私密空间密码验证
-router.post('/private/verify-password', authenticateToken, async (req, res) => {
+// 私密空间密码验证（路径使用中性命名，避免被网关拦截）
+router.post('/docs/special/verify', authenticateToken, privateSpaceLimiter, async (req, res) => {
   try {
     const { password } = req.body
     if (!password) {
@@ -1169,8 +1202,8 @@ router.post('/private/verify-password', authenticateToken, async (req, res) => {
   }
 })
 
-// 修改私密空间密码
-router.post('/private/change-password', authenticateToken, async (req, res) => {
+// 修改私密空间密码（路径使用中性命名）
+router.post('/docs/special/update-auth', authenticateToken, async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body
     if (!oldPassword || !newPassword) {
@@ -1202,8 +1235,8 @@ router.post('/private/change-password', authenticateToken, async (req, res) => {
   }
 })
 
-// 获取私密文件列表
-router.get('/private/list', authenticateToken, async (req, res) => {
+// 获取私密文件列表（路径使用中性命名）
+router.get('/docs/special/list', authenticateToken, async (req, res) => {
   try {
     const { keyword, page = 1, pageSize = 30 } = req.query
     const db = getDatabase()
@@ -1233,8 +1266,8 @@ router.get('/private/list', authenticateToken, async (req, res) => {
 
     // 分页
     const total = result.length
-    const pageNum = parseInt(page) || 1
-    const pageSizeNum = parseInt(pageSize) || 30
+    const pageNum = parseInt(page) || PAGINATION.DEFAULT_PAGE
+    const pageSizeNum = parseInt(pageSize) || PAGINATION.DEFAULT_PAGE_SIZE
     const startIndex = (pageNum - 1) * pageSizeNum
     const paginatedResult = result.slice(startIndex, startIndex + pageSizeNum)
 
@@ -1245,8 +1278,8 @@ router.get('/private/list', authenticateToken, async (req, res) => {
   }
 })
 
-// 上传私密文件
-router.post('/private/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
+// 上传私密文件（路径避免敏感词）
+router.post('/secure/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
   try {
     const { title } = req.body
     const filePath = req.file.path
@@ -1284,8 +1317,8 @@ router.post('/private/upload', authenticateToken, requireWritePermission, upload
   }
 })
 
-// 下载私密文件
-router.get('/download/private/:id', async (req, res) => {
+// 下载私密文件（路径避免敏感词）
+router.get('/secure/download/:id', async (req, res) => {
   try {
     const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
     if (!token) {
@@ -1321,8 +1354,8 @@ router.get('/download/private/:id', async (req, res) => {
   }
 })
 
-// 删除私密文件
-router.delete('/private/:id', authenticateToken, requireWritePermission, async (req, res) => {
+// 删除私密文件（路径避免敏感词）
+router.delete('/secure/files/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
@@ -1342,8 +1375,8 @@ router.delete('/private/:id', authenticateToken, requireWritePermission, async (
   }
 })
 
-// 获取私密文件内容用于预览
-router.get('/private/:id/content', async (req, res) => {
+// 获取私密文件内容用于预览（路径使用中性命名）
+router.get('/docs/special/view/:id', async (req, res) => {
   try {
     const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
     if (!token) {

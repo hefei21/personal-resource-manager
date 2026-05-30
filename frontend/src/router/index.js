@@ -59,6 +59,12 @@ const routes = [
         path: 'blog',
         name: 'Blog',
         component: () => import('@/views/Blog.vue')
+      },
+      {
+        path: 'logs',
+        name: 'Logs',
+        component: () => import('@/views/Logs.vue'),
+        meta: { requiresAdmin: true }
       }
     ]
   }
@@ -72,10 +78,14 @@ const router = createRouter({
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
   const requiresAuth = to.matched.some(record => record.meta.requiresAuth)
+  const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
 
   if (requiresAuth && !authStore.isAuthenticated) {
     next('/login')
   } else if (to.path === '/login' && authStore.isAuthenticated) {
+    next('/')
+  } else if (requiresAdmin && authStore.user?.username !== 'admin') {
+    // 非管理员访问管理员页面，跳转到首页
     next('/')
   } else {
     next()

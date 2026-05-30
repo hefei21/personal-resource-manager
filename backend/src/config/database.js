@@ -27,6 +27,200 @@ function getDatabase() {
 function initDatabase() {
   const database = getDatabase()
 
+  // 处理旧的 schema_migrations 表结构（如果存在）
+  try {
+    const tableInfo = database.prepare(`
+      SELECT name FROM sqlite_master 
+      WHERE type='table' AND name='schema_migrations'
+    `).get()
+    
+    if (tableInfo) {
+      // 检查表结构
+      const columns = database.pragma('table_info(schema_migrations)')
+      const hasMigrationKey = columns.some(col => col.name === 'migration_key')
+      
+      if (!hasMigrationKey) {
+        // 旧表结构，需要重建（使用事务保护）
+        console.log('🔄 检测到 schema_migrations 表为旧结构，正在重建...')
+        
+        // 备份现有迁移记录（旧表只有 version 字段）
+        let oldMigrations = []
+        try {
+          oldMigrations = database.prepare('SELECT * FROM schema_migrations').all()
+          console.log(`   📦 备份 ${oldMigrations.length} 条迁移记录`)
+        } catch (backupError) {
+          console.log('   ⚠️ 备份旧数据失败，可能是空表:', backupError.message)
+        }
+        
+        // 使用事务确保原子性
+        const rebuildSchemaMigrations = database.transaction(() => {
+          // 删除旧表
+          database.exec('DROP TABLE schema_migrations')
+          
+          // 创建新表
+          database.exec(`
+            CREATE TABLE schema_migrations (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              migration_key TEXT NOT NULL UNIQUE,
+              version TEXT NOT NULL,
+              executed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              description TEXT
+            )
+          `)
+          
+          // 恢复迁移记录（将 version 作为 migration_key）
+          if (oldMigrations.length > 0) {
+            const insertStmt = database.prepare(`
+              INSERT INTO schema_migrations (migration_key, version, description)
+              VALUES (?, ?, ?)
+            `)
+            oldMigrations.forEach(row => {
+              const key = row.version || row.migration_name || 'unknown'
+              const version = row.version || row.migration_name || '1.0.0'
+              insertStmt.run(key, version, '从旧表迁移')
+            })
+            console.log(`   ✅ 已恢复 ${oldMigrations.length} 条迁移记录`)
+          }
+        })
+        
+        // 执行重建
+        rebuildSchemaMigrations()
+        console.log('✅ schema_migrations 表重建完成')
+      }
+    }
+  } catch (error) {
+    console.error('[schema_migrations 表检查] 错误:', error.message)
+    console.error('❌ 迁移失败，数据库保持原状')
+    // 删除损坏的表，让后续代码重新创建
+    try {
+      database.exec('DROP TABLE IF EXISTS schema_migrations')
+      console.log('   🗑️ 已删除损坏的 schema_migrations 表，将重新创建')
+    } catch (dropError) {
+      console.error('   删除表失败:', dropError.message)
+    }
+  }
+
+  // 创建迁移记录表（如果不存在）
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      migration_key TEXT NOT NULL UNIQUE,
+      version TEXT NOT NULL,
+      executed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      description TEXT
+    )
+  `)
+
+  // 检查 reading_progress 表是否需要迁移
+  let shouldCreateReadingProgress = true
+  const MIGRATION_KEY = 'reading_progress_add_user_id'
+  
+  try {
+    // 先确保 schema_migrations 表存在
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        migration_key TEXT NOT NULL UNIQUE,
+        version TEXT NOT NULL,
+        executed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        description TEXT
+      )
+    `)
+    
+    // 检查是否已执行过迁移
+    const migrationRecord = database.prepare(`
+      SELECT * FROM schema_migrations WHERE migration_key = ?
+    `).get(MIGRATION_KEY)
+    
+    if (!migrationRecord) {
+      // 检查表是否存在
+      const tableExists = database.prepare(`
+        SELECT name FROM sqlite_master 
+        WHERE type='table' AND name='reading_progress'
+      `).get()
+      
+      if (tableExists) {
+        // 检查是否有 user_id 字段
+        const columns = database.pragma('table_info(reading_progress)')
+        const hasUserId = columns.some(col => col.name === 'user_id')
+        
+        if (!hasUserId) {
+          // 执行自动迁移
+          console.log('🔄 检测到 reading_progress 表为旧结构，开始自动迁移...')
+          
+          // 备份现有数据
+          const existingProgress = database.prepare('SELECT * FROM reading_progress').all()
+          console.log(`   📦 备份 ${existingProgress.length} 条进度记录`)
+          
+          // 使用事务迁移
+          const migrate = database.transaction(() => {
+            // 删除旧表
+            database.exec('DROP TABLE reading_progress')
+            
+            // 创建新表（带 user_id 字段，使用 CFI 新结构）
+            database.exec(`
+              CREATE TABLE reading_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id INTEGER NOT NULL,
+                user_id INTEGER,
+                current_page INTEGER DEFAULT 0,
+                cfi TEXT,
+                progress REAL DEFAULT 0,
+                font_size INTEGER DEFAULT 16,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                UNIQUE(book_id, user_id)
+              )
+            `)
+            
+            // 恢复数据（将现有进度分配给管理员 user_id = 1，进度重置为0）
+            if (existingProgress.length > 0) {
+              const insertStmt = database.prepare(`
+                INSERT INTO reading_progress 
+                (book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at)
+                VALUES (?, 1, 0, NULL, 0, ?, ?, ?)
+              `)
+              
+              existingProgress.forEach(row => {
+                insertStmt.run(
+                  row.book_id,
+                  row.font_size || 16,
+                  row.created_at,
+                  row.updated_at
+                )
+              })
+              console.log(`   ✅ 已恢复 ${existingProgress.length} 条进度记录（进度已重置）`)
+            }
+            
+            // 记录迁移状态
+            database.prepare(`
+              INSERT INTO schema_migrations (migration_key, version, description)
+              VALUES (?, '1.0.0', '添加 user_id 字段，支持多用户独立进度')
+            `).run(MIGRATION_KEY)
+          })
+          
+          // 执行迁移
+          migrate()
+          console.log('✅ reading_progress 表迁移完成')
+          
+          // 跳过后续创建
+          shouldCreateReadingProgress = false
+        }
+      }
+    } else {
+      // 已迁移过，跳过创建
+      shouldCreateReadingProgress = false
+      console.log('✓ reading_progress 表已迁移，跳过创建')
+    }
+  } catch (error) {
+    console.error('❌ 迁移检查失败:', error)
+    console.error('⚠️ 继续初始化，但 reading_progress 表可能需要手动修复')
+    // 不终止程序，继续初始化
+    shouldCreateReadingProgress = true
+  }
+
   // 先创建所有表
   const tables = [
     // 用户表
@@ -210,18 +404,24 @@ function initDatabase() {
       FOREIGN KEY (category_id) REFERENCES book_categories(id) ON DELETE SET NULL
     )`,
 
-    // 阅读进度表
-    `CREATE TABLE IF NOT EXISTS reading_progress (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      book_id INTEGER NOT NULL UNIQUE,
-      current_page INTEGER DEFAULT 0,
-      current_chapter TEXT,
-      progress REAL DEFAULT 0,
-      font_size INTEGER DEFAULT 16,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
-    )`,
+    // 阅读进度表（智能判断是否创建）
+    // 如果检测到旧表结构，跳过创建，等待迁移脚本处理
+    ...(shouldCreateReadingProgress ? [
+      `CREATE TABLE IF NOT EXISTS reading_progress (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL,
+        user_id INTEGER,
+        current_page INTEGER DEFAULT 0,
+        cfi TEXT,
+        progress REAL DEFAULT 0,
+        font_size INTEGER DEFAULT 16,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(book_id, user_id)
+      )`
+    ] : []),
 
     // 书籍目录表
     `CREATE TABLE IF NOT EXISTS book_chapters (
@@ -242,6 +442,8 @@ function initDatabase() {
       name_original TEXT,
       cover_image TEXT,
       cover_image_data TEXT,
+      header_cover_image TEXT,
+      header_cover_image_data TEXT,
       description TEXT,
       developers TEXT,
       publishers TEXT,
@@ -339,6 +541,25 @@ function initDatabase() {
       PRIMARY KEY (post_id, tag_id),
       FOREIGN KEY (post_id) REFERENCES blog_posts(id) ON DELETE CASCADE,
       FOREIGN KEY (tag_id) REFERENCES blog_tags(id) ON DELETE CASCADE
+    )`,
+
+    // 访问日志表
+    `CREATE TABLE IF NOT EXISTS access_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      username TEXT,
+      action TEXT,
+      method TEXT,
+      path TEXT,
+      module TEXT,
+      ip_address TEXT,
+      ip_location TEXT,
+      user_agent TEXT,
+      request_body TEXT,
+      response_status INTEGER,
+      duration INTEGER,
+      details TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
   ]
 
@@ -346,7 +567,7 @@ function initDatabase() {
     database.exec(sql)
   })
 
-  // 创建索引以优化查询性能
+  // 创建索引以提升查询性能
   const indexes = [
     // 音乐表索引
     'CREATE INDEX IF NOT EXISTS idx_music_artist ON music(artist)',
@@ -372,7 +593,11 @@ function initDatabase() {
     'CREATE INDEX IF NOT EXISTS idx_blog_categories_sort_order ON blog_categories(sort_order)',
     // 博客文章-标签关联表索引
     'CREATE INDEX IF NOT EXISTS idx_blog_post_tags_post_id ON blog_post_tags(post_id)',
-    'CREATE INDEX IF NOT EXISTS idx_blog_post_tags_tag_id ON blog_post_tags(tag_id)'
+    'CREATE INDEX IF NOT EXISTS idx_blog_post_tags_tag_id ON blog_post_tags(tag_id)',
+    // 访问日志表索引
+    'CREATE INDEX IF NOT EXISTS idx_access_logs_user_id ON access_logs(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs(created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_access_logs_action ON access_logs(action)'
   ]
 
   indexes.forEach(sql => {
@@ -523,6 +748,21 @@ function initDatabase() {
       }
     }
 
+    // 检查并添加横向封面字段到 games 表
+    const hasHeaderCoverImage = gameColumns.some(col => col.name === 'header_cover_image')
+    if (!hasHeaderCoverImage) {
+      console.log('添加 header_cover_image 字段到 games 表...')
+      database.exec('ALTER TABLE games ADD COLUMN header_cover_image TEXT')
+      console.log('✓ header_cover_image 字段添加成功')
+    }
+
+    const hasHeaderCoverImageData = gameColumns.some(col => col.name === 'header_cover_image_data')
+    if (!hasHeaderCoverImageData) {
+      console.log('添加 header_cover_image_data 字段到 games 表...')
+      database.exec('ALTER TABLE games ADD COLUMN header_cover_image_data TEXT')
+      console.log('✓ header_cover_image_data 字段添加成功')
+    }
+
     // 检查并添加 music 表新字段（支持新版音乐管理）
     const musicColumns = database.prepare("PRAGMA table_info(music)").all()
     console.log('music 表当前字段:', musicColumns.map(c => c.name).join(', '))
@@ -607,6 +847,69 @@ function initDatabase() {
       console.log('✓ confirmed 字段添加成功')
     }
 
+    // 检查 reading_progress 表字段
+    const readingProgressColumns = database.prepare("PRAGMA table_info(reading_progress)").all()
+    console.log('reading_progress 表当前字段:', readingProgressColumns.map(c => c.name).join(', '))
+    
+    // 检查并添加 cfi 字段到 reading_progress 表（EPUB CFI 阅读进度）
+    const hasCfi = readingProgressColumns.some(col => col.name === 'cfi')
+    if (!hasCfi) {
+      console.log('添加 cfi 字段到 reading_progress 表...')
+      database.exec('ALTER TABLE reading_progress ADD COLUMN cfi TEXT')
+      console.log('✓ cfi 字段添加成功')
+    } else {
+      console.log('✓ cfi 字段已存在')
+    }
+    
+    // 检查并删除旧字段（character_offset, current_chapter）
+    const hasCharacterOffset = readingProgressColumns.some(col => col.name === 'character_offset')
+    const hasCurrentChapter = readingProgressColumns.some(col => col.name === 'current_chapter')
+    
+    if (hasCharacterOffset || hasCurrentChapter) {
+      console.log('🗑️ 检测到旧字段，开始清理...')
+      
+      // 重建表（SQLite 不支持直接删除列）
+      database.exec(`
+        CREATE TABLE reading_progress_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          book_id INTEGER NOT NULL,
+          user_id INTEGER,
+          current_page INTEGER DEFAULT 0,
+          cfi TEXT,
+          progress REAL DEFAULT 0,
+          font_size INTEGER DEFAULT 16,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(book_id, user_id)
+        )
+      `)
+      
+      // 复制数据（进度重置为0）
+      database.exec(`
+        INSERT INTO reading_progress_new (
+          id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at
+        )
+        SELECT 
+          id, book_id, user_id, 0, NULL, 0, 
+          COALESCE(font_size, 16), 
+          created_at, 
+          updated_at
+        FROM reading_progress
+      `)
+      
+      // 删除旧表并重命名
+      database.exec('DROP TABLE reading_progress')
+      database.exec('ALTER TABLE reading_progress_new RENAME TO reading_progress')
+      
+      // 重建索引
+      database.exec('CREATE INDEX IF NOT EXISTS idx_reading_progress_book_id ON reading_progress(book_id)')
+      database.exec('CREATE INDEX IF NOT EXISTS idx_reading_progress_user_id ON reading_progress(user_id)')
+      
+      console.log('✓ 旧字段已删除，所有进度已重置为0')
+    }
+
     // 删除 code_versions 表（不再需要）
     try {
       database.exec('DROP TABLE IF EXISTS code_versions')
@@ -615,26 +918,20 @@ function initDatabase() {
       // 表可能不存在，忽略错误
     }
 
-    // 创建迁移版本表（用于跟踪已执行的迁移）
-    database.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version TEXT PRIMARY KEY,
-        executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `)
-
     // 检查是否已执行过动漫状态迁移
-    const migrationVersion = 'anime_status_v1'
-    const migrationExecuted = database.prepare(
-      'SELECT version FROM schema_migrations WHERE version = ?'
-    ).get(migrationVersion)
+    const animeMigrationKey = 'anime_status_v1'
+    const animeMigrationExecuted = database.prepare(
+      'SELECT * FROM schema_migrations WHERE migration_key = ?'
+    ).get(animeMigrationKey)
 
-    if (!migrationExecuted) {
+    if (!animeMigrationExecuted) {
       // 仅执行一次：迁移动漫状态（之前的 'watching' 表示"想看"，现在应该改为 'want_to_watch'）
       try {
         console.log('执行一次性迁移：动漫状态（watching -> want_to_watch）...')
         database.exec("UPDATE anime SET status = 'want_to_watch' WHERE status = 'watching'")
-        database.prepare('INSERT INTO schema_migrations (version) VALUES (?)').run(migrationVersion)
+        database.prepare(
+          'INSERT INTO schema_migrations (migration_key, version, description) VALUES (?, ?, ?)'
+        ).run(animeMigrationKey, '1.0.0', '迁移动漫状态（watching -> want_to_watch）')
         console.log('✓ 动漫状态迁移完成，此迁移仅执行一次')
       } catch (e) {
         console.log('[动漫状态迁移] 警告:', e.message)
@@ -650,10 +947,18 @@ function initDatabase() {
   // 创建默认用户
   const defaultUsername = process.env.DEFAULT_USERNAME || 'admin'
   const defaultPassword = process.env.DEFAULT_PASSWORD || 'admin123'
-  console.log(`创建默认用户: ${defaultUsername}, 密码: ${defaultPassword}`)
+  
+  // 安全检查：如果使用的是默认密码，发出警告但不记录明文密码
+  const isDefaultPassword = !process.env.DEFAULT_PASSWORD
+  if (isDefaultPassword) {
+    console.warn(`⚠️  警告: 使用默认密码创建用户 ${defaultUsername}`)
+    console.warn('   建议: 在生产环境设置 DEFAULT_PASSWORD 环境变量使用强密码')
+  } else {
+    console.log(`创建默认用户: ${defaultUsername}`)
+  }
 
   const hashedPassword = bcrypt.hashSync(defaultPassword, 10)
-  console.log('密码哈希:', hashedPassword)
+  // 不记录密码哈希，防止彩虹表攻击
 
   const stmt = database.prepare(
     `INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)`
@@ -661,8 +966,11 @@ function initDatabase() {
 
   try {
     const result = stmt.run(defaultUsername, hashedPassword)
-    console.log('插入用户结果:', result)
-    console.log(`✓ 默认用户已创建: ${defaultUsername}`)
+    if (result.changes > 0) {
+      console.log(`✓ 默认用户已创建: ${defaultUsername}`)
+    } else {
+      console.log(`✓ 用户已存在: ${defaultUsername}`)
+    }
   } catch (error) {
     console.error('创建用户失败:', error)
     console.error('错误详情:', error.message)
@@ -679,6 +987,51 @@ function initDatabase() {
     console.log(`✓ 私密空间默认密码已设置: ${defaultPrivatePassword}`)
   } catch (error) {
     console.error('设置私密空间密码失败:', error)
+  }
+
+  // 创建索引以提升查询速度
+  console.log('创建数据库索引...')
+
+  // 辅助函数：安全创建索引（检查字段是否存在）
+  const createIndexIfFieldExists = (tableName, fieldName, indexName) => {
+    try {
+      // 检查字段是否存在
+      const columns = database.pragma(`table_info(${tableName})`)
+      const fieldExists = columns.some(col => col.name === fieldName)
+
+      if (fieldExists) {
+        database.exec(`CREATE INDEX IF NOT EXISTS ${indexName} ON ${tableName}(${fieldName})`)
+        console.log(`✓ 创建索引: ${indexName}`)
+      } else {
+        console.log(`⚠ 跳过索引 ${indexName}（字段 ${fieldName} 不存在）`)
+      }
+    } catch (error) {
+      console.log(`⚠ 创建索引 ${indexName} 失败:`, error.message)
+    }
+  }
+
+  try {
+    // 音乐表索引
+    createIndexIfFieldExists('music', 'title', 'idx_music_title')
+    createIndexIfFieldExists('music', 'artist', 'idx_music_artist')
+    createIndexIfFieldExists('music', 'album', 'idx_music_album')
+    createIndexIfFieldExists('music', 'created_at', 'idx_music_created_at')
+
+    // 文档表索引（注意：是 category 不是 category_id）
+    createIndexIfFieldExists('documents', 'title', 'idx_documents_title')
+    createIndexIfFieldExists('documents', 'category', 'idx_documents_category')
+
+    // 书籍表索引
+    createIndexIfFieldExists('books', 'title', 'idx_books_title')
+    createIndexIfFieldExists('books', 'created_at', 'idx_books_created_at')
+
+    // 动漫表索引
+    createIndexIfFieldExists('anime', 'title', 'idx_anime_title')
+    createIndexIfFieldExists('anime', 'status', 'idx_anime_status')
+
+    console.log('✓ 数据库索引创建完成')
+  } catch (error) {
+    console.log('⚠ 索引创建过程出错:', error.message)
   }
 
   return database

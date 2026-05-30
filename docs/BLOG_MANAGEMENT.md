@@ -152,7 +152,37 @@
 
 ---
 
-## 五、技术实现细节
+## 五、前端架构
+
+### PC/移动端分离架构
+
+采用条件渲染方式实现响应式适配：
+
+**主入口文件** (`frontend/src/views/Blog.vue`):
+```vue
+<template>
+  <BlogMobile v-if="isMobile" />
+  <div v-else class="blog">
+    <!-- PC端内容 -->
+  </div>
+</template>
+```
+
+**PC端组件** (`frontend/src/pc/pages/BlogPC.vue`):
+- 表格布局展示文章列表
+- Markdown编辑器分屏预览
+- 分类树形管理
+- 标签管理对话框
+
+**移动端组件** (`frontend/src/mobile/pages/BlogMobile.vue`):
+- 卡片列表布局
+- 底部浮动操作按钮
+- 响应式编辑器
+- 分类下拉选择
+
+---
+
+## 六、技术实现细节
 
 ### 1. Markdown 编辑器配置
 
@@ -232,7 +262,7 @@ const buildTree = (items, parentId = null) => {
 
 ---
 
-## 六、配置说明
+## 七、配置说明
 
 ### 环境变量
 
@@ -244,17 +274,19 @@ const buildTree = (items, parentId = null) => {
 
 ---
 
-## 七、关键文件路径
+## 八、关键文件路径
 
 | 功能模块 | 文件路径 |
 |----------|----------|
 | 后端路由 | `backend/src/routes/blog.js` |
 | 前端视图 | `frontend/src/views/Blog.vue` |
+| PC端组件 | `frontend/src/pc/pages/BlogPC.vue` |
+| 移动端组件 | `frontend/src/mobile/pages/BlogMobile.vue` |
 | API 定义 | `frontend/src/api/index.js` |
 
 ---
 
-## 八、使用说明
+## 九、使用说明
 
 ### 1. 创建文章
 
@@ -290,7 +322,7 @@ const buildTree = (items, parentId = null) => {
 
 ---
 
-## 九、注意事项
+## 十、注意事项
 
 1. **Markdown 支持**：支持标准 Markdown 语法和 GFM 扩展
 2. **代码高亮**：使用 Atom 主题，支持多种语言

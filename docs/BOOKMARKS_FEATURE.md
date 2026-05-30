@@ -28,6 +28,32 @@
 - **可点击链接**：标题直接点击跳转到目标网站
 - **悬停提示**：使用原生 title 属性，避免样式冲突和重复提示框
 
+## PC/移动端分离架构
+
+采用条件渲染方式实现响应式适配：
+
+**主入口文件** (`frontend/src/views/Bookmarks.vue`):
+```vue
+<template>
+  <BookmarksMobile v-if="isMobile" />
+  <div v-else class="bookmarks">
+    <!-- PC端内容 -->
+  </div>
+</template>
+```
+
+**PC端组件** (`frontend/src/pc/pages/BookmarksPC.vue`):
+- 表格布局展示书签列表
+- 支持多选批量操作
+- 标签筛选下拉框
+- 分页组件
+
+**移动端组件** (`frontend/src/mobile/pages/BookmarksMobile.vue`):
+- 卡片列表布局
+- 底部操作栏
+- 滑动删除支持
+- 响应式搜索栏
+
 ## 数据库设计
 
 ### 表结构：bookmarks
@@ -238,7 +264,13 @@ backend/src/
 
 frontend/src/
 ├── views/
-│   └── Bookmarks.vue     # 书签管理页面
+│   └── Bookmarks.vue     # 书签管理页面（主入口，条件渲染PC/移动端）
+├── pc/
+│   └── pages/
+│       └── BookmarksPC.vue   # PC端书签管理组件
+├── mobile/
+│   └── pages/
+│       └── BookmarksMobile.vue   # 移动端书签管理组件
 └── api/
     └── index.js          # API接口定义
 ```

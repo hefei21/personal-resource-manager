@@ -2,15 +2,16 @@ import express from 'express'
 import bcrypt from 'bcryptjs'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, generateToken, requireWritePermission } from '../middlewares/auth.js'
+import { loginLimiter } from '../middlewares/security.js'
 
 const router = express.Router()
 
-// 登录
-router.post('/login', async (req, res) => {
+// 登录（应用严格的速率限制）
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body
 
-    console.log('登录请求:', { username, password })
+    console.log('登录请求:', { username })  // 只记录用户名，不记录密码
 
     if (!username || !password) {
       return res.status(400).json({ message: '用户名和密码不能为空' })
@@ -29,7 +30,6 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: '用户名或密码错误' })
     }
 
-    console.log('用户密码哈希:', user.password)
     const isMatch = bcrypt.compareSync(password, user.password)
     console.log('密码匹配结果:', isMatch)
     
@@ -52,7 +52,11 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('登录错误详情:', error)
     console.error('错误堆栈:', error.stack)
-    res.status(500).json({ message: '服务器错误', details: error.message })
+    // 生产环境不暴露错误详情
+    res.status(500).json({ 
+      message: '服务器错误',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    })
   }
 })
 

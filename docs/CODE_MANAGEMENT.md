@@ -114,7 +114,37 @@
 
 ---
 
-## 五、技术实现细节
+## 五、前端架构
+
+### PC/移动端分离架构
+
+采用条件渲染方式实现响应式适配：
+
+**主入口文件** (`frontend/src/views/Code.vue`):
+```vue
+<template>
+  <CodeMobile v-if="isMobile" />
+  <div v-else class="code">
+    <!-- PC端内容 -->
+  </div>
+</template>
+```
+
+**PC端组件** (`frontend/src/pc/pages/CodePC.vue`):
+- 仓库卡片网格布局
+- 文件树侧边栏
+- 代码预览分屏
+- 提交历史列表
+
+**移动端组件** (`frontend/src/mobile/pages/CodeMobile.vue`):
+- 仓库列表卡片
+- 文件浏览器
+- 代码查看器
+- 底部导航栏
+
+---
+
+## 六、技术实现细节
 
 ### 1. Git 克隆（带进度）
 
@@ -233,7 +263,7 @@ const commits = stdout.split('\n').map(line => {
 
 ---
 
-## 六、配置说明
+## 七、配置说明
 
 ### 环境变量
 
@@ -264,17 +294,19 @@ const commits = stdout.split('\n').map(line => {
 
 ---
 
-## 七、关键文件路径
+## 八、关键文件路径
 
 | 功能模块 | 文件路径 |
 |----------|----------|
 | 后端路由 | `backend/src/routes/code.js` |
 | 前端视图 | `frontend/src/views/Code.vue` |
+| PC端组件 | `frontend/src/pc/pages/CodePC.vue` |
+| 移动端组件 | `frontend/src/mobile/pages/CodeMobile.vue` |
 | API 定义 | `frontend/src/api/index.js` |
 
 ---
 
-## 八、使用说明
+## 九、使用说明
 
 ### 1. 添加仓库
 
@@ -311,7 +343,7 @@ const commits = stdout.split('\n').map(line => {
 
 ---
 
-## 九、注意事项
+## 十、注意事项
 
 1. **克隆深度**：默认浅克隆（depth=50），减少下载量
 2. **大仓库**：超大仓库克隆时间较长，请耐心等待

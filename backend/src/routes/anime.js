@@ -5,6 +5,7 @@ import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 import { cache, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
+import { bangumiLimiter, scraperLimiter } from '../middlewares/security.js'
 
 const router = express.Router()
 const BANGUMI_API_BASE = process.env.BANGUMI_API_BASE || 'https://api.bgm.tv'
@@ -170,8 +171,8 @@ router.get('/token-status', authenticateToken, async (req, res) => {
   }
 })
 
-// 搜索动漫
-router.get('/search', authenticateToken, async (req, res) => {
+// 搜索动漫（应用 Bangumi 速率限制）
+router.get('/search', authenticateToken, bangumiLimiter, async (req, res) => {
   try {
     const { keyword, tag } = req.query
     const page = parseInt(req.query.page) || 1
@@ -184,6 +185,7 @@ router.get('/search', authenticateToken, async (req, res) => {
     const cached = await cache.get(cacheKey)
     if (cached) {
       console.log('[Redis] 命中缓存:', cacheKey)
+      req.cacheHit = true // 标记缓存命中（用于跳过限制）
       return res.json(cached)
     }
 
@@ -247,7 +249,7 @@ router.get('/search', authenticateToken, async (req, res) => {
     // 不再需要手动排序，Bangumi API 已经按匹配度排序
     const scoredResults = results.map(item => ({ ...item, _score: 50 }))
 
-    // 性能优化：不再对每个搜索结果单独请求详情API
+    // 不再对每个搜索结果单独请求详情API
     // 详细信息会在用户点击详情时按需获取
     // 搜索结果只返回基本信息，大幅减少API请求次数
     const searchResults = scoredResults.map(item => ({
@@ -379,7 +381,15 @@ router.get('/detail/:bangumiId', authenticateToken, async (req, res) => {
     const detail = await getAnimeDetail(req.params.bangumiId)
     res.json({ data: detail })
   } catch (error) {
-    res.status(500).json({ message: error.message || '获取详情失败' })
+    console.error('获取动漫详情失败:', error.message)
+    // 提供更详细的错误信息
+    if (error.response?.status === 404) {
+      res.status(404).json({ message: '该动漫在 Bangumi 上不存在' })
+    } else if (error.response?.status === 502 || error.code === 'ECONNRESET') {
+      res.status(502).json({ message: 'Bangumi API 暂时不可用，请稍后重试' })
+    } else {
+      res.status(500).json({ message: error.message || '获取详情失败' })
+    }
   }
 })
 
@@ -510,6 +520,19 @@ router.get('/', authenticateToken, async (req, res) => {
 
     res.json({ data: parsedRows, total })
   } catch (error) {
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 获取所有Bangumi ID（用于搜索结果判断是否已在库中）
+router.get('/all-ids', authenticateToken, async (req, res) => {
+  try {
+    const db = getDatabase()
+    const rows = db.prepare('SELECT bangumi_id FROM anime WHERE bangumi_id IS NOT NULL').all()
+    const ids = rows.map(row => row.bangumi_id)
+    res.json({ data: ids })
+  } catch (error) {
+    console.error('获取Bangumi ID列表失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
 })
@@ -828,7 +851,7 @@ router.post('/batch-download-covers', authenticateToken, requireWritePermission,
 
 // 搜索动漫资源（多源）
 
-// 1. Nyaa（主站）
+// Nyaa
 async function searchNyaa(keyword) {
   try {
     const nyaaDomain = 'nyaa.si'
@@ -884,7 +907,7 @@ async function searchNyaa(keyword) {
   }
 }
 
-// 2. 动漫花园 (使用 AnimeGarden API)
+// 动漫花园 (AnimeGarden)
 async function searchDMHY(keyword) {
   try {
     // 使用 AnimeGarden API: https://api.animes.garden
@@ -931,7 +954,7 @@ async function searchDMHY(keyword) {
   }
 }
 
-// 3. ACG.RIP
+// ACG.RIP
 async function searchACGRip(keyword) {
   try {
     const searchUrl = `https://acg.rip/search/${encodeURIComponent(keyword)}/`
@@ -982,7 +1005,7 @@ async function searchACGRip(keyword) {
   }
 }
 
-// 4. 蜜柑计划
+// 蜜柑计划
 async function searchMikan(keyword) {
   try {
     const searchUrl = `https://mikanani.me/Home/Search?searchstr=${encodeURIComponent(keyword)}`
@@ -1193,9 +1216,9 @@ router.get('/resources/test', authenticateToken, async (req, res) => {
   })
 })
 
-// 搜索动漫资源（整合多源）
+// 搜索动漫资源（整合多源）- 应用爬虫速率限制
 // mode: 'parallel' = 同时多源搜索, 'sequential' = 顺序匹配（按优先级）
-router.get('/resources/search', authenticateToken, async (req, res) => {
+router.get('/resources/search', authenticateToken, scraperLimiter, async (req, res) => {
   try {
     const { keyword, mode = 'parallel' } = req.query
     if (!keyword) {
@@ -1207,6 +1230,7 @@ router.get('/resources/search', authenticateToken, async (req, res) => {
     const cached = await cache.get(cacheKey)
     if (cached) {
       console.log(`[资源搜索] 命中缓存: ${keyword}`)
+      req.cacheHit = true // 标记缓存命中
       return res.json(cached)
     }
 

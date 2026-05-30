@@ -1,7 +1,7 @@
 <template>
-  <t-dialog
-    v-model:visible="dialogVisible"
-    header="查找电子书资源"
+  <NativeDialog
+    v-model="dialogVisible"
+    title="查找电子书资源"
     :width="800"
     :footer="false"
     placement="center"
@@ -10,20 +10,20 @@
     <div class="book-search-dialog">
       <!-- 配置区域 -->
       <div class="config-section">
-        <t-space align="center">
-          <t-button size="small" variant="outline" @click="showConfigDialog = true" :disabled="isGuest">
-            <template #icon><t-icon name="setting" /></template>
+        <div class="config-row">
+          <NativeButton size="small" variant="outline" @click="showConfigDialog = true" :disabled="isGuest">
+            <template #icon><NativeIcon name="gear" /></template>
             域名配置
-          </t-button>
+          </NativeButton>
           <span class="config-status" :class="{ active: configValid }">
             {{ configValid ? '✓ 配置正常' : '⚠ 域名可能失效' }}
           </span>
-        </t-space>
+        </div>
       </div>
 
       <!-- 搜索区域 -->
       <div class="search-section">
-        <t-input
+        <NativeInput
           v-model="searchKeyword"
           placeholder="输入书名、作者或关键词..."
           clearable
@@ -31,28 +31,29 @@
           size="large"
         >
           <template #prefix-icon>
-            <t-icon name="search" />
+            <NativeIcon name="magnifying-glass" />
           </template>
-        </t-input>
+        </NativeInput>
         
-        <t-select
+        <NativeSelect
           v-model="searchSource"
           placeholder="选择搜索源"
           style="width: 160px"
-        >
-          <t-option value="all" label="全部来源" />
-          <t-option value="anna-archive" label="安娜档案" />
-          <t-option value="nyaa" label="Nyaa (轻小说/漫画)" />
-        </t-select>
+          :options="[
+            { value: 'all', label: '全部来源' },
+            { value: 'anna-archive', label: '安娜档案' },
+            { value: 'nyaa', label: 'Nyaa (轻小说/漫画)' }
+          ]"
+        />
         
-        <t-button 
+        <NativeButton 
           theme="primary" 
           size="large" 
           @click="handleSearch"
           :loading="searching"
         >
           搜索
-        </t-button>
+        </NativeButton>
       </div>
 
       <!-- 搜索结果 -->
@@ -60,7 +61,7 @@
         <!-- Anna's Archive 结果 -->
         <div v-if="results.annaArchive.length > 0" class="result-group">
           <h4 class="result-title">
-            <t-icon name="book" /> 安娜档案 ({{ results.annaArchive.length }} 条)
+            <NativeIcon name="book" /> 安娜档案 ({{ results.annaArchive.length }} 条)
           </h4>
           <div class="result-list">
             <div 
@@ -71,20 +72,20 @@
               <div class="item-info">
                 <div class="item-title">{{ item.title }}</div>
                 <div class="item-meta">
-                  <t-tag v-if="item.format" size="small" variant="outline">{{ item.format }}</t-tag>
-                  <t-tag v-if="item.size" size="small" variant="outline">{{ item.size }}</t-tag>
-                  <t-tag v-if="item.language" size="small" variant="outline">{{ item.language }}</t-tag>
+                  <NativeTag v-if="item.format" theme="primary" variant="outline" size="small">{{ item.format }}</NativeTag>
+                  <NativeTag v-if="item.size" theme="default" variant="outline" size="small">{{ item.size }}</NativeTag>
+                  <NativeTag v-if="item.language" theme="success" variant="outline" size="small">{{ item.language }}</NativeTag>
                 </div>
               </div>
               <div class="item-actions">
-                <t-button 
+                <NativeButton 
                   size="small" 
                   variant="outline"
                   @click="openLink(item.link)"
                 >
-                  <template #icon><t-icon name="link" /></template>
+                  <template #icon><NativeIcon name="link" /></template>
                   打开详情
-                </t-button>
+                </NativeButton>
               </div>
             </div>
           </div>
@@ -93,7 +94,7 @@
         <!-- Nyaa 结果 -->
         <div v-if="results.nyaa.length > 0" class="result-group">
           <h4 class="result-title">
-            <t-icon name="download" /> Nyaa ({{ results.nyaa.length }} 条)
+            <NativeIcon name="download" /> Nyaa ({{ results.nyaa.length }} 条)
           </h4>
           <div class="result-list">
             <div 
@@ -104,43 +105,44 @@
               <div class="item-info">
                 <div class="item-title">{{ item.title }}</div>
                 <div class="item-meta">
-                  <t-tag size="small" variant="outline">{{ item.size }}</t-tag>
-                  <t-tag size="small" variant="outline" theme="success">
-                    <t-icon name="arrow-up" /> {{ item.seeders }}
-                  </t-tag>
-                  <t-tag size="small" variant="outline" theme="danger">
-                    <t-icon name="arrow-down" /> {{ item.leechers }}
-                  </t-tag>
-                  <t-tag size="small" variant="outline">{{ item.downloads }} 下载</t-tag>
+                  <NativeTag v-if="item.format" variant="outline" theme="primary">{{ item.format }}</NativeTag>
+                  <NativeTag variant="outline">{{ item.size }}</NativeTag>
+                  <NativeTag variant="outline" theme="success">
+                    ↑ {{ item.seeders }}
+                  </NativeTag>
+                  <NativeTag variant="outline" theme="danger">
+                    ↓ {{ item.leechers }}
+                  </NativeTag>
+                  <NativeTag variant="outline">{{ item.downloads }} 下载</NativeTag>
                 </div>
               </div>
               <div class="item-actions">
-                <t-button 
+                <NativeButton 
                   v-if="item.magnetLink"
                   size="small" 
                   theme="primary"
                   @click="copyMagnet(item.magnetLink)"
                 >
-                  <template #icon><t-icon name="link" /></template>
+                  <template #icon><NativeIcon name="link" /></template>
                   复制磁力
-                </t-button>
-                <t-button 
+                </NativeButton>
+                <NativeButton 
                   v-if="item.torrentLink"
                   size="small" 
                   variant="outline"
                   @click="openLink(item.torrentLink)"
                 >
-                  <template #icon><t-icon name="download" /></template>
+                  <template #icon><NativeIcon name="download" /></template>
                   种子
-                </t-button>
-                <t-button 
+                </NativeButton>
+                <NativeButton 
                   size="small" 
                   variant="outline"
                   @click="openLink(item.link)"
                 >
-                  <template #icon><t-icon name="view" /></template>
+                  <template #icon><NativeIcon name="globe" /></template>
                   详情
-                </t-button>
+                </NativeButton>
               </div>
             </div>
           </div>
@@ -148,67 +150,70 @@
 
         <!-- 无结果提示 -->
         <div v-if="results.errors && results.errors.length > 0" class="error-section">
-          <t-alert theme="warning" :message="results.errors.join('; ')" />
+          <NativeAlert theme="warning" :message="results.errors.join('; ')" />
         </div>
       </div>
 
       <!-- 空状态 -->
       <div v-else-if="!searching && searched" class="empty-state">
-        <t-icon name="search-close" size="48px" />
+        <NativeIcon name="magnifying-glass-slash" size="48" />
         <p>没有找到相关资源</p>
         <p class="tip">尝试更换关键词或搜索源</p>
       </div>
 
       <div v-else-if="!searching && !searched" class="empty-state">
-        <t-icon name="book" size="48px" />
+        <NativeIcon name="book" size="48" />
         <p>输入关键词搜索电子书</p>
         <p class="tip">支持书名、作者或任意关键词</p>
       </div>
     </div>
 
     <!-- 配置弹窗 -->
-    <t-dialog
-      v-model:visible="showConfigDialog"
-      header="域名配置"
+    <NativeDialog
+      v-model="showConfigDialog"
+      title="域名配置"
       :width="500"
       :footer="false"
+      @close="showConfigDialog = false"
     >
       <div class="config-form">
-        <t-form :data="configForm" @submit="handleSaveConfig">
-          <t-form-item label="安娜档案域名" name="annaArchiveDomain">
-            <t-input v-model="configForm.annaArchiveDomain" placeholder="例如: annas-archive.gl" />
-          </t-form-item>
-          <t-form-item label="Nyaa域名" name="nyaaDomain">
-            <t-input v-model="configForm.nyaaDomain" placeholder="例如: nyaa.si" />
-          </t-form-item>
-          <t-form-item>
-            <t-space>
-              <t-button theme="primary" type="submit">保存配置</t-button>
-              <t-button variant="outline" @click="testDomains">测试连通性</t-button>
-            </t-space>
-          </t-form-item>
-        </t-form>
+        <NativeForm :modelValue="configForm" @submit="handleSaveConfig">
+          <NativeFormItem label="安娜档案域名" prop="annaArchiveDomain">
+            <NativeInput v-model="configForm.annaArchiveDomain" placeholder="例如: annas-archive.gl" />
+          </NativeFormItem>
+          <NativeFormItem label="Nyaa域名" prop="nyaaDomain">
+            <NativeInput v-model="configForm.nyaaDomain" placeholder="例如: nyaa.si" />
+          </NativeFormItem>
+          <NativeFormItem>
+            <div class="config-btns">
+              <NativeButton theme="primary" type="submit">保存配置</NativeButton>
+              <NativeButton variant="outline" @click="testDomains" :loading="testingDomains">测试连通性</NativeButton>
+            </div>
+          </NativeFormItem>
+        </NativeForm>
         
         <div v-if="testResults.length > 0" class="test-results">
-          <t-divider />
+          <div class="divider-line" />
           <h4>测试结果</h4>
           <div v-for="(result, index) in testResults" :key="index" class="test-result">
-            <t-icon :name="result.available ? 'check-circle' : 'close-circle'" 
+            <NativeIcon :name="result.available ? 'check-circle' : 'close-circle'" 
                     :style="{ color: result.available ? 'green' : 'red' }" />
             <span>{{ result.domain }}: {{ result.message }}</span>
           </div>
         </div>
       </div>
-    </t-dialog>
-  </t-dialog>
+    </NativeDialog>
+  </NativeDialog>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
 import api from '@/api'
 import { usePermission } from '@/composables/usePermission'
+import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeForm, NativeFormItem } from '@/components/native'
+import { useToast } from '@/composables/useToast'
 
+const toast = useToast()
 const { isGuest } = usePermission()
 
 // Props
@@ -246,6 +251,7 @@ const configForm = ref({
   nyaaDomain: 'nyaa.si'
 })
 const testResults = ref([])
+const testingDomains = ref(false)
 
 // 计算属性
 const hasResults = computed(() => {
@@ -270,7 +276,7 @@ async function loadConfig() {
 // 搜索
 async function handleSearch() {
   if (!searchKeyword.value.trim()) {
-    MessagePlugin.warning('请输入搜索关键词')
+    toast.warning('请输入搜索关键词')
     return
   }
 
@@ -286,16 +292,16 @@ async function handleSearch() {
       searched.value = true
       
       if (res.data.total === 0) {
-        MessagePlugin.info('没有找到相关资源')
+        toast.info('没有找到相关资源')
       } else {
-        MessagePlugin.success(`找到 ${res.data.total} 条结果`)
+        toast.success(`找到 ${res.data.total} 条结果`)
       }
     } else {
-      MessagePlugin.error(res.data.message || '搜索失败')
+      toast.error(res.data.message || '搜索失败')
     }
   } catch (error) {
     console.error('搜索失败:', error)
-    MessagePlugin.error('搜索失败，请检查网络或域名配置')
+    toast.error('搜索失败，请检查网络或域名配置')
   } finally {
     searching.value = false
   }
@@ -305,7 +311,7 @@ async function handleSearch() {
 async function copyMagnet(link) {
   try {
     await navigator.clipboard.writeText(link)
-    MessagePlugin.success('磁力链接已复制')
+    toast.success('磁力链接已复制')
   } catch (error) {
     // 降级方案
     const textArea = document.createElement('textarea')
@@ -314,7 +320,7 @@ async function copyMagnet(link) {
     textArea.select()
     document.execCommand('copy')
     document.body.removeChild(textArea)
-    MessagePlugin.success('磁力链接已复制')
+    toast.success('磁力链接已复制')
   }
 }
 
@@ -330,39 +336,49 @@ async function handleSaveConfig() {
   try {
     const res = await api.bookSearch.saveConfig(configForm.value)
     if (res.data.success) {
-      MessagePlugin.success('配置保存成功')
+      toast.success('配置保存成功')
       showConfigDialog.value = false
     } else {
-      MessagePlugin.error(res.data.message || '保存失败')
+      toast.error(res.data.message || '保存失败')
     }
   } catch (error) {
     console.error('保存配置失败:', error)
-    MessagePlugin.error('保存失败')
+    toast.error('保存失败')
   }
 }
 
 // 测试域名
 async function testDomains() {
+  testingDomains.value = true
   testResults.value = []
   
-  for (const domain of [configForm.value.annaArchiveDomain, configForm.value.nyaaDomain]) {
-    try {
-      const res = await api.bookSearch.testDomain(domain)
-      testResults.value.push({
-        domain,
-        available: res.data.available,
-        message: res.data.message
-      })
-    } catch (error) {
-      testResults.value.push({
-        domain,
-        available: false,
-        message: '测试失败'
-      })
+  try {
+    for (const domain of [configForm.value.annaArchiveDomain, configForm.value.nyaaDomain]) {
+      try {
+        const res = await api.bookSearch.testDomain(domain)
+        testResults.value.push({
+          domain,
+          available: res.data.available,
+          message: res.data.message
+        })
+      } catch (error) {
+        testResults.value.push({
+          domain,
+          available: false,
+          message: '测试失败'
+        })
+      }
     }
+    
+    configValid.value = testResults.value.every(r => r.available)
+  } finally {
+    testingDomains.value = false
   }
-  
-  configValid.value = testResults.value.every(r => r.available)
+}
+
+// 确定按钮保存配置
+async function handleConfirmConfig() {
+  await handleSaveConfig()
 }
 
 // 关闭
@@ -496,6 +512,18 @@ watch(dialogVisible, (val) => {
   padding: 16px 0;
 }
 
+.config-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.divider-line {
+  height: 1px;
+  background: var(--td-component-border);
+  margin: 16px 0;
+}
+
 .test-results {
   margin-top: 16px;
 }
@@ -506,5 +534,10 @@ watch(dialogVisible, (val) => {
   gap: 8px;
   padding: 8px 0;
   font-size: 13px;
+}
+
+.config-btns {
+  display: flex;
+  gap: 12px;
 }
 </style>

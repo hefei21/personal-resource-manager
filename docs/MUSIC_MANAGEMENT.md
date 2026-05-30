@@ -19,6 +19,8 @@
 | file_size | INTEGER | 文件大小（字节） |
 | file_type | TEXT | 文件类型（mp3, flac 等） |
 | cover_image | TEXT | 封面图片（base64） |
+| lyrics | TEXT | 歌词内容（LRC格式） |
+| lyrics_source | TEXT | 歌词来源 |
 | created_at | DATETIME | 创建时间 |
 | updated_at | DATETIME | 更新时间 |
 
@@ -125,18 +127,6 @@
 
 - **批量操作**：多选、批量删除、批量添加到歌单
 
-- **搜索筛选**：
-  - 关键词搜索
-  - 艺术家筛选
-  - 专辑筛选
-
-- **排序方式**：
-  - 标题排序（支持中文拼音）
-  - 艺术家排序
-  - 专辑排序
-  - 创建时间排序
-  - 时长排序
-
 - **列表视图**：
   - 封面缩略图
   - 歌曲信息（标题、艺术家、专辑、时长）
@@ -181,6 +171,11 @@
   - 点击切换歌曲
   - 从列表移除
 
+- **歌词显示**：
+  - 桌面歌词窗口
+  - 歌词同步高亮
+  - 双击歌词跳转
+
 ### 4. 歌单管理
 
 - **歌单 CRUD**：创建、编辑、删除歌单
@@ -206,7 +201,37 @@
 
 ---
 
-## 五、技术实现细节
+## 五、前端架构
+
+### PC/移动端分离架构
+
+采用条件渲染方式实现响应式适配：
+
+**主入口文件** (`frontend/src/views/Music.vue`):
+```vue
+<template>
+  <MusicMobile v-if="isMobile" />
+  <div v-else class="music">
+    <!-- PC端内容 -->
+  </div>
+</template>
+```
+
+**PC端组件** (`frontend/src/pc/pages/MusicPC.vue`):
+- 表格布局展示音乐列表
+- 侧边栏显示歌单
+- 批量操作功能
+- 表头排序支持
+
+**移动端组件** (`frontend/src/mobile/pages/MusicMobile.vue`):
+- 卡片列表布局
+- 底部播放栏
+- 歌单抽屉
+- 全屏播放器
+
+---
+
+## 六、技术实现细节
 
 ### 1. 智能排序实现
 
@@ -278,7 +303,7 @@ async function uploadFile(file) {
 }
 ```
 
-### 2. 元数据解析（三层降级策略）
+### 3. 元数据解析（三层降级策略）
 
 ```javascript
 // 第一层：FFprobe（最可靠）
@@ -315,7 +340,7 @@ function parseFromFileName(originalName) {
 }
 ```
 
-### 3. 中文拼音排序
+### 4. 中文拼音排序
 
 ```javascript
 // 使用 Intl.Collator 实现中文拼音排序
@@ -330,7 +355,7 @@ musicList.sort((a, b) => {
 })
 ```
 
-### 4. 断点续传实现
+### 5. 断点续传实现
 
 ```javascript
 // IndexedDB 存储上传状态
@@ -366,7 +391,7 @@ async function restoreUploadProgress() {
 
 ---
 
-## 六、配置说明
+## 七、配置说明
 
 ### 环境变量
 
@@ -397,18 +422,20 @@ async function restoreUploadProgress() {
 
 ---
 
-## 七、关键文件路径
+## 八、关键文件路径
 
 | 功能模块 | 文件路径 |
 |----------|----------|
 | 后端路由 | `backend/src/routes/music.js` |
 | 前端视图 | `frontend/src/views/Music.vue` |
+| PC端组件 | `frontend/src/pc/pages/MusicPC.vue` |
+| 移动端组件 | `frontend/src/mobile/pages/MusicMobile.vue` |
 | 播放器组件 | `frontend/src/components/MediaPlayer.vue` |
 | API 定义 | `frontend/src/api/index.js` |
 
 ---
 
-## 八、使用说明
+## 九、使用说明
 
 ### 1. 上传音乐
 
@@ -439,9 +466,16 @@ async function restoreUploadProgress() {
 - **删除音乐**：同时删除文件和数据库记录
 - **去重功能**：查找并删除重复音乐
 
+### 5. 歌词功能
+
+1. 点击歌曲的"搜索歌词"按钮
+2. 系统自动从多个源搜索
+3. 选择合适的歌词
+4. 在播放器中显示同步歌词
+
 ---
 
-## 九、注意事项
+## 十、注意事项
 
 1. **文件大小**：建议单文件不超过 500MB
 2. **格式支持**：MP3、FLAC、WAV、OGG、M4A、AAC、APE
@@ -454,4 +488,4 @@ async function restoreUploadProgress() {
    - 上传进度保存 60 分钟
 5. **中文排序**：使用拼音排序，支持中文和英文混合
 6. **封面提取**：自动提取嵌入的封面图片，存储为 base64
-7. **悬停提示**：使用浏览器原生 title 属性显示完整标题，避免重复悬停框问题
+7. **歌词下载**：批量下载歌词时请勿关闭页面

@@ -16,13 +16,13 @@
 
 | 模块 | 功能 | 数据库表 |
 |------|------|----------|
-| 📄 文档管理 | 分类、标签、版本控制、PDF预览 | documents, categories, document_versions |
+| 📄 文档管理 | 分类、标签、版本控制、PDF预览、隐私空间 | documents, categories, document_versions |
 | 📝 博客管理 | Markdown编辑器、分类标签、草稿发布 | blog_posts, blog_categories, blog_tags |
-| 🎵 音乐管理 | FFprobe元数据解析、播放列表、封面提取 | music, playlists, playlist_songs |
-| 📚 书籍管理 | 电子书上传、在线阅读器、进度记忆 | books, book_categories, reading_progress |
-| 💻 代码管理 | Git仓库链接管理 | code_repositories |
+| 🎵 音乐管理 | FFprobe元数据解析、播放列表、封面提取、**歌词同步**、**均衡器** | music, playlists, playlist_songs |
+| 📚 书籍管理 | 电子书上传、在线阅读器、进度记忆、在线资源搜索 | books, book_categories, reading_progress |
+| 💻 代码管理 | Git仓库链接管理、README预览 | code_repositories |
 | 🔖 书签管理 | URL收藏、图标自动获取 | bookmarks |
-| 🎬 动漫管理 | Bangumi爬虫、收藏标记、评分系统 | anime |
+| 🎬 动漫管理 | Bangumi爬虫、收藏标记、评分系统、**多源资源搜索** | anime |
 | 🎮 游戏管理 | Steam集成、成就追踪 | games, game_achievements |
 
 ### 技术栈
@@ -46,6 +46,8 @@
 - Multer（文件上传）
 - Cheerio（HTML解析）
 - https-proxy-agent（代理请求）
+- **Redis（缓存）**
+- **express-rate-limit + helmet（安全加固）**
 
 **部署**
 - Docker Compose
@@ -70,76 +72,6 @@
 - **全文搜索**：按标题、内容、标签搜索
 - **🔒 隐私空间**：独立加密存储区域，用于存放私密文档
 
-**隐私空间设计**：
-
-为了保护敏感文档，我设计了独立的隐私空间：
-
-```sql
--- 隐私文档独立存储
-CREATE TABLE private_documents (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  file_path TEXT NOT NULL,
-  size INTEGER,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-```
-
-**隐私空间特点**：
-- 🔐 **独立存储路径**：与普通文档物理隔离
-- 🔐 **独立API路由**：`/api/documents/private/*` 
-- 🔐 **独立管理界面**：需要额外确认才能访问
-- 🔐 **上传去重**：自动处理同名文件（添加后缀）
-
-```javascript
-// 隐私文档上传时自动去重
-let finalTitle = title
-let suffix = 1
-while (!unique) {
-  const existing = db.prepare('SELECT * FROM private_documents WHERE title = ?').get(finalTitle)
-  if (!existing) {
-    unique = true
-  } else {
-    finalTitle = `${title} (${suffix})`
-    suffix++
-  }
-}
-```
-
-**普通文档表结构**：
-```sql
--- 文档表结构
-CREATE TABLE documents (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  category TEXT,          -- 主分类
-  subcategory TEXT,       -- 子分类
-  tags TEXT,              -- 标签（逗号分隔）
-  file_path TEXT NOT NULL,
-  version REAL DEFAULT 1.0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-
--- 分类表（支持拖拽排序）
-CREATE TABLE categories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  parent_id INTEGER,
-  sort_order INTEGER DEFAULT 0
-)
-
--- 文档版本表
-CREATE TABLE document_versions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  document_id INTEGER NOT NULL,
-  version REAL,
-  file_path TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-```
-
 ---
 
 ### 📝 博客管理模块
@@ -151,54 +83,6 @@ CREATE TABLE document_versions (
 - **只读预览**：点击文章卡片进入预览视图，点击编辑按钮才进入编辑
 - **代码高亮**：Atom 主题，黑底 + 语法高亮
 
-**技术实现**：
-```vue
-<!-- 编辑器配置 -->
-<MdEditor
-  v-model="editForm.content"
-  :theme="editorTheme"        <!-- 主题：light -->
-  :previewTheme="previewTheme" <!-- 预览主题：default -->
-  :codeTheme="codeTheme"      <!-- 代码主题：atom（黑底高亮） -->
-  :toolbars="editorToolbars"
-  @onSave="handleAutoSave"
-/>
-
-<!-- 预览组件（只读） -->
-<MdPreview
-  :modelValue="previewContent"
-  :theme="editorTheme"
-  :previewTheme="previewTheme"
-  :codeTheme="codeTheme"
-/>
-```
-
-**数据库设计**：
-```sql
-CREATE TABLE blog_posts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  content TEXT,               -- Markdown内容
-  category_id INTEGER,
-  status TEXT DEFAULT 'draft', -- draft/published
-  is_top INTEGER DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-
-CREATE TABLE blog_categories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  parent_id INTEGER,
-  sort_order INTEGER DEFAULT 0
-)
-
-CREATE TABLE blog_tags (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE,
-  color TEXT  -- 标签颜色
-)
-```
-
 ---
 
 ### 🎵 音乐管理模块
@@ -209,196 +93,100 @@ CREATE TABLE blog_tags (
 - **播放列表**：创建、编辑、删除歌单，拖拽排序歌曲
 - **在线播放**：全局播放器，支持单曲循环、随机播放、顺序播放
 - **搜索筛选**：按艺术家、专辑、歌单筛选
-- **📤 大文件上传**：支持超大音乐文件（支持 100MB+）
-- **📤 断点续传**：网络中断后可继续上传
-- **📤 上传进度恢复**：页面刷新后恢复上传进度
+- **📤 大文件上传**：支持超大音乐文件（支持 100MB+）、断点续传
+- **🎶 歌词功能**（新增）：多源歌词搜索、批量下载、双语歌词、全屏歌词窗口
+- **🎛️ 均衡器功能**（新增）：10段均衡器、预设方案、实时调节
 
-**大文件上传实现**：
+**歌词功能实现**：
 
-采用**分片上传**策略，将大文件切分成多个小块上传：
+采用多源聚合策略，按优先级顺序尝试：
 
 ```javascript
-// 分片上传实现
-const CHUNK_SIZE = 10 * 1024 * 1024  // 每片 10MB
-
-async function uploadFile(file) {
-  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-  
-  // 1. 开始上传会话
-  await api.music.startUpload({
-    fileId: file.id,
-    fileName: file.name,
-    fileSize: file.size,
-    totalChunks
-  })
-  
-  // 2. 分片上传
-  for (let i = 0; i < totalChunks; i++) {
-    const start = i * CHUNK_SIZE
-    const end = Math.min(start + CHUNK_SIZE, file.size)
-    const chunk = file.file.slice(start, end)  // 切片
-    
-    const formData = new FormData()
-    formData.append('fileId', file.id)
-    formData.append('chunkIndex', i)
-    formData.append('chunk', chunk)
-    
-    await api.music.uploadChunk(formData)
-    
-    // 更新进度
-    file.progress = Math.round(((i + 1) / totalChunks) * 100)
+const LYRIC_SOURCES = [
+  {
+    name: '网易云音乐',
+    search: searchNeteaseMusic,
+    getLyric: getNeteaseLyric
+  },
+  {
+    name: 'QQ音乐',
+    search: searchQQMusic,
+    getLyric: getQQMusicLyric
+  },
+  {
+    name: '酷狗音乐',
+    search: searchKugouMusic,
+    getLyric: getKugouLyric
   }
-  
-  // 3. 合并分片
-  await api.music.mergeChunks({
-    fileId: file.id,
-    fileName: file.name,
-    totalChunks
-  })
-}
+]
 ```
 
-**断点续传实现**：
-
-使用 **IndexedDB** 在浏览器端保存上传状态，页面刷新后恢复：
+**双语歌词合并算法**：
 
 ```javascript
-// 保存上传状态到 IndexedDB
-async function saveUploadState(fileId, file, totalChunks) {
-  const db = await openIndexedDB()
-  await db.put('uploads', {
-    fileId,
-    fileName: file.name,
-    fileSize: file.size,
-    file: file,  // 保存 File 对象引用
-    totalChunks,
-    timestamp: Date.now()
-  })
-}
-
-// 页面加载时恢复上传进度
-async function restoreUploadProgress() {
-  const pendingUploads = await getAllPendingUploads()
+function mergeLrcWithTranslation(originalLrc, translationLrc) {
+  // 1. 解析歌词为时间戳映射
+  const originalMap = parseLrcToMap(originalLrc)
+  const translationMap = parseLrcToMap(translationLrc)
   
-  for (const upload of pendingUploads) {
-    // 从后端获取已上传的分片
-    const status = await api.music.getUploadStatus(upload.fileId)
-    
-    if (status.status === 'uploading') {
-      const receivedChunks = status.receivedChunks || []
-      
-      // 检查 File 对象是否还有效
-      if (upload.file && upload.file instanceof File) {
-        // ✅ 文件对象有效，显示为"后台上传中"
-        resumedUploads.push({
-          ...upload,
-          status: 'uploading',
-          isRecovered: true
-        })
-      } else {
-        // ❌ 文件对象丢失，需要用户重新选择
-        resumedUploads.push({
-          ...upload,
-          status: 'waiting_file',
-          needReselect: true
-        })
-      }
+  // 2. 合并原文和翻译
+  const result = []
+  for (const [timestamp, text] of originalMap) {
+    result.push(`[${timestamp}]${text}`)
+    if (translationMap.has(timestamp)) {
+      result.push(`[${timestamp}]${translationMap.get(timestamp)}`)
     }
   }
+  
+  return result.join('\n')
 }
 ```
 
-**后端分片处理**：
+**均衡器实现**：
+
+使用 Web Audio API 的 BiquadFilterNode：
 
 ```javascript
-// 上传分片
-router.post('/upload-chunk', (req, res) => {
-  const { fileId, chunkIndex } = req.body
-  const chunkFile = req.files.chunk
-  
-  // 保存到临时目录
-  const chunkPath = path.join(tempDir, `${fileId}_${chunkIndex}`)
-  fs.writeFileSync(chunkPath, chunkFile.data)
-  
-  // 记录已接收的分片
-  uploadSessions[fileId].receivedChunks.push(chunkIndex)
-  
-  res.json({ success: true, chunkIndex })
-})
-
-// 合并分片
-router.post('/merge-chunks', (req, res) => {
-  const { fileId, fileName, totalChunks } = req.body
-  
-  const finalPath = path.join(musicDir, fileName)
-  const writeStream = fs.createWriteStream(finalPath)
-  
-  // 按顺序合并分片
-  for (let i = 0; i < totalChunks; i++) {
-    const chunkPath = path.join(tempDir, `${fileId}_${i}`)
-    const chunkData = fs.readFileSync(chunkPath)
-    writeStream.write(chunkData)
-    fs.unlinkSync(chunkPath)  // 删除临时分片
+class Equalizer {
+  constructor() {
+    this.audioContext = null
+    this.bands = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] // 10段均衡器
+    this.filters = []
+    this.frequencies = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
   }
   
-  writeStream.end()
-  
-  // 解析元数据
-  const metadata = await parseMusicMetadata(finalPath)
-  // 保存到数据库...
-})
-```
-
-**上传场景处理**：
-
-| 场景 | 状态 | 处理方式 |
-|------|------|----------|
-| 正常上传 | `uploading` | 显示进度条 |
-| 网络中断 | `pending` | 显示"继续上传"按钮 |
-| 页面刷新（文件有效） | `uploading` | 后台继续上传，显示进度 |
-| 页面刷新（文件丢失） | `waiting_file` | 提示重新选择文件 |
-| 上传失败 | `error` | 显示错误信息，可重试 |
-
-**技术实现（三层降级策略）**：
-
-```javascript
-// 第一层：FFprobe（推荐，最可靠）
-async function parseWithFFprobe(filePath) {
-  const { exec } = require('child_process')
-  const command = `ffprobe -v quiet -print_format json -show_format "${filePath}"`
-  
-  const result = await execPromise(command)
-  const data = JSON.parse(result)
-  
-  return {
-    title: data.format.tags?.title,
-    artist: data.format.tags?.artist || data.format.tags?.ARTIST,
-    album: data.format.tags?.album,
-    duration: data.format.duration
+  // 创建滤波器
+  createFilters(source, destination) {
+    this.filters = this.frequencies.map((freq, i) => {
+      const filter = this.audioContext.createBiquadFilter()
+      filter.type = 'peaking'
+      filter.frequency.value = freq
+      filter.Q.value = 1.4
+      filter.gain.value = this.bands[i]
+      return filter
+    })
+    
+    // 串联滤波器
+    let lastNode = source
+    this.filters.forEach(filter => {
+      lastNode.connect(filter)
+      lastNode = filter
+    })
+    lastNode.connect(destination)
   }
-}
-
-// 第二层：轻量级纯 JS 解析（降级）
-function parseWithPureJS(filePath) {
-  // FLAC: 解析 Vorbis Comments
-  // MP3: 解析 ID3v2 标签
-  // 无需外部依赖
-}
-
-// 第三层：文件名推断（兜底）
-function parseFromFilename(filename) {
-  // 尝试从文件名提取信息
 }
 ```
 
-**为什么选择 FFprobe 而不是 music-metadata？**
+**预设方案**：
 
-| 对比项 | FFprobe | music-metadata |
-|--------|---------|----------------|
-| FLAC 兼容性 | ✅ 完美支持 | ❌ 部分文件报错 |
-| NCM 转换文件 | ✅ 正常解析 | ❌ 经常失败 |
-| 封面提取 | ✅ 稳定可靠 | ⚠️ 不稳定 |
-| 行业地位 | ✅ Netflix/Spotify 使用 | ❌ 社区库 |
+| 预设 | 说明 | 参数 |
+|------|------|------|
+| 默认 | 平衡的频率响应 | 全部 0dB |
+| 低音增强 | 强化低频效果 | 低频 +6dB |
+| 人声增强 | 提升中频人声 | 中频 +4dB |
+| 高音增强 | 提升高频细节 | 高频 +5dB |
+| 摇滚 | 强调节奏感 | 低频+高频 +4dB |
+| 古典 | 平衡的动态范围 | 轻微V型曲线 |
 
 ---
 
@@ -410,130 +198,9 @@ function parseFromFilename(filename) {
   - EPUB：章节目录、翻页、字体调整
   - PDF：缩放、翻页
   - TXT：自动分章、编码检测
-- **阅读进度**：自动保存当前位置，下次打开恢复
+- **阅读进度**：自动保存当前位置，下次打开恢复（支持多用户隔离）
 - **书籍分类**：分类树管理，支持子分类
 - **🔍 在线资源搜索**：爬取 Anna's Archive 和 Nyaa 搜索电子书
-
-**在线资源搜索爬虫**：
-
-为了方便找书，我集成了多个电子书资源站点的爬虫：
-
-**支持的搜索源**：
-- **Anna's Archive**：全球最大的电子书搜索引擎镜像
-- **Nyaa**：动漫资源站点，包含轻小说分类
-
-```javascript
-// Anna's Archive 爬虫
-async function searchAnnaArchive(keyword) {
-  const searchUrl = `https://annas-archive.gl/search?q=${encodeURIComponent(keyword)}`
-  
-  const response = await axios.get(searchUrl, {
-    httpsAgent: proxyAgent,  // 使用 Clash 代理
-    timeout: 15000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 ...',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
-    }
-  })
-  
-  const $ = cheerio.load(response.data)
-  const results = []
-  
-  // 解析搜索结果
-  $('div[data-id]').each((i, elem) => {
-    const $elem = $(elem)
-    results.push({
-      title: $elem.find('h3').text(),
-      author: $elem.find('.author').text(),
-      format: $elem.find('.format').text(),  // PDF/EPUB/MOBI
-      size: $elem.find('.size').text(),
-      link: $elem.find('a').attr('href')
-    })
-  })
-  
-  return results
-}
-
-// Nyaa 爬虫（轻小说分类）
-async function searchNyaa(keyword) {
-  const searchUrl = `https://nyaa.si/?f=0&c=3_0&q=${encodeURIComponent(keyword)}`
-  
-  const response = await axios.get(searchUrl, {
-    httpsAgent: proxyAgent,
-    timeout: 15000
-  })
-  
-  const $ = cheerio.load(response.data)
-  const results = []
-  
-  $('tr.success, tr.default').each((i, elem) => {
-    results.push({
-      title: $(elem).find('a[title]').attr('title'),
-      size: $(elem).find('td:nth-child(4)').text(),
-      seeders: $(elem).find('td:nth-child(6)').text(),
-      leechers: $(elem).find('td:nth-child(7)').text(),
-      torrent: $(elem).find('a[href*="download"]').attr('href')
-    })
-  })
-  
-  return results
-}
-
-// 并行搜索多个源
-router.get('/search', async (req, res) => {
-  const { keyword } = req.query
-  
-  const results = await Promise.allSettled([
-    searchAnnaArchive(keyword),
-    searchNyaa(keyword)
-  ])
-  
-  res.json({
-    annaArchive: results[0].status === 'fulfilled' ? results[0].value : [],
-    nyaa: results[1].status === 'fulfilled' ? results[1].value : []
-  })
-})
-```
-
-**爬虫配置**：
-```javascript
-// 可配置的域名（应对域名变化）
-const config = {
-  annaArchiveDomain: 'annas-archive.gl',
-  nyaaDomain: 'nyaa.si',
-  lastUpdated: new Date().toISOString()
-}
-
-// 配置存储在文件中，可动态修改
-fs.writeFileSync('booksearch-config.json', JSON.stringify(config))
-```
-
-**技术实现（进度保存防抖）**：
-
-```javascript
-// 防止初始值覆盖正确进度
-let isProgressLoaded = false
-
-async function handleRead(row) {
-  // 先加载进度
-  const progress = await api.books.getProgress(row.id)
-  
-  // 恢复滚动位置
-  if (progress) {
-    scrollToPosition(progress.current_chapter)
-  }
-  
-  // 进度加载完成后才设置 currentBook
-  currentBook.value = row
-  isProgressLoaded = true
-}
-
-// 保存前检查标志位
-function saveProgress() {
-  if (!currentBook.value || !isProgressLoaded) return
-  // 保存逻辑...
-}
-```
 
 ---
 
@@ -544,22 +211,7 @@ function saveProgress() {
 - **一键克隆**：自动克隆仓库到服务器
 - **文件浏览**：在线浏览仓库文件结构
 - **提交历史**：查看最近的提交记录
-
-**技术实现**：
-
-```javascript
-// 后端克隆仓库
-router.post('/clone', async (req, res) => {
-  const { url, name } = req.body
-  const targetPath = path.join(codeDir, name)
-  
-  // 使用 simple-git 克隆
-  const git = simpleGit()
-  await git.clone(url, targetPath)
-  
-  res.json({ success: true, path: targetPath })
-})
-```
+- **README预览**：渲染 README.md，支持图片转 base64
 
 ---
 
@@ -578,193 +230,50 @@ router.post('/clone', async (req, res) => {
 **核心功能**：
 - **Bangumi 爬虫**：搜索动漫信息，自动获取封面、评分、简介
 - **收藏标记**：想看、看过、正在看
-- **评分系统**：显示 Bangumi 评分
-- **状态管理**：收藏、取消收藏
-- **懒加载优化**：使用缓存机制，避免重复请求
-- **🔍 在线资源搜索**：爬取 Nyaa 搜索动漫资源
+- **评分系统**：显示 Bangumi 评分 + 个人评分
+- **状态管理**：收藏、取消收藏、隐藏
+- **懒加载优化**：使用 IndexedDB 缓存机制，避免重复请求
+- **🔍 多源资源搜索**（新增）：支持 Nyaa、DMHY、ACG.RIP、蜜柑计划等资源站点
 
-**Bangumi API 爬虫**：
+**多源资源搜索实现**：
 
-使用 Bangumi 官方 API 获取动漫信息：
+支持两种搜索模式：
 
 ```javascript
-const BANGUMI_API_V0 = 'https://api.bgm.tv/v0'
-
-// Bangumi API 要求自定义 User-Agent
-const BANGUMI_HEADERS = {
-  'User-Agent': 'PersonalResourceManager/1.0 (https://github.com/user/pr-manager)'
-}
-
-// 搜索动漫
-router.get('/search', async (req, res) => {
-  const { keyword } = req.query
-  
-  // 使用 v0 API POST 请求
-  const response = await axios.post(`${BANGUMI_API_V0}/search/subjects`, {
-    keyword,
-    type: [2],  // 动画类型（数组格式）
-    limit: 25
-  }, {
-    httpsAgent: proxyAgent,  // 使用 Clash 代理
-    timeout: 15000,
-    headers: BANGUMI_HEADERS
-  })
-  
-  // 过滤只保留动画（type=2）
-  const results = response.data.data.filter(item => item.type === 2)
-  
-  // 模糊匹配排序
-  const keywordLower = keyword.toLowerCase()
-  const scoredResults = results.map(item => {
-    let score = 0
-    const nameCn = (item.name_cn || '').toLowerCase()
-    
-    if (nameCn === keywordLower) score += 100
-    else if (nameCn.includes(keywordLower)) score += 50
-    if (item.name.toLowerCase().includes(keywordLower)) score += 30
-    
-    return { ...item, score }
-  }).sort((a, b) => b.score - a.score)
-  
-  res.json({ data: scoredResults })
-})
-
-// 获取动漫详情（并行请求）
-async function getAnimeDetail(bangumiId) {
-  const [subjectRes, charactersRes, personsRes] = await Promise.all([
-    axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}`),
-    axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}/characters`),
-    axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}/persons`)
+// 1. 并行搜索（同时多源）
+async function parallelSearch(keyword) {
+  const results = await Promise.allSettled([
+    searchNyaa(keyword),
+    searchDMHY(keyword),
+    searchAcgRip(keyword),
+    searchMikan(keyword)
   ])
   
   return {
-    subject: subjectRes.data,      // 基本信息
-    characters: charactersRes.data, // 角色信息
-    persons: personsRes.data        // 制作人员
+    nyaa: results[0].status === 'fulfilled' ? results[0].value : [],
+    dmhy: results[1].status === 'fulfilled' ? results[1].value : [],
+    acgrip: results[2].status === 'fulfilled' ? results[2].value : [],
+    mikan: results[3].status === 'fulfilled' ? results[3].value : []
   }
 }
-```
 
-**导入动漫流程**：
-
-```javascript
-// 导入动漫（支持前端传递数据）
-router.post('/import', async (req, res) => {
-  const { bangumiId, animeData } = req.body
+// 2. 顺序优先搜索（按优先级依次尝试）
+async function sequentialSearch(keyword) {
+  const sources = ['nyaa', 'dmhy', 'acgrip', 'mikan']
   
-  let animeInfo
-  if (animeData) {
-    // 前端传递了完整数据，直接使用
-    animeInfo = animeData
-  } else {
-    // 从 Bangumi API 获取
-    const detail = await getAnimeDetail(bangumiId)
-    animeInfo = detail.subject
-  }
-  
-  // 下载封面图片并转 base64
-  let coverImageData = null
-  if (animeInfo.images?.common) {
-    const imageResponse = await axios.get(animeInfo.images.common, {
-      responseType: 'arraybuffer'
-    })
-    coverImageData = `data:image/jpeg;base64,${Buffer.from(imageResponse.data).toString('base64')}`
-  }
-  
-  // 从 infobox 提取详细信息
-  const infobox = animeInfo.infobox || []
-  const author = extractFromInfobox(infobox, '作者') || extractFromInfobox(infobox, '原作')
-  const director = extractFromInfobox(infobox, '导演')
-  const studio = extractFromInfobox(infobox, '动画制作')
-  
-  // 保存到数据库
-  db.prepare(`INSERT INTO anime (...) VALUES (?, ?, ?, ...)`).run(...)
-})
-```
-
-**在线资源搜索爬虫（Nyaa）**：
-
-```javascript
-// 搜索动漫资源（Nyaa）
-router.get('/resources/search', async (req, res) => {
-  const { keyword } = req.query
-  
-  // Nyaa 搜索（动漫分类 1_0）
-  const searchUrl = `https://nyaa.si/?f=0&c=1_0&q=${encodeURIComponent(keyword)}`
-  
-  const response = await axios.get(searchUrl, {
-    httpsAgent: proxyAgent,
-    timeout: 15000,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 ...',
-      'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+  for (const source of sources) {
+    try {
+      const results = await searchBySource(source, keyword)
+      if (results.length > 0) {
+        return { source, results }
+      }
+    } catch (error) {
+      console.error(`${source} 搜索失败:`, error)
     }
-  })
-  
-  const $ = cheerio.load(response.data)
-  const results = []
-  
-  // 解析搜索结果
-  $('tr.success, tr.default').each((i, elem) => {
-    results.push({
-      title: $(elem).find('a[title]').attr('title'),
-      torrent: $(elem).find('a[href*="download"]').attr('href'),
-      size: $(elem).find('td:nth-child(4)').text(),
-      seeders: $(elem).find('td:nth-child(6)').text(),
-      leechers: $(elem).find('td:nth-child(7)').text()
-    })
-  })
-  
-  res.json({ data: results })
-})
-```
-
-**获取关联作品**：
-
-```javascript
-// 获取前传、续集等关联作品
-router.get('/relations/:bangumiId', async (req, res) => {
-  const response = await axios.get(
-    `${BANGUMI_API_V0}/subjects/${req.params.bangumiId}/subjects`
-  )
-  
-  // 只保留前传和续集
-  const relations = response.data.filter(item => {
-    const relation = item.relation || ''
-    return relation.includes('前传') || 
-           relation.includes('续集') ||
-           relation.includes('Prequel') ||
-           relation.includes('Sequel')
-  })
-  
-  res.json({ data: relations })
-})
-```
-
-**技术实现**：
-
-```javascript
-// 前端缓存优化
-const cacheLoaded = ref(false)
-const lastFilterStatus = ref('')
-
-async function loadAnime(forceReload = false) {
-  // 如果筛选条件没变化且已缓存，则不重新加载
-  if (!forceReload && cacheLoaded.value && 
-      filterStatus.value === lastFilterStatus.value) {
-    return
   }
   
-  // 加载数据...
-  cacheLoaded.value = true
+  return { source: null, results: [] }
 }
-
-// 组件激活时检查缓存
-onActivated(() => {
-  if (!cacheLoaded.value) {
-    loadAnime()
-  }
-})
 ```
 
 ---
@@ -779,37 +288,281 @@ onActivated(() => {
 
 ---
 
-## 三、开发过程中遇到的难点
+## 三、安全与权限系统（新增）
+
+### 权限管理系统
+
+实现了完整的权限管理系统，支持**管理员**和**游客**两种角色。
+
+#### 管理员
+- 拥有完整的读写权限
+- 可以执行所有操作，包括创建、更新、删除等
+- 可以修改密码
+- Token 有效期：7天（可配置）
+- 登录方式：用户名 + 密码登录
+
+#### 游客
+- 只拥有只读权限
+- 可以浏览所有资源
+- 无法执行任何写操作（创建、更新、删除）
+- Token 有效期：24小时
+- 登录方式：点击"游客访问"按钮
+- 使用 sessionStorage 存储 token（关闭浏览器后自动清除）
+
+**后端权限中间件**：
+
+```javascript
+// 认证中间件
+function authenticateToken(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1]
+  
+  if (!token) {
+    return res.status(401).json({ message: '未登录' })
+  }
+  
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET)
+    req.user = decoded
+    next()
+  } catch (error) {
+    return res.status(401).json({ message: 'Token无效' })
+  }
+}
+
+// 写权限检查
+function requireWritePermission(req, res, next) {
+  if (req.user.isGuest) {
+    return res.status(403).json({
+      message: '游客无权执行此操作',
+      code: 'GUEST_NO_PERMISSION'
+    })
+  }
+  next()
+}
+
+// 路由保护
+router.post('/documents/upload', authenticateToken, requireWritePermission, uploadDocument)
+```
+
+---
+
+### 安全加固措施
+
+#### 1. 速率限制策略
+
+使用 `express-rate-limit` 实现多级速率限制：
+
+| 接口类型 | 限制规则 | 说明 |
+|---------|---------|------|
+| **登录接口** | 5次/5分钟 | 防止暴力破解密码 |
+| **私密空间密码** | 3次/5分钟 | 防止暴力破解私密空间 |
+| **写操作** | 20次/分钟 | 管理员操作，正常使用不会触发 |
+| **读操作** | 200次/分钟 | 正常浏览，防止爬虫滥用 |
+| **Bangumi API** | 15次/分钟 | 外部API调用 |
+| **资源爬虫** | 5次/分钟 | Nyaa/DMHY等，非常严格 |
+
+**缓存绕过机制**：缓存命中的请求不消耗速率限制次数。
+
+```javascript
+// 智能速率限制
+export const scraperLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  skip: (req) => req.cacheHit === true, // 缓存命中跳过
+  keyGenerator: (req) => {
+    const userId = req.user?.id || 'anonymous'
+    return `scraper-${userId}-${req.ip}`
+  }
+})
+```
+
+#### 2. 安全响应头
+
+使用 Helmet 中间件添加安全头：
+
+```javascript
+import helmet from 'helmet'
+
+app.use(helmet({
+  frameguard: { action: 'deny' },        // 防止点击劫持
+  contentSecurityPolicy: {                // 内容安全策略
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"]
+    }
+  },
+  xssFilter: true,                        // XSS 过滤器
+  noSniff: true                           // 防止 MIME 嗅探
+}))
+```
+
+#### 3. CORS 限制
+
+**生产环境**：只允许白名单域名访问  
+**开发环境**：允许所有来源（方便调试）
+
+```javascript
+const corsOptions = {
+  origin: (origin, callback) => {
+    const allowedOrigins = process.env.CORS_ORIGIN?.split(',') || []
+    
+    if (process.env.NODE_ENV === 'development') {
+      callback(null, true) // 开发环境允许所有
+    } else if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true)
+    } else {
+      callback(new Error('不允许的来源'))
+    }
+  },
+  credentials: true
+}
+
+app.use(cors(corsOptions))
+```
+
+---
+
+## 四、性能优化（新增）
+
+### Redis 缓存系统
+
+集成 Redis 缓存，用于提升接口响应速度、降低数据库压力。
+
+#### 核心收益
+
+| 优化项 | 优化前 | 优化后 | 提升 |
+|--------|--------|--------|------|
+| 外部API调用 | 1-5秒 | 10-50ms | 90%+ |
+| 数据库查询 | 100-500ms | 10-50ms | 70%+ |
+| Git命令执行 | 100-800ms | 10-50ms | 80%+ |
+
+#### 已缓存接口
+
+覆盖 9 个模块，24 个接口：
+
+| 模块 | 接口 | TTL |
+|------|------|-----|
+| 文档管理 | 分类列表、标签列表 | 5-10分钟 |
+| 音乐管理 | 艺术家列表、专辑列表 | 30分钟 |
+| 动漫管理 | Bangumi搜索、动漫详情、资源搜索 | 30分钟-1小时 |
+| 代码管理 | GitHub信息、README、提交历史 | 5-30分钟 |
+| 博客管理 | 文章列表、分类树、标签列表 | 5-30分钟 |
+
+#### 缓存实现
+
+```javascript
+import { cache, CacheTTL } from '../utils/cache.js'
+
+// 缓存中间件
+async function withCache(req, res, next, cacheKey, ttl, fetchFn) {
+  // 1. 尝试从缓存获取
+  const cached = await cache.get(cacheKey)
+  if (cached) {
+    req.cacheHit = true // 标记缓存命中
+    return res.json(cached)
+  }
+  
+  // 2. 执行查询
+  const data = await fetchFn()
+  
+  // 3. 保存到缓存
+  await cache.set(cacheKey, data, ttl)
+  
+  res.json(data)
+}
+
+// 使用示例
+router.get('/categories', async (req, res, next) => {
+  const cacheKey = 'doc:categories'
+  await withCache(req, res, next, cacheKey, CacheTTL.MEDIUM, async () => {
+    return await db.prepare('SELECT * FROM categories').all()
+  })
+})
+```
+
+#### 自动降级机制
+
+当 Redis 不可用时，系统会自动降级到内存缓存：
+
+```javascript
+class CacheManager {
+  constructor() {
+    this.redisClient = null
+    this.memoryCache = new Map()
+  }
+  
+  async get(key) {
+    // 优先使用 Redis
+    if (this.redisClient) {
+      try {
+        const data = await this.redisClient.get(key)
+        if (data) return JSON.parse(data)
+      } catch (error) {
+        console.error('[Redis] 读取失败，降级到内存缓存')
+      }
+    }
+    
+    // 降级到内存缓存
+    return this.memoryCache.get(key)
+  }
+  
+  async set(key, value, ttl) {
+    // 双写：Redis + 内存
+    if (this.redisClient) {
+      try {
+        await this.redisClient.setex(key, ttl, JSON.stringify(value))
+      } catch (error) {
+        console.error('[Redis] 写入失败')
+      }
+    }
+    
+    // 内存缓存（带过期时间）
+    this.memoryCache.set(key, value)
+    setTimeout(() => this.memoryCache.delete(key), ttl * 1000)
+  }
+}
+```
+
+---
+
+### 数据库索引优化
+
+为常用查询字段创建索引：
+
+```sql
+-- 音乐表索引
+CREATE INDEX idx_music_artist ON music(artist);
+CREATE INDEX idx_music_album ON music(album);
+CREATE INDEX idx_music_title ON music(title);
+CREATE INDEX idx_music_created_at ON music(created_at);
+
+-- 文档表索引
+CREATE INDEX idx_documents_category ON documents(category);
+CREATE INDEX idx_documents_title ON documents(title);
+
+-- 动漫表索引
+CREATE INDEX idx_anime_title ON anime(title);
+CREATE INDEX idx_anime_status ON anime(status);
+
+-- 博客表索引
+CREATE INDEX idx_blog_posts_status ON blog_posts(status);
+CREATE INDEX idx_blog_posts_created_at ON blog_posts(created_at);
+```
+
+---
+
+## 五、开发过程中遇到的难点
 
 ### 难点1：SQLite从异步API迁移到同步API
 
 **问题背景**：
 
-最初使用 `sqlite3` 库（异步API），但在 Alpine Linux Docker 容器中编译原生模块失败：
-
-```
-Error: Cannot find module '../build/Release/node_sqlite3.node'
-```
+最初使用 `sqlite3` 库（异步API），但在 Alpine Linux Docker 容器中编译原生模块失败。
 
 **解决方案**：
 
-迁移到 `better-sqlite3`（同步API），步骤：
-
-```javascript
-// ❌ 旧代码（异步）
-db.all("SELECT * FROM users", [], (err, rows) => {
-  if (err) throw err
-  console.log(rows)
-})
-
-// ✅ 新代码（同步）
-const rows = db.prepare("SELECT * FROM users").all()
-console.log(rows)
-```
-
-**经验教训**：
-- 优先选择纯 JavaScript 实现的库，避免原生模块编译问题
-- Docker 部署时，`alpine` 镜像缺少编译工具，改用 `slim` 镜像
+迁移到 `better-sqlite3`（同步API），并改用 `slim` 镜像。
 
 ---
 
@@ -817,106 +570,19 @@ console.log(rows)
 
 **问题背景**：
 
-我希望在线预览 PDF 文件，但遇到以下问题：
-1. PDF.js 版本不兼容（4.0.379 使用私有字段）
-2. 二进制文件传输编码问题
-3. Worker 加载失败
+PDF.js 版本不兼容（4.0.379 使用私有字段），导致 Vite 打包失败。
 
 **解决方案**：
 
-**后端处理**：
-```javascript
-router.get('/:id/content', (req, res) => {
-  const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
-  
-  const binaryFormats = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'zip', 'rar']
-  const ext = doc.file_path.split('.').pop().toLowerCase()
-  
-  if (binaryFormats.includes(ext)) {
-    // 返回 base64 编码
-    const fileBuffer = fs.readFileSync(doc.file_path)
-    const base64 = fileBuffer.toString('base64')
-    res.json({ content: base64, isBase64: true })
-  } else {
-    // 文本文件直接返回内容
-    const content = fs.readFileSync(doc.file_path, 'utf-8')
-    res.json({ content })
-  }
-})
-```
-
-**前端处理**：
-```javascript
-async function loadPDF(doc) {
-  const response = await api.documents.getContent(doc.id)
-  const base64 = response.data.content
-  
-  // Base64 转 Uint8Array
-  const binaryString = atob(base64)
-  const bytes = new Uint8Array(binaryString.length)
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i)
-  }
-  
-  // 使用 PDF.js 加载
-  const pdf = await pdfjsLib.getDocument({ data: bytes }).promise
-}
-```
-
-**版本降级**：
-```json
-{
-  "dependencies": {
-    "pdfjs-dist": "3.11.174"  // 从 4.0.379 降级
-  }
-}
-```
+降级到 3.11.174 版本，并使用 CDN 加载 Worker。
 
 ---
 
 ### 难点3：音乐文件元数据解析
 
-**问题背景**：
-
-需要从音乐文件中提取：
-- 歌曲名称、艺术家、专辑
-- 封面图片
-- 时长
-
-最初尝试使用 `music-metadata` 库，但发现：
-- 部分 FLAC 文件报错 `Invalid FLAC preamble`
-- NCM 转换的文件经常无法解析
-- 封面提取不稳定
-
 **解决方案**：
 
-改用 **FFprobe**（FFmpeg 的一部分）：
-
-```javascript
-// 使用 FFprobe 解析元数据
-const { exec } = require('child_process')
-
-async function parseMusicMetadata(filePath) {
-  // 获取基本信息
-  const infoCommand = `ffprobe -v quiet -print_format json -show_format "${filePath}"`
-  const infoResult = await execPromise(infoCommand)
-  const data = JSON.parse(infoResult)
-  
-  // 提取封面图片
-  const coverCommand = `ffmpeg -i "${filePath}" -an -vcodec copy -f image2pipe - | base64`
-  const coverResult = await execPromise(coverCommand)
-  
-  return {
-    title: data.format.tags?.title,
-    artist: data.format.tags?.artist,
-    album: data.format.tags?.album,
-    duration: data.format.duration,
-    cover: `data:image/jpeg;base64,${coverResult}`
-  }
-}
-```
-
-**三层降级策略**：
+采用三层降级策略：
 
 ```
 第一层：FFprobe（推荐，需要安装 FFmpeg）
@@ -926,51 +592,13 @@ async function parseMusicMetadata(filePath) {
 第三层：文件名推断（兜底）
 ```
 
-这样即使 FFprobe 失败，至少也能获取艺术家名字。
-
 ---
 
 ### 难点4：Bangumi 爬虫与代理配置
 
-**问题背景**：
-
-动漫管理模块需要调用 Bangumi API，但：
-1. Bangumi 网站在国外，直连不稳定
-2. Docker 容器内无法直接使用系统代理
-
 **解决方案**：
 
-部署 Clash 代理：
-
-```yaml
-# docker-compose.clash.yml
-services:
-  clash:
-    image: centralx/clash:latest
-    ports:
-      - "7890:7890"   # HTTP代理
-      - "7891:7891"   # SOCKS5代理
-    networks:
-      - pr-network
-
-networks:
-  pr-network:
-    external: true
-```
-
-**后端使用代理**：
-
-```javascript
-const { HttpsProxyAgent } = require('https-proxy-agent')
-const axios = require('axios')
-
-const agent = new HttpsProxyAgent(process.env.HTTP_PROXY || 'http://clash:7890')
-
-const response = await axios.get('https://api.bgm.tv/search/xxx', {
-  httpsAgent: agent,
-  timeout: 15000
-})
-```
+部署 Clash 代理，后端使用 `https-proxy-agent` 代理请求。
 
 ---
 
@@ -978,74 +606,34 @@ const response = await axios.get('https://api.bgm.tv/search/xxx', {
 
 **问题背景**：
 
-电子书阅读器在打开时会丢失进度：
-1. 对话框打开时立即触发 `visibilitychange` 事件
-2. 此时滚动位置还是初始值 0
-3. 错误的初始值覆盖了正确进度
+电子书阅读器在打开时会丢失进度。
 
 **解决方案**：
 
-添加加载标志位：
+添加加载标志位，确保进度加载完成后才保存。
+
+---
+
+### 难点6：速率限制的信任代理问题
+
+**问题背景**：
+
+使用反向代理后，`express-rate-limit` 报错 `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR`。
+
+**解决方案**：
+
+在 Express 应用中配置信任代理：
 
 ```javascript
-let isProgressLoaded = false
-
-async function handleRead(row) {
-  // 先加载进度
-  const progress = await api.books.getProgress(row.id)
-  
-  // 恢复滚动位置
-  if (progress) {
-    scrollToPosition(progress.current_chapter)
-  }
-  
-  // 进度加载完成后才设置 currentBook
-  currentBook.value = row
-  isProgressLoaded = true
-}
-
-function saveProgress() {
-  if (!currentBook.value || !isProgressLoaded) return
-  // 保存逻辑...
-}
+// 信任第一层代理
+app.set('trust proxy', 1)
 ```
 
 ---
 
-### 难点6：SQL查询的多个坑
-
-**问题1：字符串引号错误**
-
-```javascript
-// ❌ 错误（SQLite把双引号当作标识符）
-const sql = `SELECT * FROM music WHERE cover_image != ""`
-
-// ✅ 正确（字符串用单引号）
-const sql = `SELECT * FROM music WHERE cover_image != ''`
-```
-
-**问题2：路由顺序冲突**
-
-```javascript
-// ❌ 错误顺序（/:id 会匹配 /artists）
-router.get('/:id/cover', ...)
-router.get('/artists', ...)
-
-// ✅ 正确顺序（具体路径在前）
-router.get('/artists', ...)
-router.get('/:id/cover', ...)
-```
-
----
-
-## 四、部署架构
+## 六、部署架构
 
 ### NAS 部署
-
-选择在 NAS 上部署的原因：
-- ✅ 24小时开机，随时访问
-- ✅ 本地存储，数据安全
-- ✅ 内网穿透，远程访问
 
 **目录结构**：
 
@@ -1081,6 +669,8 @@ services:
     environment:
       - NODE_ENV=production
       - JWT_SECRET=${JWT_SECRET}
+      - DEFAULT_PASSWORD=${DEFAULT_PASSWORD}
+      - CORS_ORIGIN=https://your-domain.com
       - HTTP_PROXY=http://clash:7890
     networks:
       - pr-network
@@ -1096,73 +686,47 @@ services:
     networks:
       - pr-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: pr-manager-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - pr-network
+
 networks:
   pr-network:
     external: true
-```
 
-### 性能优化
-
-1. **数据库索引**：
-```sql
-CREATE INDEX idx_documents_category ON documents(category);
-CREATE INDEX idx_music_artist ON music(artist);
-CREATE INDEX idx_blog_posts_status ON blog_posts(status);
-```
-
-2. **前端懒加载**：
-```javascript
-const cacheLoaded = ref(false)
-
-async function loadData(forceReload = false) {
-  if (!forceReload && cacheLoaded.value) return
-  // 加载数据...
-  cacheLoaded.value = true
-}
-
-onActivated(() => {
-  if (!cacheLoaded.value) loadData()
-})
-```
-
-3. **后端统计优化**：
-```javascript
-// 使用 COUNT 查询，性能远高于加载全部数据
-app.get('/api/stats', (req, res) => {
-  const stats = {
-    documents: db.prepare('SELECT COUNT(*) as count FROM documents').get()?.count || 0,
-    music: db.prepare('SELECT COUNT(*) as count FROM music').get()?.count || 0,
-    blog: {
-      total: db.prepare('SELECT COUNT(*) as count FROM blog_posts').get()?.count || 0,
-      published: db.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'published'").get()?.count || 0
-    }
-  }
-  res.json({ data: stats })
-})
+volumes:
+  redis-data:
 ```
 
 ---
 
-## 五、未来规划
+## 七、未来规划
+
+### 已完成功能
+
+- ✅ Redis 缓存系统
+- ✅ 权限管理系统（管理员 + 游客）
+- ✅ 歌词功能（多源搜索、双语歌词）
+- ✅ 音乐均衡器
+- ✅ 动漫多源资源搜索
+- ✅ 安全加固（速率限制、安全头、CORS）
+- ✅ 性能优化（数据库索引、查询优化）
 
 ### 待实现功能
 
 1. **全文搜索**：集成 SQLite FTS5 全文搜索引擎
 2. **移动端适配**：响应式设计，支持手机访问
-3. **多用户支持**：用户隔离，权限管理
-4. **数据导出**：支持导出为 Markdown/JSON
-5. **API 开放**：提供公开 API，支持第三方集成
-
-### 技术改进
-
-1. **后端重构**：考虑使用 Fastify 提升性能
-2. **数据库迁移**：考虑 PostgreSQL（如果数据量增长）
-3. **缓存层**：引入 Redis 缓存热点数据
-4. **监控告警**：集成 Prometheus + Grafana
+3. **数据导出**：支持导出为 Markdown/JSON
+4. **API 开放**：提供公开 API，支持第三方集成
 
 ---
 
-## 六、总结
+## 八、总结
 
 ### 项目成果
 
@@ -1171,7 +735,9 @@ app.get('/api/stats', (req, res) => {
 1. ✅ **全栈开发能力**：从前端到后端到部署，完整闭环
 2. ✅ **数据库设计经验**：从表结构到索引优化
 3. ✅ **Docker 实践**：容器化部署、网络配置
-4. ✅ **问题解决能力**：遇到问题独立分析和解决
+4. ✅ **安全意识**：速率限制、安全头、权限控制
+5. ✅ **性能优化**：缓存策略、查询优化
+6. ✅ **问题解决能力**：遇到问题独立分析和解决
 
 ### 技术心得
 
@@ -1179,6 +745,8 @@ app.get('/api/stats', (req, res) => {
 2. **架构设计要留余地**：考虑未来扩展性
 3. **代码质量要重视**：注释、文档、测试缺一不可
 4. **用户体验要关注**：性能优化、交互细节
+5. **安全防护不能少**：生产环境必须做安全加固
+6. **缓存是性能利器**：合理的缓存策略能大幅提升性能
 
 ### 开源分享
 
@@ -1186,8 +754,9 @@ app.get('/api/stats', (req, res) => {
 
 ---
 
-**最后更新时间**：2026-03-27
-**项目状态**：✅ 持续开发中
+**最后更新时间**：2026-04-14  
+**项目状态**：✅ 持续开发中  
+**版本**：v2.0.0
 
 ---
 
@@ -1198,22 +767,33 @@ app.get('/api/stats', (req, res) => {
 - `frontend/src/views/Documents.vue` - 文档管理组件
 - `frontend/src/views/Music.vue` - 音乐管理组件
 - `frontend/src/views/Books.vue` - 书籍阅读器
+- `frontend/src/views/Anime.vue` - 动漫管理组件
 - `frontend/src/components/MediaPlayer.vue` - 全局音乐播放器
+- `frontend/src/components/LyricsWindow.vue` - 歌词窗口组件
+- `frontend/src/components/EqualizerPanel.vue` - 均衡器面板组件
 
 ### 后端核心文件
 - `backend/src/routes/blog.js` - 博客API
 - `backend/src/routes/documents.js` - 文档API
-- `backend/src/routes/music.js` - 音乐API（含 FFprobe 解析）
+- `backend/src/routes/music.js` - 音乐API（含 FFprobe 解析、歌词）
 - `backend/src/routes/anime.js` - 动漫爬虫
+- `backend/src/middlewares/auth.js` - 认证中间件
+- `backend/src/middlewares/security.js` - 安全中间件
 - `backend/src/config/database.js` - 数据库初始化
+- `backend/src/utils/cache.js` - 缓存工具类
+- `backend/src/utils/redis.js` - Redis连接管理
 
 ### 配置文件
 - `docker-compose.yml` - 主部署配置
 - `docker-compose.clash.yml` - 代理配置
-- `.env` - 环境变量
+- `.env.production` - 生产环境变量
 
 ### 文档文件
 - `docs/DATABASE_SCHEMA.md` - 数据库表结构
 - `docs/CLASH_DEPLOYMENT.md` - 代理部署指南
 - `docs/FFMPEG_SETUP.md` - FFmpeg 安装说明
-- `docs/ALL_FIXES_SUMMARY.md` - 问题修复总结
+- `docs/REDIS_CACHE_GUIDE.md` - Redis缓存指南
+- `docs/PERMISSION_SYSTEM.md` - 权限系统说明
+- `docs/LYRICS_FEATURE.md` - 歌词功能文档
+- `docs/SECURITY_HARDENING_GUIDE.md` - 安全加固指南
+- `docs/EXTERNAL_API_RATE_LIMIT.md` - 外部API速率限制说明

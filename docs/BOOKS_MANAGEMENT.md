@@ -42,13 +42,16 @@
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
 | id | INTEGER | 主键，自增 |
-| book_id | INTEGER | 书籍 ID，唯一，外键级联删除 |
+| book_id | INTEGER | 书籍 ID，外键级联删除 |
+| user_id | INTEGER | 用户 ID，支持多用户独立进度，外键级联删除 |
 | current_page | INTEGER | 当前章节索引 |
-| current_chapter | TEXT | 滚动位置（0-1） |
+| cfi | TEXT | EPUB CFI 定位字符串（精准定位） |
 | progress | REAL | 总体进度百分比 |
 | font_size | INTEGER | 字体大小，默认 16 |
 | created_at | DATETIME | 创建时间 |
 | updated_at | DATETIME | 更新时间 |
+
+**复合唯一约束**: `UNIQUE(book_id, user_id)` - 确保每本书每个用户只有一条进度记录
 
 ### 4. book_chapters 表（书籍目录表）
 
@@ -102,8 +105,8 @@
 | 方法 | 路由 | 功能 | 参数 | 返回值 |
 |------|------|------|------|--------|
 | GET | `/ebooks/:id/content` | 获取书籍内容 | `token` (query/header) | TXT: `{ content, totalPages, fileType, title }` / EPUB: `{ chapters, toc, fileType, title }` / PDF: `{ filePath, totalPages, fileType, title }` |
-| GET | `/ebooks/:id/progress` | 获取阅读进度 | - | `{ currentPage, scrollPosition, progress, fontSize }` |
-| POST | `/ebooks/:id/progress` | 保存阅读进度 | `{ currentPage, scrollPosition, progress, fontSize }` | `{ message }` |
+| GET | `/ebooks/:id/progress` | 获取阅读进度 | - | `{ currentPage, cfi, progress, fontSize }` |
+| POST | `/ebooks/:id/progress` | 保存阅读进度 | `{ currentPage, cfi, progress, fontSize }` | `{ message }` |
 | DELETE | `/ebooks/:id/cache` | 清除书籍缓存 | - | `{ message }` |
 | GET | `/ebooks/:id/resource` | 获取 EPUB 资源 | `path, token` | 资源文件（图片/CSS/字体） |
 | GET | `/ebooks/:id/cover` | 获取封面图片 | - | 图片文件 |
@@ -177,8 +180,8 @@
 #### 进度保存
 
 - 当前章节索引
-- 章节内滚动位置（0-1）
-- 总体阅读进度
+- CFI 精准定位（EPUB 标准定位字符串）
+- 总体阅读进度百分比
 - 字体设置
 
 #### 自动保存策略
@@ -197,7 +200,254 @@
 
 ---
 
-## 五、技术实现细节
+## 五、PC端与移动端功能实现
+
+### 功能对比概览
+
+| 功能模块 | PC端 | 移动端 | 说明 |
+|---------|------|--------|------|
+| 书籍列表展示 | ✅ 封面/列表双视图 | ✅ 封面卡片瀑布流 | PC端支持表格列表，移动端针对触摸优化 |
+| 分类管理 | ✅ 拖拽排序 | ✅ 长按排序 | 交互方式适配不同设备 |
+| 上传功能 | ✅ 分片上传 | ✅ 分片上传 | 两端功能一致 |
+| 内置阅读器 | ✅ 单章模式 | ✅ 滚动流模式 | 架构差异详见下文 |
+| 阅读进度 | ✅ CFI精准定位 | ✅ CFI精准定位 | 基于EPUB CFI标准 |
+| 资源搜索 | ✅ 安娜+Nyaa | ✅ 安娜+Nyaa | 两端功能一致 |
+
+---
+
+### PC端功能实现
+
+**文件路径**: `frontend/src/pc/pages/BooksPC.vue`
+
+#### 1. 书籍管理界面
+
+**布局设计**:
+- 顶部搜索栏（搜索、排序、视图切换）
+- 分类浏览区域（网格卡片布局）
+- 书籍列表区（封面视图/列表视图）
+
+```
+┌─────────────────────────────────────────────┐
+│  [搜索框] [排序] [视图切换: 封面|列表]        │
+├─────────────────────────────────────────────┤
+│  [分类卡片1] [分类卡片2] [分类卡片3]         │
+│  [分类卡片4] ...                             │
+├─────────────────────────────────────────────┤
+│  [书籍封面1] [书籍封面2] [书籍封面3]         │
+│  [书籍封面4] [书籍封面5] ...                 │
+└─────────────────────────────────────────────┘
+```
+
+**核心功能**:
+| 功能 | 实现方式 |
+|-----|---------|
+| 视图切换 | `viewMode` 状态控制，封面视图使用 CSS Grid 布局 |
+| 分类筛选 | 点击分类卡片进入分类，显示该分类下的书籍 |
+| 批量操作 | 列表视图支持多选书籍后批量删除 |
+| 排序 | 支持最近阅读、书名、作者、年份、上传时间排序 |
+
+#### 2. 阅读器实现（单章模式）
+
+**架构设计**:
+```
+ReaderDialog (弹窗容器)
+├── reader-sidebar (目录侧边栏)
+│   └── toc-list → 点击跳转章节
+├── reader-content (内容区)
+│   └── book-text (单章节内容)
+│       └── v-html="currentChapterContent"
+└── reader-footer (底部栏)
+    └── NativeProgress (全文进度条)
+```
+
+**核心特点**:
+1. **单章节渲染**: 一次只渲染当前章节内容
+   ```javascript
+   const currentChapterContent = computed(() => {
+     const chapter = bookChapters.value[currentChapterIndex.value]
+     return chapter?.content || ''
+   })
+   ```
+
+2. **目录导航**: 左侧可折叠目录，点击章节跳转
+   - 目录项高亮当前阅读章节
+   - 支持 NCX (EPUB2) 和 NAV (EPUB3) 格式
+
+3. **进度追踪**: 
+   - 底部进度条显示章节内阅读进度
+   - 基于字符偏移计算总体进度百分比
+
+4. **CFI定位**:
+   - 保存进度时记录 CFI (Canonical Fragment Identifier)
+   - 恢复时调用 `scrollToCFI(container, cfi)` 精准定位
+
+#### 3. 交互细节
+
+| 交互 | 实现 |
+|-----|------|
+| 章节翻页 | 键盘方向键 / 滚轮 / 点击屏幕边缘 |
+| 字体调节 | 底部工具栏按钮，实时生效 |
+| 目录显示/隐藏 | 点击目录按钮或按 Esc |
+| 关闭阅读器 | 点击关闭按钮或按 Esc |
+
+---
+
+### 移动端功能实现
+
+**文件路径**: `frontend/src/mobile/pages/BooksMobile.vue` / `frontend/src/mobile/components/BookReader.vue`
+
+#### 1. 书籍管理界面
+
+**布局设计**:
+- 顶部搜索栏（搜索输入框 + 搜索图标）
+- 横向滚动分类标签栏（全部 / 分类1 / 分类2 / ... / +）
+- 书籍网格布局（2列封面卡片）
+- 右下角浮动上传按钮（FAB）
+
+```
+┌─────────────────────────┐
+│  [搜索书籍...]      [🔍] │
+├─────────────────────────┤
+│ [全部] [分类1] [分类2]..│
+├─────────────────────────┤
+│  ┌─────┐  ┌─────┐      │
+│  │书籍1│  │书籍2│      │
+│  │封面 │  │封面 │      │
+│  └─────┘  └─────┘      │
+│  ┌─────┐  ┌─────┐      │
+│  │书籍3│  │书籍4│      │
+│  │封面 │  │封面 │   [+] │
+│  └─────┘  └─────┘      │
+└─────────────────────────┘
+```
+
+**核心功能**:
+| 功能 | 实现方式 |
+|-----|---------|
+| 分类筛选 | 点击横向标签切换分类，支持全部/具体分类 |
+| 创建分类 | 点击标签栏右侧「+」按钮 |
+| 书籍展示 | 网格卡片展示封面、书名、作者、阅读进度 |
+| 上传按钮 | 右下角浮动按钮，点击打开上传弹窗 |
+| 点击阅读 | 点击书籍卡片进入阅读器 |
+
+#### 2. 阅读器实现（多章节滚动流模式）
+
+**架构设计**:
+```
+book-reader (全屏容器)
+├── reader-header (顶部栏，可隐藏)
+├── reader-content (滚动容器)
+│   ├── top-loading (顶部加载提示)
+│   ├── chapter-block * N (多个章节块)
+│   │   ├── chapter-title
+│   │   └── chapter-content (v-html)
+│   ├── bottom-loading (底部加载提示)
+│   └── load-more (加载更多提示)
+├── reader-footer (底部栏，可隐藏)
+│   ├── 目录按钮
+│   ├── 进度显示 (61.44%)
+│   └── 字号按钮
+├── drawer-overlay (目录抽屉)
+└── drawer-overlay (字号面板)
+```
+
+**核心特点**:
+
+1. **多章节滚动流**:
+   ```javascript
+   // 可见范围控制（渲染当前章及前后缓冲章）
+   const visibleRange = ref({ start: 0, end: 1 })
+   
+   // 计算可见章节（含缓冲）
+   const visibleChapters = computed(() => {
+     return bookChapters.value.slice(start, end).map(ch => ({
+       ...ch,
+       content: loadedChapters.value.get(ch.id) || '',
+       isLoading: !loadedChapters.value.has(ch.id)
+     }))
+   })
+   ```
+
+2. **智能加载策略**:
+   - **统一加载**: 打开书籍时同时加载目标章+相邻章
+   - **边界预加载**: 滚动接近未加载章节时提前加载
+   - **内存管理**: 自动卸载超出缓冲区的章节
+   
+   ```javascript
+   const BUFFER_CHAPTERS = 1  // 缓冲章节数
+   
+   // 清理策略：保留当前章及前后各1章
+   const keepStart = Math.max(0, currentIdx - BUFFER_CHAPTERS)
+   const keepEnd = Math.min(totalChapterCount.value, currentIdx + BUFFER_CHAPTERS + 1)
+   ```
+
+3. **滚动位置保持（无感加载）**:
+   ```javascript
+   // 向上加载前记录锚点
+   const anchorInfo = {
+     chapterIndex: parseInt(anchorEl.dataset.chapterIndex),
+     offsetTop: anchorEl.offsetTop,
+     scrollTop: contentRef.value.scrollTop
+   }
+   
+   // 加载完成后恢复位置
+   const heightAdded = newOffsetTop - anchorInfo.offsetTop
+   contentRef.value.scrollTop = anchorInfo.scrollTop + heightAdded
+   ```
+
+4. **章节检测**:
+   - 基于视口检测当前阅读的章节
+   - 使用视口 20% 位置作为检测点（避免误判）
+   
+   ```javascript
+   const detectionPoint = containerRect.top + containerRect.height * 0.2
+   ```
+
+5. **实时进度更新**:
+   - `requestAnimationFrame` 轮询检测滚动位置
+   - 解决移动端 `scroll` 事件节流导致的进度不更新问题
+
+6. **触摸交互优化**:
+   - 点击内容区显示/隐藏菜单
+   - 滑动翻页边界检测
+   - 目录抽屉从左侧滑出
+
+#### 3. 边界加载控制
+
+```javascript
+// 滚动屏蔽机制：防止快速滚动时的异常跳转
+const scrollBlockState = ref({
+  isBlocking: false,    // 是否正在屏蔽
+  direction: null,      // 'up' | 'down'
+  blockPosition: null,  // 开始屏蔽时的 scrollTop
+  loadingIndex: null    // 正在加载的章节索引
+})
+
+// 冷却时间防止重复加载
+const EDGE_LOAD_COOLDOWN = 500  // ms
+```
+
+---
+
+### PC端与移动端阅读器差异对比
+
+| 特性 | PC端 (单章模式) | 移动端 (滚动流模式) |
+|-----|----------------|-------------------|
+| **渲染方式** | 单章节渲染 | 多章节滚动流 |
+| **章节切换** | 离散翻页 | 连续滚动 |
+| **DOM结构** | `.book-text` 单容器 | `.chapter-block` 多容器 |
+| **进度计算** | CFI 精准定位 | CFI 精准定位 |
+| **图片加载** | 当前章预加载 | 目标章预加载 + 相邻章懒加载 |
+| **内存管理** | 无（单章占用小） | 自动清理缓冲区外的章节 |
+| **CFI生成** | 基于单章结构 | 基于多章结构 |
+| **兼容性** | 移动端CFI降级到章节开头 | PC端CFI降级到章节开头 |
+
+**进度互通性**: 两端都使用 CFI 标准定位，虽然结构差异导致解析时可能降级，但章节定位准确，不影响使用。
+
+
+---
+
+## 六、技术实现细节
 
 ### 1. 电子书格式支持
 
@@ -330,10 +580,22 @@ const metadata = await parseEpubMetadata(finalBuffer)
 ### 3. 阅读进度追踪
 
 ```javascript
-// 进度计算公式
-const progress = (currentChapterIndex / totalChapters + scrollPosition / totalChapters) * 100
+// 进度计算
+// 基于章节索引和 CFI (Canonical Fragment Identifier) 精准定位
+const progress = (currentChapterIndex / totalChapters + chapterScrollProgress / totalChapters) * 100
 
-// 保存策略
+// CFI 生成（基于当前阅读位置）
+const cfi = generateCFI(currentElement, container)
+// 示例: epubcfi(/6/4[id123]!/4/2/2)
+
+// 保存策略（多用户隔离）
+const progressData = {
+  currentPage: currentChapterIndex,
+  cfi: cfi,           // EPUB CFI 定位字符串
+  progress: progress, // 总体进度百分比
+  fontSize: fontSize
+}
+
 // 1. 滚动事件防抖（500ms）自动保存
 let saveTimeout
 reader.addEventListener('scroll', () => {
@@ -368,6 +630,10 @@ document.addEventListener('visibilitychange', () => {
     saveProgress()
   }
 })
+
+// 6. 进度加载标志位（防止初始值被错误保存）
+let isProgressLoaded = false
+// 进度加载完成后再设置 currentBook，避免 visibilitychange 误保存初始值
 ```
 
 ### 4. EPUB 资源处理
@@ -428,20 +694,25 @@ function convertToUTC8(utcTime) {
 
 ---
 
-## 六、关键文件路径
+## 七、关键文件路径
 
 | 功能模块 | 文件路径 |
 |----------|----------|
 | 后端路由 | `backend/src/routes/books.js` |
 | 书籍搜索 | `backend/src/routes/bookSearch.js` |
 | 数据库配置 | `backend/src/config/database.js` |
-| 前端视图 | `frontend/src/views/Books.vue` |
+| 前端入口 | `frontend/src/views/Books.vue` |
+| PC端页面 | `frontend/src/pc/pages/BooksPC.vue` |
+| PC端阅读器 | `frontend/src/components/ReaderDialog.vue` |
+| 移动端页面 | `frontend/src/mobile/pages/BooksMobile.vue` |
+| 移动端阅读器 | `frontend/src/mobile/components/BookReader.vue` |
+| CFI工具 | `frontend/src/utils/epub-cfi.js` |
 | 搜索组件 | `frontend/src/components/BookSearchDialog.vue` |
 | API 定义 | `frontend/src/api/index.js` |
 
 ---
 
-## 七、配置说明
+## 八、配置说明
 
 ### 环境变量
 
@@ -467,7 +738,7 @@ function convertToUTC8(utcTime) {
 
 ---
 
-## 八、使用说明
+## 九、使用说明
 
 ### 1. 上传书籍
 
@@ -500,7 +771,7 @@ function convertToUTC8(utcTime) {
 
 ---
 
-## 九、注意事项
+## 十、注意事项
 
 1. **大文件上传**：超过 100MB 自动分片上传，确保网络稳定
 2. **EPUB 缓存**：首次打开较慢（解析），后续读取缓存
@@ -509,3 +780,5 @@ function convertToUTC8(utcTime) {
 5. **数据库备份**：定期备份 `app.db` 文件
 6. **存储空间**：EPUB 文件解压后可能增大，注意磁盘空间
 7. **悬停提示**：表格书名列使用浏览器原生 title 属性，章节目录也使用原生提示，避免样式冲突
+8. **多用户进度隔离**：不同用户的阅读进度独立保存，互不影响
+9. **CFI 定位**：EPUB 阅读进度使用 CFI 标准定位，比滚动位置更精准

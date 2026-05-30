@@ -165,7 +165,37 @@
 
 ---
 
-## 五、技术实现细节
+## 五、前端架构
+
+### PC/移动端分离架构
+
+采用条件渲染方式实现响应式适配：
+
+**主入口文件** (`frontend/src/views/Documents.vue`):
+```vue
+<template>
+  <DocumentsMobile v-if="isMobile" />
+  <div v-else class="documents">
+    <!-- PC端内容 -->
+  </div>
+</template>
+```
+
+**PC端组件** (`frontend/src/pc/pages/DocumentsPC.vue`):
+- 分类树形侧边栏
+- 表格/卡片双视图
+- 批量操作功能
+- 拖拽排序支持
+
+**移动端组件** (`frontend/src/mobile/pages/DocumentsMobile.vue`):
+- 分类下拉选择
+- 卡片列表布局
+- 底部操作栏
+- 滑动删除支持
+
+---
+
+## 六、技术实现细节
 
 ### 1. 多层级分类结构
 
@@ -379,7 +409,7 @@ function convertToUTC8(utcTime) {
 
 ---
 
-## 六、配置说明
+## 七、配置说明
 
 ### 环境变量
 
@@ -403,19 +433,21 @@ function convertToUTC8(utcTime) {
 
 ---
 
-## 七、关键文件路径
+## 八、关键文件路径
 
 | 功能模块 | 文件路径 |
 |----------|----------|
 | 后端路由 | `backend/src/routes/documents.js` |
 | 数据库配置 | `backend/src/config/database.js` |
 | 存储配置 | `backend/src/config/storage.js` |
-| 前端视图 | `frontend/src/views/Documents.vue` |
+| 前端入口 | `frontend/src/views/Documents.vue` |
+| PC端视图 | `frontend/src/pc/pages/DocumentsPC.vue` |
+| Mobile端视图 | `frontend/src/mobile/pages/DocumentsMobile.vue` |
 | API 定义 | `frontend/src/api/index.js` |
 
 ---
 
-## 八、使用说明
+## 九、使用说明
 
 ### 1. 创建分类
 
@@ -453,7 +485,7 @@ function convertToUTC8(utcTime) {
 
 ---
 
-## 九、注意事项
+## 十、注意事项
 
 1. **文件大小限制**：单文件最大 50MB，超过限制需拆分或压缩
 2. **分类删除**：删除分类前确认是否需要同时删除文件

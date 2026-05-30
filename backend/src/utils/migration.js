@@ -118,7 +118,7 @@ export async function migrateCompressCovers() {
   }
 
   try {
-    // 1. 压缩音乐封面
+    // 压缩音乐封面
     console.log('\n📀 处理音乐封面...')
     const musicRows = db.prepare('SELECT id, title, cover_image FROM music WHERE cover_image IS NOT NULL').all()
     stats.music.total = musicRows.length
@@ -153,7 +153,7 @@ export async function migrateCompressCovers() {
       }
     }
 
-    // 2. 压缩动漫封面
+    // 压缩动漫封面
     console.log('\n🎬 处理动漫封面...')
     const animeRows = db.prepare('SELECT id, title, cover_image FROM anime WHERE cover_image IS NOT NULL').all()
     stats.anime.total = animeRows.length
@@ -188,7 +188,7 @@ export async function migrateCompressCovers() {
       }
     }
 
-    // 3. 压缩游戏封面
+    // 压缩游戏封面
     console.log('\n🎮 处理游戏封面...')
     const gameRows = db.prepare('SELECT id, title, cover_image_data FROM games WHERE cover_image_data IS NOT NULL').all()
     stats.games.total = gameRows.length
@@ -223,7 +223,7 @@ export async function migrateCompressCovers() {
       }
     }
 
-    // 4. 压缩书籍封面文件
+    // 压缩书籍封面文件
     const bookStats = await compressBookCoverFiles()
     stats.books = bookStats
 

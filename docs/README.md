@@ -30,6 +30,10 @@
 | [FFMPEG_SETUP.md](FFMPEG_SETUP.md) | FFmpeg配置、音频元数据解析 |
 | [NAS_DEPLOYMENT.md](NAS_DEPLOYMENT.md) | NAS部署指南、数据持久化 |
 | [JISPACE_MOUNT_GUIDE.md](JISPACE_MOUNT_GUIDE.md) | 极空间挂载配置 |
+| [PERMISSION_SYSTEM.md](PERMISSION_SYSTEM.md) | 权限管理系统（管理员/游客） |
+| [SECURITY_HARDENING_GUIDE.md](SECURITY_HARDENING_GUIDE.md) | 安全加固指南（IP黑名单、限流） |
+| [IP_BLACKLIST.md](IP_BLACKLIST.md) | IP黑名单功能说明 |
+| [EXTERNAL_API_RATE_LIMIT.md](EXTERNAL_API_RATE_LIMIT.md) | 外部API限流配置 |
 
 ---
 
@@ -109,15 +113,37 @@
 | documents, categories, document_versions | 文档管理 |
 | blog_posts, blog_categories, blog_tags, blog_post_tags | 博客管理 |
 | music, playlists, playlist_songs | 音乐管理 |
-| books, book_categories, reading_progress | 书籍管理 |
+| books, book_categories, reading_progress, book_chapters | 书籍管理 |
 | code_repositories | 代码仓库 |
 | bookmarks | 书签 |
 | anime | 动漫 |
 | games, steam_config, game_achievements | 游戏管理 |
 | todos | 待办事项（日程表） |
 | private_documents, private_settings | 私密空间 |
+| access_logs, rate_limit_logs | 访问日志与限流 |
+| ip_blacklist | IP黑名单 |
 
 详见：[DATABASE_SCHEMA.md](DATABASE_SCHEMA.md)
+
+---
+
+## 架构说明
+
+### PC/移动端分离架构
+
+项目采用条件渲染实现响应式适配，各模块独立维护两套组件：
+
+```
+frontend/src/
+├── views/              # 主入口（条件渲染）
+├── pc/pages/           # PC端组件（原生实现）
+└── mobile/pages/       # 移动端组件（原生实现）
+```
+
+- **PC端**: 原生Vue + CSS组件，表格布局，支持批量操作
+- **移动端**: 原生Vue + CSS组件，卡片布局，触摸优化
+
+> UI组件均为原生实现，不依赖第三方组件库，避免移动端touch/click事件冲突、样式覆盖困难等问题
 
 ---
 
@@ -129,7 +155,9 @@
 | 部署到NAS | [NAS_DEPLOYMENT.md](NAS_DEPLOYMENT.md) |
 | 数据库结构 | [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) |
 | 功能说明 | 各模块 MANAGEMENT 文档 |
+| 权限管理 | [PERMISSION_SYSTEM.md](PERMISSION_SYSTEM.md) |
+| 安全配置 | [SECURITY_HARDENING_GUIDE.md](SECURITY_HARDENING_GUIDE.md) |
 
 ---
 
-**最后更新**: 2026-03-27
+**最后更新**: 2026-05-29

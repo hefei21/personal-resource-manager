@@ -11,6 +11,8 @@ import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
+import { convertToUTC8 } from '../utils/time.js'
+import { PAGINATION, TIMEOUT } from '../config/constants.js'
 
 const execAsync = promisify(exec)
 
@@ -22,7 +24,7 @@ const httpsAgent = process.env.HTTP_PROXY
 // 歌词批量下载任务存储
 const lyricTasks = new Map()
 
-// ========== 上传取消管理 ==========
+// 上传取消管理
 // 使用 Set 存储已取消的 fileId，实现实时取消功能
 const cancelledUploads = new Set()
 
@@ -57,7 +59,7 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000)
 
-// ========== 中文拼音排序辅助函数（使用 Intl.Collator，无需额外依赖）==========
+// 中文拼音排序（使用 Intl.Collator）
 // 使用 JavaScript 内置的 Intl.Collator 实现中文拼音排序
 const zhCollator = new Intl.Collator('zh-CN', { 
   sensitivity: 'base',  // 不区分大小写和声调
@@ -71,7 +73,7 @@ function compareByPinyin(a, b, field) {
   return zhCollator.compare(valueA, valueB)
 }
 
-// ========== 轻量级元数据解析（降级方案）==========
+// 元数据解析（降级方案）
 
 // 简单解析 FLAC Vorbis Comments（纯 JS，无需外部依赖）
 function parseFlacVorbisComments(buffer) {
@@ -227,7 +229,7 @@ function parseMetadataLightweight(filePath, originalName) {
   }
 }
 
-// ========== 主解析函数 ==========
+// 主解析函数
 
 const router = express.Router()
 
@@ -252,20 +254,6 @@ const storage = multer.diskStorage({
 })
 
 const upload = multer({ storage })
-
-// 辅助函数：将 UTC 时间转换为 UTC+8
-function convertToUTC8(utcTime) {
-  if (!utcTime) return utcTime
-  const date = new Date(utcTime + 'Z')
-  const utc8Date = new Date(date.getTime() + 8 * 60 * 60 * 1000)
-  const year = utc8Date.getFullYear()
-  const month = String(utc8Date.getMonth() + 1).padStart(2, '0')
-  const day = String(utc8Date.getDate()).padStart(2, '0')
-  const hour = String(utc8Date.getHours()).padStart(2, '0')
-  const minute = String(utc8Date.getMinutes()).padStart(2, '0')
-  const second = String(utc8Date.getSeconds()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
-}
 
 // 解析音乐元数据（三层降级策略）
 async function parseMusicMetadata(filePath, originalName) {
@@ -382,7 +370,7 @@ async function parseMusicMetadata(filePath, originalName) {
   }
 }
 
-// ========== 分片上传 ==========
+// 分片上传
 
 // 上传分片
 router.post('/upload-chunk', authenticateToken, requireWritePermission, upload.single('chunk'), async (req, res) => {
@@ -563,33 +551,82 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     const ext = path.extname(fileName).toLowerCase()
     let finalExt = ext
     
-    // 生成最终路径
-    const finalPath = path.join(musicDir, `${Date.now()}-${Math.random().toString(36).substr(2, 9)}${ext}`)
+    // 生成最终路径和临时路径（使用临时文件+原子重命名）
+    const finalFileName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}${ext}`
+    const finalPath = path.join(musicDir, finalFileName)
+    const tempFinalPath = path.join(tempDir, `${finalFileName}.tmp`)
+    const lockFile = path.join(tempDir, `${fileId}.lock`)
     
-    // 合并分片
-    const writeStream = fs.createWriteStream(finalPath)
-    
-    for (let i = 0; i < totalChunks; i++) {
-      const chunkPath = path.join(tempDir, `${fileId}_${i}`)
-      if (fs.existsSync(chunkPath)) {
-        const chunkData = fs.readFileSync(chunkPath)
-        writeStream.write(chunkData)
-        fs.unlinkSync(chunkPath) // 删除临时分片
-      } else {
-        console.error(`分片 ${i} 不存在，文件可能损坏`)
-        writeStream.end()
-        fs.unlinkSync(finalPath) // 删除不完整的文件
-        return res.status(400).json({ 
-          message: '文件上传不完整，请重试',
-          error: 'missing_chunk'
-        })
-      }
+    // 文件锁：防止并发上传同一文件
+    if (fs.existsSync(lockFile)) {
+      return res.status(409).json({ 
+        message: '文件正在处理中，请稍后重试',
+        error: 'concurrent_upload'
+      })
     }
     
-    writeStream.end()
+    // 创建锁文件
+    fs.writeFileSync(lockFile, process.pid.toString())
     
-    // 等待写入完成
-    await new Promise(resolve => writeStream.on('finish', resolve))
+    let writeStream = null
+    let mergeSuccess = false
+    
+    try {
+      // 使用临时文件路径写入，避免产生不完整的目标文件
+      writeStream = fs.createWriteStream(tempFinalPath)
+      
+      for (let i = 0; i < totalChunks; i++) {
+        const chunkPath = path.join(tempDir, `${fileId}_${i}`)
+        if (fs.existsSync(chunkPath)) {
+          const chunkData = fs.readFileSync(chunkPath)
+          writeStream.write(chunkData)
+          // 延迟删除分片，直到合并成功后再统一清理
+        } else {
+          throw new Error(`分片 ${i} 不存在`)
+        }
+      }
+      
+      writeStream.end()
+      
+      // 等待写入完成
+      await new Promise((resolve, reject) => {
+        writeStream.on('finish', resolve)
+        writeStream.on('error', reject)
+      })
+      
+      // 原子重命名：确保目标文件要么完整存在，要么不存在
+      fs.renameSync(tempFinalPath, finalPath)
+      mergeSuccess = true
+      
+      // 合并成功后清理分片
+      for (let i = 0; i < totalChunks; i++) {
+        const chunkPath = path.join(tempDir, `${fileId}_${i}`)
+        if (fs.existsSync(chunkPath)) {
+          fs.unlinkSync(chunkPath)
+        }
+      }
+      
+    } catch (error) {
+      console.error(`文件合并失败: ${error.message}`)
+      
+      // 清理临时文件
+      if (writeStream) {
+        writeStream.destroy()
+      }
+      if (fs.existsSync(tempFinalPath)) {
+        fs.unlinkSync(tempFinalPath)
+      }
+      
+      return res.status(400).json({ 
+        message: '文件合并失败，请重试',
+        error: 'merge_failed'
+      })
+    } finally {
+      // 释放锁文件
+      if (fs.existsSync(lockFile)) {
+        fs.unlinkSync(lockFile)
+      }
+    }
 
     // 验证文件完整性（检查文件魔数/签名）
     const fileBuffer = fs.readFileSync(finalPath)
@@ -679,10 +716,9 @@ router.delete('/cancel-upload', authenticateToken, async (req, res) => {
     
     console.log(`[上传取消] 收到取消请求: ${fileId}`)
     
-    // 1. 设置取消标志（阻止后续分片上传）
     cancelledUploads.add(fileId)
     
-    // 2. 删除所有相关分片
+    // 删除临时分片
     const files = fs.readdirSync(tempDir)
     let deletedCount = 0
     files.forEach(file => {
@@ -692,12 +728,11 @@ router.delete('/cancel-upload', authenticateToken, async (req, res) => {
       }
     })
     
-    // 3. 清除进度记录
     uploadProgress.delete(fileId)
     
     console.log(`[上传取消] 已删除 ${deletedCount} 个临时分片`)
     
-    // 4. 5 分钟后清理取消标记（给正在进行的请求足够时间检测）
+    // 5分钟后清理取消标记
     setTimeout(() => {
       cancelledUploads.delete(fileId)
     }, 5 * 60 * 1000)
@@ -793,12 +828,11 @@ router.delete('/cancel-all-uploads', authenticateToken, async (req, res) => {
   try {
     console.log('[上传取消] 取消所有上传')
     
-    // 1. 将所有正在上传的文件标记为取消
     for (const [fileId] of uploadProgress) {
       cancelledUploads.add(fileId)
     }
     
-    // 2. 删除所有临时分片
+    // 删除所有临时分片
     const files = fs.readdirSync(tempDir)
     let deletedCount = 0
     files.forEach(file => {
@@ -810,13 +844,12 @@ router.delete('/cancel-all-uploads', authenticateToken, async (req, res) => {
       }
     })
     
-    // 3. 清除所有进度记录
     const cancelledCount = uploadProgress.size
     uploadProgress.clear()
     
     console.log(`[上传取消] 已取消 ${cancelledCount} 个上传，删除 ${deletedCount} 个临时文件`)
     
-    // 4. 5 分钟后清理取消标记
+    // 5分钟后清理取消标记
     setTimeout(() => {
       cancelledUploads.clear()
     }, 5 * 60 * 1000)
@@ -832,7 +865,7 @@ router.delete('/cancel-all-uploads', authenticateToken, async (req, res) => {
   }
 })
 
-// ========== 音乐管理 ==========
+// 音乐管理
 
 // 获取所有音乐 ID（用于全选）
 router.get('/all-ids', authenticateToken, async (req, res) => {
@@ -877,15 +910,29 @@ router.get('/', authenticateToken, async (req, res) => {
       album,
       sortBy = 'created_at',
       sortOrder = 'DESC',
-      page = 1,
-      pageSize = 30
+      page = PAGINATION.DEFAULT_PAGE,
+      pageSize = PAGINATION.DEFAULT_PAGE_SIZE
     } = req.query
+
+    // 尝试从缓存获取（相同查询条件）
+    const cacheKey = `music:list:${keyword || ''}:${artist || ''}:${album || ''}:${sortBy}:${sortOrder}:${page}:${pageSize}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log('[音乐列表] 命中缓存')
+      return res.json(cached)
+    }
+
     const db = getDatabase()
 
-    // 检查表结构，确定可用字段
-    const columns = db.prepare("PRAGMA table_info(music)").all()
-    const columnNames = columns.map(c => c.name)
-    console.log('music 表字段:', columnNames.join(', '))
+    // 检查表结构，确定可用字段（缓存结果，避免每次都查询）
+    const columnsCacheKey = 'music:columns'
+    let columnNames = await cache.get(columnsCacheKey)
+    if (!columnNames) {
+      const columns = db.prepare("PRAGMA table_info(music)").all()
+      columnNames = columns.map(c => c.name)
+      await cache.set(columnsCacheKey, columnNames, CacheTTL.VERY_LONG)
+      console.log('[音乐列表] 缓存表结构:', columnNames.join(', '))
+    }
 
     // 动态构建 SELECT 字段（不包含 cover_image，减少数据量）
     // 但添加 has_cover 标志位
@@ -929,8 +976,6 @@ router.get('/', authenticateToken, async (req, res) => {
 
     // 获取总数（直接 COUNT，不需要子查询）
     const countSql = `SELECT COUNT(*) as total FROM music ${whereClause}`
-    console.log('[音乐列表] COUNT SQL:', countSql)
-    console.log('[音乐列表] 参数:', params)
     const countStmt = db.prepare(countSql)
     const countResult = countStmt.get(...params)
     const total = countResult.total
@@ -945,58 +990,34 @@ router.get('/', authenticateToken, async (req, res) => {
     const sortField = validSortFields.includes(sortBy) ? sortBy : 'created_at'
     const order = validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC'
 
-    // 文本字段排序需要拼音处理
+    // 文本字段排序：使用 SQL COLLATE NOCASE
     const textFieldPattern = ['title', 'artist', 'album']
-    const needPinyinSort = textFieldPattern.includes(sortField)
+    const isTextField = textFieldPattern.includes(sortField)
 
-    // 构建完整的查询 SQL
+    // 构建完整的查询 SQL（总是使用 LIMIT 分页）
     let sql = `SELECT ${selectFields.join(', ')} FROM music ${whereClause}`
 
-    if (needPinyinSort) {
-      // 文本字段：先获取所有数据，在应用层排序（支持中文拼音）
-      const stmt = db.prepare(sql)
-      let rows = stmt.all(...params)
-      
-      // 转换时间
-      let musicList = rows.map(row => ({
-        ...row,
-        created_at: convertToUTC8(row.created_at),
-        updated_at: convertToUTC8(row.updated_at)
-      }))
-      
-      // 按拼音排序（使用 Intl.Collator，支持中文拼音排序）
-      musicList.sort((a, b) => {
-        const comparison = compareByPinyin(a, b, sortField)
-        return order === 'DESC' ? -comparison : comparison
-      })
-      
-      // 分页
-      const startIndex = (parseInt(page) - 1) * parseInt(pageSize)
-      const paginatedList = musicList.slice(startIndex, startIndex + parseInt(pageSize))
-      
-      console.log('[音乐列表] 拼音排序 - 总数:', total, '当前页:', paginatedList.length)
-      res.json({ data: paginatedList, total })
-    } else {
-      // 数值/时间字段：直接在数据库排序（性能更好）
-      sql += ` ORDER BY CASE WHEN ${sortField} IS NULL THEN 1 ELSE 0 END, ${sortField} ${order}`
-      sql += ' LIMIT ? OFFSET ?'
-      const queryParams = [...params, parseInt(pageSize), (parseInt(page) - 1) * parseInt(pageSize)]
-      
-      console.log('[音乐列表] SQL:', sql)
-      console.log('[音乐列表] 参数:', queryParams)
-      
-      const stmt = db.prepare(sql)
-      const rows = stmt.all(...queryParams)
-      
-      // 转换时间
-      const musicList = rows.map(row => ({
-        ...row,
-        created_at: convertToUTC8(row.created_at),
-        updated_at: convertToUTC8(row.updated_at)
-      }))
-      
-      res.json({ data: musicList, total })
-    }
+    // 使用 SQL 排序（不区分大小写）
+    sql += ` ORDER BY CASE WHEN ${sortField} IS NULL THEN 1 ELSE 0 END, ${sortField} COLLATE NOCASE ${order}`
+    sql += ' LIMIT ? OFFSET ?'
+    const queryParams = [...params, parseInt(pageSize), (parseInt(page) - 1) * parseInt(pageSize)]
+
+    const stmt = db.prepare(sql)
+    const rows = stmt.all(...queryParams)
+
+    // 转换时间
+    const musicList = rows.map(row => ({
+      ...row,
+      created_at: convertToUTC8(row.created_at),
+      updated_at: convertToUTC8(row.updated_at)
+    }))
+
+    const response = { data: musicList, total }
+
+    // 缓存结果（5分钟）
+    await cache.set(cacheKey, response, CacheTTL.SHORT)
+
+    res.json(response)
   } catch (error) {
     console.error('获取音乐失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -1398,6 +1419,12 @@ router.get('/play/:id', async (req, res) => {
       const parts = range.replace(/bytes=/, '').split('-')
       const start = parseInt(parts[0], 10)
       const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
+      
+      // 验证范围有效性
+      if (start >= fileSize || start < 0 || end >= fileSize || start > end) {
+        return res.status(416).json({ message: '请求范围无效' })
+      }
+      
       const chunkSize = end - start + 1
 
       res.writeHead(206, {
@@ -1408,11 +1435,29 @@ router.get('/play/:id', async (req, res) => {
       })
 
       const readStream = fs.createReadStream(filePath, { start, end })
+      
+      // 监听流错误，避免进程崩溃
+      readStream.on('error', (streamError) => {
+        console.error('文件流错误:', streamError)
+        if (!res.headersSent) {
+          res.status(500).json({ message: '文件读取失败' })
+        }
+      })
+      
       readStream.pipe(res)
     } else {
       res.setHeader('Content-Type', contentType)
       res.setHeader('Content-Length', fileSize)
       const readStream = fs.createReadStream(filePath)
+      
+      // 监听流错误
+      readStream.on('error', (streamError) => {
+        console.error('文件流错误:', streamError)
+        if (!res.headersSent) {
+          res.status(500).json({ message: '文件读取失败' })
+        }
+      })
+      
       readStream.pipe(res)
     }
   } catch (error) {
@@ -1420,11 +1465,14 @@ router.get('/play/:id', async (req, res) => {
       return res.status(401).json({ message: '认证失败' })
     }
     console.error('播放失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    // 确保没有发送过headers才发送错误响应
+    if (!res.headersSent) {
+      res.status(500).json({ message: '服务器错误' })
+    }
   }
 })
 
-// ========== 歌单管理 ==========
+// 歌单管理
 
 // 获取歌单列表
 router.get('/playlists', authenticateToken, async (req, res) => {
@@ -1513,6 +1561,12 @@ router.delete('/playlists/:id', authenticateToken, requireWritePermission, async
 router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
   try {
     const db = getDatabase()
+    const playlistId = req.params.id
+    
+    // 分页参数
+    const page = parseInt(req.query.page) || PAGINATION.DEFAULT_PAGE
+    const pageSize = parseInt(req.query.pageSize) || PAGINATION.DEFAULT_PAGE_SIZE
+    const offset = (page - 1) * pageSize
     
     // 检查表结构
     const columns = db.prepare("PRAGMA table_info(music)").all()
@@ -1531,13 +1585,24 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
     }
     selectFields.push('m.created_at', 'm.updated_at', 'ps.sort_order', 'ps.added_at')
     
+    // 获取总数
+    const countResult = db.prepare(`
+      SELECT COUNT(*) as total
+      FROM music m
+      JOIN playlist_songs ps ON m.id = ps.music_id
+      WHERE ps.playlist_id = ?
+    `).get(playlistId)
+    const total = countResult ? countResult.total : 0
+    
+    // 获取分页数据
     const rows = db.prepare(`
       SELECT ${selectFields.join(', ')}
       FROM music m
       JOIN playlist_songs ps ON m.id = ps.music_id
       WHERE ps.playlist_id = ?
       ORDER BY ps.sort_order
-    `).all(req.params.id)
+      LIMIT ? OFFSET ?
+    `).all(playlistId, pageSize, offset)
     
     const songs = rows.map(row => ({
       ...row,
@@ -1546,9 +1611,36 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
       added_at: convertToUTC8(row.added_at)
     }))
     
-    res.json({ data: songs })
+    res.json({ 
+      data: songs,
+      total: total,
+      page: page,
+      pageSize: pageSize
+    })
   } catch (error) {
     console.error('获取歌单歌曲失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// 获取歌单内所有歌曲ID（用于全选）
+router.get('/playlists/:id/all-ids', authenticateToken, async (req, res) => {
+  try {
+    const playlistId = req.params.id
+    const db = getDatabase()
+    
+    const rows = db.prepare(`
+      SELECT m.id 
+      FROM music m
+      JOIN playlist_songs ps ON m.id = ps.music_id
+      WHERE ps.playlist_id = ?
+      ORDER BY ps.sort_order
+    `).all(playlistId)
+    
+    const ids = rows.map(r => r.id)
+    res.json({ data: ids, total: ids.length })
+  } catch (error) {
+    console.error('获取歌单歌曲ID失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
 })
@@ -1646,7 +1738,7 @@ router.put('/playlists/:id/songs/reorder', authenticateToken, requireWritePermis
   }
 })
 
-// ========== 歌词管理 ==========
+// 歌词管理
 
 // 歌词源配置（按优先级顺序）
 const LYRIC_SOURCES = [
@@ -1667,7 +1759,7 @@ const LYRIC_SOURCES = [
   }
 ]
 
-// ========== 网易云音乐 ==========
+// 网易云音乐
 const NETEASE_API_BASE = 'https://music.163.com/api'
 
 // 计算字符串相似度（Levenshtein距离）
@@ -1905,7 +1997,7 @@ async function getNeteaseLyric(songId) {
   }
 }
 
-// ========== QQ音乐 ==========
+// QQ音乐
 const QQ_MUSIC_API_BASE = 'https://c.y.qq.com/soso/fcgi-bin'
 
 async function searchQQMusic(title, artist) {
@@ -2047,7 +2139,7 @@ async function getQQMusicLyric(songMid) {
   }
 }
 
-// ========== 酷狗音乐 ==========
+// 酷狗音乐
 const KUGOU_API_BASE = 'https://songsearch.kugou.com'
 
 async function searchKugouMusic(title, artist) {

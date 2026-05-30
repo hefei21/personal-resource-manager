@@ -3,6 +3,7 @@ import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import { cache, CacheTTL } from '../utils/cache.js'
 
 const router = express.Router()
 
@@ -83,7 +84,7 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
     let iconUrl = ''
     let iconData = null
     
-    // 1. 首先尝试标准的 favicon.ico（通常最小）
+    // 尝试标准 favicon.ico
     const defaultFavicon = `${urlObj.protocol}//${urlObj.host}/favicon.ico`
     iconData = await downloadImageAsBase64(defaultFavicon)
     if (iconData) {
@@ -94,7 +95,7 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
       return
     }
     
-    // 2. 尝试从 HTML 中获取 icon 或 shortcut icon（不包括 apple-touch-icon）
+    // 从 HTML 获取 icon
     const iconMatch = html.match(/<link[^>]*rel=["'](icon|shortcut icon)["'][^>]*href=["']([^"']+)["'][^>]*>/i)
     if (iconMatch) {
       iconUrl = iconMatch[2]
@@ -137,7 +138,7 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
       }
     }
     
-    // 3. 最后尝试 apple-touch-icon（可能较大）
+    // 尝试 apple-touch-icon
     const appleIconMatch = html.match(/<link[^>]*rel=["']apple-touch-icon["'][^>]*href=["']([^"']+)["'][^>]*>/i)
     if (appleIconMatch) {
       let appleIconUrl = appleIconMatch[1]
@@ -182,11 +183,21 @@ router.get('/tags', authenticateToken, async (req, res) => {
     console.log('获取书签标签...')
     const db = getDatabase()
     console.log('数据库连接成功')
-    
+
+    // 定义缓存键
+    const cacheKey = 'bookmark:tags'
+
+    // 尝试从缓存获取
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      console.log('[Redis] 命中缓存:', cacheKey)
+      return res.json({ data: cached })
+    }
+
     // 先检查表结构
     const tableInfo = db.prepare("PRAGMA table_info(bookmarks)").all()
     console.log('bookmarks表字段:', tableInfo.map(c => c.name).join(', '))
-    
+
     const rows = db.prepare("SELECT DISTINCT tags FROM bookmarks WHERE tags IS NOT NULL AND tags != ''").all()
     console.log('查询结果:', rows.length, '条记录')
     

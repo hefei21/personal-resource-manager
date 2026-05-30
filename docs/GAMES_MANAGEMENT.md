@@ -179,7 +179,37 @@
 
 ---
 
-## 五、技术实现细节
+## 五、前端架构
+
+### PC/移动端分离架构
+
+采用条件渲染方式实现响应式适配：
+
+**主入口文件** (`frontend/src/views/Games.vue`):
+```vue
+<template>
+  <GamesMobile v-if="isMobile" />
+  <div v-else class="games">
+    <!-- PC端内容 -->
+  </div>
+</template>
+```
+
+**PC端组件** (`frontend/src/pc/pages/GamesPC.vue`):
+- 表格布局展示游戏列表
+- Steam配置对话框
+- 批量操作功能
+- 表头排序支持
+
+**移动端组件** (`frontend/src/mobile/pages/GamesMobile.vue`):
+- 卡片网格布局
+- 底部操作栏
+- 筛选抽屉
+- 同步进度显示
+
+---
+
+## 六、技术实现细节
 
 ### 1. Steam API 集成
 
@@ -300,7 +330,7 @@ async function executeSyncTask(taskId, steamId, apiKey) {
 
 ---
 
-## 六、配置说明
+## 七、配置说明
 
 ### 环境变量
 
@@ -322,17 +352,19 @@ async function executeSyncTask(taskId, steamId, apiKey) {
 
 ---
 
-## 七、关键文件路径
+## 八、关键文件路径
 
 | 功能模块 | 文件路径 |
 |----------|----------|
 | 后端路由 | `backend/src/routes/games.js` |
 | 前端视图 | `frontend/src/views/Games.vue` |
+| PC端组件 | `frontend/src/pc/pages/GamesPC.vue` |
+| 移动端组件 | `frontend/src/mobile/pages/GamesMobile.vue` |
 | API 定义 | `frontend/src/api/index.js` |
 
 ---
 
-## 八、使用说明
+## 九、使用说明
 
 ### 1. 配置 Steam
 
@@ -369,7 +401,7 @@ async function executeSyncTask(taskId, steamId, apiKey) {
 
 ---
 
-## 九、注意事项
+## 十、注意事项
 
 1. **Steam API 限制**：
    - 不需要代理（国内可直接访问）

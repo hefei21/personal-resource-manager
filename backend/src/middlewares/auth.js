@@ -1,6 +1,20 @@
 import jwt from 'jsonwebtoken'
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key'
+// 强制从环境变量读取JWT密钥，拒绝使用默认值
+const JWT_SECRET = process.env.JWT_SECRET
+
+if (!JWT_SECRET) {
+  console.error('错误: JWT_SECRET 环境变量未设置')
+  console.error('请在 .env 文件或环境变量中设置 JWT_SECRET')
+  console.error('示例: JWT_SECRET=your-random-secret-key-at-least-32-characters')
+  process.exit(1)
+}
+
+if (JWT_SECRET === 'your-secret-key' || JWT_SECRET.length < 32) {
+  console.error('错误: JWT_SECRET 不能使用默认值或太短')
+  console.error('请设置一个至少32个字符的随机字符串')
+  process.exit(1)
+}
 
 export function authenticateToken(req, res, next) {
   // 优先从 Authorization 头获取 token，其次从 URL 参数获取
@@ -52,6 +66,6 @@ export function generateToken(user, isGuest = false) {
       isGuest: isGuest  // 在 token 中标记是否为游客
     },
     JWT_SECRET,
-    { expiresIn: isGuest ? '24h' : (process.env.JWT_EXPIRE || '7d') }  // 游客 token 24小时过期
+    { expiresIn: isGuest ? '24h' : (process.env.JWT_EXPIRE || '30d') }  // 游客 token 24小时，普通用户30天
   )
 }

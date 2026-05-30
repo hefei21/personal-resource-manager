@@ -1,14 +1,14 @@
 <template>
-  <t-dialog
-    v-model:visible="visible"
-    :header="anime?.name_cn || anime?.name || '动漫详情'"
+  <NativeDialog
+    v-model="visible"
+    :title="anime?.name_cn || anime?.name || '动漫详情'"
     width="900px"
     :close-on-overlay-click="false"
     destroy-on-close
     class="anime-detail-dialog"
   >
     <div v-if="loading" class="loading-container">
-      <t-loading size="40px" />
+      <NativeLoading size="40px" />
       <p>加载中...</p>
     </div>
 
@@ -54,9 +54,9 @@
           <div class="tags-section" v-if="tags.length">
             <span class="label">标签:</span>
             <div class="tags-list">
-              <t-tag v-for="tag in tags.slice(0, 15)" :key="tag" size="small" theme="primary" variant="light">
+              <NativeTag v-for="tag in tags.slice(0, 15)" :key="tag" size="small" theme="primary" variant="light">
                 {{ tag }}
-              </t-tag>
+              </NativeTag>
             </div>
           </div>
         </div>
@@ -158,9 +158,9 @@
               <span v-if="res.downloads">下载: {{ res.downloads }}</span>
             </div>
           </div>
-          <t-button size="small" theme="primary" variant="outline" @click="copyMagnet(res.magnetLink)">
+          <NativeButton size="small" theme="primary" variant="outline" @click="copyMagnet(res.magnetLink)">
             复制磁力
-          </t-button>
+          </NativeButton>
         </div>
       </div>
     </div>
@@ -171,58 +171,60 @@
     <template #footer>
       <div class="dialog-footer">
         <!-- 查找资源按钮 -->
-        <t-button variant="outline" @click="searchResources" :loading="searchingResources">
-          <template #icon><t-icon name="search" /></template>
+        <NativeButton variant="outline" @click="searchResources" :loading="searchingResources">
+          <template #icon><NativeIcon name="magnifying-glass" /></template>
           查找资源
-        </t-button>
+        </NativeButton>
         <!-- 已收藏状态下的操作 -->
         <template v-if="isImported && localAnime">
-          <t-button variant="outline" @click="refreshAnime" :loading="refreshing" :disabled="isGuest">
-            <template #icon><t-icon name="refresh" /></template>
+          <NativeButton variant="outline" @click="refreshAnime" :loading="refreshing" :disabled="isGuest">
+            <template #icon><NativeIcon name="arrow-clockwise" /></template>
             刷新
-          </t-button>
-          <t-select v-model="localAnime.status" style="width: 100px" @change="updateStatus" v-if="!isGuest">
-            <t-option value="none" label="未标记" />
-            <t-option value="watching" label="想看" />
-            <t-option value="watched" label="看过" />
-          </t-select>
-          <t-button
+          </NativeButton>
+          <NativeSelect v-model="localAnime.status" style="width: 100px" @change="updateStatus" v-if="!isGuest" :options="[
+            { value: 'none', label: '未标记' },
+            { value: 'watching', label: '想看' },
+            { value: 'watched', label: '看过' }
+          ]" />
+          <NativeButton
             :theme="localAnime.is_favorite ? 'danger' : 'default'"
             variant="outline"
             @click="toggleFavorite"
             :disabled="isGuest"
           >
-            <template #icon><t-icon :name="localAnime.is_favorite ? 'heart-filled' : 'heart'" /></template>
+            <template #icon><NativeIcon :name="localAnime.is_favorite ? 'heart-fill' : 'heart'" /></template>
             {{ localAnime.is_favorite ? '取消收藏' : '收藏' }}
-          </t-button>
-          <t-popconfirm content="确定删除吗？" @confirm="handleDelete" v-if="!isGuest">
-            <t-button theme="danger" variant="outline">
-              <template #icon><t-icon name="delete" /></template>
+          </NativeButton>
+          <NativePopconfirm content="确定删除吗？" @confirm="handleDelete" v-if="!isGuest">
+            <NativeButton theme="danger" variant="outline">
+              <template #icon><NativeIcon name="trash" /></template>
               删除
-            </t-button>
-          </t-popconfirm>
+            </NativeButton>
+          </NativePopconfirm>
         </template>
-        <t-button variant="outline" @click="visible = false">关闭</t-button>
+        <NativeButton variant="outline" @click="visible = false">关闭</NativeButton>
         <!-- 添加按钮：未收藏显示添加，已收藏显示已添加 -->
-        <t-button theme="primary" @click="handleImport" v-if="!isImported" :disabled="importing || isGuest">
-          <template #icon><t-icon name="add" /></template>
+        <NativeButton theme="primary" @click="handleImport" v-if="!isImported" :disabled="importing || isGuest">
+          <template #icon><NativeIcon name="plus" /></template>
           添加到收藏
-        </t-button>
-        <t-button v-else disabled>
-          <template #icon><t-icon name="check" /></template>
+        </NativeButton>
+        <NativeButton v-else disabled>
+          <template #icon><NativeIcon name="check" /></template>
           已添加
-        </t-button>
+        </NativeButton>
       </div>
     </template>
-  </t-dialog>
+  </NativeDialog>
 </template>
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
 import api from '../api'
 import { usePermission } from '@/composables/usePermission'
+import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect, NativePopconfirm } from '@/components/native'
+import { useToast } from '@/composables/useToast'
 
+const toast = useToast()
 const { isGuest } = usePermission()
 
 const props = defineProps({
@@ -380,44 +382,57 @@ async function loadDetail() {
       return
     }
 
-    // 如果有 bangumiId，优先从数据库获取
-    if (props.bangumiId) {
-      try {
-        const dbRes = await api.anime.getByBangumiId(props.bangumiId)
-        if (dbRes.data.data) {
-          anime.value = dbRes.data.data
-          characters.value = dbRes.data.data.characters || []
-          staff.value = dbRes.data.data.staff || []
-          isImported.value = true
-          localAnime.value = dbRes.data.data
+    // 确定要使用的 Bangumi ID
+    const bangumiId = props.bangumiId || props.animeData?.id
+    
+    if (!bangumiId && props.animeData) {
+      // 只有 animeData 没有 bangumiId 和 id 的情况（不应该发生，但作为兜底）
+      anime.value = props.animeData
+      isImported.value = false
+      loading.value = false
+      return
+    }
 
-          // 获取关联作品
-          try {
-            const relRes = await api.anime.getRelations(props.bangumiId)
-            relations.value = relRes.data.data || []
-          } catch {
-            relations.value = []
-          }
-          loading.value = false
-          return
+    // 尝试从数据库获取（只调用一次）
+    try {
+      const dbRes = await api.anime.getByBangumiId(bangumiId)
+      if (dbRes.data.data) {
+        anime.value = dbRes.data.data
+        characters.value = dbRes.data.data.characters || []
+        staff.value = dbRes.data.data.staff || []
+        isImported.value = true
+        localAnime.value = dbRes.data.data
+
+        // 获取关联作品
+        try {
+          const relRes = await api.anime.getRelations(bangumiId)
+          relations.value = relRes.data.data || []
+        } catch {
+          relations.value = []
         }
-      } catch {
-        // 数据库中没有，继续从 API 获取
+        loading.value = false
+        return
       }
+    } catch {
+      // 数据库中没有，继续从 API 获取
     }
 
     // 数据库没有，从 Bangumi API 获取
-    if (props.bangumiId) {
-      const res = await api.anime.getDetail(props.bangumiId)
+    if (bangumiId) {
+      const res = await api.anime.getDetail(bangumiId)
       const data = res.data.data
 
       anime.value = data.subject
       characters.value = data.characters || []
       staff.value = data.persons || []
 
+      // 数据库中没有，所以 isImported 保持 false
+      isImported.value = false
+      localAnime.value = null
+
       // 获取关联作品
       try {
-        const relRes = await api.anime.getRelations(props.bangumiId)
+        const relRes = await api.anime.getRelations(bangumiId)
         relations.value = relRes.data.data || []
       } catch {
         relations.value = []
@@ -425,7 +440,8 @@ async function loadDetail() {
     }
   } catch (error) {
     console.error('加载详情失败:', error)
-    MessagePlugin.error('加载详情失败')
+    const errorMsg = error.response?.data?.message || error.message || '加载详情失败'
+    toast.error(errorMsg)
   } finally {
     loading.value = false
   }
@@ -435,18 +451,18 @@ async function loadDetail() {
 async function handleImport() {
   importing.value = true
   try {
-    // 使用 bangumiId 或 animeData 中的 bangumi_id
-    const targetId = props.bangumiId || anime.value?.bangumi_id || props.animeData?.bangumi_id
+    // 使用 bangumiId 或 animeData 中的 id/bangumi_id（搜索结果用 id，本地数据用 bangumi_id）
+    const targetId = props.bangumiId || props.animeData?.id || anime.value?.bangumi_id || props.animeData?.bangumi_id
     if (!targetId) {
-      MessagePlugin.error('无法获取动漫ID')
+      toast.error('无法获取动漫ID')
       return
     }
     await api.anime.import(targetId)
-    MessagePlugin.success('添加成功')
+    toast.success('添加成功')
     isImported.value = true
     emit('imported')
   } catch (error) {
-    MessagePlugin.error(error.response?.data?.message || '添加失败')
+    toast.error(error.response?.data?.message || '添加失败')
   } finally {
     importing.value = false
   }
@@ -457,7 +473,7 @@ function openRelationDetail(rel) {
   emit('openRelation', {
     bangumiId: rel.id,
     animeData: {
-      bangumi_id: rel.id,
+      id: rel.id,  // 使用 id 而不是 bangumi_id，表示这是搜索结果
       name: rel.name,
       name_cn: rel.name_cn,
       cover_image: rel.images?.large || rel.images?.small,
@@ -474,7 +490,7 @@ function openRelationDetail(rel) {
 async function searchResources() {
   const keyword = anime.value?.name_cn || anime.value?.title || anime.value?.name
   if (!keyword) {
-    MessagePlugin.warning('无法获取动漫名称')
+    toast.warning('无法获取动漫名称')
     return
   }
 
@@ -489,13 +505,13 @@ async function searchResources() {
     const response = await api.anime.searchResources(keyword, searchMode)
     resources.value = response.data.data || []
     if (resources.value.length === 0) {
-      MessagePlugin.info('未找到相关资源')
+      toast.info('未找到相关资源')
     } else {
       const modeText = searchMode === 'sequential' ? '顺序优先' : '同时多源'
-      MessagePlugin.success(`找到 ${resources.value.length} 条资源 (${modeText}模式)`)
+      toast.success(`找到 ${resources.value.length} 条资源 (${modeText}模式)`)
     }
   } catch (error) {
-    MessagePlugin.error('搜索资源失败')
+    toast.error('搜索资源失败')
   } finally {
     searchingResources.value = false
   }
@@ -505,7 +521,7 @@ async function searchResources() {
 async function copyMagnet(link) {
   try {
     await navigator.clipboard.writeText(link)
-    MessagePlugin.success('磁力链接已复制')
+    toast.success('磁力链接已复制')
   } catch (error) {
     // 降级方案
     const textArea = document.createElement('textarea')
@@ -514,7 +530,7 @@ async function copyMagnet(link) {
     textArea.select()
     document.execCommand('copy')
     document.body.removeChild(textArea)
-    MessagePlugin.success('磁力链接已复制')
+    toast.success('磁力链接已复制')
   }
 }
 
@@ -523,10 +539,10 @@ async function updateStatus(status) {
   if (!localAnime.value) return
   try {
     await api.anime.updateStatus(localAnime.value.id, status)
-    MessagePlugin.success('状态已更新')
+    toast.success('状态已更新')
     emit('updated')
   } catch (error) {
-    MessagePlugin.error('更新失败')
+    toast.error('更新失败')
   }
 }
 
@@ -536,10 +552,10 @@ async function toggleFavorite() {
   try {
     await api.anime.toggleFavorite(localAnime.value.id)
     localAnime.value.is_favorite = !localAnime.value.is_favorite
-    MessagePlugin.success(localAnime.value.is_favorite ? '已收藏' : '已取消收藏')
+    toast.success(localAnime.value.is_favorite ? '已收藏' : '已取消收藏')
     emit('updated')
   } catch (error) {
-    MessagePlugin.error('操作失败')
+    toast.error('操作失败')
   }
 }
 
@@ -548,11 +564,11 @@ async function handleDelete() {
   if (!localAnime.value) return
   try {
     await api.anime.delete(localAnime.value.id)
-    MessagePlugin.success('删除成功')
+    toast.success('删除成功')
     visible.value = false
     emit('deleted')
   } catch (error) {
-    MessagePlugin.error('删除失败')
+    toast.error('删除失败')
   }
 }
 
@@ -563,7 +579,7 @@ async function refreshAnime() {
   refreshing.value = true
   try {
     const response = await api.anime.refresh(localAnime.value.id)
-    MessagePlugin.success('刷新成功')
+    toast.success('刷新成功')
     
     // 更新本地数据
     anime.value = response.data.data
@@ -573,7 +589,7 @@ async function refreshAnime() {
     
     emit('updated')
   } catch (error) {
-    MessagePlugin.error(error.response?.data?.message || '刷新失败')
+    toast.error(error.response?.data?.message || '刷新失败')
   } finally {
     refreshing.value = false
   }
@@ -595,7 +611,7 @@ watch(() => props.bangumiId, () => {
 </script>
 
 <style scoped>
-.anime-detail-dialog :deep(.t-dialog__body) {
+.anime-detail-dialog :deep(.native-dialog__body) {
   max-height: 70vh;
   overflow-y: auto;
 }
@@ -840,6 +856,33 @@ watch(() => props.bangumiId, () => {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.dialog-footer :deep(.native-select) {
+  width: 100px;
+}
+
+.dialog-footer :deep(.native-select__trigger) {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 12px !important;
+  box-sizing: border-box;
+  font-size: 14px;
+}
+
+/* 确保下拉框在对话框中正确显示 */
+.dialog-footer :deep(.native-select) {
+  position: relative;
+}
+
+.dialog-footer :deep(.native-select__dropdown) {
+  z-index: 99999 !important;
+}
+
+.dialog-footer :deep(.native-select__dropdown) {
+  z-index: 99999 !important;
 }
 
 @media (max-width: 768px) {
@@ -930,6 +973,8 @@ watch(() => props.bangumiId, () => {
   padding-top: 16px;
   border-top: 1px solid #e5e5e5;
 }
+
+
 
 .resources-list {
   display: flex;

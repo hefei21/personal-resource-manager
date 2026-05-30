@@ -5,6 +5,8 @@ import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 import { cache, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
+import { convertToUTC8 } from '../utils/time.js'
+import { PAGINATION, TIMEOUT } from '../config/constants.js'
 
 const router = express.Router()
 
@@ -13,8 +15,10 @@ const httpsAgent = process.env.HTTP_PROXY
   ? new HttpsProxyAgent(process.env.HTTP_PROXY)
   : undefined
 
-// Steam API 不需要代理（国内可直接访问）
-const steamAgent = undefined
+// Steam API 使用代理（国内访问不稳定）
+const steamAgent = process.env.HTTP_PROXY
+  ? new HttpsProxyAgent(process.env.HTTP_PROXY)
+  : undefined
 
 // 下载图片并转换为base64（带压缩）
 async function downloadImageAsBase64(imageUrl) {
@@ -37,23 +41,19 @@ async function downloadImageAsBase64(imageUrl) {
   }
 }
 
-// 尝试下载游戏封面（带回退机制和详细日志）
+// 下载游戏纵向封面（大图 library_600x900.jpg）
 async function downloadGameCover(steamAppId, title) {
   if (!steamAppId) {
     console.log(`✗ ${title}: 没有 Steam AppID`)
     return null
   }
 
-  // 封面源列表（按优先级）
+  // 只尝试纵向封面源，不下载横向封面（横向由 downloadGameHeaderCover 单独处理）
   const coverSources = [
     { url: `https://steamcdn-a.akamaihd.net/steam/apps/${steamAppId}/library_600x900.jpg`, type: '纵向封面' },
     { url: `https://steamcdn-a.akamaihd.net/steam/apps/${steamAppId}/library_600x900_2x.jpg`, type: '纵向封面高清' },
-    { url: `https://steamcdn-a.akamaihd.net/steam/apps/${steamAppId}/header.jpg`, type: '横向头图' },
     // 备用 CDN
-    { url: `https://cdn.cloudflare.steamstatic.com/steam/apps/${steamAppId}/library_600x900.jpg`, type: '纵向封面(CF)' },
-    { url: `https://cdn.cloudflare.steamstatic.com/steam/apps/${steamAppId}/header.jpg`, type: '横向头图(CF)' },
-    // Steam 社区 CDN
-    { url: `https://steamcommunity.com/public/images/apps/${steamAppId}/header.jpg`, type: '社区头图' }
+    { url: `https://cdn.cloudflare.steamstatic.com/steam/apps/${steamAppId}/library_600x900.jpg`, type: '纵向封面(CF)' }
   ]
 
   const failedSources = []
@@ -72,16 +72,14 @@ async function downloadGameCover(steamAppId, title) {
     }
   }
 
-  // 所有 CDN 源都失败，尝试从 Steam Store API 获取封面 URL
-  console.log(`[封面] ${title}: CDN 源均失败，尝试从 Store API 获取...`)
+  // CDN 源均失败，尝试从 Steam Store API 获取纵向封面 URL
+  console.log(`[封面] ${title}: CDN 纵向封面源均失败，尝试从 Store API 获取...`)
   try {
     const storeUrl = `https://store.steampowered.com/api/appdetails?appids=${steamAppId}`
-    const response = await axios.get(storeUrl, { httpsAgent: steamAgent, proxy: false, timeout: 15000 })
+    const response = await axios.get(storeUrl, { httpsAgent: steamAgent, timeout: 15000 })
 
     if (response.data[steamAppId]?.success) {
-      const appData = response.data[steamAppId].data
-
-      // 先尝试纵向封面 CDN URL（优先使用纵向封面，适合卡片显示）
+      // 只尝试纵向封面，不下载横向
       const verticalCoverUrls = [
         `https://steamcdn-a.akamaihd.net/steam/apps/${steamAppId}/library_600x900.jpg`,
         `https://steamcdn-a.akamaihd.net/steam/apps/${steamAppId}/library_600x900_2x.jpg`,
@@ -99,8 +97,48 @@ async function downloadGameCover(steamAppId, title) {
           // 继续尝试下一个
         }
       }
+    }
+  } catch (e) {
+    console.log(`[封面] ${title}: Store API 获取失败 - ${e.message}`)
+  }
 
-      // 最后才尝试横向封面和其他图片（可能不适合卡片显示）
+  console.log(`✗ ${title}: 纵向封面下载失败 - ${failedSources.join('; ')}`)
+  return null
+}
+
+// 下载游戏横向封面（header.jpg）
+async function downloadGameHeaderCover(steamAppId, title) {
+  if (!steamAppId) {
+    console.log(`✗ ${title}: 没有 Steam AppID，无法下载横向封面`)
+    return null
+  }
+
+  const headerSources = [
+    { url: `https://steamcdn-a.akamaihd.net/steam/apps/${steamAppId}/header.jpg`, type: '横向头图' },
+    { url: `https://cdn.cloudflare.steamstatic.com/steam/apps/${steamAppId}/header.jpg`, type: '横向头图(CF)' },
+    { url: `https://steamcommunity.com/public/images/apps/${steamAppId}/header.jpg`, type: '社区头图' }
+  ]
+
+  for (const source of headerSources) {
+    try {
+      const coverData = await downloadImageAsBase64(source.url)
+      if (coverData) {
+        console.log(`✓ ${title}: 横向封面下载成功 (${source.type})`)
+        return { url: source.url, data: coverData }
+      }
+    } catch (e) {
+      console.warn(`✗ ${title}: ${source.type} 下载失败`)
+    }
+  }
+
+  // CDN 源均失败，尝试从 Steam Store API 获取 header_image
+  console.log(`[封面] ${title}: CDN 横向封面源均失败，尝试从 Store API 获取...`)
+  try {
+    const storeUrl = `https://store.steampowered.com/api/appdetails?appids=${steamAppId}`
+    const response = await axios.get(storeUrl, { httpsAgent: steamAgent, timeout: 15000 })
+
+    if (response.data[steamAppId]?.success) {
+      const appData = response.data[steamAppId].data
       const possibleCovers = [
         appData.header_image,
         appData.background,
@@ -111,7 +149,7 @@ async function downloadGameCover(steamAppId, title) {
         if (coverUrl) {
           const coverData = await downloadImageAsBase64(coverUrl)
           if (coverData) {
-            console.log(`✓ ${title}: 使用 Store API 封面 (${coverUrl}) [横向]`)
+            console.log(`✓ ${title}: 使用 Store API 横向封面 (${coverUrl})`)
             return { url: coverUrl, data: coverData }
           }
         }
@@ -121,25 +159,11 @@ async function downloadGameCover(steamAppId, title) {
     console.log(`[封面] ${title}: Store API 获取失败 - ${e.message}`)
   }
 
-  console.log(`✗ ${title}: 所有封面源均失败 - ${failedSources.join('; ')}`)
+  console.log(`✗ ${title}: 所有横向封面源均失败`)
   return null
 }
 
-// ========== Steam 配置管理 ==========
-
-// 辅助函数：将 UTC 时间转换为 UTC+8
-function convertToUTC8(utcTime) {
-  if (!utcTime) return utcTime
-  const date = new Date(utcTime + 'Z')
-  const utc8Date = new Date(date.getTime() + 8 * 60 * 60 * 1000)
-  const year = utc8Date.getFullYear()
-  const month = String(utc8Date.getMonth() + 1).padStart(2, '0')
-  const day = String(utc8Date.getDate()).padStart(2, '0')
-  const hour = String(utc8Date.getHours()).padStart(2, '0')
-  const minute = String(utc8Date.getMinutes()).padStart(2, '0')
-  const second = String(utc8Date.getSeconds()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hour}:${minute}:${second}`
-}
+// Steam 配置管理
 
 // 获取 Steam 配置
 router.get('/steam/config', authenticateToken, (req, res) => {
@@ -169,7 +193,7 @@ router.post('/steam/config', authenticateToken, requireWritePermission, async (r
     // 测试 API 是否有效（Steam API 不需要代理）
     try {
       const testUrl = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${apiKey}&steamid=${steamId}&include_appinfo=0&include_played_free_games=1`
-      const response = await axios.get(testUrl, { httpsAgent: steamAgent, proxy: false, timeout: 10000 })
+      const response = await axios.get(testUrl, { httpsAgent: steamAgent, timeout: 10000 })
       
       if (response.data.response) {
         // 保存配置
@@ -203,7 +227,7 @@ router.delete('/steam/config', authenticateToken, requireWritePermission, (req, 
   }
 })
 
-// ========== Steam 同步 ==========
+// Steam 同步
 
 // 异步任务管理器
 const syncTasks = new Map()
@@ -243,7 +267,7 @@ setInterval(() => {
   }
 }, 60000)
 
-// 后台执行同步任务（优化版）- 只同步游戏列表，成就按需获取
+// 后台执行同步任务 - 只同步游戏列表，成就按需获取
 async function executeSyncTask(taskId, steamId, apiKey) {
   const task = syncTasks.get(taskId)
   if (!task) return
@@ -251,7 +275,17 @@ async function executeSyncTask(taskId, steamId, apiKey) {
   updateTask(taskId, { status: 'running', startTime: Date.now(), message: '正在获取游戏列表...' })
 
   try {
-    const db = getDatabase()
+    // 检查代理配置
+    if (!steamAgent) {
+      console.warn(`[任务 ${taskId}] 警告: 未配置 HTTP_PROXY，Steam API 可能无法访问`)
+    }
+    
+    let db
+    try {
+      db = getDatabase()
+    } catch (e) {
+      throw new Error('数据库连接失败: ' + e.message)
+    }
 
     // 获取游戏列表（带重试机制）
     const gamesUrl = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${apiKey}&steamid=${steamId}&include_appinfo=1&include_played_free_games=1`
@@ -265,9 +299,18 @@ async function executeSyncTask(taskId, steamId, apiKey) {
         console.log(`[任务 ${taskId}] 尝试获取游戏列表 (第${attempt}次)...`)
         gamesResponse = await axios.get(gamesUrl, {
           httpsAgent: steamAgent,
-          proxy: false,
-          timeout: 60000 // 增加到60秒
+          timeout: 60000, // 增加到60秒
+          validateStatus: (status) => status < 500 // 只将 5xx 视为错误
         })
+        
+        // 检查 Steam API 返回的错误
+        if (gamesResponse.status === 403) {
+          throw new Error('Steam API 密钥无效或权限不足')
+        }
+        if (gamesResponse.status === 429) {
+          throw new Error('Steam API 请求过于频繁，请稍后再试')
+        }
+        
         break // 成功则退出循环
       } catch (e) {
         lastError = e
@@ -351,11 +394,21 @@ async function executeSyncTask(taskId, steamId, apiKey) {
     })
 
     // 执行事务
-    transaction(games)
+    try {
+      transaction(games)
+    } catch (dbError) {
+      console.error(`[任务 ${taskId}] 数据库事务失败:`, dbError)
+      throw new Error('数据库操作失败: ' + dbError.message)
+    }
+    
     updateTask(taskId, { progress: 50, message: `游戏数据同步完成 (${newCount} 新增, ${updateCount} 更新)` })
 
     // 更新同步时间（不再自动获取成就，改为按需获取）
-    db.prepare('UPDATE steam_config SET last_sync = CURRENT_TIMESTAMP WHERE id = 1').run()
+    try {
+      db.prepare('UPDATE steam_config SET last_sync = CURRENT_TIMESTAMP WHERE id = 1').run()
+    } catch (e) {
+      console.warn(`[任务 ${taskId}] 更新同步时间失败:`, e.message)
+    }
 
     const message = `同步完成！新增 ${newCount} 个游戏，更新 ${updateCount} 个游戏`
 
@@ -419,15 +472,15 @@ router.get('/steam/sync/:taskId', authenticateToken, (req, res) => {
   res.json({ data: task })
 })
 
-// ========== 游戏管理 ==========
+// 游戏管理
 
 // 获取游戏列表
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { status, favorite, genre, platform, keyword, sortBy = 'playtime_2weeks', sortOrder = 'DESC', page = 1, pageSize = 30 } = req.query
+    const { status, favorite, genre, platform, keyword, sortBy = 'playtime_2weeks', sortOrder = 'DESC', page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
     const db = getDatabase()
 
-    let sql = 'SELECT * FROM games WHERE 1=1'
+    let sql = 'SELECT id, steam_appid, title, name_original, cover_image, cover_image_data, header_cover_image, header_cover_image_data, description, developers, publishers, release_date, genres, tags, platforms, metacritic_score, metacritic_url, playtime_forever, playtime_2weeks, last_played, status, user_rating, is_favorite, notes, achievements_total, achievements_completed, created_at, updated_at FROM games WHERE 1=1'
     const params = []
 
     if (status) {
@@ -478,6 +531,50 @@ router.get('/', authenticateToken, async (req, res) => {
     console.error('获取游戏列表失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
+})
+
+// 代理获取 Steam 封面图片（解决前端直接访问 CDN 被墙问题）
+// 注意：此接口不需要鉴权，因为封面图片是公开资源，且通过 <img> 标签加载无法携带 Token
+// 必须放在 /:id 路由之前，否则会被当作 ID 处理
+router.get('/cover-proxy', async (req, res) => {
+  const { appid, type = 'library' } = req.query
+  
+  if (!appid) {
+    return res.status(400).json({ message: '缺少 appid 参数' })
+  }
+  
+  // 构建封面 URL
+  const coverUrls = [
+    type === 'library' 
+      ? `https://steamcdn-a.akamaihd.net/steam/apps/${appid}/library_600x900.jpg`
+      : `https://steamcdn-a.akamaihd.net/steam/apps/${appid}/header.jpg`,
+    `https://cdn.cloudflare.steamstatic.com/steam/apps/${appid}/library_600x900.jpg`,
+    `https://steamcdn-a.akamaihd.net/steam/apps/${appid}/header.jpg`
+  ]
+  
+  for (const url of coverUrls) {
+    try {
+      const response = await axios.get(url, {
+        httpsAgent,
+        responseType: 'arraybuffer',
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      })
+      
+      const contentType = response.headers['content-type'] || 'image/jpeg'
+      res.set('Content-Type', contentType)
+      res.set('Cache-Control', 'public, max-age=86400') // 缓存1天
+      return res.send(Buffer.from(response.data, 'binary'))
+    } catch (e) {
+      console.warn(`[封面代理] 失败: ${url}`, e.message)
+      continue
+    }
+  }
+  
+  // 所有源都失败
+  res.status(404).json({ message: '封面获取失败' })
 })
 
 // 获取单个游戏详情
@@ -541,6 +638,8 @@ router.get('/:id/achievements', authenticateToken, async (req, res) => {
         steam_appid: game.steam_appid,
         cover_image: game.cover_image,
         cover_image_data: game.cover_image_data,
+        header_cover_image: game.header_cover_image,
+        header_cover_image_data: game.header_cover_image_data,
         playtime_forever: game.playtime_forever,
         playtime_2weeks: game.playtime_2weeks,
         last_played: game.last_played,
@@ -596,7 +695,7 @@ router.post('/:id/fetch-achievements', authenticateToken, requireWritePermission
     const playerAchievementsUrl = `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?key=${apiKey}&steamid=${steamId}&appid=${game.steam_appid}`
     let achResponse
     try {
-      achResponse = await axios.get(playerAchievementsUrl, { httpsAgent: steamAgent, proxy: false, timeout: 30000 })
+      achResponse = await axios.get(playerAchievementsUrl, { httpsAgent: steamAgent, timeout: 30000 })
     } catch (e) {
       if (e.response?.status === 403) {
         return res.status(200).json({ message: '该游戏没有成就或您未拥有此游戏', data: { achievements: [] } })
@@ -616,7 +715,7 @@ router.post('/:id/fetch-achievements', authenticateToken, requireWritePermission
     let achievementDefs = []
     try {
       const schemaUrl = `https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key=${apiKey}&appid=${game.steam_appid}`
-      const schemaResponse = await axios.get(schemaUrl, { httpsAgent: steamAgent, proxy: false, timeout: 30000 })
+      const schemaResponse = await axios.get(schemaUrl, { httpsAgent: steamAgent, timeout: 30000 })
       achievementDefs = schemaResponse.data.game?.availableGameStats?.achievements || []
     } catch (e) {
       console.log(`获取成就定义失败: ${game.title}`)
@@ -626,7 +725,7 @@ router.post('/:id/fetch-achievements', authenticateToken, requireWritePermission
     let globalPercents = {}
     try {
       const globalUrl = `https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/?gameid=${game.steam_appid}`
-      const globalResponse = await axios.get(globalUrl, { httpsAgent: steamAgent, proxy: false, timeout: 30000 })
+      const globalResponse = await axios.get(globalUrl, { httpsAgent: steamAgent, timeout: 30000 })
       const achList = globalResponse.data.achievementpercentages?.achievements || []
       globalPercents = achList.reduce((acc, a) => { acc[a.name] = a.percent; return acc }, {})
     } catch (e) {
@@ -791,13 +890,13 @@ router.post('/:id/rating', authenticateToken, requireWritePermission, async (req
   }
 })
 
-// 批量下载封面（优化：已有可用封面则跳过）
+// 批量下载封面（已有封面则跳过）
 router.post('/batch-download-covers', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
 
     // 获取所有游戏
-    const games = db.prepare('SELECT id, title, cover_image, cover_image_data, steam_appid FROM games').all()
+    const games = db.prepare('SELECT id, title, cover_image, cover_image_data, header_cover_image, header_cover_image_data, steam_appid FROM games').all()
 
     if (games.length === 0) {
       return res.json({ message: '没有游戏需要处理', updatedCount: 0 })
@@ -809,18 +908,18 @@ router.post('/batch-download-covers', authenticateToken, requireWritePermission,
 
     for (const game of games) {
       try {
-        // 如果已有封面数据，跳过
-        if (game.cover_image_data) {
+        // 只有纵向+横向封面都有才跳过
+        if (game.cover_image_data && game.header_cover_image_data) {
           skippedCount++
           continue
         }
 
-        // 尝试下载封面（带回退机制）
+        // 尝试下载封面
         if (game.steam_appid) {
           // 先尝试从 Steam Store API 获取游戏详情（可选，用于补充信息）
           try {
             const storeUrl = `https://store.steampowered.com/api/appdetails?appids=${game.steam_appid}`
-            const response = await axios.get(storeUrl, { httpsAgent: steamAgent, proxy: false, timeout: 10000 })
+            const response = await axios.get(storeUrl, { httpsAgent: steamAgent, timeout: 10000 })
 
             if (response.data[game.steam_appid]?.success) {
               const appData = response.data[game.steam_appid].data
@@ -855,15 +954,32 @@ router.post('/batch-download-covers', authenticateToken, requireWritePermission,
             console.log(`获取游戏详情失败: ${game.title}`)
           }
 
-          // 下载封面（带回退：纵向 → 纵向高清 → 横向）
-          const coverResult = await downloadGameCover(game.steam_appid, game.title)
+          let downloadedAny = false
 
-          if (coverResult) {
-            db.prepare('UPDATE games SET cover_image = ?, cover_image_data = ? WHERE id = ?').run(coverResult.url, coverResult.data, game.id)
+          // 缺纵向封面才下载
+          if (!game.cover_image_data) {
+            const coverResult = await downloadGameCover(game.steam_appid, game.title)
+            if (coverResult) {
+              db.prepare('UPDATE games SET cover_image = ?, cover_image_data = ? WHERE id = ?').run(coverResult.url, coverResult.data, game.id)
+              downloadedAny = true
+            }
+          }
+
+          // 缺横向封面才下载
+          if (!game.header_cover_image_data) {
+            const headerResult = await downloadGameHeaderCover(game.steam_appid, game.title)
+            if (headerResult) {
+              db.prepare('UPDATE games SET header_cover_image = ?, header_cover_image_data = ? WHERE id = ?').run(headerResult.url, headerResult.data, game.id)
+              downloadedAny = true
+            }
+          }
+
+          if (downloadedAny) {
             updatedCount++
-          } else {
-            errors.push({ id: game.id, title: game.title, error: '所有封面源均不可用' })
-            console.error(`✗ 下载封面失败: ${game.title} - 所有封面源均不可用`)
+          } else if (!game.cover_image_data || !game.header_cover_image_data) {
+            // 有缺失但下载失败
+            errors.push({ id: game.id, title: game.title, error: '封面源均不可用' })
+            console.error(`✗ 下载封面失败: ${game.title} - 封面源均不可用`)
           }
         }
       } catch (error) {
@@ -889,7 +1005,7 @@ router.post('/batch-download-covers', authenticateToken, requireWritePermission,
 router.post('/clear-covers', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
-    db.prepare('UPDATE games SET cover_image = NULL, cover_image_data = NULL').run()
+    db.prepare('UPDATE games SET cover_image = NULL, cover_image_data = NULL, header_cover_image = NULL, header_cover_image_data = NULL').run()
     res.json({ message: '封面数据已清除，请重新执行批量下载' })
   } catch (error) {
     res.status(500).json({ message: '服务器错误' })
@@ -910,16 +1026,26 @@ router.post('/:id/refresh-cover', authenticateToken, requireWritePermission, asy
       return res.status(400).json({ message: '该游戏没有 Steam AppID' })
     }
 
-    // 尝试下载封面
+    // 下载纵向封面（大图）
     const coverResult = await downloadGameCover(game.steam_appid, game.title)
-
     if (coverResult) {
       db.prepare('UPDATE games SET cover_image = ?, cover_image_data = ? WHERE id = ?').run(coverResult.url, coverResult.data, game.id)
+    }
+
+    // 下载横向封面（header）
+    const headerResult = await downloadGameHeaderCover(game.steam_appid, game.title)
+    if (headerResult) {
+      db.prepare('UPDATE games SET header_cover_image = ?, header_cover_image_data = ? WHERE id = ?').run(headerResult.url, headerResult.data, game.id)
+    }
+
+    if (coverResult || headerResult) {
       res.json({
         message: '封面更新成功',
         data: {
-          cover_image: coverResult.url,
-          cover_image_data: coverResult.data
+          cover_image: coverResult?.url || null,
+          cover_image_data: coverResult?.data || null,
+          header_cover_image: headerResult?.url || null,
+          header_cover_image_data: headerResult?.data || null
         }
       })
     } else {

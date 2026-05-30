@@ -9,6 +9,9 @@ import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
 import { compressImage } from '../utils/imageCompress.js'
+import { ebookResourceLimiter } from '../middlewares/security.js'
+import { convertToUTC8 } from '../utils/time.js'
+import { PAGINATION } from '../config/constants.js'
 
 const router = express.Router()
 
@@ -95,7 +98,7 @@ function extractEpubCover(epubPath) {
       }
     }
 
-    // 最后尝试查找第一个图片文件
+    // 查找第一个图片文件
     for (const entry of zipEntries) {
       if (/\.(jpg|jpeg|png|gif)$/i.test(entry.entryName)) {
         console.log(`⚠️ 使用第一个图片作为封面: ${entry.entryName}`)
@@ -158,7 +161,7 @@ function parseEpubMetadata(epubPath) {
     const zip = new AdmZip(epubPath)
     const zipEntries = zip.getEntries()
 
-    // 首先尝试从 container.xml 找到 OPF 文件路径
+    // 从 container.xml 找 OPF 路径
     let opfPath = null
     const containerEntry = zipEntries.find(e => e.entryName === 'META-INF/container.xml')
     if (containerEntry) {
@@ -297,7 +300,7 @@ function parseEpubToc(epubPath) {
     const zip = new AdmZip(epubPath)
     const zipEntries = zip.getEntries()
 
-    // 首先从container.xml获取OPF路径
+    // 从 container.xml 获取 OPF 路径
     let opfDir = ''
     const containerEntry = zipEntries.find(e => e.entryName === 'META-INF/container.xml')
     if (containerEntry) {
@@ -360,16 +363,23 @@ function parseEpubToc(epubPath) {
     const chapters = []
 
     if (tocType === 'ncx') {
-      // 解析NCX格式
-      const navPointMatches = tocContent.matchAll(/<navPoint[^>]*id=["']([^"']*)["'][^>]*>([\s\S]*?)<\/navPoint>/gi)
-      for (const match of navPointMatches) {
-        const navPoint = match[2]
-        const textMatch = navPoint.match(/<navLabel[^>]*>[\s\S]*?<text>([^<]*)<\/text>/i)
-        const srcMatch = navPoint.match(/<content[^>]*src=["']([^"']+)["']/i)
+      // 解析NCX格式 - 扁平化处理所有navPoint（避免嵌套重复）
+      // 方法：匹配所有<navPoint>到</navPoint>的块，无论嵌套深度
+      const navPointRegex = /<navPoint[^>]*>[\s\S]*?<\/navPoint>/gi
+      const navPointMatches = tocContent.match(navPointRegex) || []
+      
+      console.log(`📑 找到 ${navPointMatches.length} 个navPoint标签`)
+      
+      for (const navPointBlock of navPointMatches) {
+        // 提取navLabel中的text
+        const textMatch = navPointBlock.match(/<navLabel[^>]*>[\s\S]*?<text>([\s\S]*?)<\/text>/i)
+        // 提取content中的src（第一个匹配）
+        const srcMatch = navPointBlock.match(/<content[^>]*src=["']([^"']+)["']/i)
         
         if (textMatch && srcMatch) {
+          const title = textMatch[1].replace(/<[^>]+>/g, '').trim() // 移除可能的HTML标签
           chapters.push({
-            title: textMatch[1].trim(),
+            title: title,
             href: srcMatch[1].split('#')[0] // 移除锚点
           })
         }
@@ -397,25 +407,14 @@ function parseEpubToc(epubPath) {
     }
 
     console.log(`📑 解析到 ${uniqueChapters.length} 个章节`)
+    
+    // 如果需要，返回去重后的章节数组
+    // 注意：完整的目录合并将在主函数中处理
     return uniqueChapters
   } catch (error) {
     console.error('❌ 解析EPUB目录失败:', error)
     return []
   }
-}
-
-// 辅助函数：将 UTC 时间转换为 UTC+8
-function convertToUTC8(utcTime) {
-  if (!utcTime) return utcTime
-  const date = new Date(utcTime + 'Z')
-  const utc8Date = new Date(date.getTime() + 8 * 60 * 60 * 1000)
-  const year = utc8Date.getFullYear()
-  const month = String(utc8Date.getMonth() + 1).padStart(2, '0')
-  const day = String(utc8Date.getDate()).padStart(2, '0')
-  const hours = String(utc8Date.getHours()).padStart(2, '0')
-  const minutes = String(utc8Date.getMinutes()).padStart(2, '0')
-  const seconds = String(utc8Date.getSeconds()).padStart(2, '0')
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
 // 配置文件上传
@@ -443,7 +442,7 @@ const upload = multer({
   }
 })
 
-// ============ 分类管理 API ============
+// 分类管理
 
 // 获取分类列表
 router.get('/categories', authenticateToken, async (req, res) => {
@@ -503,6 +502,9 @@ router.post('/categories', authenticateToken, requireWritePermission, async (req
     const stmt = db.prepare('INSERT INTO book_categories (name) VALUES (?)')
     const result = stmt.run(name.trim())
 
+    // 清除分类缓存，确保分类列表实时更新
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
+
     res.json({ id: result.lastInsertRowid, message: '创建成功' })
   } catch (error) {
     console.error('创建分类失败:', error)
@@ -538,6 +540,9 @@ router.put('/categories/:id', authenticateToken, async (req, res) => {
     const updateStmt = db.prepare('UPDATE book_categories SET name = ? WHERE id = ?')
     updateStmt.run(name.trim(), categoryId)
 
+    // 清除分类缓存，确保分类列表实时更新
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
+
     res.json({ message: '更新成功' })
   } catch (error) {
     console.error('更新分类失败:', error)
@@ -562,6 +567,9 @@ router.delete('/categories/:id', authenticateToken, requireWritePermission, asyn
 
     // 删除分类
     db.prepare('DELETE FROM book_categories WHERE id = ?').run(categoryId)
+
+    // 清除分类缓存，确保分类列表实时更新
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
 
     res.json({ message: '删除成功' })
   } catch (error) {
@@ -596,9 +604,9 @@ router.put('/categories/reorder', authenticateToken, requireWritePermission, asy
   }
 })
 
-// ============ 书籍管理 API ============
+// 书籍管理
 
-// ============ 分片上传 API ============
+// 分片上传
 
 // 上传分片
 router.post('/upload-chunk', authenticateToken, multer({ dest: chunksDir }).single('chunk'), async (req, res) => {
@@ -789,13 +797,25 @@ router.get('/', authenticateToken, async (req, res) => {
     const { keyword, category, sortBy, sortOrder } = req.query
     const db = getDatabase()
 
+    const userId = req.user?.id || null // 游客为 null，管理员为用户ID
+    
+    // 构建 JOIN 条件：管理员只查自己的进度，游客只查空进度
+    let progressJoin = ''
+    if (userId) {
+      // 管理员：user_id = 具体ID
+      progressJoin = 'LEFT JOIN reading_progress rp ON b.id = rp.book_id AND rp.user_id = ?'
+    } else {
+      // 游客：user_id IS NULL
+      progressJoin = 'LEFT JOIN reading_progress rp ON b.id = rp.book_id AND rp.user_id IS NULL'
+    }
+    
     let sql = `SELECT b.*, c.name as category_name,
                rp.current_page, rp.progress, rp.font_size
                FROM books b
                LEFT JOIN book_categories c ON b.category_id = c.id
-               LEFT JOIN reading_progress rp ON b.id = rp.book_id
+               ${progressJoin}
                WHERE 1=1`
-    const params = []
+    const params = userId ? [userId] : []
 
     if (keyword) {
       sql += ' AND (b.title LIKE ? OR b.author LIKE ?)'
@@ -952,6 +972,9 @@ router.post('/upload', authenticateToken, upload.single('file'), async (req, res
       封面: coverImagePath ? '已提取' : '无'
     })
 
+    // 清除分类缓存，确保分类数量统计实时更新
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
+
     res.json({ id: result.lastInsertRowid, title: finalTitle, message: '上传成功' })
   } catch (error) {
     console.error('❌ 上传书籍失败:', error)
@@ -1097,6 +1120,9 @@ router.delete('/:id', authenticateToken, requireWritePermission, async (req, res
     // 删除数据库记录（reading_progress 和 book_chapters 会级联删除）
     db.prepare('DELETE FROM books WHERE id = ?').run(req.params.id)
 
+    // 清除分类缓存，确保分类数量统计实时更新
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
+
     res.json({ message: '删除成功' })
   } catch (error) {
     console.error('删除书籍失败:', error)
@@ -1122,6 +1148,9 @@ router.post('/batch-delete', authenticateToken, requireWritePermission, async (r
       db.prepare('DELETE FROM books WHERE id = ?').run(id)
     }
 
+    // 清除分类缓存，确保分类数量统计实时更新
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
+
     res.json({ message: '批量删除成功' })
   } catch (error) {
     console.error('批量删除失败:', error)
@@ -1140,6 +1169,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
     )
     stmt.run(title, author, year, publisher, isbn, description, categoryId || null, req.params.id)
 
+    // 清除分类缓存，确保分类数量统计实时更新
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
+
     res.json({ message: '更新成功' })
   } catch (error) {
     console.error('更新书籍失败:', error)
@@ -1147,7 +1179,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
   }
 })
 
-// ============ 阅读器 API ============
+// 阅读器
 
 // 获取书籍内容
 router.get('/:id/content', async (req, res) => {
@@ -1212,6 +1244,22 @@ router.get('/:id/content', async (req, res) => {
         try {
           console.log('📖 使用缓存内容')
           const cachedData = JSON.parse(book.content_cache)
+          const currentToken = req.query.token
+          
+          // 替换缓存中的旧token为当前token（解决token过期问题）
+          if (currentToken && cachedData.chapters) {
+            cachedData.chapters = cachedData.chapters.map(chapter => {
+              if (chapter.content) {
+                // 替换图片URL中的token参数
+                chapter.content = chapter.content.replace(
+                  /token=[^&"']+/g,
+                  `token=${currentToken}`
+                )
+              }
+              return chapter
+            })
+          }
+          
           return res.json({
             chapters: cachedData.chapters,
             toc: cachedData.toc,
@@ -1271,15 +1319,32 @@ router.get('/:id/content', async (req, res) => {
 
         // 解析manifest获取文件路径 - 支持多种格式
         const manifest = {}
+        
+        // 方法1: 标准顺序 id -> href
         const itemMatches1 = opfContent.matchAll(/<item[^>]*id=["']([^"']+)["'][^>]*href=["']([^"']+)["']/gi)
         for (const match of itemMatches1) {
           manifest[match[1]] = match[2]
         }
+        
+        // 方法2: 反向顺序 href -> id
         const itemMatches2 = opfContent.matchAll(/<item[^>]*href=["']([^"']+)["'][^>]*id=["']([^"']+)["']/gi)
         for (const match of itemMatches2) {
           manifest[match[2]] = match[1]
         }
+        
+        // 方法3: 处理可能的多行情况
+        const itemMatches3 = opfContent.matchAll(/<item\s+([^>]*\n?[^>]*)\/>/gi)
+        for (const match of itemMatches3) {
+          const itemContent = match[1]
+          const idMatch = itemContent.match(/id=["']([^"']+)["']/i)
+          const hrefMatch = itemContent.match(/href=["']([^"']+)["']/i)
+          if (idMatch && hrefMatch && !manifest[idMatch[1]]) {
+            manifest[idMatch[1]] = hrefMatch[1]
+          }
+        }
+        
         console.log('📖 Manifest条目数:', Object.keys(manifest).length)
+        console.log('📖 Manifest前5项:', Object.entries(manifest).slice(0, 5))
 
         // 解析目录
         const chapters = parseEpubToc(book.file_path)
@@ -1290,22 +1355,35 @@ router.get('/:id/content', async (req, res) => {
         const token = req.query.token
         const chapterContents = []
         
+        console.log('📖 开始处理 spine 章节...')
+        let processedCount = 0
+        let skippedCount = 0
+        
         for (let i = 0; i < spineItems.length; i++) {
           const idref = spineItems[i]
           const href = manifest[idref]
-          if (href) {
-            const fullPath = opfDir ? `${opfDir}/${href}` : href
-            let contentEntry = zipEntries.find(e => e.entryName === fullPath)
-            if (!contentEntry) {
-              contentEntry = zipEntries.find(e => 
-                e.entryName.endsWith('/' + href) || 
-                e.entryName === href ||
-                e.entryName.endsWith(fullPath)
-              )
-            }
-            if (contentEntry) {
-              try {
-                let htmlContent = contentEntry.getData().toString('utf8')
+          
+          if (!href) {
+            console.log(`⚠️ Spine[${i}]: idref="${idref}" 在 manifest 中未找到对应的 href`)
+            skippedCount++
+            continue
+          }
+          
+          const fullPath = opfDir ? `${opfDir}/${href}` : href
+          let contentEntry = zipEntries.find(e => e.entryName === fullPath)
+          
+          if (!contentEntry) {
+            contentEntry = zipEntries.find(e => 
+              e.entryName.endsWith('/' + href) || 
+              e.entryName === href ||
+              e.entryName.endsWith(fullPath)
+            )
+          }
+          
+          if (contentEntry) {
+            processedCount++
+            try {
+              let htmlContent = contentEntry.getData().toString('utf8')
 
                 // 处理图片路径 - 转换为API调用
                 const chapterDir = path.dirname(fullPath)
@@ -1357,7 +1435,22 @@ router.get('/:id/content', async (req, res) => {
 
                 // 提取body内容
                 const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
-                const bodyContent = bodyMatch ? bodyMatch[1] : htmlContent
+                let bodyContent = bodyMatch ? bodyMatch[1] : htmlContent
+                
+                // 移除可能导致内容隐藏的样式和脚本
+                bodyContent = bodyContent
+                  .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '') // 移除脚本
+                  .replace(/style=["'][^"']*display:\s*none[^"']*["']/gi, '') // 移除display:none样式
+                
+                // 检查内容是否为纯图片（无文字但有图片）
+                const textContent = bodyContent.replace(/<[^>]+>/g, '').trim()
+                const hasImages = /<img\s|<image\s/i.test(bodyContent)
+                
+                if (textContent.length === 0 && !hasImages) {
+                  console.log(`⚠️ 章节内容为空: ${href}`)
+                } else if (textContent.length === 0 && hasImages) {
+                  console.log(`🖼️ 图片章节: ${href} (仅包含图片)`)
+                }
                 
                 chapterContents.push({
                   id: idref,
@@ -1367,9 +1460,11 @@ router.get('/:id/content', async (req, res) => {
               } catch (e) {
                 console.log('⚠️ 处理章节失败:', href, e.message)
               }
+            } else {
+              console.log(`⚠️ 找不到章节文件: spine[${i}] idref="${idref}" -> href="${href}" (查找路径: ${fullPath})`)
+              skippedCount++
             }
           }
-        }
 
         // 如果没有spine，尝试直接读取所有HTML文件
         if (chapterContents.length === 0) {
@@ -1416,7 +1511,12 @@ router.get('/:id/content', async (req, res) => {
               })
 
               const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
-              const bodyContent = bodyMatch ? bodyMatch[1] : htmlContent
+              let bodyContent = bodyMatch ? bodyMatch[1] : htmlContent
+              
+              // 移除可能导致内容隐藏的样式和脚本
+              bodyContent = bodyContent
+                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                .replace(/style=["'][^"']*display:\s*none[^"']*["']/gi, '')
               
               chapterContents.push({
                 id: entry.entryName,
@@ -1429,7 +1529,16 @@ router.get('/:id/content', async (req, res) => {
           }
         }
 
-        console.log(`✅ EPUB解析完成: ${chapterContents.length}个章节`)
+        console.log(`✅ EPUB解析完成: ${chapterContents.length}个章节 (成功处理: ${processedCount}, 跳过: ${skippedCount})`)
+        
+        // 显示前3个章节的标题（用于调试）
+        if (chapterContents.length > 0) {
+          console.log('📖 前3个章节预览:')
+          chapterContents.slice(0, 3).forEach((ch, idx) => {
+            const preview = ch.content.replace(/<[^>]+>/g, '').substring(0, 100)
+            console.log(`   [${idx}] ${ch.id}: ${preview}...`)
+          })
+        }
 
         // 建立 href -> 章节索引的映射
         const hrefToIndex = {}
@@ -1441,8 +1550,54 @@ router.get('/:id/content', async (req, res) => {
           hrefToIndex[ch.href.split('#')[0]] = idx
         })
 
+        // 生成完整目录：如果 NCX 章节数少于 spine 实际章节数，自动补充
+        let finalToc = chapters
+        
+        if (chapters.length < chapterContents.length) {
+          console.log(`📖 目录章节不足 (${chapters.length}/${chapterContents.length})，自动补充缺失章节`)
+          
+          // 收集已在目录中的 href（用于去重）
+          const tocHrefs = new Set(chapters.map(ch => ch.href.split('#')[0]))
+          
+          // 用 spine 顺序生成完整目录
+          finalToc = []
+          for (const idref of spineItems) {
+            const href = manifest[idref] || ''
+            const cleanHref = href.split('#')[0]
+            
+            // 检查是否在现有目录中
+            const existingChapter = chapters.find(ch => 
+              ch.href === href || ch.href === cleanHref ||
+              ch.href.endsWith('/' + cleanHref) || cleanHref.endsWith('/' + ch.href)
+            )
+            
+            if (existingChapter) {
+              finalToc.push({ ...existingChapter })
+            } else if (hrefToIndex[cleanHref] !== undefined || hrefToIndex[href] !== undefined) {
+              // 在章节内容中有但目录中没有，自动添加标题
+              const fileName = cleanHref.split('/').pop().replace(/\.(x?html?)$/i, '')
+              // 尝试生成友好的标题
+              let title = fileName.replace(/[_-]/g, ' ')
+                .replace(/^(ch|chapter|part|section)\s*/i, '第')
+                .replace(/(\d+)$/, '$1章')
+              
+              // 如果是图片/插图页面
+              if (/illustration|image|cover|postscript/i.test(fileName)) {
+                title = fileName.replace(/(\d+)/, ' $1').replace(/^/, '插图')
+              }
+              
+              finalToc.push({
+                title: title,
+                href: href,
+                isAutoGenerated: true
+              })
+            }
+          }
+          console.log(`📖 目录已扩展为 ${finalToc.length} 个章节`)
+        }
+
         // 为 TOC 添加章节索引
-        const tocWithIndex = chapters.map(ch => {
+        const tocWithIndex = finalToc.map(ch => {
           const normalizedHref = ch.href.split('/').pop().split('#')[0]
           let chapterIndex = hrefToIndex[normalizedHref]
           if (chapterIndex === undefined) {
@@ -1498,28 +1653,222 @@ router.get('/:id/content', async (req, res) => {
   }
 })
 
+// 分页获取章节内容
+router.get('/:id/chapters', async (req, res) => {
+  try {
+    const bookId = req.params.id
+    const startIndex = parseInt(req.query.start) || 0
+    const count = parseInt(req.query.count) || 5
+    
+    // 验证 token
+    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
+    if (!token) {
+      return res.status(401).json({ message: '需要认证' })
+    }
+    const jwt = await import('jsonwebtoken')
+    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
+    
+    const db = getDatabase()
+    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(bookId)
+    
+    if (!book || !book.file_path || !fs.existsSync(book.file_path)) {
+      return res.status(404).json({ message: '书籍不存在' })
+    }
+    
+    const ext = path.extname(book.file_path).toLowerCase()
+    
+    // 优先使用缓存
+    let allChapters = []
+    let toc = []
+    
+    const currentToken = req.query.token
+    
+    if (book.content_cache) {
+      try {
+        const cached = JSON.parse(book.content_cache)
+        allChapters = cached.chapters || []
+        toc = cached.toc || []
+        
+        // 替换缓存中的旧token为当前token
+        if (currentToken && allChapters.length > 0) {
+          allChapters = allChapters.map(chapter => {
+            if (chapter.content) {
+              chapter.content = chapter.content.replace(
+                /token=[^&"']+/g,
+                `token=${currentToken}`
+              )
+            }
+            return chapter
+          })
+        }
+      } catch (e) {
+        console.log('缓存解析失败')
+      }
+    }
+    
+    // 如果没有缓存，解析EPUB
+    if (allChapters.length === 0 && ext === '.epub') {
+      // 返回简化版目录结构，不加载内容
+      const zip = new AdmZip(book.file_path)
+      const zipEntries = zip.getEntries()
+      
+      // 解析目录
+      let containerEntry = zipEntries.find(e => e.entryName === 'META-INF/container.xml')
+      let opfEntry = null
+      if (containerEntry) {
+        const containerXml = containerEntry.getData().toString('utf8')
+        const rootfileMatch = containerXml.match(/<rootfile[^>]*full-path=["']([^"']+)["']/i)
+        if (rootfileMatch) {
+          opfEntry = zipEntries.find(e => e.entryName === rootfileMatch[1])
+        }
+      }
+      if (!opfEntry) {
+        opfEntry = zipEntries.find(e => e.entryName.endsWith('.opf'))
+      }
+      
+      if (opfEntry) {
+        const opfDir = path.dirname(opfEntry.entryName)
+        const opfContent = opfEntry.getData().toString('utf8')
+        
+        // 解析spine获取章节顺序
+        const spineItems = []
+        const spineMatches = opfContent.matchAll(/<itemref[^>]*idref=["']([^"']+)["']/gi)
+        for (const match of spineMatches) {
+          spineItems.push(match[1])
+        }
+        
+        // 解析manifest
+        const manifest = {}
+        const itemMatches = opfContent.matchAll(/<item[^>]*id=["']([^"']+)["'][^>]*href=["']([^"']+)["']/gi)
+        for (const match of itemMatches) {
+          manifest[match[1]] = match[2]
+        }
+        
+        // 构建章节列表（不含内容）
+        let index = 0
+        for (const idref of spineItems) {
+          const href = manifest[idref]
+          if (href && (href.endsWith('.html') || href.endsWith('.xhtml') || href.endsWith('.htm'))) {
+            allChapters.push({
+              id: `chapter-${index}`,
+              title: `章节 ${index + 1}`,
+              href: opfDir ? `${opfDir}/${href}` : href,
+              index: index,
+              content: null // 内容延迟加载
+            })
+            index++
+          }
+        }
+        
+        // 解析NCX获取标题
+        const ncxId = opfContent.match(/<spine[^>]*toc=["']([^"']+)["']/i)?.[1]
+        if (ncxId && manifest[ncxId]) {
+          const ncxEntry = zipEntries.find(e => e.entryName === (opfDir ? `${opfDir}/${manifest[ncxId]}` : manifest[ncxId]))
+          if (ncxEntry) {
+            const ncxContent = ncxEntry.getData().toString('utf8')
+            const navMatches = ncxContent.matchAll(/<navPoint[^>]*>[\s\S]*?<text>([^<]+)<\/text>[\s\S]*?<content[^>]*src=["']([^"']+)["']/gi)
+            for (const match of navMatches) {
+              const title = match[1].trim()
+              const src = match[2].split('#')[0]
+              const chapter = allChapters.find(ch => ch.href.includes(src) || src.includes(ch.href.split('/').pop()))
+              if (chapter) {
+                chapter.title = title
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    // 加载指定范围的章节内容
+    const endIndex = Math.min(startIndex + count, allChapters.length)
+    const chaptersToLoad = allChapters.slice(startIndex, endIndex)
+    
+    if (ext === '.epub') {
+      const zip = new AdmZip(book.file_path)
+      for (const chapter of chaptersToLoad) {
+        if (!chapter.content && chapter.href) {
+          const entry = zip.getEntries().find(e => 
+            e.entryName === chapter.href || 
+            e.entryName.endsWith(chapter.href.split('/').pop())
+          )
+          if (entry) {
+            let htmlContent = entry.getData().toString('utf8')
+            
+            // 处理图片路径 - 转换为API调用（与/content接口一致）
+            const chapterDir = path.dirname(chapter.href)
+            
+            // 处理 img 标签的 src 属性
+            htmlContent = htmlContent.replace(/<img[^>]*src=["']([^"']+)["']/gi, (match, src) => {
+              let imgPath = src
+              if (!src.startsWith('http') && !src.startsWith('data:')) {
+                if (src.startsWith('/')) {
+                  imgPath = src.substring(1)
+                } else {
+                  imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
+                }
+                const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                return match.replace(src, apiUrl)
+              }
+              return match
+            })
+            
+            // 提取body内容
+            const bodyMatch = htmlContent.match(/<body[^>]*>([\s\S]*)<\/body>/i)
+            chapter.content = bodyMatch ? bodyMatch[1] : htmlContent
+          }
+        }
+      }
+    }
+    
+    res.json({
+      chapters: chaptersToLoad,
+      toc: toc,
+      total: allChapters.length,
+      startIndex,
+      endIndex,
+      hasMore: endIndex < allChapters.length
+    })
+    
+  } catch (error) {
+    console.error('获取章节失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
 // 获取阅读进度
 router.get('/:id/progress', authenticateToken, async (req, res) => {
   try {
     const db = getDatabase()
-    const progress = db.prepare('SELECT * FROM reading_progress WHERE book_id = ?').get(req.params.id)
+    const userId = req.user?.id || null // 游客为 null，管理员为用户ID
+    
+    const progress = db.prepare(`
+      SELECT * FROM reading_progress 
+      WHERE book_id = ? AND user_id IS ?
+    `).get(req.params.id, userId)
 
     if (!progress) {
-      console.log('📖 未找到阅读进度，返回默认值')
-      return res.json({ currentPage: 0, scrollPosition: 0, progress: 0, fontSize: 16 })
+      console.log('📖 未找到阅读进度，返回默认值', { 书籍ID: req.params.id, 用户ID: userId })
+      return res.json({ 
+        currentPage: 0, 
+        progress: 0, 
+        fontSize: 16, 
+        cfi: null // EPUB CFI 定位锚点
+      })
     }
 
     const result = {
       currentPage: progress.current_page,
-      scrollPosition: progress.current_chapter ? parseFloat(progress.current_chapter) : 0, // 复用 current_chapter 字段存滚动位置
+      cfi: progress.cfi || null, // EPUB CFI 定位锚点
       progress: progress.progress,
       fontSize: progress.font_size
     }
     
     console.log('📖 返回阅读进度:', {
       书籍ID: req.params.id,
+      用户ID: userId,
       章节: result.currentPage,
-      滚动位置: result.scrollPosition,
+      CFI: result.cfi,
       进度: result.progress
     })
     
@@ -1533,28 +1882,37 @@ router.get('/:id/progress', authenticateToken, async (req, res) => {
 // 保存阅读进度
 router.post('/:id/progress', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { currentPage, scrollPosition, progress, fontSize } = req.body
+    const { currentPage, progress, fontSize, cfi } = req.body
     const db = getDatabase()
-
+    const userId = req.user?.id || null // 游客为 null，管理员为用户ID
+    
     console.log('💾 保存阅读进度:', {
       书籍ID: req.params.id,
+      用户ID: userId,
       章节: currentPage,
-      滚动位置: scrollPosition,
+      CFI: cfi,
       进度: progress
     })
 
-    // 更新或插入阅读进度（current_chapter 字段复用存储 scrollPosition）
+    // 更新或插入阅读进度
     const stmt = db.prepare(
-      `INSERT INTO reading_progress (book_id, current_page, current_chapter, progress, font_size, updated_at)
-       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(book_id) DO UPDATE SET
+      `INSERT INTO reading_progress (book_id, user_id, current_page, cfi, progress, font_size, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(book_id, user_id) DO UPDATE SET
        current_page = excluded.current_page,
-       current_chapter = excluded.current_chapter,
+       cfi = excluded.cfi,
        progress = excluded.progress,
        font_size = excluded.font_size,
        updated_at = CURRENT_TIMESTAMP`
     )
-    stmt.run(req.params.id, currentPage || 0, String(scrollPosition || 0), progress || 0, fontSize || 16)
+    stmt.run(
+      req.params.id, 
+      userId, 
+      currentPage || 0, 
+      cfi || null, // EPUB CFI 定位锚点
+      progress || 0, 
+      fontSize || 16
+    )
 
     // 更新书籍的最后阅读时间
     db.prepare('UPDATE books SET last_read_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id)
@@ -1602,8 +1960,8 @@ router.delete('/:id/cache', authenticateToken, async (req, res) => {
   }
 })
 
-// 获取EPUB资源（图片、CSS等）
-router.get('/:id/resource', async (req, res) => {
+// 获取EPUB资源（图片、CSS等）- 应用专门的限流器
+router.get('/:id/resource', ebookResourceLimiter, async (req, res) => {
   try {
     const { path: resourcePath } = req.query
     const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
@@ -1664,13 +2022,21 @@ router.get('/:id/resource', async (req, res) => {
 
     if (!resourceEntry) {
       console.log('❌ 资源未找到:', normalizedPath)
-      console.log('📁 ZIP中的图片文件:', zipEntries.filter(e => /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(e.entryName)).map(e => e.entryName))
-      return res.status(404).json({ message: '资源不存在' })
+      console.log('📁 ZIP中的图片文件:', zipEntries.filter(e => /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(e.entryName)).map(e => e.entryName).slice(0, 20))
+      // 返回204 No Content而不是500，避免控制台报错
+      return res.status(204).end()
     }
 
     console.log('✅ 找到资源:', resourceEntry.entryName)
 
-    const data = resourceEntry.getData()
+    let data
+    try {
+      data = resourceEntry.getData()
+    } catch (err) {
+      console.error('❌ 读取资源数据失败:', resourceEntry.entryName, err.message)
+      return res.status(500).json({ message: '读取资源失败' })
+    }
+    
     const ext = path.extname(resourcePath).toLowerCase()
 
     // 设置Content-Type
@@ -1697,8 +2063,10 @@ router.get('/:id/resource', async (req, res) => {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: '认证失败' })
     }
-    console.error('获取资源失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('❌ 获取资源失败:', error)
+    console.error('❌ 错误堆栈:', error.stack)
+    console.error('❌ 请求参数:', { bookId: req.params.id, resourcePath: req.query.path })
+    res.status(500).json({ message: '服务器错误', error: error.message })
   }
 })
 

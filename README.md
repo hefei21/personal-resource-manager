@@ -35,22 +35,77 @@
 - 封面懒加载（IndexedDB 缓存）
 - 详情页优化（数据库优先）
 
+### 💻 代码仓库管理
+- Git 仓库链接管理
+- 代码文件预览（支持语法高亮）
+- 提交历史查看
+
+### 🔖 书签管理
+- URL 收藏、图标自动获取
+- 分类标签管理
+- 批量导入导出
+
+### 🎮 游戏管理
+- Steam 库集成
+- 成就追踪
+- 游戏时长统计
+
+### 🔒 安全功能
+- IP 黑名单管理
+- 外部 API 限流
+- 访问日志记录
+- 安全响应头
+
 ### 其他功能
-- 💻 代码仓库管理
-- 🔖 书签管理
-- 🎮 游戏管理（Steam 集成）
 - 🔍 全局搜索
 - 👥 权限管理（管理员/游客）
+- 📊 仪表盘统计
+- 📝 系统日志查看
 
 ## 🛠 技术栈
 
 | 类别 | 技术 |
 |------|------|
-| **前端** | Vue 3.4 + Vite 5.0 + TDesign |
+| **前端** | Vue 3.4 + Vite 5.0 + 原生组件 |
 | **后端** | Node.js 18 + Express 4.18 |
 | **数据库** | SQLite（better-sqlite3） |
 | **解析** | FFprobe（音频）、PDF.js（文档） |
 | **部署** | Docker Compose |
+
+> **注意**：所有 UI 组件均为原生 Vue + CSS 实现，不依赖第三方组件库
+
+## 🏗 项目架构
+
+### PC/移动端分离架构
+
+系统采用条件渲染实现响应式适配，各模块独立维护 PC 和移动端组件：
+
+```
+frontend/src/
+├── views/              # 主入口（条件渲染）
+│   ├── Anime.vue
+│   ├── Music.vue
+│   └── ...
+├── pc/pages/           # PC 端组件
+│   ├── AnimePC.vue
+│   ├── MusicPC.vue
+│   └── ...
+└── mobile/pages/       # 移动端组件
+    ├── AnimeMobile.vue
+    ├── MusicMobile.vue
+    └── ...
+```
+
+**主入口示例** (`views/Music.vue`):
+```vue
+<template>
+  <MusicMobile v-if="isMobile" />
+  <MusicPC v-else />
+</template>
+```
+
+- **PC 端**: 表格布局、批量操作、分屏预览
+- **移动端**: 卡片布局、触摸优化、底部操作栏
 
 ## 🚀 快速开始
 
@@ -126,11 +181,29 @@ volumes:
 
 ## 📖 文档
 
+### 部署与配置
 - [快速开始](docs/QUICKSTART.md)
 - [数据库结构](docs/DATABASE_SCHEMA.md)
 - [Docker 部署](docs/NAS_DEPLOYMENT.md)
 - [FFmpeg 配置](docs/FFMPEG_SETUP.md)
 - [Clash 代理](docs/CLASH_DEPLOYMENT.md)
+
+### 安全与运维
+- [权限管理系统](docs/PERMISSION_SYSTEM.md)
+- [安全加固指南](docs/SECURITY_HARDENING_GUIDE.md)
+- [IP 黑名单](docs/IP_BLACKLIST.md)
+- [外部 API 限流](docs/EXTERNAL_API_RATE_LIMIT.md)
+
+### 功能模块
+- [书籍管理](docs/BOOKS_MANAGEMENT.md)
+- [文档管理](docs/DOCUMENTS_MANAGEMENT.md)
+- [音乐管理](docs/MUSIC_MANAGEMENT.md)
+- [动漫管理](docs/ANIME_MANAGEMENT.md)
+- [博客管理](docs/BLOG_MANAGEMENT.md)
+- [游戏管理](docs/GAMES_MANAGEMENT.md)
+- [代码管理](docs/CODE_MANAGEMENT.md)
+- [书签管理](docs/BOOKMARKS_FEATURE.md)
+- [仪表盘](docs/DASHBOARD_MANAGEMENT.md)
 
 ## 🔒 安全提示
 
@@ -161,16 +234,30 @@ volumes:
 
 ## 📝 开发计划
 
+- [x] ~~移动端适配~~ ✅ **已完成**（PC/移动端分离架构）
+- [x] ~~权限管理系统~~ ✅ **已完成**（管理员/游客双角色）
+- [x] ~~安全加固~~ ✅ **已完成**（IP黑名单、限流、日志）
 - [ ] 全文搜索（SQLite FTS5）
-- [ ] 移动端适配
 - [ ] 多用户支持
 - [ ] API 开放
 - [ ] 数据导出
 
 ## 🐛 已知问题修复
 
+### 架构重构（2026-05-29）
+- **PC/移动端分离架构**：各模块独立维护 PC 和移动端组件，通过条件渲染实现响应式适配
+  - PC端：原生 Vue + CSS 组件，表格布局，支持批量操作
+  - 移动端：原生 Vue + CSS 组件，卡片布局，触摸优化
+- **UI 组件库移除**：完全移除 TDesign 依赖，所有组件使用原生实现，解决移动端兼容性问题
+- **后端服务层抽取**：新增 `backend/src/services/` 目录，业务逻辑更清晰
+- **安全功能增强**：
+  - IP 黑名单管理（自动/手动封禁可疑IP）
+  - 外部 API 限流（防止滥用 Bangumi 等第三方接口）
+  - 访问日志记录（审计追踪）
+  - 安全响应头（X-Frame-Options、X-Content-Type-Options 等）
+
 ### UI 优化（2026-04-03）
-- **悬停提示问题**：移除 TDesign t-tooltip 组件，改用浏览器原生 title 属性，解决重复悬停框和样式冲突问题（影响模块：音乐、动漫、书籍、书签）
+- **悬停提示问题**：改用浏览器原生 title 属性，解决重复悬停框和样式冲突问题（影响模块：音乐、动漫、书籍、书签）
 - **加载状态优化**：所有列表页实现骨架屏效果，页面框架立即显示，内容区域显示加载动画
 - **表格布局优化**：修复音乐和动漫管理页面的表格列对齐问题，确保表头与内容左对齐
 - **游客权限优化**：所有写操作按钮对游客显示为禁用状态，提供明确的权限提示

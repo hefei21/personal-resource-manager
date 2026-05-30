@@ -20,7 +20,8 @@
     "mammoth": "^1.7.1",
     "xlsx": "^0.18.5",
     "lunar-javascript": "^1.6.12",
-    "md-editor-v3": "^4.13.2"
+    "md-editor-v3": "^4.13.2",
+    "@phosphor-icons/vue": "^2.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.2",

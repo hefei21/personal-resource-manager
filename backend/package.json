@@ -22,7 +22,10 @@
     "https-proxy-agent": "^6.2.1",
     "cheerio": "^1.0.0",
     "redis": "^4.6.12",
-    "sharp": "^0.33.0"
+    "sharp": "^0.33.0",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "ip2region": "^2.3.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

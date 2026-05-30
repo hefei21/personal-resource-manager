@@ -333,7 +333,42 @@ function extractFromInfobox(infobox, key) {
 
 ---
 
-## 六、性能优化
+## 六、前端架构
+
+### PC/移动端分离架构
+
+采用条件渲染方式实现响应式适配：
+
+**主入口文件** (`frontend/src/views/Anime.vue`):
+```vue
+<template>
+  <AnimeMobile v-if="isMobile" />
+  <div v-else class="anime">
+    <!-- PC端内容 -->
+  </div>
+</template>
+```
+
+**PC端组件** (`frontend/src/pc/pages/AnimePC.vue`):
+- 表格布局展示动漫列表
+- 支持表头排序
+- 搜索和筛选功能
+- 分页浏览
+
+**移动端组件** (`frontend/src/mobile/pages/AnimeMobile.vue`):
+- 卡片列表布局
+- 支持滑动删除
+- 底部操作栏
+- 响应式搜索栏
+
+**移动端详情页** (`frontend/src/mobile/pages/AnimeDetailMobile.vue`):
+- 全屏展示动漫详情
+- 关联作品点击跳转
+- 资源搜索结果显示
+
+---
+
+## 七、性能优化
 
 ### 1. 封面加载优化
 
@@ -820,7 +855,7 @@ api.interceptors.response.use(
 
 ---
 
-## 七、前端 API 封装
+## 八、前端 API 封装
 
 **文件**: `frontend/src/api/index.js`
 
@@ -847,19 +882,22 @@ anime: {
 
 ---
 
-## 八、关键文件路径
+## 九、关键文件路径
 
 | 功能模块 | 文件路径 |
 |----------|----------|
 | 后端路由 | `backend/src/routes/anime.js` |
 | 数据库配置 | `backend/src/config/database.js` |
 | 前端视图 | `frontend/src/views/Anime.vue` |
+| PC端组件 | `frontend/src/pc/pages/AnimePC.vue` |
+| 移动端组件 | `frontend/src/mobile/pages/AnimeMobile.vue` |
+| 移动端详情 | `frontend/src/mobile/pages/AnimeDetailMobile.vue` |
 | 详情组件 | `frontend/src/components/AnimeDetailDialog.vue` |
 | API 定义 | `frontend/src/api/index.js` |
 
 ---
 
-## 九、配置说明
+## 十、配置说明
 
 ### 环境变量
 
@@ -883,7 +921,7 @@ services:
 
 ---
 
-## 十、使用说明
+## 十一、使用说明
 
 ### 1. 搜索动漫
 
@@ -929,7 +967,7 @@ services:
 
 ---
 
-## 十一、注意事项
+## 十二、注意事项
 
 1. **Bangumi API 限制**：
    - 需要自定义 User-Agent

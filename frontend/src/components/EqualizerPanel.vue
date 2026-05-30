@@ -3,25 +3,18 @@
     <div class="equalizer-header">
       <h3 class="equalizer-title">均衡器</h3>
       <div class="header-controls">
-        <t-switch
+        <NativeSwitch
           v-model="enabled"
           size="small"
           @change="handleEnableChange"
         />
-        <t-select
+        <NativeSelect
           v-model="currentPreset"
           size="small"
           class="preset-select"
           @change="handlePresetChange"
-        >
-          <t-option
-            v-for="(preset, key) in presets"
-            :key="key"
-            :value="key"
-            :label="preset.name"
-          />
-          <t-option value="custom" label="自定义" :disabled="true" />
-        </t-select>
+          :options="presetOptions"
+        />
       </div>
     </div>
 
@@ -56,16 +49,22 @@
     </div>
 
     <div class="actions">
-      <t-button size="small" variant="outline" @click="handleReset" :disabled="!enabled">
+      <NativeButton class="equalizer-reset-btn" size="small" variant="outline" @click="handleReset" :disabled="!enabled">
         重置
-      </t-button>
+      </NativeButton>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, computed } from 'vue'
 import { equalizer, EQUALIZER_PRESETS } from '../utils/Equalizer.js'
+import { usePermission } from '@/composables/usePermission'
+import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeSelect, NativeSwitch } from '@/components/native'
+import { useToast } from '@/composables/useToast'
+
+const toast = useToast()
+const { isGuest } = usePermission()
 
 // 频率标签
 const frequencies = ['31', '62', '125', '250', '500', '1K', '2K', '4K', '8K', '16K']
@@ -75,6 +74,14 @@ const enabled = ref(false)
 const bands = ref([...equalizer.bands])
 const currentPreset = ref('default')
 const presets = EQUALIZER_PRESETS
+
+// 预设选项
+const presetOptions = computed(() => {
+  return Object.entries(presets).map(([key, preset]) => ({
+    value: key,
+    label: preset.name
+  })).concat([{ value: 'custom', label: '自定义', disabled: true }])
+})
 
 // 监听均衡器状态
 watch(() => equalizer.isEnabled, (val) => {
@@ -127,14 +134,24 @@ function handleReset() {
   saveConfig()
 }
 
-// 保存配置到 localStorage
+// 保存配置到 localStorage（仅管理员）
 function saveConfig() {
+  if (isGuest.value) return // 游客不保存配置
   const config = equalizer.getConfig()
   localStorage.setItem('equalizerConfig', JSON.stringify(config))
 }
 
-// 加载配置
+// 加载配置（仅管理员）
 function loadConfig() {
+  // 游客使用默认配置，不从localStorage加载
+  if (isGuest.value) {
+    equalizer.reset()
+    bands.value = [...equalizer.bands]
+    currentPreset.value = 'default'
+    enabled.value = false
+    return
+  }
+  
   try {
     const saved = localStorage.getItem('equalizerConfig')
     if (saved) {
@@ -169,7 +186,6 @@ defineExpose({
   padding: 12px 10px;
   min-width: 480px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .equalizer-header {
@@ -194,32 +210,53 @@ defineExpose({
   gap: 12px;
 }
 
-/* 预设下拉框样式 */
+/* 预设下拉框样式 - NativeSelect */
 .preset-select {
   width: 100px;
 }
 
-.preset-select :deep(.t-input) {
+.preset-select :deep(.native-select__trigger) {
   background: rgba(255, 255, 255, 0.15) !important;
   border-color: rgba(255, 255, 255, 0.2) !important;
-}
-
-.preset-select :deep(.t-input__inner) {
   color: #fff !important;
   font-size: 13px;
+  height: 28px;
+  min-height: 28px;
 }
 
-.preset-select :deep(.t-input__inner::placeholder) {
-  color: rgba(255, 255, 255, 0.5);
+.preset-select :deep(.native-select__label) {
+  color: #fff !important;
 }
 
-.preset-select :deep(.t-fake-arrow) {
+.preset-select :deep(.native-select__arrow) {
   color: rgba(255, 255, 255, 0.8);
 }
 
-/* 开关样式 */
-.header-controls :deep(.t-switch) {
-  --td-switch-checked-color: #6bcb77;
+.preset-select :deep(.native-select__dropdown) {
+  background: #1b263b;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.preset-select :deep(.native-select__option) {
+  color: #fff;
+}
+
+.preset-select :deep(.native-select__option:hover) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.preset-select :deep(.native-select__option--selected) {
+  background: rgba(74, 222, 128, 0.3);
+  color: #4ade80;
+}
+
+/* 开关样式 - NativeSwitch */
+.header-controls :deep(.native-switch__track) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.header-controls :deep(.native-switch--checked .native-switch__track) {
+  background: #6bcb77;
 }
 
 .bands-container {
@@ -300,16 +337,32 @@ defineExpose({
   box-shadow: 0 0 6px rgba(74, 222, 128, 0.3), 0 0 6px rgba(252, 165, 165, 0.3);
 }
 
+/* 均衡器滑块 - 移动端隐藏 */
 .vertical-slider {
-  position: relative;
-  width: 120px;
-  height: 20px;
-  transform: rotate(-90deg);
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
-  outline: none;
-  cursor: pointer;
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+/* PC端显示 */
+@media (min-width: 769px) {
+  .vertical-slider {
+    position: relative;
+    width: 120px;
+    height: 20px;
+    transform: rotate(-90deg);
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    outline: none;
+    cursor: pointer;
+    opacity: 1;
+    pointer-events: auto;
+    visibility: visible;
+  }
 }
 
 .vertical-slider::-webkit-slider-runnable-track {
@@ -384,20 +437,26 @@ defineExpose({
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-/* 重置按钮样式 */
-.actions :deep(.t-button) {
-  color: #fff;
-  border-color: rgba(255, 255, 255, 0.3);
-  background: rgba(255, 255, 255, 0.1);
-  font-weight: 500;
+/* 重置按钮样式 - 使用高优先级选择器 */
+.equalizer-reset-btn {
+  border-color: rgba(255, 255, 255, 0.4) !important;
+  background: rgba(255, 255, 255, 0.15) !important;
+  color: #fff !important;
+  font-weight: 500 !important;
+  min-width: 64px;
 }
 
-.actions :deep(.t-button:hover) {
-  border-color: rgba(255, 255, 255, 0.5);
-  background: rgba(255, 255, 255, 0.15);
+.equalizer-reset-btn:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.6) !important;
+  background: rgba(255, 255, 255, 0.25) !important;
+  color: #fff !important;
 }
 
-.actions :deep(.t-button:disabled) {
-  opacity: 0.4;
+.equalizer-reset-btn:disabled {
+  opacity: 0.6 !important;
+  color: rgba(255, 255, 255, 0.6) !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  cursor: not-allowed;
 }
 </style>

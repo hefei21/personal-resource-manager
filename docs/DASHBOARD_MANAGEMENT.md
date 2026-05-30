@@ -77,7 +77,36 @@
 
 ---
 
-## 四、API 接口
+## 四、前端架构
+
+### PC/移动端分离架构
+
+采用条件渲染方式实现响应式适配：
+
+**主入口文件** (`frontend/src/views/Dashboard.vue`):
+```vue
+<template>
+  <DashboardMobile v-if="isMobile" />
+  <div v-else class="dashboard">
+    <!-- PC端内容 -->
+  </div>
+</template>
+```
+
+**PC端组件** (`frontend/src/pc/pages/DashboardPC.vue`):
+- 统计卡片网格布局（6列）
+- 日程表双栏布局（日历+待办）
+- 最近活动列表
+
+**移动端组件** (`frontend/src/mobile/pages/DashboardMobile.vue`):
+- 统计卡片垂直堆叠
+- 日程表单栏布局
+- 底部快捷操作
+- 待办事项滑动操作
+
+---
+
+## 五、API 接口
 
 ### 统计接口
 
@@ -96,7 +125,7 @@
 
 ---
 
-## 五、技术实现细节
+## 六、技术实现细节
 
 ### 1. 统计数据获取
 
@@ -201,7 +230,7 @@ function formatSize(bytes) {
 
 ---
 
-## 六、配置说明
+## 七、配置说明
 
 ### 数据刷新频率
 
@@ -216,16 +245,18 @@ function formatSize(bytes) {
 
 ---
 
-## 七、关键文件路径
+## 八、关键文件路径
 
 | 功能模块 | 文件路径 |
 |----------|----------|
 | 前端视图 | `frontend/src/views/Dashboard.vue` |
+| PC端组件 | `frontend/src/pc/pages/DashboardPC.vue` |
+| 移动端组件 | `frontend/src/mobile/pages/DashboardMobile.vue` |
 | API 定义 | `frontend/src/api/index.js` |
 
 ---
 
-## 八、使用说明
+## 九、使用说明
 
 ### 查看统计
 

@@ -2,23 +2,17 @@ import express from 'express'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 import { cache, CacheTTL } from '../utils/cache.js'
+import { convertToUTC8 } from '../utils/time.js'
+import { PAGINATION } from '../config/constants.js'
 
 const router = express.Router()
 
-// 时间转换函数：UTC转UTC+8
-function convertToUTC8(dateString) {
-  if (!dateString) return ''
-  const date = new Date(dateString)
-  const utc8Time = new Date(date.getTime() + 8 * 60 * 60 * 1000)
-  return utc8Time.toISOString().replace('T', ' ').substring(0, 19)
-}
-
-// ==================== 文章相关 ====================
+// 文章管理
 
 // 获取文章列表
 router.get('/posts', async (req, res) => {
   try {
-    const { status, category_id, tag_id, keyword, page = 1, pageSize = 30 } = req.query
+    const { status, category_id, tag_id, keyword, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
     
     // 尝试从缓存获取
     const cacheKey = `blog:posts:${status || 'all'}:${category_id || 'all'}:${tag_id || 'all'}:${keyword || 'all'}:${page}:${pageSize}`
@@ -314,7 +308,8 @@ router.put('/posts/:id', authenticateToken, requireWritePermission, async (req, 
       message: '更新成功'
     })
     
-    // 清除文章列表缓存
+    // 清除文章缓存（单篇 + 列表）
+    await cache.del(`blog:post:${id}`)
     await cache.delPattern('blog:posts:*')
   } catch (error) {
     console.error('更新文章失败:', error)
@@ -340,7 +335,8 @@ router.delete('/posts/:id', authenticateToken, requireWritePermission, async (re
       message: '删除成功'
     })
     
-    // 清除文章列表缓存
+    // 清除文章缓存（单篇 + 列表）
+    await cache.del(`blog:post:${id}`)
     await cache.delPattern('blog:posts:*')
   } catch (error) {
     console.error('删除文章失败:', error)
@@ -348,7 +344,7 @@ router.delete('/posts/:id', authenticateToken, requireWritePermission, async (re
   }
 })
 
-// ==================== 分类相关 ====================
+// 分类管理
 
 // 获取分类列表（树形）
 router.get('/categories', async (req, res) => {
@@ -539,7 +535,7 @@ router.delete('/categories/:id', authenticateToken, requireWritePermission, (req
   }
 })
 
-// ==================== 标签相关 ====================
+// 标签管理
 
 // 获取标签列表
 router.get('/tags', async (req, res) => {

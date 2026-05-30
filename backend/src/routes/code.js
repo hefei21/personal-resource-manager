@@ -42,23 +42,47 @@ router.get('/:id/raw/:path(*)', async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
+    // 禁止路径中的 .. 和空字节（防止路径遍历）
+    if (relativePath.includes('..') || relativePath.includes('\0')) {
+      console.log('安全检查失败: 路径包含非法字符')
+      return res.status(403).json({ message: '非法路径' })
+    }
+
     // 将 URL 中的 / 转换为系统路径分隔符
     relativePath = relativePath.replace(/\//g, path.sep)
     
     console.log('请求图片路径:', relativePath, '仓库路径:', repo.local_path)
     
-    const fullPath = path.join(repo.local_path, relativePath)
+    // 使用 path.resolve 规范化路径，防止路径遍历
+    const resolvedRepoPath = path.resolve(repo.local_path)
+    const fullPath = path.resolve(path.join(resolvedRepoPath, relativePath))
     console.log('完整路径:', fullPath)
     
-    // 安全检查
-    if (!fullPath.startsWith(repo.local_path)) {
+    // 安全检查：确保解析后的路径在仓库目录内
+    const pathSeparator = path.sep
+    if (!fullPath.startsWith(resolvedRepoPath + pathSeparator) && fullPath !== resolvedRepoPath) {
       console.log('安全检查失败: 路径不在仓库目录内')
       return res.status(403).json({ message: '非法路径' })
     }
 
+    // 检查文件是否存在（同时检查符号链接）
     if (!fs.existsSync(fullPath)) {
       console.log('文件不存在:', fullPath)
       return res.status(404).json({ message: '文件不存在' })
+    }
+
+    // 检查是否是符号链接（防止通过软链接访问其他目录）
+    try {
+      const realPath = fs.realpathSync(fullPath)
+      const resolvedRealPath = path.resolve(realPath)
+      if (!resolvedRealPath.startsWith(resolvedRepoPath + pathSeparator) && 
+          resolvedRealPath !== resolvedRepoPath) {
+        console.log('安全检查失败: 符号链接指向仓库外部')
+        return res.status(403).json({ message: '不能访问符号链接' })
+      }
+    } catch (e) {
+      console.log('无法解析文件路径:', e.message)
+      return res.status(403).json({ message: '无法访问该文件' })
     }
 
     const stats = fs.statSync(fullPath)
@@ -661,7 +685,7 @@ router.get('/:id/readme', authenticateToken, async (req, res) => {
 
     let content = fs.readFileSync(readmePath, 'utf-8')
     
-    // 转换相对图片路径为 base64 data URL（避免代理拦截问题）
+    // 转换相对图片路径为 base64 data URL
     content = convertImagePathsToBase64(content, repo.local_path, readmePath)
     
     console.log('README 图片路径转换完成')
@@ -827,7 +851,7 @@ router.get('/:id/commits', authenticateToken, async (req, res) => {
       // Git 日志
       try {
         const { stdout } = await execAsync(
-          `git -C "${repo.local_path}" log --pretty=format:"%H|%an|%ad|%s" --date=iso -n ${limit}`,
+          `git -C "${repo.local_path}" log --pretty=format:"%H|%an|%ad|%s" --date=format:'%Y-%m-%d %H:%M:%S' -n ${limit}`,
           { timeout: 30000 }
         )
         commits = stdout.split('\n').filter(line => line).map(line => {
@@ -859,6 +883,14 @@ router.get('/:id/commits', authenticateToken, async (req, res) => {
 router.get('/:id/commit/:hash', authenticateToken, async (req, res) => {
   try {
     const { hash } = req.params
+    
+    // 尝试从缓存获取
+    const cacheKey = `code:commit:${req.params.id}:${hash}`
+    const cached = await cache.get(cacheKey)
+    if (cached) {
+      return res.json({ data: cached })
+    }
+    
     const db = getDatabase()
     const repo = db.prepare('SELECT local_path, type FROM code_repositories WHERE id = ?').get(req.params.id)
     

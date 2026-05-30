@@ -56,6 +56,7 @@ class Equalizer {
     this.isInitialized = false
     this.bands = [...EQUALIZER_PRESETS.default.bands]
     this.currentPreset = 'default'
+    this.pendingEnabled = false // 记录用户期望的启用状态
   }
 
   /**
@@ -87,16 +88,24 @@ class Equalizer {
       this.gainNode = this.audioContext.createGain()
       this.gainNode.gain.value = 1
 
-      // 连接节点链：source -> filters -> gainNode -> destination
-      this.sourceNode.connect(this.filters[0])
-      for (let i = 0; i < this.filters.length - 1; i++) {
-        this.filters[i].connect(this.filters[i + 1])
+      // 根据 pendingEnabled 决定初始连接方式
+      if (this.pendingEnabled) {
+        // 启用均衡器：source -> filters -> gainNode -> destination
+        this.sourceNode.connect(this.filters[0])
+        for (let i = 0; i < this.filters.length - 1; i++) {
+          this.filters[i].connect(this.filters[i + 1])
+        }
+        this.filters[this.filters.length - 1].connect(this.gainNode)
+        this.gainNode.connect(this.audioContext.destination)
+        this.isEnabled = true
+      } else {
+        // 禁用均衡器：直接连接到输出
+        this.sourceNode.connect(this.audioContext.destination)
+        this.isEnabled = false
       }
-      this.filters[this.filters.length - 1].connect(this.gainNode)
-      this.gainNode.connect(this.audioContext.destination)
 
       this.isInitialized = true
-      console.log('✓ 均衡器初始化成功')
+      console.log(`✓ 均衡器初始化成功 (已${this.isEnabled ? '启用' : '禁用'})`)
       return true
     } catch (error) {
       console.error('均衡器初始化失败:', error)
@@ -108,7 +117,11 @@ class Equalizer {
    * 启用均衡器
    */
   enable() {
-    if (!this.isInitialized) return
+    this.pendingEnabled = true
+    if (!this.isInitialized) {
+      this.isEnabled = true // 先设置状态，初始化时会应用
+      return
+    }
     this.isEnabled = true
     // 重新连接均衡器路径
     this.sourceNode.disconnect()
@@ -120,7 +133,11 @@ class Equalizer {
    * 禁用均衡器（直通模式）
    */
   disable() {
-    if (!this.isInitialized) return
+    this.pendingEnabled = false
+    if (!this.isInitialized) {
+      this.isEnabled = false // 先设置状态，初始化时会应用
+      return
+    }
     this.isEnabled = false
     // 断开均衡器，直接连接到输出
     this.sourceNode.disconnect()
@@ -197,7 +214,12 @@ class Equalizer {
 
     if (config.bands && Array.isArray(config.bands)) {
       this.setAllBands(config.bands)
-      // 如果不是预设配置，标记为自定义
+    }
+
+    // 恢复预设名称（如果保存的是预设）或标记为自定义
+    if (config.preset && EQUALIZER_PRESETS[config.preset]) {
+      this.currentPreset = config.preset
+    } else {
       this.currentPreset = 'custom'
     }
 
