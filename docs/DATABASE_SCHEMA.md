@@ -283,29 +283,78 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 13. reading_progress - 阅读进度表
+### 13. book_chapters - 书籍目录表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
-| id | INTEGER | PRIMARY KEY AUTOINCREMENT | - | 进度ID |
-| book_id | INTEGER | NOT NULL UNIQUE | - | 书籍ID |
-| current_page | INTEGER | - | 0 | 当前章节索引 |
-| current_chapter | TEXT | - | NULL | 滚动位置（复用此字段存储百分比） |
-| progress | REAL | - | 0 | 总进度百分比 |
-| font_size | INTEGER | - | 16 | 字体大小 |
-| updated_at | DATETIME | - | CURRENT_TIMESTAMP | 更新时间 |
+| id | INTEGER | PRIMARY KEY AUTOINCREMENT | - | 目录ID |
+| book_id | INTEGER | NOT NULL | - | 书籍ID |
+| title | TEXT | - | NULL | 章节标题 |
+| chapter_index | INTEGER | NOT NULL | - | 章节索引 |
+| start_position | INTEGER | - | 0 | 起始位置（字节） |
+| created_at | DATETIME | - | CURRENT_TIMESTAMP | 创建时间 |
 
 **外键约束**:
 - `book_id` REFERENCES `books(id)` ON DELETE CASCADE
 
+**索引**:
+- `book_id` + `chapter_index` (复合索引)
+
 **字段说明**:
-- `current_page`: 当前阅读的章节索引（从 0 开始）
-- `current_chapter`: 复用字段，存储章节内滚动位置（0-1 的浮点数）
-- `progress`: 总阅读进度百分比
+- `chapter_index`: 章节顺序索引，从 0 开始
+- `start_position`: 在TXT文件中的起始字节位置
 
 ---
 
-### 14. blog_posts - 博客文章表
+### 14. reading_progress - 阅读进度表
+
+| 字段名 | 类型 | 约束 | 默认值 | 说明 |
+|--------|------|------|--------|------|
+| id | INTEGER | PRIMARY KEY AUTOINCREMENT | - | 进度ID |
+| book_id | INTEGER | NOT NULL | - | 书籍ID |
+| user_id | INTEGER | - | NULL | 用户ID（NULL表示游客） |
+| current_page | INTEGER | - | 0 | 当前章节索引 |
+| cfi | TEXT | - | NULL | EPUB CFI定位字符串 |
+| progress | REAL | - | 0 | 总进度百分比 |
+| font_size | INTEGER | - | 16 | 字体大小 |
+| created_at | DATETIME | - | CURRENT_TIMESTAMP | 创建时间 |
+| updated_at | DATETIME | - | CURRENT_TIMESTAMP | 更新时间 |
+
+**外键约束**:
+- `book_id` REFERENCES `books(id)` ON DELETE CASCADE
+- `user_id` REFERENCES `users(id)` ON DELETE CASCADE
+
+**唯一约束**:
+- `UNIQUE(book_id, user_id)` - 每本书每个用户只有一条进度记录
+
+**字段说明**:
+- `current_page`: 当前阅读的章节索引（从 0 开始）
+- `cfi`: EPUB标准CFI定位字符串，精准定位阅读位置
+- `progress`: 总阅读进度百分比
+- `user_id`: 支持多用户进度隔离，管理员和游客的进度独立保存
+
+---
+
+### 24. schema_migrations - 数据库迁移记录表
+
+| 字段名 | 类型 | 约束 | 默认值 | 说明 |
+|--------|------|------|--------|------|
+| id | INTEGER | PRIMARY KEY AUTOINCREMENT | - | 记录ID |
+| migration_name | TEXT | NOT NULL UNIQUE | - | 迁移名称 |
+| applied_at | DATETIME | - | CURRENT_TIMESTAMP | 应用时间 |
+
+**字段说明**:
+- `migration_name`: 迁移脚本名称，如 "add_reading_progress_user_id"
+- `applied_at`: 迁移执行时间
+
+**用途**:
+- 记录已执行的数据库迁移
+- 防止重复迁移
+- 支持幂等性迁移脚本
+
+---
+
+### 15. blog_posts - 博客文章表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -338,7 +387,7 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 16. blog_tags - 博客标签表
+### 17. blog_tags - 博客标签表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -349,7 +398,7 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 17. blog_post_tags - 文章标签关联表
+### 18. blog_post_tags - 文章标签关联表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -363,7 +412,7 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 18. games - 游戏表
+### 19. games - 游戏表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -394,7 +443,7 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 19. steam_config - Steam 配置表
+### 20. steam_config - Steam 配置表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -408,7 +457,7 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 20. game_achievements - 游戏成就表
+### 21. game_achievements - 游戏成就表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -428,7 +477,7 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 21. private_documents - 私密文件表
+### 22. private_documents - 私密文件表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -441,7 +490,7 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 22. private_settings - 私密空间设置表
+### 23. private_settings - 私密空间设置表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -452,7 +501,7 @@ id | name   | parent_id | path         | level | sort_order
 
 ---
 
-### 23. todos - 待办事项表
+### 25. todos - 待办事项表
 
 | 字段名 | 类型 | 约束 | 默认值 | 说明 |
 |--------|------|------|--------|------|
@@ -481,7 +530,8 @@ categories (分类)
 
 books (书籍)
   └─ book_categories (分类) [N:1]
-  └─ reading_progress (进度) [1:1]
+  └─ book_chapters (目录) [1:N]
+  └─ reading_progress (进度) [1:N] 按用户隔离
 
 music (音乐)
   └─ playlists (歌单) [N:M] 通过 playlist_songs 关联
@@ -518,6 +568,13 @@ private_documents (私密文件)
 
 ## 数据库迁移历史
 
+### 2026-05-XX
+- ✅ 添加 `reading_progress.user_id` 字段（多用户进度隔离）
+- ✅ 修改 `reading_progress` 唯一约束为 `UNIQUE(book_id, user_id)`
+- ✅ 添加 `reading_progress.cfi` 字段（EPUB精准定位）
+- ✅ 添加 `book_chapters` 表（书籍目录）
+- ✅ 添加 `schema_migrations` 表（迁移记录）
+
 ### 2026-03-19
 - ✅ 添加 `book_categories` 表（书籍分类）
 - ✅ 添加 `books` 表（书籍信息）
@@ -526,6 +583,8 @@ private_documents (私密文件)
 
 ### 2026-03-18
 - ✅ 添加 `categories.sort_order` 字段（支持拖拽排序）
+- ✅ 添加 `book_categories.sort_order` 字段（支持拖拽排序）
+- ✅ 添加 `blog_categories.sort_order` 字段（支持拖拽排序）
 
 ### 历史迁移
 - ✅ 添加 `documents.subcategory` 字段（支持多级分类）
@@ -542,7 +601,8 @@ private_documents (私密文件)
 - `blog_tags.name` (UNIQUE)
 - `playlists.name` (UNIQUE)
 - `book_categories.name` (UNIQUE)
-- `reading_progress.book_id` (UNIQUE)
+- `reading_progress.book_id` + `reading_progress.user_id` (复合UNIQUE)
+- `schema_migrations.migration_name` (UNIQUE)
 - 所有 PRIMARY KEY 字段
 
 建议添加的索引（如果查询性能有问题）：
@@ -553,6 +613,9 @@ CREATE INDEX idx_categories_parent_id ON categories(parent_id);
 CREATE INDEX idx_categories_sort_order ON categories(sort_order);
 CREATE INDEX idx_books_category_id ON books(category_id);
 CREATE INDEX idx_books_last_read_at ON books(last_read_at);
+CREATE INDEX idx_book_chapters_book_id ON book_chapters(book_id);
+CREATE INDEX idx_reading_progress_book_id ON reading_progress(book_id);
+CREATE INDEX idx_reading_progress_user_id ON reading_progress(user_id);
 CREATE INDEX idx_blog_posts_category_id ON blog_posts(category_id);
 CREATE INDEX idx_blog_posts_status ON blog_posts(status);
 CREATE INDEX idx_games_status ON games(status);
@@ -580,4 +643,7 @@ CREATE INDEX idx_playlist_songs_playlist_id ON playlist_songs(playlist_id);
    - 删除分类时会级联删除子分类
    - 删除文档时会级联删除文档版本
    - 删除代码仓库时会级联删除代码版本
+   - 删除书籍时会级联删除阅读进度和目录
 4. **分类路径**: `categories.path` 和 `documents.subcategory` 格式为 "一级/二级/三级"
+5. **多用户进度**: `reading_progress` 表使用 `user_id` 字段隔离不同用户的阅读进度，管理员和游客的进度独立保存
+6. **迁移记录**: `schema_migrations` 表用于记录已执行的数据库迁移，确保迁移脚本的幂等性

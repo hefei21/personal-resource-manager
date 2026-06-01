@@ -4,6 +4,18 @@
 
 书籍管理模块提供完整的电子书管理功能，支持多格式电子书（TXT、EPUB、PDF）、分片上传、内置阅读器、阅读进度同步和资源搜索。
 
+![书籍管理](./screenshots/05-books.png)
+
+**移动端界面：**
+
+![移动端书籍管理](./screenshots/mobile-07-books.png)
+
+*移动端书籍列表 - 瀑布流卡片布局*
+
+![移动端阅读器](./screenshots/mobile-08-book-reader.png)
+
+*移动端阅读器 - 仿真纸张背景，底部导航*
+
 ## 二、数据库结构
 
 ### 1. book_categories 表（书籍分类表）
@@ -183,6 +195,8 @@
 - CFI 精准定位（EPUB 标准定位字符串）
 - 总体阅读进度百分比
 - 字体设置
+
+![书籍阅读器](./screenshots/12-book-reader.png)
 
 #### 自动保存策略
 

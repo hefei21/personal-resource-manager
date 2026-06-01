@@ -2,30 +2,146 @@ import Database from 'better-sqlite3'
 import fs from 'fs'
 import path from 'path'
 import bcrypt from 'bcryptjs'
+import { getCurrentUsername, getContext } from '../utils/dbContext.js'
 
-const dbPath = process.env.DB_PATH || path.join(process.env.DATA_PATH, 'database', 'app.db')
-const dbDir = path.dirname(dbPath)
+const baseDbPath = process.env.DB_PATH || path.join(process.env.DATA_PATH, 'database', 'app.db')
+const dbDir = path.dirname(baseDbPath)
 
 // 确保数据库目录存在
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true })
 }
 
-// 获取数据库连接（同步）
-let db = null
+// 数据库连接池（按数据库路径存储）
+const dbPool = new Map()
 
-function getDatabase() {
-  if (!db) {
-    db = new Database(dbPath)
-    db.pragma('journal_mode = WAL')
-    console.log(`数据库已连接: ${dbPath}`)
+// 当前请求的 req 对象（用于在没有上下文时回退）
+let currentReq = null
+
+/**
+ * 设置当前请求的 req 对象
+ * @param {Object} req - Express 请求对象
+ */
+export function setCurrentReq(req) {
+  currentReq = req
+}
+
+/**
+ * 获取当前请求的 req 对象
+ * @returns {Object|null} Express 请求对象
+ */
+export function getCurrentReq() {
+  return currentReq
+}
+
+// 测试账号配置
+const TEST_DB_NAME = 'app_test.db'
+const TEST_USERNAME = 'test'
+const TEST_PASSWORD = '123456'
+
+/**
+ * 根据用户名获取数据库路径
+ * @param {string} username - 用户名，为null时使用默认数据库
+ * @returns {string} 数据库文件路径
+ */
+function getDbPathByUsername(username) {
+  if (username === TEST_USERNAME) {
+    return path.join(dbDir, TEST_DB_NAME)
   }
-  return db
+  return baseDbPath
+}
+
+/**
+ * 获取数据库连接（支持多用户）
+ * @param {Object|string} reqOrUsername - Express请求对象或用户名，为null时使用默认数据库或从上下文获取
+ * @returns {Database} better-sqlite3 数据库实例
+ */
+function getDatabase(reqOrUsername = null) {
+  let username = null
+  
+  // 如果传入的是请求对象
+  if (reqOrUsername && typeof reqOrUsername === 'object' && reqOrUsername.user) {
+    username = reqOrUsername.user.username
+  } else if (typeof reqOrUsername === 'string') {
+    // 如果传入的是用户名字符串
+    username = reqOrUsername
+  } else {
+    // 尝试从上下文获取
+    const context = getContext()
+    if (context) {
+      username = context.username
+      // 如果没有 username 但有 req 对象，尝试从 req 获取
+      if (!username && context.req && context.req.user) {
+        username = context.req.user.username
+      }
+    }
+    
+    // 如果上下文没有 username，尝试从 currentReq 获取
+    if (!username && currentReq && currentReq.user) {
+      username = currentReq.user.username
+    }
+  }
+  
+  const dbPath = getDbPathByUsername(username)
+  
+  if (!dbPool.has(dbPath)) {
+    const db = new Database(dbPath)
+    db.pragma('journal_mode = WAL')
+    console.log(`数据库已连接: ${dbPath}${username ? ` (用户: ${username})` : ''}`)
+    dbPool.set(dbPath, db)
+  }
+  return dbPool.get(dbPath)
+}
+
+/**
+ * 从请求中获取用户名
+ * @param {Object} req - Express 请求对象
+ * @returns {string|null} 用户名
+ */
+function getUsernameFromRequest(req) {
+  if (req.user && req.user.username) {
+    return req.user.username
+  }
+  return null
+}
+
+/**
+ * 获取当前请求对应的数据库
+ * @param {Object} req - Express 请求对象
+ * @returns {Database} better-sqlite3 数据库实例
+ */
+function getDatabaseForRequest(req) {
+  const username = getUsernameFromRequest(req)
+  return getDatabase(username)
 }
 
 // 初始化数据库表
 function initDatabase() {
-  const database = getDatabase()
+  // 初始化主数据库
+  const mainDb = getDatabase()
+  initDatabaseInstance(mainDb, 'main')
+  
+  // 初始化测试数据库（如果不存在则创建）
+  const testDbPath = path.join(dbDir, TEST_DB_NAME)
+  const testDb = getDatabase(TEST_USERNAME)
+  initDatabaseInstance(testDb, 'test')
+  
+  // 创建 test 用户（在主数据库中）
+  createTestUser(mainDb)
+  
+  // 为测试数据库插入示例数据
+  insertTestData(testDb)
+  
+  return mainDb
+}
+
+/**
+ * 初始化单个数据库实例
+ * @param {Database} database - 数据库实例
+ * @param {string} dbType - 数据库类型（main/test）
+ */
+function initDatabaseInstance(database, dbType = 'main') {
+  console.log(`\n========== 初始化 ${dbType} 数据库 ==========`)
 
   // 处理旧的 schema_migrations 表结构（如果存在）
   try {
@@ -1034,8 +1150,262 @@ function initDatabase() {
     console.log('⚠ 索引创建过程出错:', error.message)
   }
 
+  console.log(`========== ${dbType} 数据库初始化完成 ==========\n`)
   return database
 }
 
+/**
+ * 创建测试用户
+ * @param {Database} mainDb - 主数据库实例
+ */
+function createTestUser(mainDb) {
+  const hashedPassword = bcrypt.hashSync(TEST_PASSWORD, 10)
+  const stmt = mainDb.prepare(
+    `INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)`
+  )
+  const result = stmt.run(TEST_USERNAME, hashedPassword)
+  if (result.changes > 0) {
+    console.log(`✓ 测试用户已创建: ${TEST_USERNAME} / ${TEST_PASSWORD}`)
+  } else {
+    console.log(`✓ 测试用户已存在: ${TEST_USERNAME}`)
+  }
+}
+
+/**
+ * 为测试数据库插入示例数据
+ * @param {Database} testDb - 测试数据库实例
+ */
+function insertTestData(testDb) {
+  // 检查是否已有数据
+  const checkStmt = testDb.prepare('SELECT COUNT(*) as count FROM documents')
+  const { count } = checkStmt.get()
+  if (count > 0) {
+    console.log('✓ 测试数据库已有数据，跳过示例数据插入')
+    return
+  }
+  
+  console.log('正在插入示例数据到测试数据库...')
+  
+  // ========== 文档管理示例数据 ==========
+  const docCategories = [
+    { name: '技术文档', parent_id: null, path: '技术文档', level: 0 },
+    { name: '前端开发', parent_id: 1, path: '技术文档/前端开发', level: 1 },
+    { name: '后端开发', parent_id: 1, path: '技术文档/后端开发', level: 1 },
+    { name: '工作资料', parent_id: null, path: '工作资料', level: 0 },
+    { name: '学习笔记', parent_id: null, path: '学习笔记', level: 0 }
+  ]
+  
+  const catStmt = testDb.prepare(`
+    INSERT INTO categories (name, parent_id, path, level) VALUES (?, ?, ?, ?)
+  `)
+  docCategories.forEach(cat => catStmt.run(cat.name, cat.parent_id, cat.path, cat.level))
+  
+  const documents = [
+    { title: 'Vue3 开发指南.pdf', category: '技术文档', subcategory: '前端开发', tags: 'Vue,前端,框架', file_path: '/docs/vue3-guide.pdf' },
+    { title: 'React 最佳实践.pdf', category: '技术文档', subcategory: '前端开发', tags: 'React,前端,框架', file_path: '/docs/react-best-practices.pdf' },
+    { title: 'Node.js 性能优化.pdf', category: '技术文档', subcategory: '后端开发', tags: 'Node.js,后端,性能', file_path: '/docs/nodejs-performance.pdf' },
+    { title: '2024年度工作总结.docx', category: '工作资料', subcategory: '', tags: '工作,总结', file_path: '/docs/work-summary-2024.docx' },
+    { title: 'JavaScript 高级程序设计读书笔记.pdf', category: '学习笔记', subcategory: '', tags: 'JS,读书笔记', file_path: '/docs/js-advanced-notes.pdf' },
+    { title: 'Python 数据分析入门.pdf', category: '学习笔记', subcategory: '', tags: 'Python,数据', file_path: '/docs/python-data-analysis.pdf' }
+  ]
+  
+  const docStmt = testDb.prepare(`
+    INSERT INTO documents (title, category, subcategory, tags, file_path) VALUES (?, ?, ?, ?, ?)
+  `)
+  documents.forEach(doc => docStmt.run(doc.title, doc.category, doc.subcategory, doc.tags, doc.file_path))
+  
+  // ========== 音乐管理示例数据 ==========
+  const playlists = [
+    { name: '我的最爱', description: '最常听的歌曲合集' },
+    { name: '工作专注', description: '适合工作时听的轻音乐' },
+    { name: '运动健身', description: '跑步健身时听的音乐' }
+  ]
+  
+  const playlistStmt = testDb.prepare(`
+    INSERT INTO playlists (name, description) VALUES (?, ?)
+  `)
+  playlists.forEach(p => playlistStmt.run(p.name, p.description))
+  
+  const music = [
+    { title: '告白气球', artist: '周杰伦', album: '周杰伦的床边故事', duration: 215, file_type: 'mp3' },
+    { title: '晴天', artist: '周杰伦', album: '叶惠美', duration: 269, file_type: 'mp3' },
+    { title: '演员', artist: '薛之谦', album: '初学者', duration: 257, file_type: 'mp3' },
+    { title: '成都', artist: '赵雷', album: '无法长大', duration: 336, file_type: 'flac' },
+    { title: '夜空中最亮的星', artist: '逃跑计划', album: '世界', duration: 252, file_type: 'mp3' },
+    { title: '平凡之路', artist: '朴树', album: '猎户星座', duration: 301, file_type: 'flac' },
+    { title: '起风了', artist: '买辣椒也用券', album: '起风了', duration: 313, file_type: 'mp3' },
+    { title: '稻香', artist: '周杰伦', album: '魔杰座', duration: 223, file_type: 'mp3' }
+  ]
+  
+  const musicStmt = testDb.prepare(`
+    INSERT INTO music (title, artist, album, duration, file_type) VALUES (?, ?, ?, ?, ?)
+  `)
+  music.forEach(m => musicStmt.run(m.title, m.artist, m.album, m.duration, m.file_type))
+  
+  // 关联歌单和歌曲
+  const playlistSongs = [
+    { playlist_id: 1, music_id: 1 }, { playlist_id: 1, music_id: 2 }, { playlist_id: 1, music_id: 4 },
+    { playlist_id: 2, music_id: 5 }, { playlist_id: 2, music_id: 6 },
+    { playlist_id: 3, music_id: 3 }, { playlist_id: 3, music_id: 7 }, { playlist_id: 3, music_id: 8 }
+  ]
+  
+  const psStmt = testDb.prepare(`
+    INSERT INTO playlist_songs (playlist_id, music_id) VALUES (?, ?)
+  `)
+  playlistSongs.forEach(ps => psStmt.run(ps.playlist_id, ps.music_id))
+  
+  // 更新歌单歌曲数量
+  testDb.exec(`
+    UPDATE playlists SET song_count = (
+      SELECT COUNT(*) FROM playlist_songs WHERE playlist_id = playlists.id
+    )
+  `)
+  
+  // ========== 书籍管理示例数据 ==========
+  const bookCategories = [
+    { name: '技术书籍' }, { name: '小说文学' }, { name: '商业管理' }
+  ]
+  
+  const bookCatStmt = testDb.prepare(`
+    INSERT INTO book_categories (name) VALUES (?)
+  `)
+  bookCategories.forEach(bc => bookCatStmt.run(bc.name))
+  
+  const books = [
+    { title: '深入理解计算机系统', author: 'Randal E. Bryant', year: '2016', publisher: '机械工业出版社', category_id: 1 },
+    { title: '三体', author: '刘慈欣', year: '2008', publisher: '重庆出版社', category_id: 2 },
+    { title: '百年孤独', author: '加西亚·马尔克斯', year: '2011', publisher: '南海出版公司', category_id: 2 },
+    { title: '从0到1', author: '彼得·蒂尔', year: '2015', publisher: '中信出版社', category_id: 3 },
+    { title: '人类简史', author: '尤瓦尔·赫拉利', year: '2014', publisher: '中信出版社', category_id: 3 }
+  ]
+  
+  const bookStmt = testDb.prepare(`
+    INSERT INTO books (title, author, year, publisher, category_id, file_path, total_pages) 
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  books.forEach(b => bookStmt.run(b.title, b.author, b.year, b.publisher, b.category_id, '/books/' + b.title + '.pdf', Math.floor(Math.random() * 500) + 100))
+  
+  // ========== 代码仓库示例数据 ==========
+  const codeRepos = [
+    { name: 'personal-resource-manager', url: 'https://github.com/demo/personal-resource-manager', description: '个人资源管理系统', local_path: '/code/personal-resource-manager' },
+    { name: 'vue-admin-template', url: 'https://github.com/demo/vue-admin-template', description: 'Vue3 后台管理模板', local_path: '/code/vue-admin-template' },
+    { name: 'rust-web-server', url: 'https://github.com/demo/rust-web-server', description: 'Rust 编写的 Web 服务器', local_path: '/code/rust-web-server' },
+    { name: 'python-ml-examples', url: 'https://github.com/demo/python-ml-examples', description: 'Python 机器学习示例', local_path: '/code/python-ml-examples' },
+    { name: 'go-microservices', url: 'https://github.com/demo/go-microservices', description: 'Go 微服务架构示例', local_path: '/code/go-microservices' }
+  ]
+  
+  const codeStmt = testDb.prepare(`
+    INSERT INTO code_repositories (name, url, description, local_path) VALUES (?, ?, ?, ?)
+  `)
+  codeRepos.forEach(c => codeStmt.run(c.name, c.url, c.description, c.local_path))
+  
+  // ========== 书签管理示例数据 ==========
+  const bookmarks = [
+    { title: 'GitHub', url: 'https://github.com', category: '开发工具', tags: 'git,代码托管' },
+    { title: 'Stack Overflow', url: 'https://stackoverflow.com', category: '开发工具', tags: '问答,编程' },
+    { title: 'Vue.js 官方文档', url: 'https://vuejs.org', category: '技术文档', tags: 'Vue,前端' },
+    { title: 'MDN Web Docs', url: 'https://developer.mozilla.org', category: '技术文档', tags: 'Web,文档' },
+    { title: '掘金', url: 'https://juejin.cn', category: '技术社区', tags: '社区,前端' },
+    { title: '知乎', url: 'https://www.zhihu.com', category: '知识社区', tags: '问答,知识' },
+    { title: '哔哩哔哩', url: 'https://www.bilibili.com', category: '娱乐', tags: '视频,弹幕' },
+    { title: '网易云音乐', url: 'https://music.163.com', category: '音乐', tags: '音乐,娱乐' }
+  ]
+  
+  const bookmarkStmt = testDb.prepare(`
+    INSERT INTO bookmarks (title, url, category, tags) VALUES (?, ?, ?, ?)
+  `)
+  bookmarks.forEach(b => bookmarkStmt.run(b.title, b.url, b.category, b.tags))
+  
+  // ========== 博客文章示例数据 ==========
+  const blogCategories = [
+    { name: '技术分享' }, { name: '生活随笔' }, { name: '读书笔记' }
+  ]
+  
+  const blogCatStmt = testDb.prepare(`
+    INSERT INTO blog_categories (name) VALUES (?)
+  `)
+  blogCategories.forEach(bc => blogCatStmt.run(bc.name))
+  
+  const blogPosts = [
+    { title: '2024年前端技术趋势展望', content: '本文将探讨2024年前端领域的技术发展趋势...', category_id: 1, status: 'published' },
+    { title: '我的2024年度总结', content: '回顾这一年，收获颇丰...', category_id: 2, status: 'published' },
+    { title: '读完《代码大全》有感', content: '这是一本值得反复阅读的经典著作...', category_id: 3, status: 'draft' },
+    { title: 'Vue3 Composition API 最佳实践', content: '分享一些使用 Composition API 的心得体会...', category_id: 1, status: 'published' },
+    { title: '周末露营记', content: '上周末和朋友去郊外露营，天气很好...', category_id: 2, status: 'published' }
+  ]
+  
+  const blogStmt = testDb.prepare(`
+    INSERT INTO blog_posts (title, content, category_id, status) VALUES (?, ?, ?, ?)
+  `)
+  blogPosts.forEach(bp => blogStmt.run(bp.title, bp.content, bp.category_id, bp.status))
+  
+  // ========== 动漫管理示例数据 ==========
+  const animeList = [
+    { bangumi_id: 100444, title: '进击的巨人', name_cn: '进击的巨人', rating: 9.0, eps_total: 75, status: 'completed', air_date: '2013-04-07' },
+    { bangumi_id: 160209, title: '鬼灭之刃', name_cn: '鬼灭之刃', rating: 8.8, eps_total: 26, status: 'completed', air_date: '2019-04-06' },
+    { bangumi_id: 137722, title: 'Re:从零开始的异世界生活', name_cn: 'Re:从零开始的异世界生活', rating: 8.5, eps_total: 50, status: 'watching', air_date: '2016-04-04' },
+    { bangumi_id: 278826, title: '咒术回战', name_cn: '咒术回战', rating: 8.3, eps_total: 24, status: 'completed', air_date: '2020-10-03' },
+    { bangumi_id: 265, title: '钢之炼金术师', name_cn: '钢之炼金术师', rating: 9.2, eps_total: 64, status: 'completed', air_date: '2009-04-05' },
+    { bangumi_id: 101960, title: '约定的梦幻岛', name_cn: '约定的梦幻岛', rating: 8.6, eps_total: 23, status: 'completed', air_date: '2019-01-10' },
+    { bangumi_id: 292222, title: '间谍过家家', name_cn: '间谍过家家', rating: 8.1, eps_total: 25, status: 'watching', air_date: '2022-04-09' },
+    { bangumi_id: 18652, title: '命运石之门', name_cn: '命运石之门', rating: 9.1, eps_total: 24, status: 'completed', air_date: '2011-04-06' }
+  ]
+  
+  const animeStmt = testDb.prepare(`
+    INSERT INTO anime (bangumi_id, title, name_cn, rating, eps_total, status, air_date) 
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  animeList.forEach(a => animeStmt.run(a.bangumi_id, a.title, a.name_cn, a.rating, a.eps_total, a.status, a.air_date))
+  
+  // ========== 游戏管理示例数据 ==========
+  const games = [
+    { steam_appid: 730, title: 'Counter-Strike 2', developers: 'Valve', publishers: 'Valve', release_date: '2023-09-27', status: 'playing', playtime_forever: 2580, metacritic_score: 88 },
+    { steam_appid: 570, title: 'Dota 2', developers: 'Valve', publishers: 'Valve', release_date: '2013-07-09', status: 'completed', playtime_forever: 5200, metacritic_score: 90 },
+    { steam_appid: 1623730, title: 'Palworld', developers: 'Pocketpair', publishers: 'Pocketpair', release_date: '2024-01-19', status: 'playing', playtime_forever: 680, metacritic_score: 75 },
+    { steam_appid: 292030, title: 'The Witcher 3: Wild Hunt', developers: 'CD PROJEKT RED', publishers: 'CD PROJEKT RED', release_date: '2015-05-18', status: 'completed', playtime_forever: 8900, metacritic_score: 93 },
+    { steam_appid: 1091500, title: 'Cyberpunk 2077', developers: 'CD PROJEKT RED', publishers: 'CD PROJEKT RED', release_date: '2020-12-10', status: 'playing', playtime_forever: 4500, metacritic_score: 86 },
+    { steam_appid: 1245620, title: 'ELDEN RING', developers: 'FromSoftware', publishers: 'Bandai Namco', release_date: '2022-02-25', status: 'playing', playtime_forever: 3200, metacritic_score: 96 },
+    { steam_appid: 359550, title: 'Tom Clancy\'s Rainbow Six Siege', developers: 'Ubisoft', publishers: 'Ubisoft', release_date: '2015-12-01', status: 'playing', playtime_forever: 1200, metacritic_score: 79 },
+    { steam_appid: 1085660, title: 'Destiny 2', developers: 'Bungie', publishers: 'Bungie', release_date: '2019-10-01', status: 'completed', playtime_forever: 2100, metacritic_score: 83 }
+  ]
+  
+  const gameStmt = testDb.prepare(`
+    INSERT INTO games (steam_appid, title, developers, publishers, release_date, status, playtime_forever, metacritic_score) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `)
+  games.forEach(g => gameStmt.run(g.steam_appid, g.title, g.developers, g.publishers, g.release_date, g.status, g.playtime_forever, g.metacritic_score))
+  
+  // ========== 待办事项示例数据 ==========
+  const todos = [
+    { text: '完成项目文档编写', date: new Date().toISOString().split('T')[0], completed: 0, confirmed: 1 },
+    { text: '学习 TypeScript 高级特性', date: new Date().toISOString().split('T')[0], completed: 0, confirmed: 1 },
+    { text: '整理书架', date: new Date().toISOString().split('T')[0], completed: 1, confirmed: 1 },
+    { text: '购买生活用品', date: new Date(Date.now() + 86400000).toISOString().split('T')[0], completed: 0, confirmed: 0 },
+    { text: '预订餐厅', date: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0], completed: 0, confirmed: 0 },
+    { text: '完成代码审查', date: new Date().toISOString().split('T')[0], completed: 1, confirmed: 1 },
+    { text: '回复邮件', date: new Date().toISOString().split('T')[0], completed: 0, confirmed: 1 },
+    { text: '健身锻炼', date: new Date().toISOString().split('T')[0], completed: 1, confirmed: 1 }
+  ]
+  
+  const todoStmt = testDb.prepare(`
+    INSERT INTO todos (text, date, completed, confirmed) VALUES (?, ?, ?, ?)
+  `)
+  todos.forEach(t => todoStmt.run(t.text, t.date, t.completed, t.confirmed))
+  
+  // ========== 私密文件示例数据 ==========
+  const privateDocs = [
+    { title: '个人财务记录.xlsx', size: 24576 },
+    { title: '身份证复印件.pdf', size: 102400 },
+    { title: '重要合同扫描件.pdf', size: 512000 }
+  ]
+  
+  const privateStmt = testDb.prepare(`
+    INSERT INTO private_documents (title, file_path, size) VALUES (?, ?, ?)
+  `)
+  privateDocs.forEach((pd, idx) => privateStmt.run(pd.title, `/private/doc${idx + 1}.${pd.title.split('.').pop()}`, pd.size))
+  
+  console.log('✓ 示例数据插入完成')
+}
+
 // 获取数据库实例
-export { getDatabase, initDatabase }
+export { getDatabase, getDatabaseForRequest, initDatabase }

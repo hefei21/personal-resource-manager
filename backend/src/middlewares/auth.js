@@ -1,4 +1,6 @@
 import jwt from 'jsonwebtoken'
+import { runWithContext } from '../utils/dbContext.js'
+import { setCurrentReq } from '../config/database.js'
 
 // 强制从环境变量读取JWT密钥，拒绝使用默认值
 const JWT_SECRET = process.env.JWT_SECRET
@@ -35,7 +37,26 @@ export function authenticateToken(req, res, next) {
       return res.status(403).json({ message: '无效的令牌' })
     }
     req.user = user
-    next()
+    
+    // 设置 currentReq 以便 getDatabase() 能够获取当前用户
+    setCurrentReq(req)
+    
+    // 在请求结束时清除 currentReq
+    res.on('finish', () => {
+      setCurrentReq(null)
+    })
+    
+    // 设置数据库上下文，让 getDatabase() 能根据用户返回正确的数据库
+    const context = {
+      username: user?.username || null,
+      userId: user?.id || null,
+      isGuest: user?.isGuest || false,
+      req: req  // 保存 req 对象以便后续使用
+    }
+    
+    runWithContext(context, () => {
+      next()
+    })
   })
 }
 

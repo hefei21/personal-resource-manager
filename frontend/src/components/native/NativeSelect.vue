@@ -46,39 +46,41 @@
         </svg>
       </span>
     </div>
-    <div v-if="isOpen" ref="dropdownRef" class="native-select__dropdown" :style="dropdownStyle">
-      <div v-if="filterable" class="native-select__filter-dropdown">
-        <input 
-          v-model="filterText"
-          type="text"
-          class="native-select__filter-input-dropdown"
-          :placeholder="filterPlaceholder"
-        >
-      </div>
-      <div class="native-select__options-list">
-        <div
-          v-for="option in filteredOptions"
-          :key="option.value"
-          class="native-select__option"
-          :class="{ 
-            'native-select__option--selected': isOptionSelected(option),
-            'native-select__option--multiple': multiple,
-            'native-select__option--disabled': option.disabled
-          }"
-          @click="selectOption(option)"
-        >
-          <span v-if="multiple" class="native-select__checkbox">
-            <svg v-if="isOptionSelected(option)" viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-            </svg>
-          </span>
-          <span class="native-select__option-label" v-html="highlightMatch(option.label)"></span>
+    <Teleport to="body">
+      <div v-if="isOpen" ref="dropdownRef" class="native-select__dropdown" :style="dropdownStyle" @click.stop>
+        <div v-if="filterable" class="native-select__filter-dropdown">
+          <input 
+            v-model="filterText"
+            type="text"
+            class="native-select__filter-input-dropdown"
+            :placeholder="filterPlaceholder"
+          >
         </div>
-        <div v-if="filteredOptions.length === 0" class="native-select__empty">
-          {{ emptyText }}
+        <div class="native-select__options-list">
+          <div
+            v-for="option in filteredOptions"
+            :key="option.value"
+            class="native-select__option"
+            :class="{ 
+              'native-select__option--selected': isOptionSelected(option),
+              'native-select__option--multiple': multiple,
+              'native-select__option--disabled': option.disabled
+            }"
+            @click="selectOption(option)"
+          >
+            <span v-if="multiple" class="native-select__checkbox">
+              <svg v-if="isOptionSelected(option)" viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+              </svg>
+            </span>
+            <span class="native-select__option-label" v-html="highlightMatch(option.label)"></span>
+          </div>
+          <div v-if="filteredOptions.length === 0" class="native-select__empty">
+            {{ emptyText }}
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -140,6 +142,7 @@ function documentClickHandler(event) {
   if (triggerRef.value && triggerRef.value.contains(target)) return
   
   // 如果点击的是 dropdown 元素或其子元素，不关闭
+  // 由于 dropdown 被 Teleport 到 body，需要通过 ref 检查
   if (dropdownRef.value && dropdownRef.value.contains(target)) return
   
   // 点击了外部，关闭下拉框

@@ -166,7 +166,7 @@
           <!-- 均衡器按钮（非侧边栏模式） -->
           <div v-if="!isSidebarMode" class="equalizer-wrapper" ref="equalizerWrapperRef">
             <button
-              class="icon-btn mode-btn"
+              class="icon-btn mode-btn equalizer-toggle-btn"
               :class="{ active: showEqualizer }"
               title="均衡器"
               @click="toggleEqualizer"
@@ -183,7 +183,7 @@
                   v-if="showEqualizer" 
                   class="equalizer-popup-panel" 
                   :style="equalizerPopupStyle"
-                  v-click-outside="() => showEqualizer = false"
+                  @click.stop
                 >
                   <EqualizerPanel />
                 </div>
@@ -325,22 +325,39 @@ function updateDragProgress(e) {
   dragProgress.value = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100))
 }
 
-// 点击播放器空白处关闭播放列表 - 使用document监听实现
+// 点击播放器空白处关闭播放列表和均衡器 - 使用document监听实现
 function handleDocumentClick(e) {
-  // 如果播放列表未显示，不处理
-  if (!showPlaylist.value) return
-  
-  // 获取播放列表面板和播放列表按钮
-  const playlistPanel = document.querySelector('.playlist-panel')
-  const playlistBtn = document.querySelector('.playlist-toggle-btn')
-  
-  // 如果点击的是播放列表面板内部或播放列表按钮，不关闭
-  if (playlistPanel?.contains(e.target) || playlistBtn?.contains(e.target)) {
-    return
+  // 处理播放列表
+  if (showPlaylist.value) {
+    // 获取播放列表面板和播放列表按钮
+    const playlistPanel = document.querySelector('.playlist-panel')
+    const playlistBtn = document.querySelector('.playlist-toggle-btn')
+    
+    // 如果点击的是播放列表面板内部或播放列表按钮，不关闭
+    if (playlistPanel?.contains(e.target) || playlistBtn?.contains(e.target)) {
+      return
+    }
+    
+    // 否则关闭播放列表
+    showPlaylist.value = false
   }
   
-  // 否则关闭播放列表
-  showPlaylist.value = false
+  // 处理均衡器面板
+  if (showEqualizer.value) {
+    const equalizerPanel = document.querySelector('.equalizer-popup-panel')
+    const equalizerBtn = document.querySelector('.equalizer-toggle-btn')
+    const selectDropdown = document.querySelector('.native-select__dropdown')
+    
+    // 如果点击的是均衡器面板内部、均衡器按钮或 Select dropdown，不关闭
+    if (equalizerPanel?.contains(e.target) || 
+        equalizerBtn?.contains(e.target) ||
+        selectDropdown?.contains(e.target)) {
+      return
+    }
+    
+    // 否则关闭均衡器
+    showEqualizer.value = false
+  }
 }
 
 onMounted(() => {
@@ -772,8 +789,8 @@ function handleWindowResize() {
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
   min-width: 320px;
   max-width: calc(100vw - 20px);
-  max-height: 400px;
-  overflow-y: auto;
+  max-height: none;
+  overflow: visible;
 }
 
 /* 淡入淡出动画 */

@@ -11,7 +11,7 @@
       >
         <div class="native-dialog" :style="{ width: typeof width === 'number' ? width + 'px' : width }">
           <div class="native-dialog__header">
-            <span :id="titleId" class="native-dialog__title">{{ title }}</span>
+            <span :id="titleId" class="native-dialog__title">{{ dialogTitle }}</span>
             <button 
               v-if="closeBtn" 
               class="native-dialog__close" 
@@ -25,7 +25,7 @@
           <div class="native-dialog__body">
             <slot />
           </div>
-          <div v-if="showFooter" class="native-dialog__footer">
+          <div v-if="showFooterComputed" class="native-dialog__footer">
             <slot name="footer">
               <NativeButton theme="default" @click="handleCancel">{{ cancelText }}</NativeButton>
               <NativeButton 
@@ -51,10 +51,12 @@ import NativeButton from './NativeButton.vue'
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   title: { type: String, default: '' },
+  header: { type: String, default: '' },
   width: { type: [String, Number], default: '520px' },
   closeBtn: { type: Boolean, default: true },
   closeOnOverlayClick: { type: Boolean, default: true },
   closeOnEsc: { type: Boolean, default: true },
+  footer: { type: Boolean, default: true },
   showFooter: { type: Boolean, default: true },
   confirmText: { type: String, default: '确定' },
   cancelText: { type: String, default: '取消' },
@@ -67,6 +69,12 @@ const emit = defineEmits(['update:modelValue', 'close', 'confirm', 'cancel', 'cl
 
 // 生成唯一标题ID用于 aria-labelledby
 const titleId = computed(() => 'dialog-title-' + Math.random().toString(36).substr(2, 9))
+
+// 兼容 footer 和 showFooter 属性
+const showFooterComputed = computed(() => props.footer !== false && props.showFooter !== false)
+
+// 兼容 title 和 header 属性
+const dialogTitle = computed(() => props.title || props.header || '')
 
 // 保存原始的 body overflow 值
 let originalBodyOverflow = ''

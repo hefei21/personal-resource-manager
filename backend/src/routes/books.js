@@ -795,6 +795,7 @@ router.post('/parse-metadata', authenticateToken, requireWritePermission, upload
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const { keyword, category, sortBy, sortOrder } = req.query
+    console.log('[Books API] 接收到的参数:', { keyword, category, sortBy, sortOrder })
     const db = getDatabase()
 
     const userId = req.user?.id || null // 游客为 null，管理员为用户ID

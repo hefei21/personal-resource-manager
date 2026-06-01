@@ -127,17 +127,25 @@ function mergeLrcWithTranslation(originalLrc, translationLrc) {
 
 ### 5. 全屏歌词窗口 ✅
 
-**组件：** `frontend/src/components/LyricsWindow.vue`
+**组件：**
+- PC端：`frontend/src/components/business/lyrics/LyricsWindowPC.vue`
+- 移动端：`frontend/src/components/business/lyrics/LyricsWindowMobile.vue`
 
 **功能特点：**
 - 网易云音乐风格的全屏显示
-- 左侧：旋转唱片封面 + 歌曲信息
-- 右侧：歌词滚动显示 + 高亮当前行
-- 底部：播放控制栏
+- PC端：左侧旋转唱片封面 + 右侧歌词
+- 移动端：全屏歌词 + 滑动交互
+- 歌词滚动显示 + 高亮当前行
+- 底部播放控制栏
 
 **触发方式：**
 - 点击播放栏的封面
 - 点击播放栏的歌曲名
+
+**移动端适配：**
+- 全屏弹窗从底部滑出
+- 支持手势滑动操作
+- 适配小屏幕的字体大小
 
 ### 6. 歌词同步高亮 ✅
 
@@ -252,11 +260,44 @@ POST /api/music/clean-sample-lyrics
 }
 ```
 
+### 7. 获取歌词状态
+
+```
+GET /api/music/lyrics/status
+```
+
+**响应：**
+```json
+{
+  "total": 100,
+  "withLyrics": 45,
+  "withoutLyrics": 55
+}
+```
+
+### 8. 取消歌词任务
+
+```
+POST /api/music/lyrics/task/:taskId/cancel
+```
+
+**响应：**
+```json
+{
+  "success": true,
+  "message": "任务已取消"
+}
+```
+
 ---
 
 ## 四、前端组件
 
-### 1. LyricsWindow.vue（歌词窗口）
+### 1. 歌词窗口组件
+
+**PC端组件：** `frontend/src/components/business/lyrics/LyricsWindowPC.vue`
+
+**移动端组件：** `frontend/src/components/business/lyrics/LyricsWindowMobile.vue`
 
 **Props：**
 - `visible`: 是否显示
@@ -280,7 +321,21 @@ POST /api/music/clean-sample-lyrics
 - `toggle-mute`: 切换静音
 - `toggle-play-mode`: 切换播放模式
 
-### 2. Music.vue（音乐管理页）
+### 2. 均衡器面板组件
+
+**组件：** `frontend/src/components/EqualizerPanel.vue`
+
+**功能：**
+- 10段均衡器调节滑块
+- 预设方案选择
+- 实时音频处理
+- 重置功能
+
+### 3. Music.vue（音乐管理页）
+
+**组件重构：**
+- PC端：`frontend/src/pc/pages/MusicPC.vue`
+- 移动端：`frontend/src/mobile/pages/MusicMobile.vue`
 
 **新增状态：**
 ```javascript
@@ -302,6 +357,43 @@ const lyricsProgress = ref({
 - `batchDownloadLyrics()`: 为所有无歌词的音乐下载歌词
 - `batchDownloadLyricsForSelected()`: 为选中的音乐下载歌词
 - `pollLyricsProgress()`: 轮询歌词下载进度
+
+### 4. MediaPlayer.vue（媒体播放器）
+
+**组件重构：**
+- PC端：`frontend/src/components/business/media-player/MediaPlayerPC.vue`
+- 移动端：`frontend/src/components/business/media-player/MediaPlayerMobile.vue`
+
+**集成内容：**
+- 歌词窗口触发按钮
+- 均衡器入口
+- 播放控制
+
+### 3. 均衡器集成
+
+**组件：** `frontend/src/components/EqualizerPanel.vue`
+
+**功能特点：**
+- 10段均衡器调节（32Hz - 16kHz）
+- 6种预设方案（默认、低音增强、人声增强、高音增强、摇滚、古典）
+- 实时音频处理
+- 预设保存和加载
+
+**技术实现：**
+- 使用 Web Audio API
+- 10个 BiquadFilterNode 节点
+- 支持 gain 值 -12dB 到 +12dB 调节
+
+**预设参数：**
+
+| 预设 | 32Hz | 64Hz | 125Hz | 250Hz | 500Hz | 1kHz | 2kHz | 4kHz | 8kHz | 16kHz |
+|------|------|------|-------|-------|-------|------|------|------|------|-------|
+| 默认 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 低音 | +6 | +4 | +2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| 人声 | 0 | 0 | 0 | 0 | +2 | +4 | +2 | 0 | 0 | 0 |
+| 高音 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | +2 | +4 | +6 |
+| 摇滚 | +4 | +2 | 0 | 0 | -2 | -2 | 0 | +2 | +4 | +4 |
+| 古典 | +4 | +2 | 0 | 0 | 0 | 0 | 0 | +2 | +4 | +6 |
 
 ---
 
@@ -400,11 +492,33 @@ const lyricsProgress = ref({
 
 ---
 
-## 十、未来优化方向
+## 十、移动端适配
+
+### 适配方案
+
+歌词功能已完整适配移动端：
+
+| 功能 | PC端 | 移动端 |
+|------|------|--------|
+| 歌词窗口 | 全屏弹窗，左侧封面右侧歌词 | 全屏弹窗，上下布局 |
+| 歌词滚动 | 平滑滚动 | 支持手势滑动 |
+| 歌词编辑 | 文本框编辑 | 文本框编辑（适配小屏） |
+| 播放控制 | 底部固定控制栏 | 底部浮动控制栏 |
+
+### 实现要点
+
+1. **响应式布局**：使用 `@media` 媒体查询区分 PC/移动端
+2. **组件分离**：PC和移动端使用独立的组件实现
+3. **手势支持**：移动端添加滑动手势操作
+4. **字体适配**：移动端自动调整歌词字体大小
+
+## 十一、未来优化方向
 
 ### 短期优化
 
 - [x] 支持双语歌词显示
+- [x] 移动端适配
+- [x] 均衡器功能
 - [ ] 添加歌词手动搜索功能
 - [ ] 歌词上传支持本地LRC文件
 
@@ -491,13 +605,18 @@ docker-compose restart backend
 
 ### 新增文件
 - `backend/migrations/add_lyrics_fields.sql` - 数据库迁移脚本
-- `frontend/src/components/LyricsWindow.vue` - 歌词窗口组件
+- `frontend/src/components/business/lyrics/LyricsWindowPC.vue` - PC端歌词窗口组件
+- `frontend/src/components/business/lyrics/LyricsWindowMobile.vue` - 移动端歌词窗口组件
+- `frontend/src/components/EqualizerPanel.vue` - 均衡器面板组件
 
 ### 修改文件
-- `backend/src/routes/music.js` - 添加歌词API、双语歌词合并
+- `backend/src/routes/music.js` - 添加歌词API、双语歌词合并、均衡器数据处理
 - `frontend/src/api/index.js` - 添加歌词接口定义
-- `frontend/src/components/MediaPlayer.vue` - 集成歌词窗口
-- `frontend/src/views/Music.vue` - 添加批量下载功能、异步任务处理
+- `frontend/src/components/business/media-player/MediaPlayerPC.vue` - PC端播放器集成歌词窗口
+- `frontend/src/components/business/media-player/MediaPlayerMobile.vue` - 移动端播放器集成歌词窗口
+- `frontend/src/pc/pages/MusicPC.vue` - PC端音乐管理页添加批量下载功能
+- `frontend/src/mobile/pages/MusicMobile.vue` - 移动端音乐管理页添加批量下载功能
+- `frontend/src/views/Music.vue` - 主入口适配PC/移动端路由
 
 ---
 
@@ -508,5 +627,5 @@ docker-compose restart backend
 
 ---
 
-**最后更新：** 2026-03-31  
-**版本：** v1.1.0
+**最后更新：** 2026-06-01  
+**版本：** v2.1.0

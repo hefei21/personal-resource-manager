@@ -20,7 +20,7 @@ process.on('uncaughtException', (error) => {
 })
 
 // 导入配置
-import { initDatabase } from './config/database.js'
+import { initDatabase, setCurrentReq } from './config/database.js'
 import { ensureDirectories } from './config/storage.js'
 import { initRedis, closeRedis } from './utils/redis.js'
 import { migrateCompressCovers } from './utils/migration.js'
@@ -33,6 +33,8 @@ import {
   readLimiter,
   slowQueryDetector
 } from './middlewares/security.js'
+
+
 
 // 导入路由
 import authRoutes from './routes/auth.js'
@@ -283,6 +285,8 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
 app.use('/api', accessLogger)
 
 app.use('/api/auth', authRoutes)
+
+// API 路由（authenticateToken 中间件会自动设置数据库上下文）
 app.use('/api/documents', documentsRoutes)
 app.use('/api/music', musicRoutes)
 app.use('/api/ebooks', booksRoutes)  // 改为 ebooks 避免"books"关键词被拦截

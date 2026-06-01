@@ -4,6 +4,18 @@
 
 博客管理模块提供完整的博客写作、发布、管理功能，支持 Markdown 编辑、分类管理、标签管理、文章预览和草稿/发布状态管理。
 
+![博客管理](./screenshots/03-blog.png)
+
+**移动端界面：**
+
+![移动端博客管理](./screenshots/mobile-03-blog.png)
+
+*移动端博客列表 - 卡片布局，底部悬浮添加按钮*
+
+![移动端文章预览](./screenshots/mobile-04-article-preview.png)
+
+*移动端文章预览 - Markdown渲染，表格适配*
+
 ## 二、数据库结构
 
 ### 1. blog_posts 表（文章主表）
@@ -102,6 +114,8 @@
 ### 2. 文章编辑器
 
 使用 `md-editor-v3` Markdown 编辑器：
+
+![博客编辑器](./screenshots/11-blog-editor.png)
 
 - **编辑模式**：
   - 编辑器模式（左侧）

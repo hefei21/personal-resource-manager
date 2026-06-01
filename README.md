@@ -2,6 +2,8 @@
 
 一个全功能的个人资源管理系统，支持文档、音乐、书籍、博客、动漫等资源管理。
 
+![仪表盘首页](./docs/screenshots/01-dashboard-home.png)
+
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Vue](https://img.shields.io/badge/Vue-3.4-brightgreen)
 ![Node](https://img.shields.io/badge/Node.js-18+-green)
@@ -13,20 +15,28 @@
 - 文件上传、在线预览（PDF、Word、Excel）
 - 版本控制、隐私空间
 
+![文档管理](./docs/screenshots/02-documents.png)
+
 ### 🎵 音乐管理
 - FFprobe 元数据解析（支持 MP3/FLAC/M4A）
 - 大文件分片上传、断点续传
 - 播放列表、全局播放器
+
+![音乐管理](./docs/screenshots/04-music.png)
 
 ### 📚 书籍管理
 - 在线阅读器（EPUB/PDF/TXT）
 - 阅读进度保存
 - Anna's Archive / Nyaa 资源搜索
 
+![书籍管理](./docs/screenshots/05-books.png)
+
 ### 📝 博客管理
 - Markdown 编辑器（实时预览）
 - 分类标签、草稿/发布管理
 - 代码高亮（Atom 主题）
+
+![博客管理](./docs/screenshots/03-blog.png)
 
 ### 🎬 动漫管理
 - Bangumi API 集成（支持认证）
@@ -35,20 +45,28 @@
 - 封面懒加载（IndexedDB 缓存）
 - 详情页优化（数据库优先）
 
+![动漫管理](./docs/screenshots/09-anime.png)
+
 ### 💻 代码仓库管理
 - Git 仓库链接管理
 - 代码文件预览（支持语法高亮）
 - 提交历史查看
+
+![代码管理](./docs/screenshots/08-code.png)
 
 ### 🔖 书签管理
 - URL 收藏、图标自动获取
 - 分类标签管理
 - 批量导入导出
 
+![书签管理](./docs/screenshots/06-bookmarks.png)
+
 ### 🎮 游戏管理
 - Steam 库集成
 - 成就追踪
 - 游戏时长统计
+
+![游戏管理](./docs/screenshots/07-games.png)
 
 ### 🔒 安全功能
 - IP 黑名单管理

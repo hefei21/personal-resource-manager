@@ -320,11 +320,13 @@ function formatTime(seconds) {
 .song-title {
   font-size: 20px;
   font-weight: 600;
-  margin: 0 0 10px 0;
+  margin: 0 auto 10px auto;
   max-width: 280px;
+  width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: center;
 }
 
 .song-artist {

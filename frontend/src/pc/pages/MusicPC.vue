@@ -40,7 +40,7 @@
             clearable
             filterable
             @change="searchMusic"
-            :options="artists.map(artist => ({ value: artist, label: artist }))"
+            :options="artistOptions"
           />
 
           <NativeSelect
@@ -50,7 +50,7 @@
             clearable
             filterable
             @change="searchMusic"
-            :options="albums.map(album => ({ value: album, label: album }))"
+            :options="albumOptions"
           />
 
           <NativeSelect
@@ -93,7 +93,7 @@
               size="small" 
               variant="text"
               iconSize="1.3em"
-              @click="showPlaylistManageDialog = true"
+              @click="openPlaylistManageDialog"
               title="编辑歌单"
               :disabled="isGuest"
             >
@@ -453,9 +453,21 @@
             <NativeButton theme="primary" @click="savePlaylistEdit" :disabled="isGuest">
               保存修改
             </NativeButton>
-            <NativePopconfirm content="确定删除该歌单吗？歌曲源文件不会被删除。" @confirm="deletePlaylistFromEdit">
+            <NativeButton 
+              v-if="isGuest" 
+              theme="danger" 
+              variant="outline" 
+              disabled
+            >
+              删除歌单
+            </NativeButton>
+            <NativePopconfirm 
+              v-else
+              content="确定删除该歌单吗？歌曲源文件不会被删除。" 
+              @confirm="deletePlaylistFromEdit"
+            >
               <template #trigger>
-                <NativeButton theme="danger" variant="outline" :disabled="isGuest">
+                <NativeButton theme="danger" variant="outline">
                   删除歌单
                 </NativeButton>
               </template>
@@ -615,6 +627,15 @@ const sortOrderMap = {
 // 艺术家和专辑列表
 const artists = ref([])
 const albums = ref([])
+
+// 计算属性缓存选项列表（避免每次渲染都重新计算）
+const artistOptions = computed(() => {
+  return artists.value.map(artist => ({ value: artist, label: artist }))
+})
+
+const albumOptions = computed(() => {
+  return albums.value.map(album => ({ value: album, label: album }))
+})
 
 // 歌单相关
 const playlists = ref([])
@@ -1754,6 +1775,26 @@ async function savePlaylistEdit() {
       toast.error('保存失败')
     }
   }
+}
+
+// 打开歌单编辑对话框
+function openPlaylistManageDialog() {
+  // 如果当前有选中的歌单，自动选择它
+  if (currentPlaylist.value) {
+    editingPlaylistId.value = currentPlaylist.value.id
+    // 加载该歌单的信息到表单
+    const playlist = playlists.value.find(p => p.id === currentPlaylist.value.id)
+    if (playlist) {
+      playlistEditForm.value = {
+        name: playlist.name || '',
+        description: playlist.description || ''
+      }
+    }
+  } else {
+    editingPlaylistId.value = null
+    playlistEditForm.value = { name: '', description: '' }
+  }
+  showPlaylistManageDialog.value = true
 }
 
 async function deletePlaylistFromEdit() {

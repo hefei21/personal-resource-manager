@@ -4,6 +4,18 @@
 
 动漫管理模块集成 Bangumi API，提供动漫搜索、收藏管理、状态跟踪、评分、关联作品和资源查找功能。
 
+![动漫管理](./screenshots/09-anime.png)
+
+**移动端界面：**
+
+![移动端动漫管理](./screenshots/mobile-12-anime.png)
+
+*移动端动漫列表 - 卡片布局，评分显示*
+
+![移动端动漫详情](./screenshots/mobile-13-anime-detail.png)
+
+*移动端动漫详情 - 全屏展示，详细信息*
+
 ## 二、数据库结构
 
 ### anime 表（动漫主表）
@@ -282,6 +294,8 @@ function extractFromInfobox(infobox, key) {
 - 删除按钮（带确认）
 
 ### 详情对话框 `frontend/src/components/AnimeDetailDialog.vue`
+
+![动漫详情](./screenshots/14-anime-detail.png)
 
 #### 展示内容
 

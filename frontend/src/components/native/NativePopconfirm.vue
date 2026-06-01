@@ -1,7 +1,7 @@
 <template>
   <div ref="triggerRef" class="native-popconfirm">
     <div 
-      class="native-popconfirm__trigger" 
+      class="native-popconfirm__trigger"
       @click="toggle"
       @keydown.enter.prevent="toggle"
       @keydown.space.prevent="toggle"
@@ -19,7 +19,7 @@
           class="native-popconfirm__popup" 
           :class="`native-popconfirm--${placement}`"
           :style="popupStyle"
-          v-click-outside="close"
+          @click.stop
         >
           <div class="native-popconfirm__content">
             <div class="native-popconfirm__icon" v-if="showIcon" aria-hidden="true">
@@ -67,7 +67,6 @@
 
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
-import { vClickOutside } from './directives/clickOutside'
 
 const props = defineProps({
   content: { type: String, default: '确认执行此操作？' },
@@ -76,7 +75,7 @@ const props = defineProps({
   cancelText: { type: String, default: '取消' },
   placement: { type: String, default: 'top' }, // top, bottom, left, right
   showIcon: { type: Boolean, default: true },
-  zIndex: { type: Number, default: 5500 }
+  zIndex: { type: Number, default: 10001 }
 })
 
 const emit = defineEmits(['confirm', 'cancel', 'close'])
@@ -151,13 +150,36 @@ function toggle() {
       updatePosition()
       // 自动聚焦确认按钮
       confirmBtnRef.value?.focus()
+      // 添加 document 点击监听来关闭（使用冒泡阶段，不是捕获阶段）
+      setTimeout(() => {
+        document.addEventListener('click', handleDocumentClick)
+      }, 0)
     })
+  } else {
+    document.removeEventListener('click', handleDocumentClick)
   }
+}
+
+// 处理 document 点击事件（冒泡阶段）
+function handleDocumentClick(e) {
+  // 如果点击在 trigger 区域，不处理（让 toggle 处理）
+  if (triggerRef.value && triggerRef.value.contains(e.target)) {
+    return
+  }
+  // 如果点击在 popup 区域，不处理
+  if (popupRef.value && popupRef.value.contains(e.target)) {
+    return
+  }
+  // 点击了外部，关闭
+  close()
+  // 移除监听
+  document.removeEventListener('click', handleDocumentClick)
 }
 
 function close() {
   visible.value = false
   emit('close')
+  document.removeEventListener('click', handleDocumentClick)
 }
 
 function handleConfirm() {
@@ -185,6 +207,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleWindowChange)
   window.removeEventListener('scroll', handleWindowChange, true)
+  document.removeEventListener('click', handleDocumentClick)
 })
 </script>
 

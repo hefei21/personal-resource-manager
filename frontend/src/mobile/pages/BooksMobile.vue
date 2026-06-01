@@ -332,11 +332,15 @@ async function loadBooks() {
   loading.value = true
   try {
     const params = {
-      categoryId: currentCategoryId.value,
       keyword: searchKeyword.value,
       sortBy: 'last_read_at',
       sortOrder: 'desc'
     }
+    // 后端API使用'category'作为参数名，不是'categoryId'
+    if (currentCategoryId.value) {
+      params.category = Number(currentCategoryId.value)
+    }
+    console.log('[BooksMobile] 加载书籍参数:', params, '当前分类ID:', currentCategoryId.value)
     const response = await api.books.list(params)
     // API返回 {data: [...]} 结构
     books.value = response.data?.data || response.data || []

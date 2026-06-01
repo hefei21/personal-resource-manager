@@ -4,6 +4,18 @@
 
 代码管理模块提供 Git/SVN 仓库克隆、文件浏览、提交历史查看、代码预览等功能，支持 GitHub 仓库信息获取、README 渲染和图片路径转换。
 
+![代码管理](./screenshots/08-code.png)
+
+**移动端界面：**
+
+![移动端代码管理](./screenshots/mobile-09-code.png)
+
+*移动端仓库列表 - 卡片式展示*
+
+![移动端代码详情](./screenshots/mobile-10-code-detail.png)
+
+*移动端文件浏览 - 列表布局*
+
 ## 二、数据库结构
 
 ### code_repositories 表（代码仓库表）
@@ -72,6 +84,8 @@
   - 选择仓库类型
 
 ### 2. 文件浏览器
+
+![代码详情](./screenshots/13-code-detail.png)
 
 - **文件树**：
   - 目录和文件图标区分
