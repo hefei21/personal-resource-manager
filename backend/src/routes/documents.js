@@ -141,13 +141,12 @@ router.get('/categories', authenticateToken, async (req, res) => {
         pathCountMap.set(category, currentCount + count)
       } else {
         // 子分类下的文档：更新该子分类及其所有父分类的计数
-        const fullPath = `${category}/${subcategory}`
         const parts = subcategory.split('/')
         
-        // 更新完整的子分类路径
-        pathCountMap.set(fullPath, (pathCountMap.get(fullPath) || 0) + count)
+        // 更新根分类的计数（子分类文档也要算到根分类）
+        pathCountMap.set(category, (pathCountMap.get(category) || 0) + count)
         
-        // 更新中间路径（如前端/Vue会累加到前端）
+        // 更新完整路径及中间路径（如前端/Vue会累加到前端）
         let currentPath = category
         for (let i = 0; i < parts.length; i++) {
           currentPath = i === 0 ? `${category}/${parts[0]}` : `${currentPath}/${parts[i]}`
@@ -169,7 +168,7 @@ router.get('/categories', authenticateToken, async (req, res) => {
       }))
     }
 
-    // 获取根分类（parent_id为null的分类）
+    // 获取根分类
     const rootCategories = childrenMap.get(0) || []
 
     const categories = rootCategories.map(row => ({

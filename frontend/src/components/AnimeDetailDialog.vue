@@ -183,7 +183,8 @@
           </NativeButton>
           <NativeSelect v-model="localAnime.status" style="width: 100px" @change="updateStatus" v-if="!isGuest" :options="[
             { value: 'none', label: '未标记' },
-            { value: 'watching', label: '想看' },
+            { value: 'want_to_watch', label: '想看' },
+            { value: 'watching', label: '在看' },
             { value: 'watched', label: '看过' }
           ]" />
           <NativeButton

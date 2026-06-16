@@ -1196,6 +1196,12 @@ router.delete('/:id', authenticateToken, requireWritePermission, async (req, res
     // 删除音乐记录
     db.prepare('DELETE FROM music WHERE id = ?').run(req.params.id)
 
+    // 清除相关缓存
+    await cache.delPattern('music:list:*')
+    await cache.del(CacheKeys.MUSIC_ARTISTS)
+    await cache.del(CacheKeys.MUSIC_ALBUMS)
+    await cache.del(CacheKeys.MUSIC_PLAYLISTS)
+
     res.json({ message: '删除成功' })
   } catch (error) {
     console.error('删除失败:', error)
@@ -1222,9 +1228,11 @@ router.post('/batch-delete', authenticateToken, requireWritePermission, async (r
     
     transaction()
     
-    // 清除艺术家和专辑缓存
+    // 清除相关缓存
+    await cache.delPattern('music:list:*')
     await cache.del(CacheKeys.MUSIC_ARTISTS)
     await cache.del(CacheKeys.MUSIC_ALBUMS)
+    await cache.del(CacheKeys.MUSIC_PLAYLISTS)
 
     res.json({ message: '删除成功', count: ids.length })
   } catch (error) {
@@ -1683,6 +1691,10 @@ router.delete('/playlists/:id/songs/:songId', authenticateToken, requireWritePer
       parseInt(req.params.id),
       parseInt(req.params.songId)
     )
+    
+    // 清除歌单相关缓存
+    await cache.del(CacheKeys.MUSIC_PLAYLISTS)
+    
     res.json({ message: '移除成功' })
   } catch (error) {
     console.error('移除歌曲失败:', error)
@@ -1704,6 +1716,9 @@ router.post('/playlists/:id/songs/batch-remove', authenticateToken, async (req, 
     })
 
     transaction()
+    
+    // 清除歌单相关缓存
+    await cache.del(CacheKeys.MUSIC_PLAYLISTS)
 
     res.json({ message: '移除成功', count: songIds.length })
   } catch (error) {

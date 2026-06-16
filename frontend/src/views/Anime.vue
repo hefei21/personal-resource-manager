@@ -526,19 +526,15 @@ function handleSortChange(context) {
 
   // NativeTable 返回 { sortBy, descending }
   if (!context || !context.sortBy) {
-    console.log('[表头排序] 取消排序，恢复默认排序')
-    // 取消排序时，恢复默认排序（更新时间降序）
-    sortBy.value = 'updated_at'
-    sortOrder.value = 'DESC'
-    tableSortKey.value = ''
-    tableSortOrder.value = ''
-    pagination.value.current = 1
-    loadAnime()
+    console.log('[表头排序] 参数为空，忽略')
     return
   }
 
   const field = sortFieldMap[context.sortBy] || context.sortBy
-  if (!field) return
+  if (!field) {
+    console.log('[表头排序] 字段映射失败:', context.sortBy)
+    return
+  }
 
   sortBy.value = field
   sortOrder.value = context.descending ? 'DESC' : 'ASC'
@@ -546,6 +542,7 @@ function handleSortChange(context) {
   tableSortKey.value = context.sortBy
   tableSortOrder.value = context.descending ? 'desc' : 'asc'
   pagination.value.current = 1
+  console.log('[表头排序] 应用排序:', { field, order: sortOrder.value })
   loadAnime()
 }
 

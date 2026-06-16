@@ -382,7 +382,7 @@ const transaction = db.transaction((items) => {
 transaction(orders)
 ```
 
-### 6. 时间转换
+### 7. 时间转换
 
 ```javascript
 // UTC 转 UTC+8（用于显示时间）
@@ -400,7 +400,7 @@ function convertToUTC8(utcTime) {
 }
 ```
 
-### 7. 分类删除逻辑
+### 8. 分类删除逻辑
 
 ```javascript
 // 删除分类时的两种模式：

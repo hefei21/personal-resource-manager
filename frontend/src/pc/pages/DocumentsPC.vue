@@ -146,8 +146,8 @@
             </div>
 <NativeIcon name="folder-open" size="24" class="category-icon" />
           <h3>{{ cat.name }}</h3>
-          <div v-if="hoveredCategoryId === cat.id && categoryFileCount[cat.id] !== undefined" class="file-count-tooltip">
-              {{ categoryFileCount[cat.id] }} 个文件
+          <div v-if="hoveredCategoryId === cat.id && cat.fileCount !== undefined" class="file-count-tooltip">
+              {{ cat.fileCount }} 个文件
             </div>
           </div>
         </div>

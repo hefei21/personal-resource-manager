@@ -184,6 +184,7 @@
           :toolbars="mobileToolbars" 
           :preview="false" 
           editorClass="mobile-md-editor"
+          @onSave="handleEditorSave"
         />
       </div>
       <div class="editor-toolbar">
@@ -220,7 +221,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
 import { MdPreview, MdEditor } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
@@ -352,6 +353,11 @@ function closeEditor() {
 async function handleSaveDraft() { await savePost('draft') }
 async function handlePublish() { await savePost('published') }
 
+// 编辑器工具栏保存按钮回调
+function handleEditorSave() {
+  handleSaveDraft()
+}
+
 async function savePost(status) {
   if (!editForm.value.title?.trim()) { toast.warning('请输入文章标题'); return }
   const tags = tagInput.value.split(/[,，]/).map(t => t.trim()).filter(t => t)
@@ -460,7 +466,7 @@ onMounted(() => { loadPosts(true); loadCategories(); loadTags() })
 .empty-state p { margin: 16px 0; font-size: 14px; }
 .primary-btn { padding: 10px 24px; background: #0052d9; color: #fff; border: none; border-radius: 20px; font-size: 14px; cursor: pointer; }
 .post-list { display: flex; flex-direction: column; gap: 12px; }
-.post-card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; }
+.post-card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
 .post-card:active { transform: scale(0.98); }
 .post-header { margin-bottom: 12px; }
 .post-badges { display: flex; gap: 6px; margin-bottom: 8px; }

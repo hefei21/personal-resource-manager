@@ -789,7 +789,8 @@ async function loadMusic() {
       sortBy: sortBy.value,
       sortOrder: sortOrder,
       page: pagination.value.current,
-      pageSize: pagination.value.pageSize
+      pageSize: pagination.value.pageSize,
+      _t: Date.now() // 添加时间戳避免缓存
     })
     musicList.value = response.data.data || []
     total.value = response.data.total || 0
@@ -863,7 +864,8 @@ async function loadPlaylistSongs() {
   try {
     const response = await api.music.getPlaylistSongs(currentPlaylist.value.id, {
       page: playlistPagination.value.current,
-      pageSize: playlistPagination.value.pageSize
+      pageSize: playlistPagination.value.pageSize,
+      _t: Date.now() // 添加时间戳避免缓存
     })
     musicList.value = response.data.data || []
     playlistTotal.value = response.data.total || currentPlaylist.value.song_count || 0
@@ -1548,12 +1550,36 @@ async function saveSong() {
   }
 }
 
+// 刷新当前页（保持页码不变）
+async function refreshCurrentPage() {
+  if (currentPlaylist.value) {
+    // 歌单模式下刷新当前页
+    loading.value = true
+    try {
+      const response = await api.music.getPlaylistSongs(currentPlaylist.value.id, {
+        page: playlistPagination.value.current,
+        pageSize: playlistPagination.value.pageSize,
+        _t: Date.now() // 添加时间戳避免缓存
+      })
+      musicList.value = response.data.data || []
+      playlistTotal.value = response.data.total || currentPlaylist.value.song_count || 0
+    } catch (error) {
+      toast.error('刷新列表失败')
+    } finally {
+      loading.value = false
+    }
+  } else {
+    // 全部音乐模式下刷新当前页
+    await loadMusic()
+  }
+}
+
 // 删除歌曲
 async function deleteSong(id) {
   try {
     if (currentPlaylist.value) {
       // 从歌单移除，不删除源文件
-      await api.music.removePlaylistSong(currentPlaylist.value.id, id)
+      await api.music.removeSongFromPlaylist(currentPlaylist.value.id, id)
       toast.success('已从歌单移除')
     } else {
       // 删除源文件
@@ -1566,12 +1592,13 @@ async function deleteSong(id) {
       }))
     }
     
-    if (currentPlaylist.value) {
-      selectPlaylist(currentPlaylist.value)
-    } else {
-      loadMusic()
-    }
-    loadPlaylists()
+    // 立即从本地列表移除被删除的项，实现即时刷新
+    musicList.value = musicList.value.filter(song => song.id !== id)
+    
+    // 刷新当前页（保持页码不变）
+    await refreshCurrentPage()
+    // 刷新歌单数量
+    await loadPlaylists()
   } catch (error) {
     toast.error('删除失败')
   }
@@ -1663,9 +1690,13 @@ async function batchDelete() {
       detail: { songIds: idsToDelete }
     }))
     
+    // 立即从本地列表移除被删除的项，实现即时刷新
+    musicList.value = musicList.value.filter(song => !idsToDelete.includes(song.id))
+    
     selectedSongs.value = []
-    loadMusic()
-    loadPlaylists()
+    // 刷新当前页（保持页码不变）
+    await refreshCurrentPage()
+    await loadPlaylists()
   } catch (error) {
     toast.error('删除失败')
   }
@@ -1677,12 +1708,16 @@ async function batchDeleteFromPlaylist() {
   
   try {
     const idsToDelete = [...selectedSongs.value]
-    await api.music.batchRemoveFromPlaylist(currentPlaylist.value.id, idsToDelete)
+    await api.music.batchRemoveSongsFromPlaylist(currentPlaylist.value.id, idsToDelete)
     toast.success('已从歌单移除')
     
+    // 立即从本地列表移除被删除的项，实现即时刷新
+    musicList.value = musicList.value.filter(song => !idsToDelete.includes(song.id))
+    
     selectedSongs.value = []
-    selectPlaylist(currentPlaylist.value)
-    loadPlaylists()
+    // 刷新当前页（保持页码不变）
+    await refreshCurrentPage()
+    await loadPlaylists()
   } catch (error) {
     toast.error('移除失败')
   }

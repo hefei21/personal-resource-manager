@@ -3,6 +3,7 @@ import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import dotenv from 'dotenv'
 import path from 'path'
+import fs from 'fs'
 
 // 加载环境变量
 dotenv.config()
@@ -157,8 +158,11 @@ app.use((req, res, next) => {
   next()
 })
 
-// 静态文件服务
-app.use('/uploads', express.static(path.join(process.env.UPLOADS_PATH, './uploads')))
+// 静态文件服务 - 映射 /uploads 到 uploads 目录
+const uploadsPath = process.env.UPLOADS_PATH || '/app/data/uploads'
+console.log('[Static] Uploads path:', uploadsPath)
+console.log('[Static] Screenshots exists:', fs.existsSync(path.join(uploadsPath, 'screenshots')))
+app.use('/uploads', express.static(uploadsPath))
 
 // 健康检查
 app.get('/api/health', async (req, res) => {

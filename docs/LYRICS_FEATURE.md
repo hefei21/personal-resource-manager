@@ -369,7 +369,7 @@ const lyricsProgress = ref({
 - 均衡器入口
 - 播放控制
 
-### 3. 均衡器集成
+### 5. 均衡器集成
 
 **组件：** `frontend/src/components/EqualizerPanel.vue`
 
@@ -534,7 +534,7 @@ const lyricsProgress = ref({
 
 ---
 
-## 十一、注意事项
+## 十三、注意事项
 
 1. **版权风险**
    - 歌词API需遵守相关服务条款
@@ -551,7 +551,7 @@ const lyricsProgress = ref({
 
 ---
 
-## 十二、测试建议
+## 十四、测试建议
 
 ### 1. 功能测试
 
@@ -573,7 +573,7 @@ const lyricsProgress = ref({
 
 ---
 
-## 十三、部署说明
+## 十五、部署说明
 
 ### 1. 数据库迁移
 
@@ -601,7 +601,7 @@ docker-compose restart backend
 
 ---
 
-## 十四、文件清单
+## 十六、文件清单
 
 ### 新增文件
 - `backend/migrations/add_lyrics_fields.sql` - 数据库迁移脚本
@@ -620,7 +620,7 @@ docker-compose restart backend
 
 ---
 
-## 十五、相关文档
+## 十七、相关文档
 
 - [音乐管理模块文档](./MUSIC_MANAGEMENT.md)
 - [Clash 代理配置文档](./CLASH_PROXY.md)

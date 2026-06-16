@@ -140,7 +140,7 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`)
     }
 
-    sql += ' ORDER BY updated_at DESC'
+    sql += ' ORDER BY last_sync DESC, updated_at DESC'
 
     const stmt = db.prepare(sql)
     const rows = stmt.all(params)

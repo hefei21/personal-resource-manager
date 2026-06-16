@@ -27,16 +27,16 @@
 
 ### 界面预览
 
-![仪表盘](./screenshots/01-dashboard-home.png)
+![仪表盘](/uploads/screenshots/01-dashboard-home.png)
 *仪表盘首页 - 显示系统概览和各模块入口*
 
-![文档管理](./screenshots/02-documents.png)
+![文档管理](/uploads/screenshots/02-documents.png)
 *文档管理 - 支持分类、标签、PDF预览*
 
-![博客管理](./screenshots/03-blog.png)
+![博客管理](/uploads/screenshots/03-blog.png)
 *博客管理 - Markdown编辑器，支持草稿/发布*
 
-![博客编辑器](./screenshots/11-blog-editor.png)
+![博客编辑器](/uploads/screenshots/11-blog-editor.png)
 *博客编辑器 - 分屏预览，代码高亮*
 
 ### 技术栈
@@ -204,10 +204,10 @@ class Equalizer {
 
 **音乐管理界面**：
 
-![音乐管理](./screenshots/04-music.png)
+![音乐管理](/uploads/screenshots/04-music.png)
 *音乐管理 - 表格布局，支持筛选和排序*
 
-![歌词全屏](./screenshots/10-lyrics-fullscreen.png)
+![歌词全屏](/uploads/screenshots/10-lyrics-fullscreen.png)
 *歌词全屏窗口 - 网易云风格，同步高亮*
 
 ---
@@ -226,10 +226,10 @@ class Equalizer {
 
 **界面预览**：
 
-![书籍管理](./screenshots/05-books.png)
+![书籍管理](/uploads/screenshots/05-books.png)
 *书籍管理 - 封面/列表双视图，支持分类筛选*
 
-![书籍阅读器](./screenshots/12-book-reader.png)
+![书籍阅读器](/uploads/screenshots/12-book-reader.png)
 *书籍阅读器 - 目录导航，字体调节，进度保存*
 
 ---
@@ -245,10 +245,10 @@ class Equalizer {
 
 **界面预览**：
 
-![代码管理](./screenshots/08-code.png)
+![代码管理](/uploads/screenshots/08-code.png)
 *代码管理 - 仓库卡片，GitHub信息自动获取*
 
-![代码详情](./screenshots/13-code-detail.png)
+![代码详情](/uploads/screenshots/13-code-detail.png)
 *代码详情 - 文件树 + 代码预览，支持语法高亮*
 
 ---
@@ -263,7 +263,7 @@ class Equalizer {
 
 **界面预览**：
 
-![书签管理](./screenshots/06-bookmarks.png)
+![书签管理](/uploads/screenshots/06-bookmarks.png)
 *书签管理 - URL收藏，图标自动获取*
 
 ---
@@ -280,10 +280,10 @@ class Equalizer {
 
 **界面预览**：
 
-![动漫管理](./screenshots/09-anime.png)
+![动漫管理](/uploads/screenshots/09-anime.png)
 *动漫管理 - Bangumi数据，支持状态标记和评分*
 
-![动漫详情](./screenshots/14-anime-detail.png)
+![动漫详情](/uploads/screenshots/14-anime-detail.png)
 *动漫详情 - 角色声优、关联作品、资源搜索*
 
 ---
@@ -341,10 +341,10 @@ async function sequentialSearch(keyword) {
 
 **界面预览**：
 
-![游戏管理](./screenshots/07-games.png)
+![游戏管理](/uploads/screenshots/07-games.png)
 *游戏管理 - Steam库同步，状态标记，评分*
 
-![游戏详情](./screenshots/15-game-detail.png)
+![游戏详情](/uploads/screenshots/15-game-detail.png)
 *游戏详情 - 成就追踪，游戏统计*
 
 ---
@@ -796,7 +796,7 @@ app.set('trust proxy', 1)
 
 ### 系统截图展示
 
-![仪表盘](./screenshots/01-dashboard-home.png)
+![仪表盘](/uploads/screenshots/01-dashboard-home.png)
 
 ### NAS 部署
 

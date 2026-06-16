@@ -248,19 +248,24 @@ function handleRowClick(row, index) {
 function handleSort(col) {
   if (!col.sorter) return
   const key = col.key || col.dataIndex
+  let newSortKey = sortKey.value
+  let newSortOrder = sortOrder.value
+
   if (sortKey.value === key) {
-    // 当前已排序：desc -> asc -> 取消（与 DocumentsPC.vue 逻辑一致）
-    sortOrder.value = sortOrder.value === 'desc' ? 'asc' : sortOrder.value === 'asc' ? '' : 'desc'
-    if (sortOrder.value === '') {
-      sortKey.value = ''
-    }
+    // 当前已排序：desc -> asc -> desc（循环切换，不取消）
+    newSortOrder = sortOrder.value === 'desc' ? 'asc' : 'desc'
   } else {
-    // 点击新列：默认倒序开始（与 DocumentsPC.vue 逻辑一致）
-    sortKey.value = key
-    sortOrder.value = 'desc'
+    // 点击新列：默认倒序开始
+    newSortKey = key
+    newSortOrder = 'desc'
   }
+
+  // 更新状态
+  sortKey.value = newSortKey
+  sortOrder.value = newSortOrder
+
   // 触发 sortChange 事件，由外部组件处理排序逻辑
-  emit('sortChange', { sortBy: sortKey.value, descending: sortOrder.value === 'desc' })
+  emit('sortChange', { sortBy: newSortKey, descending: newSortOrder === 'desc' })
 }
 </script>
 

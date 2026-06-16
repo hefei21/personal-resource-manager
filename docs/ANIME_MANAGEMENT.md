@@ -42,7 +42,7 @@
 | infobox | TEXT | 详细信息（JSON 格式） |
 | characters | TEXT | 角色信息（JSON 格式） |
 | staff | TEXT | 制作人员（JSON 格式） |
-| status | TEXT | 观看状态：'none' / 'watching' / 'watched'，默认 'none' |
+| status | TEXT | 观看状态：'none' / 'want_to_watch' / 'watching' / 'watched'，默认 'none' |
 | is_favorite | INTEGER | 是否收藏，默认 0 |
 | created_at | DATETIME | 创建时间 |
 | updated_at | DATETIME | 更新时间 |
@@ -144,7 +144,7 @@
 #### 3. 获取列表 `GET /anime`
 
 **参数**:
-- `status` - 状态筛选（none/watching/watched）
+- `status` - 状态筛选（none/want_to_watch/watching/watched）
 - `favorite` - 是否只看收藏（"true"）
 - `sortBy` - 排序字段（updated_at/air_date/rating/user_rating/status）
 - `sortOrder` - 排序方向（ASC/DESC）
@@ -271,14 +271,14 @@ function extractFromInfobox(infobox, key) {
 
 **3. 我的动漫库**
 - 筛选器：
-  - 状态筛选（全部/未标记/想看/看过）
+  - 状态筛选（全部/未标记/想看/在看/看过）
   - 只看收藏
 - 排序：更新时间/上映日期/总评分/我的评分/标记状态
 - 升序/降序切换
 - 表格展示：封面、标题、评分、我的评分、状态、收藏、操作
 
 **4. 状态管理**
-- 下拉切换状态：未标记 / 想看 / 看过
+- 下拉切换状态：未标记 / 想看 / 在看 / 看过
 - 鼠标悬停显示下拉菜单
 
 **5. 评分功能**
@@ -291,6 +291,7 @@ function extractFromInfobox(infobox, key) {
 
 **7. 操作列**
 - 详情按钮（三横线图标）
+- 隐藏按钮（眼睛图标）：隐藏当前动漫，不再显示在列表中
 - 删除按钮（带确认）
 
 ### 详情对话框 `frontend/src/components/AnimeDetailDialog.vue`
@@ -595,7 +596,7 @@ router.get('/search', authenticateToken, async (req, res) => {
 
 ---
 
-## 七、技术实现细节
+## 八、技术实现细节
 
 ### 1. 表头排序功能
 
@@ -688,7 +689,7 @@ axios.get(url, {
 })
 ```
 
-### 2. API 调用优化
+### 3. API 调用优化
 
 ```javascript
 // 并行请求
@@ -959,7 +960,7 @@ services:
 
 ### 4. 筛选排序
 
-- 状态筛选：全部/未标记/想看/看过
+- 状态筛选：全部/未标记/想看/在看/看过
 - 只看收藏：勾选复选框
 - 排序：选择排序字段 + 升降序
 
@@ -1008,4 +1009,4 @@ services:
 6. **悬停提示**：
    - 表格标题列使用浏览器原生 title 属性
    - 搜索结果卡片使用原生 title 属性
-   - 避免重复悬停框和样式冲突问题
+   - 避免重复悬停框和样式冲突�

@@ -169,7 +169,7 @@
                 <!-- 文件内容 -->
                 <div class="file-content">
                   <!-- 加载中 -->
-                  <div v-if="fileLoading" class="file-loading">
+                  <div v-if="fileLoading || readmeLoading" class="file-loading">
                     <NativeLoading size="medium" />
                     <span class="loading-text">加载中...</span>
                   </div>
@@ -397,6 +397,7 @@ const fileTree = ref([])
 const fileTreeLoading = ref(false)
 const commits = ref([])
 const readmeContent = ref('')
+const readmeLoading = ref(false)
 const activeTab = ref('files')
 const currentFile = ref(null)
 const fileLoading = ref(false)
@@ -775,6 +776,9 @@ async function syncRepo(repo) {
     const response = await api.code.sync(repo.id)
     toast.success('开始同步仓库...')
     
+    // 立即更新列表显示同步状态
+    loadRepos()
+    
     // 开始轮询同步进度
     if (response.data?.taskId) {
       startSyncPolling(repo.id, response.data.taskId)
@@ -1101,6 +1105,7 @@ function closeFile() {
 // 加载 README
 async function loadReadme() {
   if (!currentRepo.value) return
+  readmeLoading.value = true
   console.log('[CodePC] 开始加载 README, repoId:', currentRepo.value.id)
   try {
     const response = await api.code.getReadme(currentRepo.value.id)
@@ -1110,6 +1115,8 @@ async function loadReadme() {
   } catch (error) {
     console.error('[CodePC] 加载 README 失败:', error)
     readmeContent.value = ''
+  } finally {
+    readmeLoading.value = false
   }
 }
 
@@ -1311,6 +1318,8 @@ onMounted(() => loadRepos())
 .browser-header-right {
   flex-shrink: 0;
   margin-left: auto;
+  display: flex;
+  gap: 12px;
 }
 
 .browser-layout {

@@ -1,5 +1,8 @@
 <template>
-  <div class="mobile-music">
+  <div class="mobile-music" :class="{ 'batch-mode-active': batchMode }">
+    <!-- 批量操作时的顶部占位 -->
+    <div v-if="batchMode" class="batch-bar-placeholder"></div>
+    
     <!-- 歌单标签栏 -->
     <div class="playlist-tabs">
       <div class="tab-scroll">
@@ -28,16 +31,28 @@
       </button>
     </div>
 
-    <!-- 批量操作栏 -->
+    <!-- 批量操作栏（顶部固定） -->
     <div v-if="batchMode" class="batch-bar">
-      <div class="batch-info">
-        <span>已选择 {{ selectedSongs.length }} 首</span>
-        <button class="text-btn" @click="toggleSelectAll">{{ isAllSelected ? '取消全选' : '全选' }}</button>
+      <div class="batch-left">
+        <label class="checkbox-wrap">
+          <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll">
+          <span class="checkmark"></span>
+        </label>
+        <span class="batch-count">已选择 {{ selectedSongs.length }} 首</span>
       </div>
       <div class="batch-actions">
-        <button class="action-btn secondary" @click="addSelectedToPlaylist">添加到歌单</button>
-        <button class="action-btn danger" @click="batchDelete">删除</button>
-        <button class="action-btn secondary" @click="exitBatchMode">完成</button>
+        <button class="action-btn-icon" @click="addSelectedToPlaylist" title="添加到歌单">
+          <NativeIcon name="add" size="18" />
+          <span>添加</span>
+        </button>
+        <button class="action-btn-icon danger" @click="batchDelete" title="删除">
+          <NativeIcon name="delete" size="18" />
+          <span>删除</span>
+        </button>
+        <button class="action-btn-icon" @click="exitBatchMode" title="完成">
+          <NativeIcon name="check" size="18" />
+          <span>完成</span>
+        </button>
       </div>
     </div>
 
@@ -164,7 +179,7 @@
             <NativeIcon name="edit" /> 编辑
           </div>
           <div class="sheet-item delete" @click="confirmDelete(currentSong)">
-            <NativeIcon name="delete" /> 删除
+            <NativeIcon name="delete" /> {{ currentPlaylist ? '从歌单移除' : '删除' }}
           </div>
         </div>
         <div class="sheet-cancel" @click="closeActionMenu">取消</div>
@@ -214,14 +229,21 @@
     <!-- 删除确认弹窗 -->
     <div v-if="deleteConfirmVisible" class="modal-overlay" @click.self="deleteConfirmVisible = false">
       <div class="modal-container small">
-        <div class="modal-header">确认删除</div>
+        <div class="modal-header">{{ currentPlaylist ? '从歌单移除' : '确认删除' }}</div>
         <div class="modal-body">
-          <p>确定要删除歌曲「{{ songToDelete?.title }}」吗？</p>
-          <p class="warning-text">删除后无法恢复</p>
+          <p v-if="currentPlaylist">
+            确定要从歌单「{{ currentPlaylist.name }}」中移除歌曲「{{ songToDelete?.title }}」吗？
+          </p>
+          <p v-else>确定要删除歌曲「{{ songToDelete?.title }}」吗？</p>
+          <p :class="currentPlaylist ? 'info-text' : 'warning-text'">
+            {{ currentPlaylist ? '歌曲文件不会被删除，仍可在"全部"中找到' : '删除后无法恢复' }}
+          </p>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" @click="deleteConfirmVisible = false">取消</button>
-          <button class="btn-danger" @click="doDelete">删除</button>
+          <button :class="currentPlaylist ? 'btn-primary' : 'btn-danger'" @click="doDelete">
+            {{ currentPlaylist ? '移除' : '删除' }}
+          </button>
         </div>
       </div>
     </div>
@@ -641,16 +663,41 @@ const toggleSelectAll = async () => {
 const batchDelete = async () => {
   if (selectedSongs.value.length === 0) return
   
-  if (!confirm(`确定要删除选中的 ${selectedSongs.value.length} 首歌曲吗？`)) return
+  // 根据是否在歌单中显示不同的提示
+  const isInPlaylist = !!currentPlaylist.value
+  const confirmMsg = isInPlaylist 
+    ? `确定要从歌单「${currentPlaylist.value.name}」中移除选中的 ${selectedSongs.value.length} 首歌曲吗？\n（歌曲文件不会被删除）`
+    : `确定要彻底删除选中的 ${selectedSongs.value.length} 首歌曲吗？\n（此操作不可恢复）`
+  
+  if (!confirm(confirmMsg)) return
 
   try {
-    await api.music.batchDelete({ ids: selectedSongs.value })
-    toast.success('删除成功')
+    const idsToDelete = [...selectedSongs.value]
+    
+    // 保存当前滚动位置
+    const scrollPos = saveScrollPosition()
+    
+    if (isInPlaylist) {
+      // 从歌单中移除
+      await api.music.batchRemoveSongsFromPlaylist(currentPlaylist.value.id, idsToDelete)
+      toast.success('已从歌单中移除')
+    } else {
+      // 彻底删除歌曲
+      await api.music.batchDelete({ ids: idsToDelete })
+      toast.success('删除成功')
+    }
+    
+    // 立即从本地列表移除被删除的项，实现即时刷新
+    musicList.value = musicList.value.filter(song => !idsToDelete.includes(song.id))
+    
     exitBatchMode()
-    loadMusic()
+    await loadPlaylists()
+    
+    // 恢复滚动位置
+    restoreScrollPosition(scrollPos)
   } catch (error) {
     console.error('批量删除失败:', error)
-    toast.error('删除失败')
+    toast.error(isInPlaylist ? '从歌单移除失败' : '删除失败')
   }
 }
 
@@ -713,6 +760,25 @@ const saveEdit = async () => {
   }
 }
 
+// 获取滚动容器
+const getScrollContainer = () => document.querySelector('.scrollable-content')
+
+// 保存滚动位置
+const saveScrollPosition = () => {
+  const container = getScrollContainer()
+  return container ? container.scrollTop : 0
+}
+
+// 恢复滚动位置
+const restoreScrollPosition = (position) => {
+  nextTick(() => {
+    const container = getScrollContainer()
+    if (container) {
+      container.scrollTop = position
+    }
+  })
+}
+
 // 删除
 const confirmDelete = (song) => {
   songToDelete.value = song
@@ -722,13 +788,33 @@ const confirmDelete = (song) => {
 
 const doDelete = async () => {
   try {
-    await api.music.delete(songToDelete.value.id)
-    toast.success('删除成功')
+    const isInPlaylist = !!currentPlaylist.value
+    const deletedId = songToDelete.value.id
+    
+    // 保存当前滚动位置
+    const scrollPos = saveScrollPosition()
+    
+    if (isInPlaylist) {
+      // 从歌单中移除
+      await api.music.removeSongFromPlaylist(currentPlaylist.value.id, deletedId)
+      toast.success('已从歌单中移除')
+    } else {
+      // 彻底删除歌曲
+      await api.music.delete(deletedId)
+      toast.success('删除成功')
+    }
+    
+    // 立即从本地列表移除被删除的项，实现即时刷新
+    musicList.value = musicList.value.filter(song => song.id !== deletedId)
+    
     deleteConfirmVisible.value = false
-    loadMusic()
+    await loadPlaylists()
+    
+    // 恢复滚动位置
+    restoreScrollPosition(scrollPos)
   } catch (error) {
     console.error('删除失败:', error)
-    toast.error('删除失败')
+    toast.error(error.message || '删除失败')
   }
 }
 
@@ -915,62 +1001,67 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-/* ========== 批量操作栏 ========== */
-.batch-bar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 70px;
-  z-index: 150;
-  background: #fff;
-  padding: 12px 16px;
-  border-top: 1px solid #f0f0f0;
-  box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+/* ========== 批量操作栏（顶部固定） ========== */
+.batch-bar-placeholder {
+  height: 56px;
 }
 
-.batch-info {
+.batch-bar {
+  position: fixed;
+  top: 0;
+  left: 56px;
+  right: 0;
+  z-index: 100;
+  background: #fff;
+  padding: 10px 12px 10px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  border-radius: 0 0 8px 0;
 }
 
-.batch-info span {
+.batch-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.batch-count {
   font-size: 14px;
   color: #333;
-}
-
-.text-btn {
-  background: none;
-  border: none;
-  color: #0052d9;
-  font-size: 13px;
-  cursor: pointer;
+  font-weight: 500;
 }
 
 .batch-actions {
   display: flex;
-  gap: 8px;
+  gap: 16px;
 }
 
-.action-btn {
-  flex: 1;
-  padding: 10px;
+.action-btn-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: none;
   border: none;
-  border-radius: 6px;
-  font-size: 13px;
-  background: #0052d9;
-  color: #fff;
-  cursor: pointer;
-}
-
-.action-btn.secondary {
-  background: #f5f7fa;
   color: #666;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 8px;
 }
 
-.action-btn.danger {
-  background: #e34d59;
+.action-btn-icon:active {
+  opacity: 0.7;
+}
+
+.action-btn-icon.danger {
+  color: #e34d59;
+}
+
+.action-btn-icon span {
+  font-size: 11px;
 }
 
 /* ========== 音乐列表 ========== */
@@ -1516,6 +1607,12 @@ onUnmounted(() => {
 
 .warning-text {
   color: #e34d59;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.info-text {
+  color: #0052d9;
   font-size: 13px;
   margin-top: 8px;
 }

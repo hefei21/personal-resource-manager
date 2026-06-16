@@ -1320,6 +1320,11 @@ async function handleRead(row) {
     // 定位完成后关闭 loading，用户看到已定位好的内容
     readerLoading.value = false
     
+    // 等待目录渲染完成后再同步滚动
+    await nextTick()
+    await new Promise(resolve => setTimeout(resolve, 100))
+    await syncTocScroll()
+    
     // 设置滚动监听
     setupScrollListener()
     
@@ -1576,7 +1581,7 @@ function setupLinkClickHandler(readerContent) {
   }
   
   // 创建新的事件处理函数
-  linkClickHandler = (e) => {
+  linkClickHandler = async (e) => {
     // 查找最近的a标签
     const link = e.target.closest('a[href]')
     if (!link) return
@@ -1622,6 +1627,10 @@ function setupLinkClickHandler(readerContent) {
       if (chapterIndex !== -1) {
         // 跳转到目标章节
         currentChapterIndex.value = chapterIndex
+        
+        // 同步目录滚动
+        await syncTocScroll()
+        
         nextTick(() => {
           // 如果有锚点，在章节加载后跳转到锚点
           if (anchor) {
@@ -1718,6 +1727,32 @@ function scrollToTop() {
   }
 }
 
+// 同步目录滚动到当前章节
+async function syncTocScroll() {
+  // 等待目录 DOM 更新完成
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 50))
+  
+  const sidebarContent = document.querySelector('.sidebar-content')
+  const activeItem = document.querySelector('.toc-item.toc-active')
+  
+  if (sidebarContent && activeItem) {
+    // 计算滚动位置，使当前项在视口中间
+    const containerHeight = sidebarContent.clientHeight
+    const itemTop = activeItem.offsetTop
+    const itemHeight = activeItem.clientHeight
+    const scrollTop = itemTop - containerHeight / 2 + itemHeight / 2
+    
+    sidebarContent.scrollTo({
+      top: Math.max(0, scrollTop),
+      behavior: 'smooth'
+    })
+    console.log('📑 目录已同步滚动到当前章节:', currentChapterIndex.value + 1)
+  } else {
+    console.log('⚠️ 目录同步失败:', { sidebarContent: !!sidebarContent, activeItem: !!activeItem })
+  }
+}
+
 // 章节切换（简单 loading，图片懒加载）
 async function switchChapter(newIndex) {
   if (newIndex < 0 || newIndex >= bookChapters.value.length) return
@@ -1739,6 +1774,11 @@ async function switchChapter(newIndex) {
   
   // 关闭 loading
   readerLoading.value = false
+  
+  // 等待目录渲染完成后再同步滚动
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 100))
+  await syncTocScroll()
 }
 
 // 章节导航

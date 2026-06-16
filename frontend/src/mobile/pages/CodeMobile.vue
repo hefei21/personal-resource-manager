@@ -39,6 +39,9 @@
               <NativeTag v-if="isCloning(repo.id)" theme="warning" size="small">
                 克隆中 {{ cloneProgress(repo.id) }}%
               </NativeTag>
+              <NativeTag v-else-if="isSyncing(repo.id)" theme="primary" size="small">
+                同步中
+              </NativeTag>
               <NativeTag v-else-if="!repo.last_sync" theme="warning" size="small">
                 等待克隆
               </NativeTag>
@@ -47,7 +50,7 @@
               <NativeButton theme="default" size="small" variant="text" @click.stop="editRepo(repo)">
                 <NativeIcon name="pencil" size="16" />
               </NativeButton>
-              <NativeButton theme="default" size="small" variant="text" @click.stop="syncRepo(repo)">
+              <NativeButton theme="default" size="small" variant="text" @click.stop="syncRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id)">
                 <NativeIcon name="arrow-clockwise" size="16" />
               </NativeButton>
               <NativeButton theme="default" size="small" variant="text" class="btn-delete" @click.stop="confirmDelete(repo)">
@@ -114,8 +117,11 @@
 
       <!-- README 内容 -->
       <div v-if="activeTab === 'readme'" class="detail-content">
+        <div v-if="readmeLoading" class="content-loading">
+          <NativeLoading size="small" />
+        </div>
         <MdPreview
-          v-if="readmeContent"
+          v-else-if="readmeContent"
           :modelValue="readmeContent"
           :theme="editorTheme"
           :previewTheme="previewTheme"
@@ -164,7 +170,10 @@
 
       <!-- 提交历史 -->
       <div v-else-if="activeTab === 'commits'" class="detail-content">
-        <div v-if="commits.length > 0" class="commit-list">
+        <div v-if="commitsLoading" class="content-loading">
+          <NativeLoading size="small" />
+        </div>
+        <div v-else-if="commits.length > 0" class="commit-list">
           <div
             v-for="commit in commits"
             :key="commit.hash"
@@ -272,7 +281,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import api from '@/api'
 import { usePermission } from '@/composables/usePermission'
 import { 
@@ -309,6 +318,8 @@ const currentRepo = ref(null)
 const fileList = ref([])
 const commits = ref([])
 const readmeContent = ref('')
+const readmeLoading = ref(false)
+const commitsLoading = ref(false)
 const activeTab = ref('readme')
 
 // 目录浏览状态
@@ -476,11 +487,65 @@ async function doDelete() {
   }
 }
 
+// 检查是否正在同步
+function isSyncing(repoId) {
+  const status = syncStatuses.value.get(String(repoId))
+  return status && status.status === 'syncing'
+}
+
+// 获取同步进度
+function syncProgress(repoId) {
+  const status = syncStatuses.value.get(String(repoId))
+  return status ? status.progress : 0
+}
+
+// 轮询同步状态
+let syncPollInterval = null
+function startSyncPolling(repoId, taskId) {
+  syncStatuses.value.set(String(repoId), { status: 'syncing', progress: 0, message: '准备中...' })
+
+  if (syncPollInterval) {
+    clearInterval(syncPollInterval)
+  }
+
+  syncPollInterval = setInterval(async () => {
+    try {
+      const response = await api.code.getSyncStatus(repoId)
+      const data = response.data?.data
+
+      if (data) {
+        syncStatuses.value.set(String(repoId), data)
+
+        if (data.status === 'completed') {
+          clearInterval(syncPollInterval)
+          syncPollInterval = null
+          toast.success('同步成功')
+          loadRepos() // 刷新列表
+        } else if (data.status === 'failed') {
+          clearInterval(syncPollInterval)
+          syncPollInterval = null
+          toast.error(data.message || '同步失败')
+        }
+      }
+    } catch (e) {
+      console.error('获取同步状态失败:', e)
+    }
+  }, 1000) // 每秒轮询一次
+}
+
 // 同步仓库
 async function syncRepo(repo) {
   try {
-    await api.code.sync(repo.id)
+    const response = await api.code.sync(repo.id)
     toast.success('开始同步仓库...')
+    
+    // 立即刷新列表显示同步状态
+    loadRepos()
+    
+    // 开始轮询同步进度
+    if (response.data?.taskId) {
+      startSyncPolling(repo.id, response.data.taskId)
+    }
   } catch (error) {
     toast.error('同步失败')
   }
@@ -575,22 +640,28 @@ async function fetchGithubInfo() {
 // 加载 README
 async function loadReadme() {
   if (!currentRepo.value) return
+  readmeLoading.value = true
   try {
     const response = await api.code.getReadme(currentRepo.value.id)
     readmeContent.value = response.data.data?.content || ''
   } catch (error) {
     readmeContent.value = ''
+  } finally {
+    readmeLoading.value = false
   }
 }
 
 // 加载提交历史
 async function loadCommits() {
   if (!currentRepo.value) return
+  commitsLoading.value = true
   try {
     const response = await api.code.getCommits(currentRepo.value.id, 20)
     commits.value = response.data.data || []
   } catch (error) {
     commits.value = []
+  } finally {
+    commitsLoading.value = false
   }
 }
 
@@ -656,6 +727,16 @@ function formatDate(dateStr) {
 }
 
 onMounted(() => loadRepos())
+
+// 组件卸载时清理定时器
+onUnmounted(() => {
+  if (clonePollInterval) {
+    clearInterval(clonePollInterval)
+  }
+  if (syncPollInterval) {
+    clearInterval(syncPollInterval)
+  }
+})
 </script>
 
 <style scoped>

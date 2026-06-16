@@ -555,6 +555,21 @@ const privatePasswordInput = ref('')
 const privatePasswordError = ref('')
 const privateAccessGranted = ref(false)
 
+// 检查 sessionStorage 中是否有私密空间访问权限
+function checkPrivateAccess() {
+  return sessionStorage.getItem('privateAccessGranted') === 'true'
+}
+
+// 设置私密空间访问权限
+function setPrivateAccess(granted) {
+  if (granted) {
+    sessionStorage.setItem('privateAccessGranted', 'true')
+  } else {
+    sessionStorage.removeItem('privateAccessGranted')
+  }
+  privateAccessGranted.value = granted
+}
+
 // 方法定义
 
 // 切换视图模式
@@ -574,10 +589,13 @@ function switchViewMode(mode) {
       loadDocuments()
       return
     }
-    if (!privateAccessGranted.value) {
+    // 从 sessionStorage 检查访问权限
+    const hasAccess = checkPrivateAccess()
+    if (!hasAccess) {
       privatePasswordDialogVisible.value = true
       return
     }
+    privateAccessGranted.value = true
   }
   
   loadDocuments()
@@ -590,15 +608,24 @@ async function verifyPrivatePassword() {
       password: privatePasswordInput.value
     })
     if (response.data.success) {
-      privateAccessGranted.value = true
+      // 持久化访问权限到 sessionStorage
+      setPrivateAccess(true)
       privatePasswordDialogVisible.value = false
       privatePasswordError.value = ''
+      privatePasswordInput.value = ''
+      // 清空搜索关键词，避免带着之前的搜索词搜索私密文件
+      searchKeyword.value = ''
       loadPrivateDocuments()
     } else {
-      privatePasswordError.value = '密码错误'
+      privatePasswordError.value = response.data.message || '密码错误'
     }
   } catch (error) {
-    privatePasswordError.value = '验证失败'
+    // 处理密码错误（400状态码）
+    if (error.response?.status === 400) {
+      privatePasswordError.value = error.response.data?.message || '密码错误'
+    } else {
+      privatePasswordError.value = error.response?.data?.message || '验证失败'
+    }
   }
 }
 
@@ -660,10 +687,13 @@ async function loadPrivateDocuments() {
     const data = response.data?.data || []
     total.value = response.data?.total || 0
     
+    // 给私密文档添加 isPrivate 标记，用于预览时调用正确的 API
+    const privateData = data.map(doc => ({ ...doc, isPrivate: true }))
+    
     if (page.value === 1) {
-      documents.value = data
+      documents.value = privateData
     } else {
-      documents.value.push(...data)
+      documents.value.push(...privateData)
     }
   } catch (error) {
     console.error('加载私密文档失败:', error)
@@ -872,7 +902,11 @@ function handleDownloadFile() {
   const doc = documents.value.find(d => d.id === previewDocumentId.value)
   if (!doc) return
   const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-  window.open(`/api/documents/${doc.id}/content?token=${token}&download=1`, '_blank')
+  // 根据是否是私密文档使用不同的下载链接
+  const downloadUrl = doc.isPrivate
+    ? `/api/documents/secure/download/${doc.id}?token=${token}&download=1`
+    : `/api/documents/${doc.id}/content?token=${token}&download=1`
+  window.open(downloadUrl, '_blank')
 }
 
 // 预览文档（与PC端逻辑完全对齐）
@@ -901,7 +935,10 @@ async function previewDocument(doc) {
         }
       } catch (e) { console.warn('图片base64获取失败，回退URL模式') }
       currentDoc.value = doc
-      previewImageUrl.value = `/api/documents/${doc.id}/content?token=${token}`
+      // 私密文档使用不同的图片预览链接
+      previewImageUrl.value = doc.isPrivate
+        ? `/api/documents/docs/special/view/${doc.id}?token=${token}`
+        : `/api/documents/${doc.id}/content?token=${token}`
       imagePreviewVisible.value = true
       previewingDocIds.value.delete(doc.id)
       return

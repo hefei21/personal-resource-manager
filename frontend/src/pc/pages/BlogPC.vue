@@ -145,6 +145,7 @@
       width="85%"
       :show-footer="false"
       :close-on-overlay-click="false"
+      class="blog-edit-dialog"
     >
       <div class="editor-container">
         <div class="editor-header">
@@ -185,7 +186,7 @@
             :codeTheme="codeTheme"
             :toolbars="editorToolbars"
             @onSave="handleAutoSave"
-            style="height: calc(100vh - 350px)"
+            style="height: calc(100vh - 380px); min-height: 300px;"
           />
         </div>
 
@@ -302,7 +303,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
 import { MdEditor, MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
@@ -497,9 +498,10 @@ async function handlePreview(post) {
   }
 }
 
-// 自动保存
+// 编辑器工具栏保存按钮回调
 function handleAutoSave(content) {
-  console.log('自动保存:', content.substring(0, 100))
+  // 调用保存草稿功能
+  handleSaveDraft()
 }
 
 // 保存草稿
@@ -859,12 +861,21 @@ onMounted(() => {
   width: 100%;
 }
 
+/* 编辑器对话框 */
+.blog-edit-dialog :deep(.native-dialog__content) {
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* 编辑器样式 */
 .editor-container {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  height: calc(100vh - 100px);
+  gap: 12px;
+  height: calc(85vh - 60px);
+  overflow: hidden;
 }
 
 .editor-header {

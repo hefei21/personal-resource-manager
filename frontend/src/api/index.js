@@ -6,11 +6,40 @@ const api = axios.create({
 })
 
 // 简单的 toast 提示（避免在 api 层依赖 Vue 组件）
+let toastDebounce = null
 function showToast(message, type = 'warning') {
+  // 防抖：2 秒内重复的 toast 只显示第一个
+  if (toastDebounce) return
+  toastDebounce = setTimeout(() => { toastDebounce = null }, 2000)
+  
   // 使用自定义事件通知 Vue 应用显示 toast
   window.dispatchEvent(new CustomEvent('api-toast', { detail: { message, type } }))
   // 同时输出到控制台
   console.warn(`[API ${type}]`, message)
+}
+
+// 处理 token 过期/无效
+let isRedirecting = false
+function handleTokenExpired() {
+  if (isRedirecting) return
+  isRedirecting = true
+  
+  console.warn('[API] Token 已过期或无效，准备重新登录')
+  
+  // 提示用户登录已过期
+  showToast('登录已过期，请重新登录', 'warning')
+  
+  // 清除 localStorage 和 sessionStorage
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  sessionStorage.removeItem('token')
+  sessionStorage.removeItem('user')
+  
+  // 延迟跳转，让用户看到提示
+  setTimeout(() => {
+    isRedirecting = false
+    window.location.href = '/login'
+  }, 1500)
 }
 
 api.interceptors.request.use(
@@ -35,19 +64,16 @@ api.interceptors.response.use(
     const isAuthEndpoint = requestUrl.includes('/auth/login') || requestUrl.includes('/auth/guest-login')
     
     if (error.response?.status === 401 && !isAuthEndpoint) {
-      // 提示用户登录已过期
-      showToast('登录已过期，请重新登录', 'warning')
-      
-      // 清除 localStorage 和 sessionStorage
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      sessionStorage.removeItem('token')
-      sessionStorage.removeItem('user')
-      
-      // 延迟跳转，让用户看到提示
-      setTimeout(() => {
-        window.location.href = '/login'
-      }, 1000)
+      // Token 缺失或未认证
+      handleTokenExpired()
+    } else if (error.response?.status === 403 && !isAuthEndpoint) {
+      // Token 过期或无效（后端 JWT 验证失败返回 403）
+      const errorCode = error.response?.data?.code
+      if (errorCode !== 'GUEST_NO_PERMISSION') {
+        handleTokenExpired()
+      } else {
+        console.warn('游客无权执行此操作')
+      }
     } else if (error.response?.status === 403) {
       // 处理权限错误
       const errorCode = error.response?.data?.code
