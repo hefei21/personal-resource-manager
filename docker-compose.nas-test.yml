@@ -1,0 +1,92 @@
+services:
+  backend:
+    image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG}
+    container_name: pr-test-backend
+    restart: unless-stopped
+    ports:
+      - "13000:3000"
+    volumes:
+      - ${TEST_DATA_ROOT}/db:/app/data/database
+      - ${TEST_DATA_ROOT}/documents:/app/data/documents
+      - ${TEST_DATA_ROOT}/music:/app/data/music
+      - ${TEST_DATA_ROOT}/books:/app/data/books
+      - ${TEST_DATA_ROOT}/code:/app/data/code
+      - ${TEST_DATA_ROOT}/uploads:/app/data/uploads
+      - ${TEST_DATA_ROOT}/logs:/app/data/logs
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_PATH: /app/data
+      DB_PATH: /app/data/database/app.db
+      DOCUMENTS_PATH: /app/data/documents
+      MUSIC_PATH: /app/data/music
+      BOOKS_PATH: /app/data/books
+      CODE_PATH: /app/data/code
+      UPLOADS_PATH: /app/data/uploads
+      LOGS_PATH: /app/data/logs
+      JWT_SECRET: ${TEST_JWT_SECRET}
+      JWT_EXPIRE: 1h
+      DEFAULT_USERNAME: ${TEST_ADMIN_USERNAME}
+      DEFAULT_PASSWORD: ${TEST_ADMIN_PASSWORD}
+      PRIVATE_PASSWORD: ${TEST_PRIVATE_PASSWORD}
+      CORS_ORIGIN: http://${NAS_HOST}:15173
+      REDIS_URL: redis://redis:6379
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: localhost,127.0.0.1,redis,backend
+      BANGUMI_ACCESS_TOKEN: ""
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - pr-test-network
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: pr-test-redis
+    restart: unless-stopped
+    volumes:
+      - ${TEST_DATA_ROOT}/redis:/data
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    networks:
+      - pr-test-network
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    image: ghcr.io/hefei21/personal-resource-manager-frontend:${IMAGE_TAG}
+    container_name: pr-test-frontend
+    restart: unless-stopped
+    ports:
+      - "15173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - pr-test-network
+
+networks:
+  pr-test-network:
+    name: pr-test-network
+    driver: bridge
+

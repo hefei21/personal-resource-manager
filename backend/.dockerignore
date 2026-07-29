@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log*
+.env
+.env.*
+!.env.example
+!.env.production.example
+data
+*.db
+*.db-shm
+*.db-wal
+logs
+.git
+.gitignore
+.codex
+
