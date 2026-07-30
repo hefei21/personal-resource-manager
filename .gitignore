@@ -6,11 +6,28 @@
 node_modules/
 **/node_modules/
 
-# ==================== 环境配置 ====================
-# 【重要】.env 包含敏感信息，不要提交到 Git
+# ==================== 环境配置与凭据 ====================
+# 默认忽略所有环境文件，显式放行不含真实值的示例模板。
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
+!.env.*.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+
+# 本地包管理器配置可能包含 Registry Token。
+.npmrc
+.yarnrc
+
+# 私钥、证书包和常见凭据文件。
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
 
 # ==================== 数据库文件 ====================
 # 【重要】用户数据不要提交到 Git
@@ -18,6 +35,11 @@ node_modules/
 *.db-journal
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 db/
 database/
 
@@ -45,7 +67,7 @@ yarn-error.log*
 *~
 
 # ==================== CodeBuddy ====================
-.codebuddy/
+/.codebuddy/
 
 # ==================== 操作系统文件 ====================
 .DS_Store
@@ -63,11 +85,16 @@ coverage/
 # ==================== 临时文件 ====================
 *.tmp
 *.temp
+*.bak
+*.backup
+*.orig
 .cache/
 .temp/
+.eslintcache
 
 # ==================== Docker 相关 ====================
 docker-compose.override.yml
+docker-compose.override.yaml
 # 【重要】Tunnel Token 是敏感信息，不要提交到 Git
 docker-compose.tunnel.yml
 
