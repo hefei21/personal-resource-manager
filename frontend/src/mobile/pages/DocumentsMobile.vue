@@ -392,7 +392,7 @@ import hljs from 'highlight.js'
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 import api from '@/api'
-import { authenticatedAssetUrl, getDemoAuthorizationHeaders } from '@/utils/authentication'
+import { authenticatedAssetUrl } from '@/utils/authentication'
 import { usePermission } from '@/composables/usePermission'
 import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect } from '@/components/native'
 import { useToast } from '@/composables/useToast'
@@ -491,7 +491,7 @@ const uploadForm = ref({
   categoryPath: ''
 })
 const uploadAction = computed(() => '/api/documents/upload')
-const uploadHeaders = computed(() => getDemoAuthorizationHeaders())
+const uploadHeaders = computed(() => ({}))
 
 // 批量编辑
 const batchEditDialogVisible = ref(false)

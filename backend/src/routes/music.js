@@ -1385,16 +1385,8 @@ router.post('/remove-duplicates', authenticateToken, async (req, res) => {
 })
 
 // 播放音乐（返回文件流）
-router.get('/play/:id', async (req, res) => {
+router.get('/play/:id', authenticateToken, async (req, res) => {
   try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    const decoded = jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const music = db.prepare('SELECT * FROM music WHERE id = ?').get(req.params.id)
 

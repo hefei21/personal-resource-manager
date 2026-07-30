@@ -800,16 +800,8 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
 })
 
 // 获取文档内容用于编辑或预览
-router.get('/:id/content', async (req, res) => {
+router.get('/:id/content', authenticateToken, async (req, res) => {
   try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM documents WHERE id = ?')
     const document = stmt.get(req.params.id)
@@ -1064,18 +1056,8 @@ router.put('/batch/update', authenticateToken, requireWritePermission, async (re
 })
 
 // 下载文档
-router.get('/download/:id', async (req, res) => {
+router.get('/download/:id', authenticateToken, async (req, res) => {
   try {
-    // 支持 token 参数认证
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    // 验证 token（简化版，实际应该使用 authenticateToken 中间件）
-    const jwt = await import('jsonwebtoken')
-    const decoded = jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM documents WHERE id = ?')
     const document = stmt.get(req.params.id)
@@ -1317,16 +1299,8 @@ router.post('/secure/upload', authenticateToken, requireWritePermission, upload.
 })
 
 // 下载私密文件（路径避免敏感词）
-router.get('/secure/download/:id', async (req, res) => {
+router.get('/secure/download/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
     const document = stmt.get(req.params.id)
@@ -1375,16 +1349,8 @@ router.delete('/secure/files/:id', authenticateToken, requireWritePermission, as
 })
 
 // 获取私密文件内容用于预览（路径使用中性命名）
-router.get('/docs/special/view/:id', async (req, res) => {
+router.get('/docs/special/view/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
     const document = stmt.get(req.params.id)

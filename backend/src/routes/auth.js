@@ -1,7 +1,12 @@
 import express from 'express'
 import bcrypt from 'bcryptjs'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken, generateToken, requireOwner } from '../middlewares/auth.js'
+import {
+  authenticateToken,
+  generateDemoToken,
+  LEGACY_DEMO_COOKIE,
+  requireOwner
+} from '../middlewares/auth.js'
 import { loginLimiter } from '../middlewares/security.js'
 import {
   OWNER_SESSION_COOKIE,
@@ -59,13 +64,9 @@ router.post('/login', loginLimiter, async (req, res) => {
       ownerSessionCookieOptions(req, remember === true)
     )
 
-    // Transitional JWT: retained only until content and download routes stop
-    // accepting primary credentials in URL query parameters.
-    const token = generateToken(user, false)
     console.log('登录成功', { username: user.username, userId: user.id })
 
     res.json({
-      token,
       user: {
         id: user.id,
         username: user.username,
@@ -93,10 +94,16 @@ router.post('/guest-login', (req, res) => {
       username: '游客'
     }
     
-    const token = generateToken(guestUser, true)  // 游客登录，isGuest = true
+    const token = generateDemoToken(guestUser)
+    res.cookie(LEGACY_DEMO_COOKIE, token, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: req.secure || req.get('x-forwarded-proto') === 'https',
+      path: '/',
+      maxAge: 24 * 60 * 60 * 1000
+    })
     
     res.json({
-      token,
       user: {
         id: 'guest',
         username: '游客',
@@ -120,6 +127,12 @@ router.post('/logout', authenticateToken, (req, res) => {
     OWNER_SESSION_COOKIE,
     clearOwnerSessionCookieOptions(req)
   )
+  res.clearCookie(LEGACY_DEMO_COOKIE, {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: req.secure || req.get('x-forwarded-proto') === 'https',
+    path: '/'
+  })
   res.json({ message: '登出成功' })
 })
 

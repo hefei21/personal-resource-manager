@@ -30,27 +30,12 @@ function handleTokenExpired() {
   // 提示用户登录已过期
   showToast('登录已过期，请重新登录', 'warning')
   
-  sessionStorage.removeItem('demoToken')
-  
   // 延迟跳转，让用户看到提示
   setTimeout(() => {
     isRedirecting = false
     window.location.href = '/login'
   }, 1500)
 }
-
-api.interceptors.request.use(
-  (config) => {
-    // Owner authentication uses the HttpOnly cookie. This header exists only
-    // for the transitional demo flow and cannot contain an owner credential.
-    const demoToken = sessionStorage.getItem('demoToken')
-    if (demoToken) {
-      config.headers.Authorization = `Bearer ${demoToken}`
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
 
 api.interceptors.response.use(
   (response) => response,

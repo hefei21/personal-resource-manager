@@ -78,21 +78,19 @@ function Invoke-Api {
   param(
     [string]$Method = 'GET',
     [string]$Path,
-    [string]$Token,
+    [Microsoft.PowerShell.Commands.WebRequestSession]$Session,
     [object]$Body,
     [hashtable]$Form,
     [int]$TimeoutSec = 30
   )
-  $headers = @{}
-  if ($Token) {
-    $headers.Authorization = "Bearer $Token"
-  }
   $params = @{
     Uri = "$ApiBase$Path"
     Method = $Method
-    Headers = $headers
     TimeoutSec = $TimeoutSec
     SkipHttpErrorCheck = $true
+  }
+  if ($Session) {
+    $params.WebSession = $Session
   }
   if ($null -ne $Body) {
     $params.ContentType = 'application/json'
@@ -179,25 +177,25 @@ function Invoke-SmokeSuite {
   $health = Invoke-Api -Path '/health'
   Assert-Status 'health.api' 'smoke' $health @(200) | Out-Null
 
-  $adminLogin = Invoke-Api -Method POST -Path '/auth/login' -Body @{
+  $adminSession = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
+  $adminLogin = Invoke-Api -Method POST -Path '/auth/login' -Session $adminSession -Body @{
     username = $envValues.TEST_ADMIN_USERNAME
     password = $envValues.TEST_ADMIN_PASSWORD
   }
   $adminOk = Assert-Status 'auth.admin-login' 'smoke' $adminLogin @(200)
-  if (-not $adminOk -or -not $adminLogin.Body.token) {
-    throw 'Admin login did not return a token.'
+  if (-not $adminOk) {
+    throw 'Admin login did not establish a session.'
   }
-  $adminToken = [string]$adminLogin.Body.token
 
-  $guestLogin = Invoke-Api -Method POST -Path '/auth/guest-login'
+  $guestSession = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
+  $guestLogin = Invoke-Api -Method POST -Path '/auth/guest-login' -Session $guestSession
   $guestOk = Assert-Status 'auth.guest-login' 'smoke' $guestLogin @(200)
-  if (-not $guestOk -or -not $guestLogin.Body.token) {
-    throw 'Guest login did not return a token.'
+  if (-not $guestOk) {
+    throw 'Guest login did not establish a session.'
   }
-  $guestToken = [string]$guestLogin.Body.token
 
-  Assert-Status 'auth.admin-check' 'smoke' (Invoke-Api -Path '/auth/check' -Token $adminToken) @(200) | Out-Null
-  Assert-Status 'auth.guest-check' 'smoke' (Invoke-Api -Path '/auth/check' -Token $guestToken) @(200) | Out-Null
+  Assert-Status 'auth.admin-check' 'smoke' (Invoke-Api -Path '/auth/check' -Session $adminSession) @(200) | Out-Null
+  Assert-Status 'auth.guest-check' 'smoke' (Invoke-Api -Path '/auth/check' -Session $guestSession) @(200) | Out-Null
 
   $listEndpoints = [ordered]@{
     'documents.list' = '/documents?page=1&pageSize=10'
@@ -212,10 +210,10 @@ function Invoke-SmokeSuite {
     'search.global' = '/search?keyword=synthetic'
   }
   foreach ($entry in $listEndpoints.GetEnumerator()) {
-    Assert-Status $entry.Key 'smoke' (Invoke-Api -Path $entry.Value -Token $adminToken) @(200) | Out-Null
+    Assert-Status $entry.Key 'smoke' (Invoke-Api -Path $entry.Value -Session $adminSession) @(200) | Out-Null
   }
 
-  $documentUpload = Invoke-Api -Method POST -Path '/documents/upload' -Token $adminToken -TimeoutSec 60 -Form @{
+  $documentUpload = Invoke-Api -Method POST -Path '/documents/upload' -Session $adminSession -TimeoutSec 60 -Form @{
     file = Get-Item -LiteralPath (Join-Path $FixtureRoot 'baseline.txt')
     title = 'Synthetic baseline document'
     category = 'Baseline'
@@ -226,8 +224,8 @@ function Invoke-SmokeSuite {
   $documentId = if ($documentOk) { [int]$documentUpload.Body.id } else { 0 }
 
   if ($documentId -gt 0) {
-    Assert-Status 'documents.content-header-token' 'smoke' (Invoke-Api -Path "/documents/$documentId/content" -Token $adminToken) @(200) | Out-Null
-    Assert-Status 'documents.update' 'smoke' (Invoke-Api -Method PUT -Path "/documents/$documentId" -Token $adminToken -Body @{
+    Assert-Status 'documents.content-cookie' 'smoke' (Invoke-Api -Path "/documents/$documentId/content" -Session $adminSession) @(200) | Out-Null
+    Assert-Status 'documents.update' 'smoke' (Invoke-Api -Method PUT -Path "/documents/$documentId" -Session $adminSession -Body @{
       title = 'Synthetic baseline document updated'
       category = 'Baseline'
       subcategory = ''
@@ -238,7 +236,7 @@ function Invoke-SmokeSuite {
     Save-Result 'documents.update' 'smoke' 'SKIP' 'Document upload did not produce an ID.'
   }
 
-  $bookmarkCreate = Invoke-Api -Method POST -Path '/bookmarks' -Token $adminToken -Body @{
+  $bookmarkCreate = Invoke-Api -Method POST -Path '/bookmarks' -Session $adminSession -Body @{
     title = 'Synthetic bookmark'
     url = 'https://example.invalid/stage0'
     category = 'Baseline'
@@ -248,7 +246,7 @@ function Invoke-SmokeSuite {
   $bookmarkOk = Assert-Status 'bookmarks.create' 'smoke' $bookmarkCreate @(200)
   $bookmarkId = if ($bookmarkOk) { [int]$bookmarkCreate.Body.id } else { 0 }
   if ($bookmarkId -gt 0) {
-    Assert-Status 'bookmarks.update' 'smoke' (Invoke-Api -Method PUT -Path "/bookmarks/$bookmarkId" -Token $adminToken -Body @{
+    Assert-Status 'bookmarks.update' 'smoke' (Invoke-Api -Method PUT -Path "/bookmarks/$bookmarkId" -Session $adminSession -Body @{
       title = 'Synthetic bookmark updated'
       url = 'https://example.invalid/stage0-updated'
       category = 'Baseline'
@@ -260,8 +258,6 @@ function Invoke-SmokeSuite {
   }
 
   $state = [ordered]@{
-    adminToken = $adminToken
-    guestToken = $guestToken
     documentId = $documentId
     bookmarkId = $bookmarkId
     generatedAt = [DateTime]::UtcNow.ToString('o')
@@ -271,7 +267,7 @@ function Invoke-SmokeSuite {
   $fixedTestLogin = Invoke-Api -Method POST -Path '/auth/login' -Body @{ username = 'test'; password = '123456' }
   Assert-SecurityInvariant 'security.fixed-test-account' $fixedTestLogin
 
-  $privateList = Invoke-Api -Path '/documents/docs/special/list' -Token $guestToken
+  $privateList = Invoke-Api -Path '/documents/docs/special/list' -Session $guestSession
   Assert-SecurityInvariant 'security.private-list-secondary-auth' $privateList
 
   $bookConfigWrite = Invoke-Api -Method PUT -Path '/book-search/config' -Body @{
@@ -281,7 +277,7 @@ function Invoke-SmokeSuite {
   Assert-SecurityInvariant 'security.book-search-config-auth' $bookConfigWrite
 
   if ($documentId -gt 0) {
-    $urlToken = Invoke-Api -Path "/documents/$documentId/content?token=$([uri]::EscapeDataString($adminToken))"
+    $urlToken = Invoke-Api -Path "/documents/$documentId/content?token=synthetic-invalid-token"
     if ($urlToken.Status -eq 200) {
       Save-Result 'security.jwt-in-query' 'security' 'KNOWN_FAIL' 'Primary JWT was accepted from the URL query string.' $urlToken.DurationMs $urlToken.Status
     } else {
@@ -290,7 +286,7 @@ function Invoke-SmokeSuite {
   }
 
   if ($bookmarkId -gt 0) {
-    $guestDelete = Invoke-Api -Method DELETE -Path "/bookmarks/$bookmarkId" -Token $guestToken
+    $guestDelete = Invoke-Api -Method DELETE -Path "/bookmarks/$bookmarkId" -Session $guestSession
     Assert-SecurityInvariant 'security.guest-bookmark-delete' $guestDelete
   }
 
@@ -299,7 +295,16 @@ function Invoke-SmokeSuite {
 }
 
 function Invoke-ScenarioSuite {
-  $state = Read-State
+  Read-State | Out-Null
+  $envValues = Read-DotEnv
+  $adminSession = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
+  $adminLogin = Invoke-Api -Method POST -Path '/auth/login' -Session $adminSession -Body @{
+    username = $envValues.TEST_ADMIN_USERNAME
+    password = $envValues.TEST_ADMIN_PASSWORD
+  }
+  if ($adminLogin.Status -ne 200) {
+    throw 'Scenario suite could not establish an owner session.'
+  }
 
   & docker compose --env-file $EnvPath -f $ComposePath stop redis | Out-Null
   Start-Sleep -Seconds 2
@@ -309,7 +314,7 @@ function Invoke-ScenarioSuite {
   } else {
     Save-Result 'reliability.redis-outage-health' 'reliability' 'FAIL' "Health endpoint was unavailable: HTTP $($redisHealth.Status)." $redisHealth.DurationMs $redisHealth.Status
   }
-  $redisFallback = Invoke-Api -Path '/bookmarks' -Token $state.adminToken
+  $redisFallback = Invoke-Api -Path '/bookmarks' -Session $adminSession
   Assert-Status 'reliability.redis-outage-read' 'reliability' $redisFallback @(200) | Out-Null
   & docker compose --env-file $EnvPath -f $ComposePath start redis | Out-Null
 
@@ -329,8 +334,8 @@ function Invoke-ScenarioSuite {
   $listDurations = @()
   $searchDurations = @()
   foreach ($i in 1..15) {
-    $listDurations += (Invoke-Api -Path '/documents?page=1&pageSize=10' -Token $state.adminToken).DurationMs
-    $searchDurations += (Invoke-Api -Path '/search?keyword=synthetic' -Token $state.adminToken).DurationMs
+    $listDurations += (Invoke-Api -Path '/documents?page=1&pageSize=10' -Session $adminSession).DurationMs
+    $searchDurations += (Invoke-Api -Path '/search?keyword=synthetic' -Session $adminSession).DurationMs
   }
   Save-Result 'performance.documents-list' 'performance' 'PASS' "15 requests: P50=$(Get-Percentile $listDurations 50)ms, P95=$(Get-Percentile $listDurations 95)ms."
   Save-Result 'performance.global-search' 'performance' 'PASS' "15 requests: P50=$(Get-Percentile $searchDurations 50)ms, P95=$(Get-Percentile $searchDurations 95)ms."

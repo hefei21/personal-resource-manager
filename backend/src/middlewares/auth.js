@@ -12,6 +12,7 @@ export const PRINCIPALS = Object.freeze({
   OWNER: 'owner',
   DEMO: 'demo'
 })
+export const LEGACY_DEMO_COOKIE = 'pr_demo_session'
 
 function getOwnerAuthDatabase() {
   return getDatabase({ user: { username: '__owner_auth__' } })
@@ -77,27 +78,30 @@ export function authenticateToken(req, res, next) {
     }
   }
 
-  // 优先从 Authorization 头获取 token，其次从 URL 参数获取
-  const authHeader = req.headers['authorization']
-  let token = authHeader && authHeader.split(' ')[1]
-  
-  // 如果头中没有，尝试从 URL 参数获取
-  if (!token && req.query.token) {
-    token = req.query.token
-  }
-
-  if (!token) {
+  const demoToken = req.cookies?.[LEGACY_DEMO_COOKIE]
+  if (!demoToken) {
     return res.status(401).json({ message: '需要认证' })
   }
 
   try {
-    const user = jwt.verify(token, JWT_SECRET)
+    const user = jwt.verify(demoToken, JWT_SECRET)
+    if (user.principal !== PRINCIPALS.DEMO || user.isGuest !== true) {
+      return res.status(403).json({ message: '无效的演示会话' })
+    }
     return attachPrincipal(req, res, next, user, {
-      type: req.query.token ? 'legacy_query_jwt' : 'legacy_bearer_jwt'
+      type: 'legacy_demo_cookie'
     })
   } catch {
-    return res.status(403).json({ message: '无效的令牌' })
+    return res.status(403).json({ message: '无效的演示会话' })
   }
+}
+
+export function optionalAuthentication(req, res, next) {
+  if (!req.cookies?.[OWNER_SESSION_COOKIE] &&
+      !req.cookies?.[LEGACY_DEMO_COOKIE]) {
+    return next()
+  }
+  return authenticateToken(req, res, next)
 }
 
 /**
@@ -127,16 +131,15 @@ export function requireOwner(req, res, next) {
   next()
 }
 
-export function generateToken(user, isGuest = false) {
-  const principal = isGuest ? PRINCIPALS.DEMO : PRINCIPALS.OWNER
+export function generateDemoToken(user) {
   return jwt.sign(
     { 
       id: user.id, 
       username: user.username,
-      principal,
-      isGuest: principal === PRINCIPALS.DEMO
+      principal: PRINCIPALS.DEMO,
+      isGuest: true
     },
     JWT_SECRET,
-    { expiresIn: isGuest ? '24h' : (process.env.JWT_EXPIRE || '30d') }  // 游客 token 24小时，普通用户30天
+    { expiresIn: '24h' }
   )
 }

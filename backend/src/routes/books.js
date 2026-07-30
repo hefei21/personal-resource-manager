@@ -1183,19 +1183,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
 // 阅读器
 
 // 获取书籍内容
-router.get('/:id/content', async (req, res) => {
+router.get('/:id/content', authenticateToken, async (req, res) => {
   try {
     console.log('📖 获取书籍内容请求, ID:', req.params.id)
-
-    // 支持通过 URL query 参数或 header 传递 token
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    // 验证 token
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
 
     const db = getDatabase()
     const book = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id)
@@ -1245,17 +1235,13 @@ router.get('/:id/content', async (req, res) => {
         try {
           console.log('📖 使用缓存内容')
           const cachedData = JSON.parse(book.content_cache)
-          const currentToken = req.query.token
-          
-          // 替换缓存中的旧token为当前token（解决token过期问题）
-          if (currentToken && cachedData.chapters) {
+          // 清理旧缓存中曾经嵌入的 URL 凭据。
+          if (cachedData.chapters) {
             cachedData.chapters = cachedData.chapters.map(chapter => {
               if (chapter.content) {
-                // 替换图片URL中的token参数
-                chapter.content = chapter.content.replace(
-                  /token=[^&"']+/g,
-                  `token=${currentToken}`
-                )
+                chapter.content = chapter.content
+                  .replace(/&token=[^&"']+/g, '')
+                  .replace(/\?token=[^&"']+/g, '')
               }
               return chapter
             })
@@ -1353,7 +1339,6 @@ router.get('/:id/content', async (req, res) => {
 
         // 构建章节内容（保留HTML格式，支持图片）
         const bookId = req.params.id
-        const token = req.query.token
         const chapterContents = []
         
         console.log('📖 开始处理 spine 章节...')
@@ -1398,7 +1383,7 @@ router.get('/:id/content', async (req, res) => {
                     } else {
                       imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
                     }
-                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                     return match.replace(src, apiUrl)
                   }
                   return match
@@ -1413,7 +1398,7 @@ router.get('/:id/content', async (req, res) => {
                     } else {
                       imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
                     }
-                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                     return match.replace(src, apiUrl)
                   }
                   return match
@@ -1428,7 +1413,7 @@ router.get('/:id/content', async (req, res) => {
                     } else {
                       imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
                     }
-                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                     return match.replace(src, apiUrl)
                   }
                   return match
@@ -1485,7 +1470,7 @@ router.get('/:id/content', async (req, res) => {
               htmlContent = htmlContent.replace(/<img[^>]*src=["']([^"']+)["']/gi, (match, src) => {
                 if (!src.startsWith('http') && !src.startsWith('data:')) {
                   let imgPath = src.startsWith('/') ? src.substring(1) : path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
-                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                   return match.replace(src, apiUrl)
                 }
                 return match
@@ -1495,7 +1480,7 @@ router.get('/:id/content', async (req, res) => {
               htmlContent = htmlContent.replace(/url\(["']?([^"')]+)["']?\)/gi, (match, src) => {
                 if (!src.startsWith('http') && !src.startsWith('data:') && !src.startsWith('#')) {
                   let imgPath = src.startsWith('/') ? src.substring(1) : path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
-                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                   return match.replace(src, apiUrl)
                 }
                 return match
@@ -1505,7 +1490,7 @@ router.get('/:id/content', async (req, res) => {
               htmlContent = htmlContent.replace(/<image[^>]*href=["']([^"']+)["']/gi, (match, src) => {
                 if (!src.startsWith('http') && !src.startsWith('data:')) {
                   let imgPath = src.startsWith('/') ? src.substring(1) : path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
-                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                   return match.replace(src, apiUrl)
                 }
                 return match
@@ -1655,19 +1640,11 @@ router.get('/:id/content', async (req, res) => {
 })
 
 // 分页获取章节内容
-router.get('/:id/chapters', async (req, res) => {
+router.get('/:id/chapters', authenticateToken, async (req, res) => {
   try {
     const bookId = req.params.id
     const startIndex = parseInt(req.query.start) || 0
     const count = parseInt(req.query.count) || 5
-    
-    // 验证 token
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
     
     const db = getDatabase()
     const book = db.prepare('SELECT * FROM books WHERE id = ?').get(bookId)
@@ -1682,22 +1659,19 @@ router.get('/:id/chapters', async (req, res) => {
     let allChapters = []
     let toc = []
     
-    const currentToken = req.query.token
-    
     if (book.content_cache) {
       try {
         const cached = JSON.parse(book.content_cache)
         allChapters = cached.chapters || []
         toc = cached.toc || []
         
-        // 替换缓存中的旧token为当前token
-        if (currentToken && allChapters.length > 0) {
+        // 清理旧缓存中曾经嵌入的 URL 凭据。
+        if (allChapters.length > 0) {
           allChapters = allChapters.map(chapter => {
             if (chapter.content) {
-              chapter.content = chapter.content.replace(
-                /token=[^&"']+/g,
-                `token=${currentToken}`
-              )
+              chapter.content = chapter.content
+                .replace(/&token=[^&"']+/g, '')
+                .replace(/\?token=[^&"']+/g, '')
             }
             return chapter
           })
@@ -1808,7 +1782,7 @@ router.get('/:id/chapters', async (req, res) => {
                 } else {
                   imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
                 }
-                const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                 return match.replace(src, apiUrl)
               }
               return match
@@ -1962,18 +1936,9 @@ router.delete('/:id/cache', authenticateToken, async (req, res) => {
 })
 
 // 获取EPUB资源（图片、CSS等）- 应用专门的限流器
-router.get('/:id/resource', ebookResourceLimiter, async (req, res) => {
+router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req, res) => {
   try {
     const { path: resourcePath } = req.query
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     if (!resourcePath) {
       return res.status(400).json({ message: '缺少资源路径' })
     }

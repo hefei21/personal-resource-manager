@@ -3,14 +3,12 @@ import { ref } from 'vue'
 import api from '@/api'
 
 export const useAuthStore = defineStore('auth', () => {
-  // Owner credentials live only in an HttpOnly cookie. Keep the transitional
-  // demo bearer isolated in sessionStorage until the demo workspace replaces it.
+  // Authentication credentials live only in HttpOnly cookies.
   localStorage.removeItem('token')
   localStorage.removeItem('user')
   sessionStorage.removeItem('token')
   sessionStorage.removeItem('user')
 
-  const demoToken = ref(sessionStorage.getItem('demoToken') || '')
   const user = ref(null)
   const isAuthenticated = ref(false)
   let authChecked = false
@@ -21,8 +19,6 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await api.auth.login({ username, password, remember })
       user.value = response.data.user
       isAuthenticated.value = true
-      demoToken.value = ''
-      sessionStorage.removeItem('demoToken')
       authChecked = true
 
       return { success: true }
@@ -37,11 +33,9 @@ export const useAuthStore = defineStore('auth', () => {
   async function guestLogin() {
     try {
       const response = await api.auth.guestLogin()
-      demoToken.value = response.data.token
       user.value = response.data.user
       isAuthenticated.value = true
 
-      sessionStorage.setItem('demoToken', demoToken.value)
       authChecked = true
 
       return { success: true }
@@ -61,10 +55,8 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // Local state must still be cleared when the server is unavailable.
     }
-    demoToken.value = ''
     user.value = null
     isAuthenticated.value = false
-    sessionStorage.removeItem('demoToken')
     authChecked = true
   }
 
@@ -81,8 +73,6 @@ export const useAuthStore = defineStore('auth', () => {
       .catch(() => {
         user.value = null
         isAuthenticated.value = false
-        demoToken.value = ''
-        sessionStorage.removeItem('demoToken')
         return false
       })
       .finally(() => {
@@ -102,7 +92,6 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    demoToken,
     user,
     isAuthenticated,
     login,

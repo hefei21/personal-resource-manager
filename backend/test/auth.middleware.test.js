@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import test from 'node:test'
-import jwt from 'jsonwebtoken'
 
 process.env.JWT_SECRET = 'test-only-secret-that-is-at-least-32-characters'
 process.env.DATA_PATH = path.resolve(
@@ -11,8 +10,9 @@ process.env.DATA_PATH = path.resolve(
 
 const {
   PRINCIPALS,
+  LEGACY_DEMO_COOKIE,
   authenticateToken,
-  generateToken,
+  generateDemoToken,
   requireOwner,
   requireWritePermission
 } = await import('../src/middlewares/auth.js')
@@ -36,31 +36,36 @@ function responseRecorder() {
   }
 }
 
-test('new tokens carry explicit principals', () => {
-  const owner = jwt.decode(generateToken({ id: 1, username: 'owner' }))
-  const demo = jwt.decode(generateToken({ id: 'demo', username: 'demo' }, true))
+test('legacy demo cookie authenticates only as demo', async () => {
+  const token = generateDemoToken({ id: 'demo', username: 'demo' })
+  const req = {
+    cookies: { [LEGACY_DEMO_COOKIE]: token },
+    headers: {},
+    query: {}
+  }
+  const res = responseRecorder()
 
-  assert.equal(owner.principal, PRINCIPALS.OWNER)
-  assert.equal(owner.isGuest, false)
-  assert.equal(demo.principal, PRINCIPALS.DEMO)
-  assert.equal(demo.isGuest, true)
+  await new Promise((resolve) => authenticateToken(req, res, resolve))
+  assert.equal(req.user.principal, PRINCIPALS.DEMO)
+  assert.equal(req.user.isGuest, true)
+  assert.equal(req.auth.type, 'legacy_demo_cookie')
+  res.listeners.finish?.()
 })
 
-test('legacy tokens are normalized without granting demo owner access', async () => {
-  const cases = [
-    [{ id: 1, username: 'legacy-owner', isGuest: false }, PRINCIPALS.OWNER],
-    [{ id: 'guest', username: 'legacy-demo', isGuest: true }, PRINCIPALS.DEMO]
-  ]
+test('bearer and URL tokens are not authentication mechanisms', () => {
+  const token = generateDemoToken({ id: 'demo', username: 'demo' })
 
-  for (const [claims, expectedPrincipal] of cases) {
-    const token = jwt.sign(claims, process.env.JWT_SECRET)
-    const req = { headers: { authorization: `Bearer ${token}` }, query: {} }
+  for (const req of [
+    { cookies: {}, headers: { authorization: `Bearer ${token}` }, query: {} },
+    { cookies: {}, headers: {}, query: { token } }
+  ]) {
     const res = responseRecorder()
-
-    await new Promise((resolve) => authenticateToken(req, res, resolve))
-    assert.equal(req.user.principal, expectedPrincipal)
-    assert.equal(req.user.isGuest, expectedPrincipal === PRINCIPALS.DEMO)
-    res.listeners.finish?.()
+    let called = false
+    authenticateToken(req, res, () => {
+      called = true
+    })
+    assert.equal(called, false)
+    assert.equal(res.statusCode, 401)
   }
 })
 
