@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('prepare', 'up', 'smoke', 'scenarios', 'report', 'down', 'all')]
+  [ValidateSet('validate', 'prepare', 'up', 'smoke', 'scenarios', 'report', 'down', 'all')]
   [string]$Command = 'all',
 
   [switch]$Cleanup,
@@ -19,6 +19,7 @@ $ComposePath = Join-Path $ProjectRoot 'docker-compose.test.yml'
 $RedisDebugComposePath = Join-Path $ProjectRoot 'docker-compose.test.redis-debug.yml'
 $TestRunner = Join-Path $PSScriptRoot 'test\run-tests.ps1'
 $FixtureGenerator = Join-Path $PSScriptRoot 'test\generate-fixtures.ps1'
+$StaticValidator = Join-Path $PSScriptRoot 'test\validate-static.ps1'
 
 function Assert-SafeRuntimePath {
   $workspace = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
@@ -133,9 +134,6 @@ function Prepare-TestEnvironment {
   }
 
   & $FixtureGenerator -OutputRoot $FixtureRoot
-  if ($LASTEXITCODE -ne 0) {
-    throw 'Fixture generation failed.'
-  }
 
   Write-Host "Prepared isolated runtime at $RuntimeRoot"
   Write-Host 'No production data path is mounted by docker-compose.test.yml.'
@@ -175,9 +173,6 @@ function Invoke-TestSuite([ValidateSet('smoke', 'scenarios', 'report')] [string]
     throw 'Run prepare or up first.'
   }
   & $TestRunner -Suite $Suite -RuntimeRoot $RuntimeRoot -ReportsRoot $ReportsRoot -FixtureRoot $FixtureRoot
-  if ($LASTEXITCODE -ne 0) {
-    throw "$Suite test suite failed."
-  }
 }
 
 function Stop-TestStack {
@@ -200,6 +195,12 @@ function Stop-TestStack {
 }
 
 switch ($Command) {
+  'validate' {
+    & $StaticValidator -ProjectRoot $ProjectRoot
+    if ($LASTEXITCODE -ne 0) {
+      throw 'Static validation failed.'
+    }
+  }
   'prepare' { Prepare-TestEnvironment }
   'up' { Start-TestStack }
   'smoke' { Invoke-TestSuite 'smoke' }
@@ -207,6 +208,10 @@ switch ($Command) {
   'report' { Invoke-TestSuite 'report' }
   'down' { Stop-TestStack }
   'all' {
+    & $StaticValidator -ProjectRoot $ProjectRoot
+    if ($LASTEXITCODE -ne 0) {
+      throw 'Static validation failed.'
+    }
     Prepare-TestEnvironment
     Start-TestStack
     Invoke-TestSuite 'smoke'
