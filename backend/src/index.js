@@ -23,7 +23,7 @@ process.on('uncaughtException', (error) => {
 // 导入配置
 import { initDatabase, setCurrentReq } from './config/database.js'
 import { ensureDirectories } from './config/storage.js'
-import { initRedis, closeRedis } from './utils/redis.js'
+import { initRedis, closeRedis, isRedisConnected } from './utils/redis.js'
 import { migrateCompressCovers } from './utils/migration.js'
 import { migrate as migrateAccessLogs } from '../migrate-access-logs.js'
 
@@ -182,8 +182,7 @@ app.get('/api/health', async (req, res) => {
   }
   
   try {
-    const redis = await import('./utils/redis.js')
-    const isConnected = redis.getRedis && redis.getRedis().isReady
+    const isConnected = isRedisConnected()
     health.services.redis = isConnected ? 'ok' : 'not_connected'
     if (!isConnected && health.status === 'ok') {
       health.status = 'degraded'

@@ -177,17 +177,7 @@ function Invoke-SmokeSuite {
   $envValues = Read-DotEnv
 
   $health = Invoke-Api -Path '/health'
-  if (
-    $health.Status -eq 503 -and
-    $health.Body.services.database -eq 'ok' -and
-    $health.Body.services.redis -eq 'not_connected'
-  ) {
-    Save-Result 'health.redis-status' 'smoke' 'KNOWN_FAIL' `
-      'Redis is connected in logs, but /api/health calls a non-existent getRedis export and reports HTTP 503.' `
-      $health.DurationMs $health.Status
-  } else {
-    Assert-Status 'health.api' 'smoke' $health @(200) | Out-Null
-  }
+  Assert-Status 'health.api' 'smoke' $health @(200) | Out-Null
 
   $adminLogin = Invoke-Api -Method POST -Path '/auth/login' -Body @{
     username = $envValues.TEST_ADMIN_USERNAME

@@ -18,28 +18,25 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     const db = getDatabase()
-    console.log('数据库连接成功:', db)
 
     // 使用 better-sqlite3 的正确查询方式
     const stmt = db.prepare('SELECT * FROM users WHERE username = ?')
     const user = stmt.get(username)
-    console.log('查询用户结果:', user)
 
     if (!user) {
-      console.log('用户不存在:', username)
+      console.log('登录失败: 用户名或密码错误', { username })
       return res.status(401).json({ message: '用户名或密码错误' })
     }
 
     const isMatch = bcrypt.compareSync(password, user.password)
-    console.log('密码匹配结果:', isMatch)
     
     if (!isMatch) {
-      console.log('密码不匹配')
+      console.log('登录失败: 用户名或密码错误', { username })
       return res.status(401).json({ message: '用户名或密码错误' })
     }
 
     const token = generateToken(user, false)  // 管理员登录，isGuest = false
-    console.log('生成的 token:', token)
+    console.log('登录成功', { username: user.username, userId: user.id })
 
     res.json({
       token,
