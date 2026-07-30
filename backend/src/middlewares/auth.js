@@ -4,6 +4,10 @@ import { setCurrentReq } from '../config/database.js'
 
 // 强制从环境变量读取JWT密钥，拒绝使用默认值
 const JWT_SECRET = process.env.JWT_SECRET
+export const PRINCIPALS = Object.freeze({
+  OWNER: 'owner',
+  DEMO: 'demo'
+})
 
 if (!JWT_SECRET) {
   console.error('错误: JWT_SECRET 环境变量未设置')
@@ -36,7 +40,13 @@ export function authenticateToken(req, res, next) {
     if (err) {
       return res.status(403).json({ message: '无效的令牌' })
     }
-    req.user = user
+    const principal = user.principal ||
+      (user.isGuest ? PRINCIPALS.DEMO : PRINCIPALS.OWNER)
+    req.user = {
+      ...user,
+      principal,
+      isGuest: principal === PRINCIPALS.DEMO
+    }
     
     // 设置 currentReq 以便 getDatabase() 能够获取当前用户
     setCurrentReq(req)
@@ -48,9 +58,10 @@ export function authenticateToken(req, res, next) {
     
     // 设置数据库上下文，让 getDatabase() 能根据用户返回正确的数据库
     const context = {
-      username: user?.username || null,
-      userId: user?.id || null,
-      isGuest: user?.isGuest || false,
+      username: req.user.username || null,
+      userId: req.user.id || null,
+      principal,
+      isGuest: req.user.isGuest,
       req: req  // 保存 req 对象以便后续使用
     }
     
@@ -65,14 +76,22 @@ export function authenticateToken(req, res, next) {
  * 必须在 authenticateToken 之后使用
  */
 export function requireWritePermission(req, res, next) {
+  return requireOwner(req, res, next)
+}
+
+/**
+ * Require the authenticated data owner.
+ * Legacy non-guest tokens are normalized to owner by authenticateToken.
+ */
+export function requireOwner(req, res, next) {
   if (!req.user) {
     return res.status(401).json({ message: '需要认证' })
   }
   
-  if (req.user.isGuest) {
+  if (req.user.principal !== PRINCIPALS.OWNER) {
     return res.status(403).json({ 
-      message: '游客无权执行此操作',
-      code: 'GUEST_NO_PERMISSION'
+      message: '仅资源所有者可执行此操作',
+      code: 'OWNER_REQUIRED'
     })
   }
   
@@ -80,11 +99,13 @@ export function requireWritePermission(req, res, next) {
 }
 
 export function generateToken(user, isGuest = false) {
+  const principal = isGuest ? PRINCIPALS.DEMO : PRINCIPALS.OWNER
   return jwt.sign(
     { 
       id: user.id, 
       username: user.username,
-      isGuest: isGuest  // 在 token 中标记是否为游客
+      principal,
+      isGuest: principal === PRINCIPALS.DEMO
     },
     JWT_SECRET,
     { expiresIn: isGuest ? '24h' : (process.env.JWT_EXPIRE || '30d') }  // 游客 token 24小时，普通用户30天

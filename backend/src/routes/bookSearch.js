@@ -5,9 +5,14 @@ import * as cheerio from 'cheerio'
 import fs from 'fs'
 import path from 'path'
 import { scraperLimiter } from '../middlewares/security.js'
+import { authenticateToken, requireOwner } from '../middlewares/auth.js'
 import { cache, CacheTTL } from '../utils/cache.js'
 
 const router = express.Router()
+
+// External search configuration and network probes are owner-only. The public
+// demo will use a separate synthetic-data API rather than these production tools.
+router.use(authenticateToken, requireOwner)
 
 // 配置文件路径
 const CONFIG_PATH = process.env.DATA_PATH 

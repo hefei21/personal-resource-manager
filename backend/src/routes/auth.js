@@ -1,7 +1,7 @@
 import express from 'express'
 import bcrypt from 'bcryptjs'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken, generateToken, requireWritePermission } from '../middlewares/auth.js'
+import { authenticateToken, generateToken, requireOwner } from '../middlewares/auth.js'
 import { loginLimiter } from '../middlewares/security.js'
 
 const router = express.Router()
@@ -43,6 +43,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       user: {
         id: user.id,
         username: user.username,
+        principal: 'owner',
         isGuest: false
       }
     })
@@ -73,6 +74,7 @@ router.post('/guest-login', (req, res) => {
       user: {
         id: 'guest',
         username: '游客',
+        principal: 'demo',
         isGuest: true
       }
     })
@@ -92,12 +94,13 @@ router.get('/check', authenticateToken, (req, res) => {
   res.json({ 
     authenticated: true, 
     user: req.user,
+    principal: req.user.principal,
     isGuest: req.user.isGuest || false
   })
 })
 
 // 修改密码 - 仅管理员可用
-router.post('/change-password', authenticateToken, requireWritePermission, async (req, res) => {
+router.post('/change-password', authenticateToken, requireOwner, async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body
     const userId = req.user.id

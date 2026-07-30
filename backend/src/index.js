@@ -51,7 +51,7 @@ import bookSearchRoutes from './routes/bookSearch.js'
 import todosRoutes from './routes/todos.js'
 import blogRoutes from './routes/blog.js'
 import { getDatabase } from './config/database.js'
-import { authenticateToken } from './middlewares/auth.js'
+import { authenticateToken, requireOwner } from './middlewares/auth.js'
 import { accessLogger, queryLogs, getLogStats, initLogger } from './services/logger.js'
 import { 
   initIpBlacklistTable, 
@@ -303,12 +303,7 @@ app.use('/api/todos', todosRoutes)  // 待办事项
 app.use('/api/blog', blogRoutes)  // 博客管理
 
 // 管理员访问日志接口
-app.get('/api/admin/logs', authenticateToken, (req, res) => {
-  // 检查是否为管理员
-  if (req.user?.username !== 'admin') {
-    return res.status(403).json({ message: '只有管理员可以查看日志' })
-  }
-  
+app.get('/api/admin/logs', authenticateToken, requireOwner, (req, res) => {
   try {
     const result = queryLogs(req.query)
     res.json({
@@ -324,12 +319,7 @@ app.get('/api/admin/logs', authenticateToken, (req, res) => {
 })
 
 // 管理员日志统计接口
-app.get('/api/admin/logs/stats', authenticateToken, (req, res) => {
-  // 检查是否为管理员
-  if (req.user?.username !== 'admin') {
-    return res.status(403).json({ message: '只有管理员可以查看日志统计' })
-  }
-  
+app.get('/api/admin/logs/stats', authenticateToken, requireOwner, (req, res) => {
   try {
     const stats = getLogStats()
     res.json({ data: stats })
@@ -340,7 +330,7 @@ app.get('/api/admin/logs/stats', authenticateToken, (req, res) => {
 })
 
 // Redis缓存监控接口
-app.get('/api/cache/stats', authenticateToken, async (req, res) => {
+app.get('/api/cache/stats', authenticateToken, requireOwner, async (req, res) => {
   try {
     const { cache } = await import('./utils/cache.js')
     const stats = await cache.getStats()
@@ -355,7 +345,7 @@ app.get('/api/cache/stats', authenticateToken, async (req, res) => {
 })
 
 // 清空缓存接口（需要管理员权限）
-app.post('/api/cache/clear', authenticateToken, async (req, res) => {
+app.post('/api/cache/clear', authenticateToken, requireOwner, async (req, res) => {
   try {
     const { cache } = await import('./utils/cache.js')
     await cache.clear()
@@ -372,11 +362,7 @@ app.post('/api/cache/clear', authenticateToken, async (req, res) => {
 // IP黑名单管理
 
 // 获取黑名单列表（仅管理员）
-app.get('/api/admin/blacklist', authenticateToken, (req, res) => {
-  if (req.user?.username !== 'admin') {
-    return res.status(403).json({ message: '只有管理员可以查看黑名单' })
-  }
-  
+app.get('/api/admin/blacklist', authenticateToken, requireOwner, (req, res) => {
   try {
     const result = queryBlacklist(req.query)
     res.json({
@@ -392,11 +378,7 @@ app.get('/api/admin/blacklist', authenticateToken, (req, res) => {
 })
 
 // 获取黑名单统计（仅管理员）
-app.get('/api/admin/blacklist/stats', authenticateToken, (req, res) => {
-  if (req.user?.username !== 'admin') {
-    return res.status(403).json({ message: '只有管理员可以查看黑名单统计' })
-  }
-  
+app.get('/api/admin/blacklist/stats', authenticateToken, requireOwner, (req, res) => {
   try {
     const stats = getBlacklistStats()
     res.json({ data: stats })
@@ -407,11 +389,7 @@ app.get('/api/admin/blacklist/stats', authenticateToken, (req, res) => {
 })
 
 // 手动拉黑IP（仅管理员）
-app.post('/api/admin/blacklist/block', authenticateToken, (req, res) => {
-  if (req.user?.username !== 'admin') {
-    return res.status(403).json({ message: '只有管理员可以拉黑IP' })
-  }
-  
+app.post('/api/admin/blacklist/block', authenticateToken, requireOwner, (req, res) => {
   const { ipAddress, reason, durationHours } = req.body
   
   if (!ipAddress) {
@@ -428,11 +406,7 @@ app.post('/api/admin/blacklist/block', authenticateToken, (req, res) => {
 })
 
 // 解除拉黑（仅管理员）
-app.post('/api/admin/blacklist/unblock', authenticateToken, (req, res) => {
-  if (req.user?.username !== 'admin') {
-    return res.status(403).json({ message: '只有管理员可以解除拉黑' })
-  }
-  
+app.post('/api/admin/blacklist/unblock', authenticateToken, requireOwner, (req, res) => {
   const { ipAddress } = req.body
   
   if (!ipAddress) {

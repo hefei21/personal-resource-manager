@@ -21,6 +21,12 @@ New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 
 $records = [System.Collections.Generic.List[object]]::new()
 foreach ($file in Get-ChildItem -LiteralPath $RoutesRoot -Filter '*.js' -File | Sort-Object Name) {
+  $fileContent = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
+  $moduleAuthenticated = $fileContent -match 'router\.use\s*\(\s*authenticateToken\b'
+  $moduleOwnerOnly = $fileContent -match (
+    'router\.use\s*\(\s*authenticateToken\s*,\s*' +
+    '(?:requireOwner|requireWritePermission)\b'
+  )
   $lineNumber = 0
   foreach ($line in Get-Content -LiteralPath $file.FullName -Encoding UTF8) {
     $lineNumber++
@@ -31,8 +37,10 @@ foreach ($file in Get-ChildItem -LiteralPath $RoutesRoot -Filter '*.js' -File | 
     $method = $matches[1].ToUpperInvariant()
     $pathMatch = [regex]::Match($line, "router\.(?:get|post|put|patch|delete)\s*\(\s*['""]([^'""]+)['""]")
     $routePath = if ($pathMatch.Success) { $pathMatch.Groups[1].Value } else { '<dynamic>' }
-    $authenticated = $line -match '\bauthenticateToken\b'
-    $writeGuard = $line -match '\brequireWritePermission\b'
+    $authenticated = $moduleAuthenticated -or
+      ($line -match '\bauthenticateToken\b')
+    $writeGuard = $moduleOwnerOnly -or
+      ($line -match '\b(?:requireOwner|requireWritePermission)\b')
     $mutating = $method -in @('POST', 'PUT', 'PATCH', 'DELETE')
 
     $flags = [System.Collections.Generic.List[string]]::new()
