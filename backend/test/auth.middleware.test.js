@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict'
+import path from 'node:path'
 import test from 'node:test'
 import jwt from 'jsonwebtoken'
 
 process.env.JWT_SECRET = 'test-only-secret-that-is-at-least-32-characters'
+process.env.DATA_PATH = path.resolve(
+  import.meta.dirname,
+  '../../.codex/test-runtime/unit'
+)
 
 const {
   PRINCIPALS,

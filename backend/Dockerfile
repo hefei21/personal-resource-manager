@@ -18,9 +18,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装依赖（优先复制 package 文件以利用缓存）
-COPY package.json ./
-RUN npm install --omit=dev
+# 安装锁定依赖（优先复制 package 文件以利用缓存）
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # 复制源代码
 COPY . .
