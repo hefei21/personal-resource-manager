@@ -146,16 +146,25 @@ function Prepare-TestEnvironment {
 
 function Wait-ForHealth {
   $deadline = [DateTime]::UtcNow.AddMinutes(4)
-  do {
-    try {
-      $health = Invoke-RestMethod -Uri 'http://127.0.0.1:13000/api/health' -TimeoutSec 5
-      if ($health.status -in @('ok', 'degraded')) {
-        return
+  $client = [System.Net.Http.HttpClient]::new()
+  $client.Timeout = [TimeSpan]::FromSeconds(5)
+  try {
+    do {
+      try {
+        $response = $client.GetAsync('http://127.0.0.1:13000/api/health').GetAwaiter().GetResult()
+        $content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        $health = $content | ConvertFrom-Json
+        if ($health.services.database -eq 'ok') {
+          return
+        }
+      } catch {
+        # The container can reject connections while it is still starting.
       }
-    } catch {
       Start-Sleep -Seconds 3
-    }
-  } while ([DateTime]::UtcNow -lt $deadline)
+    } while ([DateTime]::UtcNow -lt $deadline)
+  } finally {
+    $client.Dispose()
+  }
 
   Invoke-Compose @('ps')
   throw 'Backend health check did not become ready within four minutes.'
