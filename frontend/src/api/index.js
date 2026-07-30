@@ -2,7 +2,8 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000
+  timeout: 30000,
+  withCredentials: true
 })
 
 // 简单的 toast 提示（避免在 api 层依赖 Vue 组件）
@@ -18,22 +19,18 @@ function showToast(message, type = 'warning') {
   console.warn(`[API ${type}]`, message)
 }
 
-// 处理 token 过期/无效
+// 处理服务端会话过期/无效
 let isRedirecting = false
 function handleTokenExpired() {
   if (isRedirecting) return
   isRedirecting = true
   
-  console.warn('[API] Token 已过期或无效，准备重新登录')
+  console.warn('[API] 会话已过期或无效，准备重新登录')
   
   // 提示用户登录已过期
   showToast('登录已过期，请重新登录', 'warning')
   
-  // 清除 localStorage 和 sessionStorage
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
-  sessionStorage.removeItem('token')
-  sessionStorage.removeItem('user')
+  sessionStorage.removeItem('demoToken')
   
   // 延迟跳转，让用户看到提示
   setTimeout(() => {
@@ -44,10 +41,11 @@ function handleTokenExpired() {
 
 api.interceptors.request.use(
   (config) => {
-    // 优先从 localStorage 获取，其次从 sessionStorage（游客模式）
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
+    // Owner authentication uses the HttpOnly cookie. This header exists only
+    // for the transitional demo flow and cannot contain an owner credential.
+    const demoToken = sessionStorage.getItem('demoToken')
+    if (demoToken) {
+      config.headers.Authorization = `Bearer ${demoToken}`
     }
     return config
   },
@@ -61,7 +59,9 @@ api.interceptors.response.use(
     const requestUrl = error.config?.url || ''
     
     // 排除登录相关接口，这些接口的401是业务错误而非登录过期
-    const isAuthEndpoint = requestUrl.includes('/auth/login') || requestUrl.includes('/auth/guest-login')
+    const isAuthEndpoint = requestUrl.includes('/auth/login') ||
+      requestUrl.includes('/auth/guest-login') ||
+      requestUrl.includes('/auth/check')
     
     if (error.response?.status === 401 && !isAuthEndpoint) {
       // Token 缺失或未认证
@@ -113,10 +113,7 @@ export default {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
     versions: (id) => api.get(`/documents/${id}/versions`),
-    getContent: (id) => {
-      const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-      return api.get(`/documents/${id}/content`, { params: { token } })
-    },
+    getContent: (id) => api.get(`/documents/${id}/content`),
     updateContent: (id, data) => api.put(`/documents/${id}/content`, data),
     // 私密空间 API（路径使用中性命名，避免被网关拦截）
     verifyPrivatePassword: (data) => api.post('/documents/docs/special/verify', data),
@@ -126,10 +123,7 @@ export default {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
     deletePrivate: (id) => api.delete(`/documents/docs/special/list/${id}`),
-    getPrivateContent: (id) => {
-      const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-      return api.get(`/documents/docs/special/view/${id}`, { params: { token } })
-    }
+    getPrivateContent: (id) => api.get(`/documents/docs/special/view/${id}`)
   },
   music: {
     list: (params) => api.get('/music', { params }),
@@ -203,15 +197,9 @@ export default {
     update: (id, data) => api.put(`/ebooks/${id}`, data),
     delete: (id) => api.delete(`/ebooks/${id}`),
     batchDelete: (data) => api.post('/ebooks/batch-delete', data),
-    getContent: (id) => {
-      const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-      return api.get(`/ebooks/${id}/content`, { params: { token } })
-    },
+    getContent: (id) => api.get(`/ebooks/${id}/content`),
     // 虚拟滚动：分页获取章节内容
-    getChapters: (id, start, count) => {
-      const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-      return api.get(`/ebooks/${id}/chapters`, { params: { token, start, count } })
-    },
+    getChapters: (id, start, count) => api.get(`/ebooks/${id}/chapters`, { params: { start, count } }),
     getProgress: (id) => api.get(`/ebooks/${id}/progress`),
     saveProgress: (id, data) => api.post(`/ebooks/${id}/progress`, data),
     clearCache: (id) => api.delete(`/ebooks/${id}/cache`)

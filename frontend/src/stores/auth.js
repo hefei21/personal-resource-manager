@@ -3,29 +3,27 @@ import { ref } from 'vue'
 import api from '@/api'
 
 export const useAuthStore = defineStore('auth', () => {
-  // 优先从 localStorage 读取，其次从 sessionStorage
-  const token = ref(
-    localStorage.getItem('token') || sessionStorage.getItem('token') || ''
-  )
-  const user = ref(
-    JSON.parse(localStorage.getItem('user') || sessionStorage.getItem('user') || 'null')
-  )
-  const isAuthenticated = ref(!!token.value)
+  // Owner credentials live only in an HttpOnly cookie. Keep the transitional
+  // demo bearer isolated in sessionStorage until the demo workspace replaces it.
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  sessionStorage.removeItem('token')
+  sessionStorage.removeItem('user')
+
+  const demoToken = ref(sessionStorage.getItem('demoToken') || '')
+  const user = ref(null)
+  const isAuthenticated = ref(false)
+  let authChecked = false
+  let authCheckPromise = null
 
   async function login(username, password, remember = true) {
     try {
       const response = await api.auth.login({ username, password, remember })
-      token.value = response.data.token
       user.value = response.data.user
       isAuthenticated.value = true
-
-      if (remember) {
-        localStorage.setItem('token', token.value)
-        localStorage.setItem('user', JSON.stringify(user.value))
-      } else {
-        sessionStorage.setItem('token', token.value)
-        sessionStorage.setItem('user', JSON.stringify(user.value))
-      }
+      demoToken.value = ''
+      sessionStorage.removeItem('demoToken')
+      authChecked = true
 
       return { success: true }
     } catch (error) {
@@ -39,13 +37,12 @@ export const useAuthStore = defineStore('auth', () => {
   async function guestLogin() {
     try {
       const response = await api.auth.guestLogin()
-      token.value = response.data.token
+      demoToken.value = response.data.token
       user.value = response.data.user
       isAuthenticated.value = true
 
-      // 游客模式使用 sessionStorage（关闭浏览器后自动清除）
-      sessionStorage.setItem('token', token.value)
-      sessionStorage.setItem('user', JSON.stringify(user.value))
+      sessionStorage.setItem('demoToken', demoToken.value)
+      authChecked = true
 
       return { success: true }
     } catch (error) {
@@ -56,18 +53,44 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  function logout() {
-    token.value = ''
+  async function logout() {
+    try {
+      if (isAuthenticated.value) {
+        await api.auth.logout()
+      }
+    } catch {
+      // Local state must still be cleared when the server is unavailable.
+    }
+    demoToken.value = ''
     user.value = null
     isAuthenticated.value = false
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    sessionStorage.removeItem('token')
-    sessionStorage.removeItem('user')
+    sessionStorage.removeItem('demoToken')
+    authChecked = true
   }
 
-  function checkAuth() {
-    return !!token.value
+  async function checkAuth() {
+    if (authChecked) return isAuthenticated.value
+    if (authCheckPromise) return authCheckPromise
+
+    authCheckPromise = api.auth.check()
+      .then((response) => {
+        user.value = response.data.user
+        isAuthenticated.value = response.data.authenticated === true
+        return isAuthenticated.value
+      })
+      .catch(() => {
+        user.value = null
+        isAuthenticated.value = false
+        demoToken.value = ''
+        sessionStorage.removeItem('demoToken')
+        return false
+      })
+      .finally(() => {
+        authChecked = true
+        authCheckPromise = null
+      })
+
+    return authCheckPromise
   }
 
   function isGuest() {
@@ -79,7 +102,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    token,
+    demoToken,
     user,
     isAuthenticated,
     login,

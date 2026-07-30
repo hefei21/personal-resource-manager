@@ -114,22 +114,11 @@ import { ref, reactive, onMounted } from 'vue'
 import axios from 'axios'
 import { NativeButton, NativeInput, NativeDialog, NativeTag, NativeTextarea, NativeRadio, NativeRadioGroup, NativeIcon, NativeTable, NativePagination } from '@/components/native'
 
-// 创建带 token 的 axios 实例
+// Owner authentication is provided by the same-origin HttpOnly cookie.
 const apiClient = axios.create({
-  baseURL: '/api'
+  baseURL: '/api',
+  withCredentials: true
 })
-
-// 请求拦截器：自动添加 token
-apiClient.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`
-    }
-    return config
-  },
-  (error) => Promise.reject(error)
-)
 
 const loading = ref(false)
 const blacklist = ref([])

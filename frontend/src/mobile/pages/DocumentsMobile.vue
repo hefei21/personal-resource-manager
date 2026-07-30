@@ -392,6 +392,7 @@ import hljs from 'highlight.js'
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 import api from '@/api'
+import { authenticatedAssetUrl, getDemoAuthorizationHeaders } from '@/utils/authentication'
 import { usePermission } from '@/composables/usePermission'
 import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect } from '@/components/native'
 import { useToast } from '@/composables/useToast'
@@ -490,10 +491,7 @@ const uploadForm = ref({
   categoryPath: ''
 })
 const uploadAction = computed(() => '/api/documents/upload')
-const uploadHeaders = computed(() => {
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-  return { Authorization: `Bearer ${token}` }
-})
+const uploadHeaders = computed(() => getDemoAuthorizationHeaders())
 
 // 批量编辑
 const batchEditDialogVisible = ref(false)
@@ -901,20 +899,16 @@ function nextPage() {
 function handleDownloadFile() {
   const doc = documents.value.find(d => d.id === previewDocumentId.value)
   if (!doc) return
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
   // 根据是否是私密文档使用不同的下载链接
   const downloadUrl = doc.isPrivate
-    ? `/api/documents/secure/download/${doc.id}?token=${token}&download=1`
-    : `/api/documents/${doc.id}/content?token=${token}&download=1`
+    ? authenticatedAssetUrl(`/api/documents/secure/download/${doc.id}?download=1`)
+    : authenticatedAssetUrl(`/api/documents/${doc.id}/content?download=1`)
   window.open(downloadUrl, '_blank')
 }
 
 // 预览文档（与PC端逻辑完全对齐）
 async function previewDocument(doc) {
   try {
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-    // 游客也可以预览（不需要token检查，游客登录时也有token）
-
     // 标记该条目为loading状态
     previewingDocIds.value.add(doc.id)
 
@@ -937,8 +931,8 @@ async function previewDocument(doc) {
       currentDoc.value = doc
       // 私密文档使用不同的图片预览链接
       previewImageUrl.value = doc.isPrivate
-        ? `/api/documents/docs/special/view/${doc.id}?token=${token}`
-        : `/api/documents/${doc.id}/content?token=${token}`
+        ? authenticatedAssetUrl(`/api/documents/docs/special/view/${doc.id}`)
+        : authenticatedAssetUrl(`/api/documents/${doc.id}/content`)
       imagePreviewVisible.value = true
       previewingDocIds.value.delete(doc.id)
       return
@@ -1291,8 +1285,7 @@ async function restoreVersion(ver) {
 // 预览版本
 function previewVersion(ver) {
   // 简化处理：打开对应版本的文件
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-  const url = `/api/documents/${currentDoc.value.id}/content?token=${token}&version=${ver.version}`
+  const url = authenticatedAssetUrl(`/api/documents/${currentDoc.value.id}/content?version=${ver.version}`)
   window.open(url, '_blank')
 }
 

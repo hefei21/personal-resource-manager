@@ -806,6 +806,7 @@
 <script setup>
 import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
+import { authenticatedAssetUrl } from '@/utils/authentication'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mammoth from 'mammoth'
@@ -1570,12 +1571,7 @@ function handlePrivateView(row) {
 }
 
 function handlePrivateDownload(row) {
-  const token = localStorage.getItem('token')
-  if (token) {
-    window.open(`${window.location.origin}/api/documents/secure/download/${row.id}?token=${token}`, '_blank')
-  } else {
-    toast.error('无法下载，未登录')
-  }
+  window.open(authenticatedAssetUrl(`/api/documents/secure/download/${row.id}`), '_blank')
 }
 
 async function handlePrivateDelete(id) {
@@ -1813,14 +1809,8 @@ async function handleUploadConfirm() {
 }
 
 function handleView(row) {
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
   console.log('预览文件，row数据:', row)
   console.log('文件路径:', row.filePath)
-
-  if (!token) {
-    toast.error('无法预览，未登录')
-    return
-  }
 
   if (!row || !row.id) {
     toast.error('无法预览，文档ID不存在')
@@ -1831,16 +1821,11 @@ function handleView(row) {
 }
 
 function handleDownload(row) {
-  const token = localStorage.getItem('token')
-  if (token) {
-    window.open(`${window.location.origin}/api/documents/download/${row.id}?token=${token}`, '_blank')
-  } else {
-    toast.error('无法下载，未登录')
-  }
+  window.open(authenticatedAssetUrl(`/api/documents/download/${row.id}`), '_blank')
 }
 
 function handleDownloadVersion(row) {
-  window.open(`${window.location.origin}/api/documents/download/version/${row.id}`, '_blank')
+  window.open(authenticatedAssetUrl(`/api/documents/download/version/${row.id}`), '_blank')
 }
 
 async function handleEdit(row) {

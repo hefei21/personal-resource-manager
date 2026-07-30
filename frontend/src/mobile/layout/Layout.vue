@@ -342,8 +342,8 @@ const pageTitle = computed(() => {
   return titles[route.name] || '雨的空间'
 })
 
-function handleLogout() {
-  authStore.logout()
+async function handleLogout() {
+  await authStore.logout()
   router.push('/login')
 }
 
