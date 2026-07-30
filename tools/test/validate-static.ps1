@@ -133,13 +133,13 @@ $nasVolumeLines = @(
   $nasCompose -split "`r?`n" |
     Where-Object { $_ -match '^\s*-\s+[^:]+:.+$' -and $_ -match '/app/data/' }
 )
-$unsafeNasMounts = @($nasVolumeLines | Where-Object { $_ -notmatch '^\s*-\s+\./data/' })
+$unsafeNasMounts = @($nasVolumeLines | Where-Object { $_ -notmatch '\$\{TEST_DATA_ROOT:\?[^}]+\}/' })
 Assert-Condition 'compose.nas.mounts' ($nasVolumeLines.Count -gt 0 -and $unsafeNasMounts.Count -eq 0) `
-  'NAS test mounts are confined to the Compose project data directory.' `
-  'NAS test Compose contains a mount outside the relative ./data directory.'
+  'NAS test mounts require the explicit TEST_DATA_ROOT.' `
+  'NAS test Compose contains a mount outside TEST_DATA_ROOT.'
 
 Assert-Condition 'compose.nas.images' `
-  ($nasCompose -notmatch '(?m)^\s*build:' -and $nasCompose -match 'ghcr\.io/.+\$\{IMAGE_TAG\}') `
+  ($nasCompose -notmatch '(?m)^\s*build:' -and $nasCompose -match 'ghcr\.io/.+\$\{IMAGE_TAG:\?[^}]+\}') `
   'NAS test Compose uses versioned GHCR images without local builds.' `
   'NAS test Compose contains a build or an unversioned application image.'
 
@@ -149,9 +149,9 @@ Assert-Condition 'compose.production.images' `
   'Production NAS Compose contains a build or an unversioned application image.'
 
 $composeSecretsAreVariables = (
-  $nasCompose -match 'JWT_SECRET:\s*\$\{TEST_JWT_SECRET\}' -and
-  $nasCompose -match 'DEFAULT_PASSWORD:\s*\$\{TEST_ADMIN_PASSWORD\}' -and
-  $nasCompose -match 'PRIVATE_PASSWORD:\s*\$\{TEST_PRIVATE_PASSWORD\}' -and
+  $nasCompose -match 'JWT_SECRET:\s*\$\{TEST_JWT_SECRET:\?[^}]+\}' -and
+  $nasCompose -match 'DEFAULT_PASSWORD:\s*\$\{TEST_ADMIN_PASSWORD:\?[^}]+\}' -and
+  $nasCompose -match 'PRIVATE_PASSWORD:\s*\$\{TEST_PRIVATE_PASSWORD:\?[^}]+\}' -and
   $productionCompose -match 'JWT_SECRET:\s*\$\{JWT_SECRET\}' -and
   $productionCompose -match 'DEFAULT_PASSWORD:\s*\$\{DEFAULT_PASSWORD\}'
 )

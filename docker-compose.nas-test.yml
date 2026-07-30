@@ -1,18 +1,18 @@
 services:
   backend:
-    image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG}
+    image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG:?IMAGE_TAG is required}
     container_name: pr-test-backend
     restart: unless-stopped
     ports:
       - "13000:3000"
     volumes:
-      - ./data/db:/app/data/database
-      - ./data/documents:/app/data/documents
-      - ./data/music:/app/data/music
-      - ./data/books:/app/data/books
-      - ./data/code:/app/data/code
-      - ./data/uploads:/app/data/uploads
-      - ./data/logs:/app/data/logs
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/db:/app/data/database
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/documents:/app/data/documents
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/music:/app/data/music
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/books:/app/data/books
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/code:/app/data/code
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/uploads:/app/data/uploads
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/logs:/app/data/logs
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -24,11 +24,11 @@ services:
       CODE_PATH: /app/data/code
       UPLOADS_PATH: /app/data/uploads
       LOGS_PATH: /app/data/logs
-      JWT_SECRET: ${TEST_JWT_SECRET}
+      JWT_SECRET: ${TEST_JWT_SECRET:?TEST_JWT_SECRET is required}
       JWT_EXPIRE: 1h
-      DEFAULT_USERNAME: ${TEST_ADMIN_USERNAME}
-      DEFAULT_PASSWORD: ${TEST_ADMIN_PASSWORD}
-      PRIVATE_PASSWORD: ${TEST_PRIVATE_PASSWORD}
+      DEFAULT_USERNAME: ${TEST_ADMIN_USERNAME:?TEST_ADMIN_USERNAME is required}
+      DEFAULT_PASSWORD: ${TEST_ADMIN_PASSWORD:?TEST_ADMIN_PASSWORD is required}
+      PRIVATE_PASSWORD: ${TEST_PRIVATE_PASSWORD:?TEST_PRIVATE_PASSWORD is required}
       # 浏览器通过 frontend 的 /api 同源代理访问后端，无需预先知道 NAS 地址。
       CORS_ORIGIN: ""
       REDIS_URL: redis://redis:6379
@@ -58,7 +58,7 @@ services:
     container_name: pr-test-redis
     restart: unless-stopped
     volumes:
-      - ./data/redis:/data
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/redis:/data
     command:
       - redis-server
       - --appendonly
@@ -75,7 +75,7 @@ services:
       retries: 20
 
   frontend:
-    image: ghcr.io/hefei21/personal-resource-manager-frontend:${IMAGE_TAG}
+    image: ghcr.io/hefei21/personal-resource-manager-frontend:${IMAGE_TAG:?IMAGE_TAG is required}
     container_name: pr-test-frontend
     restart: unless-stopped
     ports:
