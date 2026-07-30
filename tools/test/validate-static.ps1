@@ -133,10 +133,10 @@ $nasVolumeLines = @(
   $nasCompose -split "`r?`n" |
     Where-Object { $_ -match '^\s*-\s+[^:]+:.+$' -and $_ -match '/app/data/' }
 )
-$unsafeNasMounts = @($nasVolumeLines | Where-Object { $_ -notmatch '\$\{TEST_DATA_ROOT\}/' })
+$unsafeNasMounts = @($nasVolumeLines | Where-Object { $_ -notmatch '^\s*-\s+\./data/' })
 Assert-Condition 'compose.nas.mounts' ($nasVolumeLines.Count -gt 0 -and $unsafeNasMounts.Count -eq 0) `
-  'NAS test mounts require TEST_DATA_ROOT.' `
-  'NAS test Compose contains a mount outside TEST_DATA_ROOT.'
+  'NAS test mounts are confined to the Compose project data directory.' `
+  'NAS test Compose contains a mount outside the relative ./data directory.'
 
 Assert-Condition 'compose.nas.images' `
   ($nasCompose -notmatch '(?m)^\s*build:' -and $nasCompose -match 'ghcr\.io/.+\$\{IMAGE_TAG\}') `

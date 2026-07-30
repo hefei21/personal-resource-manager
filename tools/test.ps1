@@ -37,9 +37,14 @@ function Assert-CommandAvailable([string]$Name) {
 }
 
 function New-RandomSecret([int]$Bytes = 32) {
-  $buffer = [byte[]]::new($Bytes)
-  [System.Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
-  return [Convert]::ToHexString($buffer).ToLowerInvariant()
+  $buffer = New-Object byte[] $Bytes
+  $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $generator.GetBytes($buffer)
+  } finally {
+    $generator.Dispose()
+  }
+  return ([System.BitConverter]::ToString($buffer) -replace '-', '').ToLowerInvariant()
 }
 
 function Test-PortAvailable([int]$Port) {
