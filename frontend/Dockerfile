@@ -1,5 +1,5 @@
 # 构建阶段
-FROM node:18-slim AS build-stage
+FROM node:22-slim AS build-stage
 
 WORKDIR /app
 

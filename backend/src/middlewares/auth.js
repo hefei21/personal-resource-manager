@@ -1,6 +1,10 @@
 import jwt from 'jsonwebtoken'
 import { runWithContext } from '../utils/dbContext.js'
-import { setCurrentReq } from '../config/database.js'
+import { getDatabase, setCurrentReq } from '../config/database.js'
+import {
+  OWNER_SESSION_COOKIE,
+  resolveOwnerSession
+} from '../services/sessions.js'
 
 // 强制从环境变量读取JWT密钥，拒绝使用默认值
 const JWT_SECRET = process.env.JWT_SECRET
@@ -8,6 +12,10 @@ export const PRINCIPALS = Object.freeze({
   OWNER: 'owner',
   DEMO: 'demo'
 })
+
+function getOwnerAuthDatabase() {
+  return getDatabase({ user: { username: '__owner_auth__' } })
+}
 
 if (!JWT_SECRET) {
   console.error('错误: JWT_SECRET 环境变量未设置')
@@ -22,7 +30,53 @@ if (JWT_SECRET === 'your-secret-key' || JWT_SECRET.length < 32) {
   process.exit(1)
 }
 
+function attachPrincipal(req, res, next, user, auth) {
+  const principal = user.principal ||
+    (user.isGuest ? PRINCIPALS.DEMO : PRINCIPALS.OWNER)
+  req.user = {
+    ...user,
+    principal,
+    isGuest: principal === PRINCIPALS.DEMO
+  }
+  req.auth = auth
+
+  setCurrentReq(req)
+  res.on('finish', () => {
+    setCurrentReq(null)
+  })
+
+  const context = {
+    username: req.user.username || null,
+    userId: req.user.id || null,
+    principal,
+    isGuest: req.user.isGuest,
+    req
+  }
+
+  runWithContext(context, next)
+}
+
 export function authenticateToken(req, res, next) {
+  const sessionToken = req.cookies?.[OWNER_SESSION_COOKIE]
+  if (sessionToken) {
+    try {
+      const session = resolveOwnerSession(getOwnerAuthDatabase(), sessionToken)
+      if (!session) {
+        return res.status(401).json({
+          message: '会话已过期，请重新登录',
+          code: 'SESSION_INVALID'
+        })
+      }
+      return attachPrincipal(req, res, next, session.user, {
+        type: 'owner_session',
+        tokenHash: session.tokenHash
+      })
+    } catch (error) {
+      console.error('验证服务端会话失败:', error.message)
+      return res.status(500).json({ message: '认证服务暂不可用' })
+    }
+  }
+
   // 优先从 Authorization 头获取 token，其次从 URL 参数获取
   const authHeader = req.headers['authorization']
   let token = authHeader && authHeader.split(' ')[1]
@@ -36,39 +90,14 @@ export function authenticateToken(req, res, next) {
     return res.status(401).json({ message: '需要认证' })
   }
 
-  jwt.verify(token, JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({ message: '无效的令牌' })
-    }
-    const principal = user.principal ||
-      (user.isGuest ? PRINCIPALS.DEMO : PRINCIPALS.OWNER)
-    req.user = {
-      ...user,
-      principal,
-      isGuest: principal === PRINCIPALS.DEMO
-    }
-    
-    // 设置 currentReq 以便 getDatabase() 能够获取当前用户
-    setCurrentReq(req)
-    
-    // 在请求结束时清除 currentReq
-    res.on('finish', () => {
-      setCurrentReq(null)
+  try {
+    const user = jwt.verify(token, JWT_SECRET)
+    return attachPrincipal(req, res, next, user, {
+      type: req.query.token ? 'legacy_query_jwt' : 'legacy_bearer_jwt'
     })
-    
-    // 设置数据库上下文，让 getDatabase() 能根据用户返回正确的数据库
-    const context = {
-      username: req.user.username || null,
-      userId: req.user.id || null,
-      principal,
-      isGuest: req.user.isGuest,
-      req: req  // 保存 req 对象以便后续使用
-    }
-    
-    runWithContext(context, () => {
-      next()
-    })
-  })
+  } catch {
+    return res.status(403).json({ message: '无效的令牌' })
+  }
 }
 
 /**
