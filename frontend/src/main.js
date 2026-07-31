@@ -16,18 +16,10 @@ app.use(router)
 app.use(TDesign)
 app.component('NativeIcon', NativeIcon)
 
-// 全局 API toast 监听
-app.mixin({
-  mounted() {
-    this._apiToastHandler = (e) => {
-      const toast = useToast()
-      toast[e.detail.type || 'warning'](e.detail.message)
-    }
-    window.addEventListener('api-toast', this._apiToastHandler)
-  },
-  beforeUnmount() {
-    window.removeEventListener('api-toast', this._apiToastHandler)
-  }
-})
-
 app.mount('#app')
+
+// 全局 API toast 监听（单例注册）
+window.addEventListener('api-toast', (e) => {
+  const toast = useToast()
+  toast[e.detail.type || 'warning'](e.detail.message)
+})

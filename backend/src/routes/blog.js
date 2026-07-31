@@ -1,19 +1,23 @@
 import express from 'express'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
+import {
+  authenticateToken,
+  requireOwner
+} from '../middlewares/auth.js'
 import { cache, CacheTTL } from '../utils/cache.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
 
 const router = express.Router()
 
-// 文章管理
+// Personal notes are production data and are never exposed anonymously.
+router.use(authenticateToken, requireOwner)
 
 // 获取文章列表
 router.get('/posts', async (req, res) => {
   try {
     const { status, category_id, tag_id, keyword, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
-    
+
     // 尝试从缓存获取
     const cacheKey = `blog:posts:${status || 'all'}:${category_id || 'all'}:${tag_id || 'all'}:${keyword || 'all'}:${page}:${pageSize}`
     const cached = await cache.get(cacheKey)
@@ -127,7 +131,7 @@ router.get('/posts', async (req, res) => {
 router.get('/posts/:id', async (req, res) => {
   try {
     const { id } = req.params
-    
+
     // 尝试从缓存获取
     const cacheKey = `blog:post:${id}`
     const cached = await cache.get(cacheKey)
@@ -183,7 +187,7 @@ router.get('/posts/:id', async (req, res) => {
 })
 
 // 创建文章
-router.post('/posts', authenticateToken, requireWritePermission, async (req, res) => {
+router.post('/posts', async (req, res) => {
   try {
     const db = getDatabase()
     const { title, content, category_id, tags, status = 'draft', is_top = false } = req.body
@@ -235,7 +239,7 @@ router.post('/posts', authenticateToken, requireWritePermission, async (req, res
 })
 
 // 更新文章
-router.put('/posts/:id', authenticateToken, requireWritePermission, async (req, res) => {
+router.put('/posts/:id', async (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -274,7 +278,6 @@ router.put('/posts/:id', authenticateToken, requireWritePermission, async (req, 
       updateFields.push('is_top = ?')
       params.push(is_top ? 1 : 0)
     }
-
     updateFields.push('updated_at = CURRENT_TIMESTAMP')
     params.push(id)
 
@@ -318,7 +321,7 @@ router.put('/posts/:id', authenticateToken, requireWritePermission, async (req, 
 })
 
 // 删除文章
-router.delete('/posts/:id', authenticateToken, requireWritePermission, async (req, res) => {
+router.delete('/posts/:id', async (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -423,7 +426,7 @@ router.get('/categories/all', (req, res) => {
 })
 
 // 创建分类
-router.post('/categories', authenticateToken, requireWritePermission, (req, res) => {
+router.post('/categories', (req, res) => {
   try {
     const db = getDatabase()
     const { name, parent_id, sort_order = 0 } = req.body
@@ -450,7 +453,7 @@ router.post('/categories', authenticateToken, requireWritePermission, (req, res)
 })
 
 // 更新分类
-router.put('/categories/:id', authenticateToken, requireWritePermission, (req, res) => {
+router.put('/categories/:id', (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -501,7 +504,7 @@ router.put('/categories/:id', authenticateToken, requireWritePermission, (req, r
 })
 
 // 删除分类
-router.delete('/categories/:id', authenticateToken, requireWritePermission, (req, res) => {
+router.delete('/categories/:id', (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -581,7 +584,7 @@ router.get('/tags', async (req, res) => {
 })
 
 // 创建标签
-router.post('/tags', authenticateToken, requireWritePermission, (req, res) => {
+router.post('/tags', (req, res) => {
   try {
     const db = getDatabase()
     const { name, color } = req.body
@@ -614,7 +617,7 @@ router.post('/tags', authenticateToken, requireWritePermission, (req, res) => {
 })
 
 // 更新标签
-router.put('/tags/:id', authenticateToken, requireWritePermission, (req, res) => {
+router.put('/tags/:id', (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
@@ -661,7 +664,7 @@ router.put('/tags/:id', authenticateToken, requireWritePermission, (req, res) =>
 })
 
 // 删除标签
-router.delete('/tags/:id', authenticateToken, requireWritePermission, async (req, res) => {
+router.delete('/tags/:id', async (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
