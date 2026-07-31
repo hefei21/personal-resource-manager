@@ -3,7 +3,7 @@
     <!-- 列表视图 -->
     <div v-if="!currentRepo">
       <div class="page-header">
-        <p>管理 Git 和 SVN 代码仓库</p>
+        <p>管理 Git 代码仓库</p>
       </div>
 
       <NativeCard class="toolbar">
@@ -36,7 +36,7 @@
               <div class="repo-item">
                 <div class="repo-info" @click="openRepo(repo)">
                   <div class="repo-name">
-                    <NativeIcon :name="repo.type === 'svn' ? 'folder' : 'git'" />
+                    <NativeIcon name="git" />
                     {{ repo.name }}
                     <NativeTag v-if="isCloning(repo.id)" theme="warning" variant="light">克隆中 {{ cloneProgress(repo.id) }}%</NativeTag>
                     <NativeTag v-else-if="!repo.last_sync" theme="warning" variant="light">等待克隆</NativeTag>
@@ -46,7 +46,7 @@
                     <div class="clone-progress-fill" :style="{ width: cloneProgress(repo.id) + '%' }"></div>
                   </div>
                   <div class="repo-meta">
-                    <span>{{ repo.type.toUpperCase() }}</span>
+                    <span>GIT</span>
                     <span v-if="repo.last_sync">同步: {{ formatDate(repo.last_sync) }}</span>
                   </div>
                   <div v-if="repo.size !== undefined || (repo.languages && repo.languages.length > 0)" class="repo-stats">
@@ -93,7 +93,7 @@
           </NativeButton>
         </div>
         <div class="browser-title">
-          <NativeIcon :name="currentRepo.type === 'svn' ? 'folder' : 'git'" />
+          <NativeIcon name="git" />
           {{ currentRepo.name }}
         </div>
         <div class="browser-header-right">
@@ -243,12 +243,6 @@
         </NativeFormItem>
         <NativeFormItem label="仓库名称">
           <NativeInput v-model="addForm.name" placeholder="给仓库起个名字" />
-        </NativeFormItem>
-        <NativeFormItem label="仓库类型">
-          <NativeRadioGroup v-model="addForm.type">
-            <NativeRadio value="git">Git</NativeRadio>
-            <NativeRadio value="svn">SVN</NativeRadio>
-          </NativeRadioGroup>
         </NativeFormItem>
         <NativeFormItem label="简介">
           <NativeTextarea v-model="addForm.description" placeholder="仓库简介（可选）" />

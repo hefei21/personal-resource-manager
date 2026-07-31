@@ -1,15 +1,23 @@
 import express from 'express'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
-import { exec, spawn } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import { promisify } from 'util'
 import axios from 'axios'
 import { cache, CacheTTL } from '../utils/cache.js'
+import {
+  normalizeCommitLimit,
+  RepositorySecurityError,
+  resolveManagedRepositoryPath,
+  resolveRepositoryEntry,
+  validateCommitHash,
+  validateGitRemoteUrl
+} from '../services/repositorySecurity.js'
 
 const router = express.Router()
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 
 // 代码存储目录
 const CODE_BASE_PATH = process.env.CODE_PATH || path.join(process.env.DATA_PATH || '/data', 'code')
@@ -19,22 +27,40 @@ if (!fs.existsSync(CODE_BASE_PATH)) {
   fs.mkdirSync(CODE_BASE_PATH, { recursive: true })
 }
 
-// 获取文件原始内容（用于图片等）- 不需要认证，因为只是返回静态资源
-// 安全性由路径检查保证（必须在仓库目录内）
+const SAFE_GIT_CONFIG = [
+  '-c', 'protocol.file.allow=never',
+  '-c', 'protocol.ext.allow=never'
+]
+
+function runGit(args, options = {}) {
+  return execFileAsync(
+    'git',
+    [...SAFE_GIT_CONFIG, ...args],
+    {
+      timeout: options.timeout || 30000,
+      maxBuffer: options.maxBuffer || 1024 * 1024,
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0'
+      }
+    }
+  )
+}
+
+function sendRepositorySecurityError(res, error) {
+  if (!(error instanceof RepositorySecurityError)) return false
+  res.status(400).json({ message: error.message, code: error.code })
+  return true
+}
+
+// 获取文件原始内容（用于图片等）
 router.get('/:id/raw/:path(*)', async (req, res) => {
-  console.log('==== RAW 接口被调用 ====')
-  console.log('originalUrl:', req.originalUrl)
-  console.log('url:', req.url)
-  console.log('params:', req.params)
-  console.log('path参数:', req.params.path)
   try {
     const db = getDatabase()
-    // 使用命名参数 :path(*) 捕获路径
     let relativePath = req.params.path || ''
-    // 去掉查询参数
     relativePath = relativePath.split('?')[0]
     relativePath = decodeURIComponent(relativePath)
-    console.log('提取的文件路径:', relativePath)
     
     const repo = db.prepare('SELECT local_path FROM code_repositories WHERE id = ?').get(req.params.id)
     
@@ -42,48 +68,11 @@ router.get('/:id/raw/:path(*)', async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
-    // 禁止路径中的 .. 和空字节（防止路径遍历）
-    if (relativePath.includes('..') || relativePath.includes('\0')) {
-      console.log('安全检查失败: 路径包含非法字符')
-      return res.status(403).json({ message: '非法路径' })
-    }
-
-    // 将 URL 中的 / 转换为系统路径分隔符
-    relativePath = relativePath.replace(/\//g, path.sep)
-    
-    console.log('请求图片路径:', relativePath, '仓库路径:', repo.local_path)
-    
-    // 使用 path.resolve 规范化路径，防止路径遍历
-    const resolvedRepoPath = path.resolve(repo.local_path)
-    const fullPath = path.resolve(path.join(resolvedRepoPath, relativePath))
-    console.log('完整路径:', fullPath)
-    
-    // 安全检查：确保解析后的路径在仓库目录内
-    const pathSeparator = path.sep
-    if (!fullPath.startsWith(resolvedRepoPath + pathSeparator) && fullPath !== resolvedRepoPath) {
-      console.log('安全检查失败: 路径不在仓库目录内')
-      return res.status(403).json({ message: '非法路径' })
-    }
-
-    // 检查文件是否存在（同时检查符号链接）
-    if (!fs.existsSync(fullPath)) {
-      console.log('文件不存在:', fullPath)
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    // 检查是否是符号链接（防止通过软链接访问其他目录）
-    try {
-      const realPath = fs.realpathSync(fullPath)
-      const resolvedRealPath = path.resolve(realPath)
-      if (!resolvedRealPath.startsWith(resolvedRepoPath + pathSeparator) && 
-          resolvedRealPath !== resolvedRepoPath) {
-        console.log('安全检查失败: 符号链接指向仓库外部')
-        return res.status(403).json({ message: '不能访问符号链接' })
-      }
-    } catch (e) {
-      console.log('无法解析文件路径:', e.message)
-      return res.status(403).json({ message: '无法访问该文件' })
-    }
+    const fullPath = resolveRepositoryEntry(
+      CODE_BASE_PATH,
+      repo.local_path,
+      relativePath
+    )
 
     const stats = fs.statSync(fullPath)
     if (stats.isDirectory()) {
@@ -99,15 +88,15 @@ router.get('/:id/raw/:path(*)', async (req, res) => {
       '.gif': 'image/gif',
       '.bmp': 'image/bmp',
       '.webp': 'image/webp',
-      '.svg': 'image/svg+xml',
+      '.svg': 'application/octet-stream',
       '.ico': 'image/x-icon',
       '.pdf': 'application/pdf',
       '.txt': 'text/plain',
       '.md': 'text/markdown',
-      '.json': 'application/json',
-      '.js': 'application/javascript',
-      '.css': 'text/css',
-      '.html': 'text/html'
+      '.json': 'text/plain',
+      '.js': 'text/plain',
+      '.css': 'text/plain',
+      '.html': 'text/plain'
     }
     
     const contentType = mimeTypes[ext] || 'application/octet-stream'
@@ -121,6 +110,10 @@ router.get('/:id/raw/:path(*)', async (req, res) => {
     const stream = fs.createReadStream(fullPath)
     stream.pipe(res)
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ message: '文件不存在' })
+    }
     console.error('获取文件原始内容失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -148,8 +141,15 @@ router.get('/', authenticateToken, async (req, res) => {
     // 计算每个仓库的大小
     const reposWithSize = rows.map(repo => {
       let size = 0
-      if (repo.local_path && fs.existsSync(repo.local_path)) {
-        size = getDirectorySize(repo.local_path)
+      try {
+        const repositoryPath = resolveManagedRepositoryPath(
+          CODE_BASE_PATH,
+          repo.local_path,
+          { mustExist: true }
+        )
+        size = getDirectorySize(repositoryPath)
+      } catch {
+        size = 0
       }
       // 解析languages字段
       let languages = []
@@ -158,7 +158,8 @@ router.get('/', authenticateToken, async (req, res) => {
           languages = JSON.parse(repo.languages)
         } catch (e) {}
       }
-      return { ...repo, size, languages }
+      const { local_path: _localPath, ...publicRepo } = repo
+      return { ...publicRepo, size, languages }
     })
     
     res.json({ data: reposWithSize, total: reposWithSize.length })
@@ -176,10 +177,11 @@ function getDirectorySize(dirPath) {
     for (const file of files) {
       const filePath = path.join(dirPath, file)
       try {
-        const stats = fs.statSync(filePath)
+        const stats = fs.lstatSync(filePath)
+        if (stats.isSymbolicLink()) continue
         if (stats.isDirectory()) {
           // 跳过 .git 目录（通常很大）
-          if (file !== '.git' && file !== '.svn') {
+          if (file !== '.git') {
             size += getDirectorySize(filePath)
           }
         } else {
@@ -213,32 +215,55 @@ router.post('/', authenticateToken, async (req, res) => {
     if (!name || !url) {
       return res.status(400).json({ message: '仓库名称和URL不能为空' })
     }
+    if (type !== 'git') {
+      return res.status(400).json({
+        message: '仅支持 Git 仓库',
+        code: 'REPOSITORY_TYPE_UNSUPPORTED'
+      })
+    }
+    const safeRemoteUrl = validateGitRemoteUrl(url)
 
     // 检查是否已存在
-    const existing = db.prepare('SELECT id FROM code_repositories WHERE url = ?').get(url)
+    const existing = db.prepare(
+      'SELECT id FROM code_repositories WHERE url = ?'
+    ).get(safeRemoteUrl)
     if (existing) {
       return res.status(400).json({ message: '该仓库URL已存在' })
     }
 
     // 生成本地路径
     const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_')
-    const localPath = path.join(CODE_BASE_PATH, `${safeName}_${Date.now()}`)
+    const localPath = resolveManagedRepositoryPath(
+      CODE_BASE_PATH,
+      path.join(CODE_BASE_PATH, `${safeName}_${Date.now()}`)
+    )
 
     // 先保存到数据库
     const stmt = db.prepare(
       `INSERT INTO code_repositories (name, url, description, local_path, type) VALUES (?, ?, ?, ?, ?)`
     )
-    const result = stmt.run(name, url, description, localPath, type)
+    const result = stmt.run(
+      name,
+      safeRemoteUrl,
+      description,
+      localPath,
+      'git'
+    )
 
     // 异步克隆仓库
-    cloneRepository(result.lastInsertRowid, url, localPath, type, name)
+    cloneRepository(
+      result.lastInsertRowid,
+      safeRemoteUrl,
+      localPath,
+      name
+    )
 
     res.json({ 
       id: result.lastInsertRowid, 
-      message: '仓库添加成功，正在后台克隆...',
-      localPath 
+      message: '仓库添加成功，正在后台克隆...'
     })
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
     console.error('创建代码仓库失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -354,8 +379,9 @@ router.get('/github-info', authenticateToken, async (req, res) => {
 })
 
 // 克隆仓库的异步函数（带进度）
-async function cloneRepository(id, url, localPath, type, name) {
+async function cloneRepository(id, url, localPath, name) {
   const db = getDatabase()
+  const managedPath = resolveManagedRepositoryPath(CODE_BASE_PATH, localPath)
   
   const task = {
     id: String(id),
@@ -367,17 +393,8 @@ async function cloneRepository(id, url, localPath, type, name) {
   cloneTasks.set(String(id), task)
   
   try {
-    console.log(`[仓库 ${name}] 开始克隆到 ${localPath}`)
-    
-    if (type === 'svn') {
-      task.message = '正在 SVN checkout...'
-      await execAsync(`svn checkout "${url}" "${localPath}"`, { timeout: 300000 })
-      task.progress = 100
-      task.message = 'SVN checkout 完成'
-    } else {
-      // git - 使用 spawn 获取实时进度
-      await cloneGitWithProgress(url, localPath, task)
-    }
+    console.log(`[仓库 ${name}] 开始克隆`)
+    await cloneGitWithProgress(url, managedPath, task)
     
     // 更新同步时间
     db.prepare('UPDATE code_repositories SET last_sync = CURRENT_TIMESTAMP WHERE id = ?').run(id)
@@ -395,7 +412,7 @@ async function cloneRepository(id, url, localPath, type, name) {
     task.message = '克隆失败: ' + error.message
     // 克隆失败，清理目录
     try {
-      fs.rmSync(localPath, { recursive: true, force: true })
+      fs.rmSync(managedPath, { recursive: true, force: true })
     } catch (e) {}
     // 标记为失败状态
     try {
@@ -406,16 +423,39 @@ async function cloneRepository(id, url, localPath, type, name) {
   }
   
   // 10分钟后清理任务记录
-  setTimeout(() => {
+  const cleanupTimer = setTimeout(() => {
     cloneTasks.delete(String(id))
   }, 600000)
+  cleanupTimer.unref?.()
 }
 
 // Git 克隆带进度
 function cloneGitWithProgress(url, localPath, task) {
   return new Promise((resolve, reject) => {
-    const args = ['clone', '--progress', '--depth', '50', url, localPath]
-    const proc = spawn('git', args)
+    const args = [
+      ...SAFE_GIT_CONFIG,
+      'clone',
+      '--progress',
+      '--depth',
+      '50',
+      url,
+      localPath
+    ]
+    const proc = spawn('git', args, {
+      windowsHide: true,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0'
+      }
+    })
+    let settled = false
+
+    const finish = (callback) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      callback()
+    }
     
     task.message = '正在连接服务器...'
     
@@ -454,26 +494,27 @@ function cloneGitWithProgress(url, localPath, task) {
     
     proc.on('close', (code) => {
       if (code === 0) {
-        resolve()
+        finish(resolve)
       } else {
-        reject(new Error(`Git clone 失败，退出码: ${code}`))
+        finish(() => reject(new Error(`Git clone 失败，退出码: ${code}`)))
       }
     })
     
     proc.on('error', (err) => {
-      reject(err)
+      finish(() => reject(err))
     })
     
     // 5分钟超时
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       proc.kill()
-      reject(new Error('克隆超时'))
+      finish(() => reject(new Error('克隆超时')))
     }, 300000)
+    timeout.unref?.()
   })
 }
 
 // 删除代码仓库
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     const repo = db.prepare('SELECT local_path FROM code_repositories WHERE id = ?').get(req.params.id)
@@ -482,15 +523,21 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
-    // 删除本地目录
-    if (fs.existsSync(repo.local_path)) {
-      fs.rmSync(repo.local_path, { recursive: true, force: true })
+    const managedPath = resolveManagedRepositoryPath(
+      CODE_BASE_PATH,
+      repo.local_path
+    )
+
+    // 只允许删除代码存储根目录内的受管仓库目录
+    if (fs.existsSync(managedPath)) {
+      fs.rmSync(managedPath, { recursive: true, force: true })
     }
 
     // 删除数据库记录
     db.prepare('DELETE FROM code_repositories WHERE id = ?').run(req.params.id)
     res.json({ message: '删除成功' })
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
     console.error('删除代码仓库失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -532,19 +579,12 @@ router.get('/:id/tree', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
-    // 将 URL 中的 / 转换为系统路径分隔符
-    relativePath = relativePath.replace(/\//g, path.sep)
-
-    const fullPath = path.join(repo.local_path, relativePath)
-    
-    // 安全检查：确保路径在仓库目录内
-    if (!fullPath.startsWith(repo.local_path)) {
-      return res.status(403).json({ message: '非法路径' })
-    }
-
-    if (!fs.existsSync(fullPath)) {
-      return res.status(404).json({ message: '路径不存在' })
-    }
+    const fullPath = resolveRepositoryEntry(
+      CODE_BASE_PATH,
+      repo.local_path,
+      relativePath,
+      { allowRepositoryRoot: true }
+    )
 
     const stats = fs.statSync(fullPath)
     if (!stats.isDirectory()) {
@@ -566,6 +606,10 @@ router.get('/:id/tree', authenticateToken, async (req, res) => {
 
     res.json({ data: items })
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ message: '路径不存在' })
+    }
     console.error('获取文件树失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -586,19 +630,11 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: '路径不能为空' })
     }
     
-    // 将 URL 中的 / 转换为系统路径分隔符
-    relativePath = relativePath.replace(/\//g, path.sep)
-
-    const fullPath = path.join(repo.local_path, relativePath)
-    
-    // 安全检查
-    if (!fullPath.startsWith(repo.local_path)) {
-      return res.status(403).json({ message: '非法路径' })
-    }
-
-    if (!fs.existsSync(fullPath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
+    const fullPath = resolveRepositoryEntry(
+      CODE_BASE_PATH,
+      repo.local_path,
+      relativePath
+    )
 
     const stats = fs.statSync(fullPath)
     if (stats.isDirectory()) {
@@ -629,7 +665,16 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
     // 如果是 Markdown 文件，转换其中的图片路径为 base64
     if (ext === '.md' || ext === '.markdown') {
       console.log('处理 Markdown 文件图片路径:', relativePath)
-      content = convertImagePathsToBase64(content, repo.local_path, fullPath)
+      const repositoryPath = resolveManagedRepositoryPath(
+        CODE_BASE_PATH,
+        repo.local_path,
+        { mustExist: true }
+      )
+      content = convertImagePathsToBase64(
+        content,
+        repositoryPath,
+        fullPath
+      )
     }
     
     res.json({ 
@@ -642,6 +687,10 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
       }
     })
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ message: '文件不存在' })
+    }
     console.error('获取文件内容失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -667,14 +716,29 @@ router.get('/:id/readme', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
+    const repositoryPath = resolveManagedRepositoryPath(
+      CODE_BASE_PATH,
+      repo.local_path,
+      { mustExist: true }
+    )
+
     // 查找 README 文件
     const readmeNames = ['README.md', 'readme.md', 'README.MD', 'Readme.md', 'README.txt', 'readme.txt']
     let readmePath = null
     
     for (const name of readmeNames) {
-      const fullPath = path.join(repo.local_path, name)
-      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-        readmePath = fullPath
+      const candidatePath = resolveRepositoryEntry(
+        CODE_BASE_PATH,
+        repositoryPath,
+        name,
+        { mustExist: false }
+      )
+      if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
+        readmePath = resolveRepositoryEntry(
+          CODE_BASE_PATH,
+          repositoryPath,
+          name
+        )
         break
       }
     }
@@ -686,7 +750,11 @@ router.get('/:id/readme', authenticateToken, async (req, res) => {
     let content = fs.readFileSync(readmePath, 'utf-8')
     
     // 转换相对图片路径为 base64 data URL
-    content = convertImagePathsToBase64(content, repo.local_path, readmePath)
+    content = convertImagePathsToBase64(
+      content,
+      repositoryPath,
+      readmePath
+    )
     
     console.log('README 图片路径转换完成')
     
@@ -700,6 +768,10 @@ router.get('/:id/readme', authenticateToken, async (req, res) => {
     
     res.json({ data: result })
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
+    if (error.code === 'ENOENT') {
+      return res.json({ data: null })
+    }
     console.error('获取README失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -709,35 +781,26 @@ router.get('/:id/readme', authenticateToken, async (req, res) => {
 function imageToBase64(imagePath, repoPath, mdFilePath) {
   try {
     // 解码 URL 编码的路径
-    let decodedPath = decodeURIComponent(imagePath)
-    
-    // 构建完整路径
-    let fullPath = decodedPath
-    if (!path.isAbsolute(decodedPath)) {
-      // 如果有 md 文件路径，则相对于 md 文件所在目录
-      // 否则相对于仓库根目录
-      const basePath = mdFilePath ? path.dirname(mdFilePath) : repoPath
-      
-      // 处理相对路径：./path, ../path, /path, path
-      fullPath = path.resolve(basePath, decodedPath)
-    }
-    
-    // 规范化路径
-    fullPath = path.normalize(fullPath)
-    
-    // 安全检查：确保路径在仓库目录内
-    if (!fullPath.startsWith(repoPath)) {
-      console.log('  -> 安全检查失败：路径不在仓库内', fullPath)
+    const decodedPath = decodeURIComponent(imagePath)
+    if (path.isAbsolute(decodedPath) && !decodedPath.startsWith('/')) {
       return null
     }
-    
-    if (!fs.existsSync(fullPath)) {
-      console.log('  -> 文件不存在:', fullPath)
-      return null
-    }
+
+    const basePath = decodedPath.startsWith('/')
+      ? repoPath
+      : (mdFilePath ? path.dirname(mdFilePath) : repoPath)
+    const candidatePath = path.resolve(
+      basePath,
+      decodedPath.replace(/^[/\\]+/, '')
+    )
+    const relativePath = path.relative(repoPath, candidatePath)
+    const fullPath = resolveRepositoryEntry(
+      CODE_BASE_PATH,
+      repoPath,
+      relativePath
+    )
     
     // 读取文件并转为 base64
-    const fileBuffer = fs.readFileSync(fullPath)
     const ext = path.extname(fullPath).toLowerCase()
     const mimeTypes = {
       '.png': 'image/png',
@@ -746,10 +809,14 @@ function imageToBase64(imagePath, repoPath, mdFilePath) {
       '.gif': 'image/gif',
       '.bmp': 'image/bmp',
       '.webp': 'image/webp',
-      '.svg': 'image/svg+xml',
       '.ico': 'image/x-icon'
     }
-    const mimeType = mimeTypes[ext] || 'application/octet-stream'
+    const mimeType = mimeTypes[ext]
+    if (!mimeType) return null
+
+    const stats = fs.statSync(fullPath)
+    if (stats.size > 5 * 1024 * 1024) return null
+    const fileBuffer = fs.readFileSync(fullPath)
     const base64 = fileBuffer.toString('base64')
     console.log('  -> 转换成功:', ext, mimeType, '大小:', fileBuffer.length)
     return `data:${mimeType};base64,${base64}`
@@ -812,7 +879,7 @@ function convertImagePathsToBase64(content, repoPath, mdFilePath = null) {
 // 获取提交历史
 router.get('/:id/commits', authenticateToken, async (req, res) => {
   try {
-    const { limit = 20 } = req.query
+    const limit = normalizeCommitLimit(req.query.limit)
     const { id } = req.params
     
     // 尝试从缓存获取
@@ -830,43 +897,41 @@ router.get('/:id/commits', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
-    if (!fs.existsSync(repo.local_path)) {
-      return res.status(404).json({ message: '仓库尚未克隆完成' })
+    if (repo.type !== 'git') {
+      return res.status(410).json({
+        message: 'SVN 支持已移除，请迁移为 Git 仓库',
+        code: 'SVN_RETIRED'
+      })
     }
 
+    const repositoryPath = resolveManagedRepositoryPath(
+      CODE_BASE_PATH,
+      repo.local_path,
+      { mustExist: true }
+    )
     let commits = []
-
-    if (repo.type === 'svn') {
-      // SVN 日志
-      try {
-        const { stdout } = await execAsync(
-          `svn log "${repo.local_path}" --limit ${limit}`,
-          { timeout: 30000 }
-        )
-        commits = parseSvnLog(stdout)
-      } catch (e) {
-        commits = []
-      }
-    } else {
-      // Git 日志
-      try {
-        const { stdout } = await execAsync(
-          `git -C "${repo.local_path}" log --pretty=format:"%H|%an|%ad|%s" --date=format:'%Y-%m-%d %H:%M:%S' -n ${limit}`,
-          { timeout: 30000 }
-        )
-        commits = stdout.split('\n').filter(line => line).map(line => {
-          const [hash, author, date, ...messageParts] = line.split('|')
-          return {
-            hash: hash.substring(0, 7),
-            fullHash: hash,
-            author,
-            date,
-            message: messageParts.join('|')
-          }
-        })
-      } catch (e) {
-        commits = []
-      }
+    try {
+      const { stdout } = await runGit([
+        '-C',
+        repositoryPath,
+        'log',
+        '--pretty=format:%H|%an|%ad|%s',
+        '--date=format:%Y-%m-%d %H:%M:%S',
+        '-n',
+        String(limit)
+      ])
+      commits = stdout.split('\n').filter(line => line).map(line => {
+        const [hash, author, date, ...messageParts] = line.split('|')
+        return {
+          hash: hash.substring(0, 7),
+          fullHash: hash,
+          author,
+          date,
+          message: messageParts.join('|')
+        }
+      })
+    } catch {
+      commits = []
     }
 
     // 缓存结果（5分钟）
@@ -874,6 +939,10 @@ router.get('/:id/commits', authenticateToken, async (req, res) => {
     
     res.json({ data: commits })
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ message: '仓库尚未克隆完成' })
+    }
     console.error('获取提交历史失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -882,7 +951,7 @@ router.get('/:id/commits', authenticateToken, async (req, res) => {
 // 获取单个提交的详情和代码变更
 router.get('/:id/commit/:hash', authenticateToken, async (req, res) => {
   try {
-    const { hash } = req.params
+    const hash = validateCommitHash(req.params.hash)
     
     // 尝试从缓存获取
     const cacheKey = `code:commit:${req.params.id}:${hash}`
@@ -898,58 +967,48 @@ router.get('/:id/commit/:hash', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
-    if (!fs.existsSync(repo.local_path)) {
-      return res.status(404).json({ message: '仓库尚未克隆完成' })
+    if (repo.type !== 'git') {
+      return res.status(410).json({
+        message: 'SVN 支持已移除，请迁移为 Git 仓库',
+        code: 'SVN_RETIRED'
+      })
     }
 
+    const repositoryPath = resolveManagedRepositoryPath(
+      CODE_BASE_PATH,
+      repo.local_path,
+      { mustExist: true }
+    )
     let commitDetail = null
-
-    if (repo.type === 'svn') {
-      // SVN 提交详情
-      try {
-        const { stdout: logOut } = await execAsync(
-          `svn log -v -r ${hash.replace('r', '')} "${repo.local_path}"`,
-          { timeout: 30000 }
-        )
-        const { stdout: diffOut } = await execAsync(
-          `svn diff -c ${hash.replace('r', '')} "${repo.local_path}"`,
-          { timeout: 60000 }
-        )
-        commitDetail = {
-          hash,
-          diff: diffOut || '无变更内容',
-          files: parseSvnChangedFiles(logOut)
-        }
-      } catch (e) {
-        commitDetail = { hash, diff: '获取变更失败', files: [] }
+    try {
+      const { stdout: showOut } = await runGit([
+        '-C',
+        repositoryPath,
+        'show',
+        '--stat',
+        '--pretty=format:%H|%an|%ad|%s',
+        hash,
+        '--'
+      ])
+      const { stdout: diffOut } = await runGit([
+        '-C',
+        repositoryPath,
+        'show',
+        '--format=',
+        hash,
+        '--'
+      ], {
+        timeout: 60000,
+        maxBuffer: 1024 * 1024 * 5
+      })
+      commitDetail = {
+        hash,
+        diff: diffOut || '无变更内容',
+        files: parseGitChangedFiles(showOut)
       }
-    } else {
-      // Git 提交详情
-      try {
-        // 获取提交信息
-        const { stdout: showOut } = await execAsync(
-          `git -C "${repo.local_path}" show --stat --pretty=format:"%H|%an|%ad|%s" ${hash}`,
-          { timeout: 30000 }
-        )
-        
-        // 获取代码变更
-        const { stdout: diffOut } = await execAsync(
-          `git -C "${repo.local_path}" show --format="" ${hash}`,
-          { timeout: 60000, maxBuffer: 1024 * 1024 * 5 }
-        )
-        
-        // 解析变更文件列表
-        const files = parseGitChangedFiles(showOut)
-        
-        commitDetail = {
-          hash,
-          diff: diffOut || '无变更内容',
-          files
-        }
-      } catch (e) {
-        console.error('获取Git提交详情失败:', e)
-        commitDetail = { hash, diff: '获取变更失败', files: [] }
-      }
+    } catch (error) {
+      console.error('获取Git提交详情失败:', error.message)
+      commitDetail = { hash, diff: '获取变更失败', files: [] }
     }
 
     // 缓存结果（10分钟）
@@ -957,6 +1016,10 @@ router.get('/:id/commit/:hash', authenticateToken, async (req, res) => {
     
     res.json({ data: commitDetail })
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
+    if (error.code === 'ENOENT') {
+      return res.status(404).json({ message: '仓库尚未克隆完成' })
+    }
     console.error('获取提交详情失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -988,59 +1051,6 @@ function parseGitChangedFiles(output) {
   return files
 }
 
-// 解析 SVN 变更文件列表
-function parseSvnChangedFiles(logOutput) {
-  const files = []
-  const lines = logOutput.split('\n')
-  let inChanges = false
-  
-  for (const line of lines) {
-    if (line.includes('Changed paths:')) {
-      inChanges = true
-      continue
-    }
-    if (inChanges && line.trim() === '') {
-      break
-    }
-    if (inChanges) {
-      const match = line.trim().match(/^[AMD]\s+(.+)/)
-      if (match) {
-        files.push({ file: match[1] })
-      }
-    }
-  }
-  
-  return files
-}
-
-// 解析 SVN 日志
-function parseSvnLog(logOutput) {
-  const commits = []
-  const lines = logOutput.split('\n')
-  let currentCommit = null
-  
-  for (const line of lines) {
-    if (line.startsWith('r') && line.includes(' | ')) {
-      const parts = line.split(' | ')
-      if (parts.length >= 3) {
-        currentCommit = {
-          hash: parts[0].trim(),
-          author: parts[1].trim(),
-          date: parts[2].trim(),
-          message: ''
-        }
-      }
-    } else if (currentCommit && line.trim() && !line.startsWith('---')) {
-      currentCommit.message += line.trim() + ' '
-    } else if (line.startsWith('---') && currentCommit) {
-      commits.push(currentCommit)
-      currentCommit = null
-    }
-  }
-  
-  return commits.map(c => ({ ...c, message: c.message.trim() }))
-}
-
 // 手动同步仓库
 router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, res) => {
   try {
@@ -1050,6 +1060,17 @@ router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, 
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
     }
+    if (repo.type !== 'git') {
+      return res.status(410).json({
+        message: 'SVN 支持已移除，请迁移为 Git 仓库',
+        code: 'SVN_RETIRED'
+      })
+    }
+
+    const repositoryPath = resolveManagedRepositoryPath(
+      CODE_BASE_PATH,
+      repo.local_path
+    )
 
     // 初始化同步任务状态
     const taskId = String(repo.id)
@@ -1061,18 +1082,25 @@ router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, 
       startTime: Date.now()
     })
 
-    if (!fs.existsSync(repo.local_path)) {
+    if (!fs.existsSync(repositoryPath)) {
       // 如果目录不存在，重新克隆
       syncTasks.get(taskId).message = '目录不存在，开始重新克隆...'
-      cloneRepository(repo.id, repo.url, repo.local_path, repo.type, repo.name)
+      cloneRepository(repo.id, repo.url, repositoryPath, repo.name)
       return res.json({ message: '开始重新克隆仓库...', taskId })
     }
 
     // 异步更新仓库
-    updateRepository(repo.id, repo.url, repo.local_path, repo.type, repo.name, taskId)
+    updateRepository(
+      repo.id,
+      repo.url,
+      repositoryPath,
+      repo.name,
+      taskId
+    )
 
     res.json({ message: '开始同步仓库...', taskId })
   } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
     console.error('同步仓库失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
@@ -1101,7 +1129,7 @@ router.get('/:id/sync-status', authenticateToken, async (req, res) => {
 })
 
 // 更新仓库的异步函数（带进度跟踪）
-async function updateRepository(id, url, localPath, type, name, taskId) {
+async function updateRepository(id, url, localPath, name, taskId) {
   const db = getDatabase()
   const task = syncTasks.get(taskId)
   
@@ -1113,11 +1141,15 @@ async function updateRepository(id, url, localPath, type, name, taskId) {
       task.progress = 30
     }
     
-    if (type === 'svn') {
-      await execAsync(`svn update "${localPath}"`, { timeout: 300000 })
-    } else {
-      await execAsync(`git -C "${localPath}" pull`, { timeout: 300000 })
-    }
+    const repositoryPath = resolveManagedRepositoryPath(
+      CODE_BASE_PATH,
+      localPath,
+      { mustExist: true }
+    )
+    await runGit(
+      ['-C', repositoryPath, 'pull', '--ff-only'],
+      { timeout: 300000 }
+    )
     
     if (task) {
       task.message = '同步完成，更新数据库...'
@@ -1147,9 +1179,10 @@ async function updateRepository(id, url, localPath, type, name, taskId) {
   
   // 10分钟后清理任务记录
   if (task) {
-    setTimeout(() => {
+    const cleanupTimer = setTimeout(() => {
       syncTasks.delete(taskId)
     }, 600000)
+    cleanupTimer.unref?.()
   }
 }
 
@@ -1163,12 +1196,22 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
-    // 检查本地目录是否存在
-    const exists = fs.existsSync(repo.local_path)
+    // 检查受管仓库目录是否存在，但不向前端暴露物理路径。
+    let exists = false
+    try {
+      const repositoryPath = resolveManagedRepositoryPath(
+        CODE_BASE_PATH,
+        repo.local_path
+      )
+      exists = fs.existsSync(repositoryPath)
+    } catch {
+      exists = false
+    }
+    const { local_path: _localPath, ...publicRepo } = repo
     
     res.json({ 
       data: {
-        ...repo,
+        ...publicRepo,
         exists
       }
     })
