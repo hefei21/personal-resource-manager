@@ -9,10 +9,16 @@ const routes = [
     meta: { requiresAuth: false }
   },
   {
+    path: '/demo',
+    name: 'DemoWorkspace',
+    component: () => import('@/views/DemoWorkspace.vue'),
+    meta: { requiresAuth: true, requiresDemo: true }
+  },
+  {
     path: '/',
     name: 'Layout',
     component: () => import('@/views/Layout.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, requiresOwner: true },
     redirect: '/dashboard',
     children: [
       {
@@ -79,13 +85,19 @@ router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
   const requiresAuth = to.matched.some(record => record.meta.requiresAuth)
   const requiresAdmin = to.matched.some(record => record.meta.requiresAdmin)
+  const requiresOwner = to.matched.some(record => record.meta.requiresOwner)
+  const requiresDemo = to.matched.some(record => record.meta.requiresDemo)
   await authStore.checkAuth()
 
   if (requiresAuth && !authStore.isAuthenticated) {
     next('/login')
   } else if (to.path === '/login' && authStore.isAuthenticated) {
+    next(authStore.demoMode ? '/demo' : '/')
+  } else if (requiresOwner && authStore.user?.principal !== 'owner') {
+    next('/demo')
+  } else if (requiresDemo && authStore.user?.principal !== 'demo') {
     next('/')
-  } else if (requiresAdmin && authStore.user?.username !== 'admin') {
+  } else if (requiresAdmin && authStore.user?.principal !== 'owner') {
     // 非管理员访问管理员页面，跳转到首页
     next('/')
   } else {

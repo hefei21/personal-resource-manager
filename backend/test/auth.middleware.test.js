@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import test from 'node:test'
 
-process.env.JWT_SECRET = 'test-only-secret-that-is-at-least-32-characters'
 process.env.DATA_PATH = path.resolve(
   import.meta.dirname,
   '../../.codex/test-runtime/unit'
@@ -10,9 +9,7 @@ process.env.DATA_PATH = path.resolve(
 
 const {
   PRINCIPALS,
-  LEGACY_DEMO_COOKIE,
   authenticateToken,
-  generateDemoToken,
   requireOwner,
   requireWritePermission
 } = await import('../src/middlewares/auth.js')
@@ -36,28 +33,11 @@ function responseRecorder() {
   }
 }
 
-test('legacy demo cookie authenticates only as demo', async () => {
-  const token = generateDemoToken({ id: 'demo', username: 'demo' })
-  const req = {
-    cookies: { [LEGACY_DEMO_COOKIE]: token },
-    headers: {},
-    query: {}
-  }
-  const res = responseRecorder()
-
-  await new Promise((resolve) => authenticateToken(req, res, resolve))
-  assert.equal(req.user.principal, PRINCIPALS.DEMO)
-  assert.equal(req.user.isGuest, true)
-  assert.equal(req.auth.type, 'legacy_demo_cookie')
-  res.listeners.finish?.()
-})
-
-test('bearer and URL tokens are not authentication mechanisms', () => {
-  const token = generateDemoToken({ id: 'demo', username: 'demo' })
-
+test('production authentication rejects demo, bearer and URL credentials', () => {
   for (const req of [
-    { cookies: {}, headers: { authorization: `Bearer ${token}` }, query: {} },
-    { cookies: {}, headers: {}, query: { token } }
+    { cookies: { pr_demo_session: 'opaque-demo-token' }, headers: {}, query: {} },
+    { cookies: {}, headers: { authorization: 'Bearer legacy-token' }, query: {} },
+    { cookies: {}, headers: {}, query: { token: 'legacy-token' } }
   ]) {
     const res = responseRecorder()
     let called = false

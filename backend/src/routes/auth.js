@@ -3,8 +3,6 @@ import bcrypt from 'bcryptjs'
 import { getDatabase } from '../config/database.js'
 import {
   authenticateToken,
-  generateDemoToken,
-  LEGACY_DEMO_COOKIE,
   requireOwner
 } from '../middlewares/auth.js'
 import { loginLimiter } from '../middlewares/security.js'
@@ -85,38 +83,6 @@ router.post('/login', loginLimiter, async (req, res) => {
   }
 })
 
-// 游客登录
-router.post('/guest-login', (req, res) => {
-  try {
-    // 创建虚拟游客用户
-    const guestUser = {
-      id: 'guest',
-      username: '游客'
-    }
-    
-    const token = generateDemoToken(guestUser)
-    res.cookie(LEGACY_DEMO_COOKIE, token, {
-      httpOnly: true,
-      sameSite: 'strict',
-      secure: req.secure || req.get('x-forwarded-proto') === 'https',
-      path: '/',
-      maxAge: 24 * 60 * 60 * 1000
-    })
-    
-    res.json({
-      user: {
-        id: 'guest',
-        username: '游客',
-        principal: 'demo',
-        isGuest: true
-      }
-    })
-  } catch (error) {
-    console.error('游客登录错误:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
 // 登出
 router.post('/logout', authenticateToken, (req, res) => {
   const sessionToken = req.cookies?.[OWNER_SESSION_COOKIE]
@@ -127,12 +93,6 @@ router.post('/logout', authenticateToken, (req, res) => {
     OWNER_SESSION_COOKIE,
     clearOwnerSessionCookieOptions(req)
   )
-  res.clearCookie(LEGACY_DEMO_COOKIE, {
-    httpOnly: true,
-    sameSite: 'strict',
-    secure: req.secure || req.get('x-forwarded-proto') === 'https',
-    path: '/'
-  })
   res.json({ message: '登出成功' })
 })
 

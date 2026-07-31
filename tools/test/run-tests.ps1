@@ -187,15 +187,16 @@ function Invoke-SmokeSuite {
     throw 'Admin login did not establish a session.'
   }
 
-  $guestSession = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
-  $guestLogin = Invoke-Api -Method POST -Path '/auth/guest-login' -Session $guestSession
-  $guestOk = Assert-Status 'auth.guest-login' 'smoke' $guestLogin @(200)
-  if (-not $guestOk) {
-    throw 'Guest login did not establish a session.'
+  $demoSession = [Microsoft.PowerShell.Commands.WebRequestSession]::new()
+  $demoLogin = Invoke-Api -Method POST -Path '/demo/sessions' -Session $demoSession
+  $demoOk = Assert-Status 'demo.session-create' 'smoke' $demoLogin @(201)
+  if (-not $demoOk) {
+    throw 'Demo workspace did not establish a session.'
   }
 
   Assert-Status 'auth.admin-check' 'smoke' (Invoke-Api -Path '/auth/check' -Session $adminSession) @(200) | Out-Null
-  Assert-Status 'auth.guest-check' 'smoke' (Invoke-Api -Path '/auth/check' -Session $guestSession) @(200) | Out-Null
+  Assert-Status 'demo.session-check' 'smoke' (Invoke-Api -Path '/demo/session' -Session $demoSession) @(200) | Out-Null
+  Assert-Status 'demo.documents-list' 'smoke' (Invoke-Api -Path '/demo/resources/documents' -Session $demoSession) @(200) | Out-Null
 
   $listEndpoints = [ordered]@{
     'documents.list' = '/documents?page=1&pageSize=10'
@@ -267,8 +268,8 @@ function Invoke-SmokeSuite {
   $fixedTestLogin = Invoke-Api -Method POST -Path '/auth/login' -Body @{ username = 'test'; password = '123456' }
   Assert-SecurityInvariant 'security.fixed-test-account' $fixedTestLogin
 
-  $privateList = Invoke-Api -Path '/documents/docs/special/list' -Session $guestSession
-  Assert-SecurityInvariant 'security.private-list-secondary-auth' $privateList
+  $privateList = Invoke-Api -Path '/documents/docs/special/list' -Session $demoSession
+  Assert-SecurityInvariant 'security.demo-production-isolation' $privateList
 
   $bookConfigWrite = Invoke-Api -Method PUT -Path '/book-search/config' -Body @{
     annaArchiveDomain = 'example.invalid'
@@ -286,8 +287,8 @@ function Invoke-SmokeSuite {
   }
 
   if ($bookmarkId -gt 0) {
-    $guestDelete = Invoke-Api -Method DELETE -Path "/bookmarks/$bookmarkId" -Session $guestSession
-    Assert-SecurityInvariant 'security.guest-bookmark-delete' $guestDelete
+    $demoDelete = Invoke-Api -Method DELETE -Path "/bookmarks/$bookmarkId" -Session $demoSession
+    Assert-SecurityInvariant 'security.demo-production-delete' $demoDelete
   }
 
   Save-Result 'manual.frontend-navigation' 'manual' 'MANUAL' 'Open http://127.0.0.1:15173 and check desktop/mobile navigation.'

@@ -45,8 +45,8 @@ api.interceptors.response.use(
     
     // 排除登录相关接口，这些接口的401是业务错误而非登录过期
     const isAuthEndpoint = requestUrl.includes('/auth/login') ||
-      requestUrl.includes('/auth/guest-login') ||
-      requestUrl.includes('/auth/check')
+      requestUrl.includes('/auth/check') ||
+      requestUrl.includes('/demo/session')
     
     if (error.response?.status === 401 && !isAuthEndpoint) {
       // Token 缺失或未认证
@@ -74,10 +74,20 @@ api.interceptors.response.use(
 export default {
   auth: {
     login: (data) => api.post('/auth/login', data),
-    guestLogin: () => api.post('/auth/guest-login'),
     logout: () => api.post('/auth/logout'),
     check: () => api.get('/auth/check'),
     changePassword: (data) => api.post('/auth/change-password', data)
+  },
+  demo: {
+    createSession: () => api.post('/demo/sessions'),
+    checkSession: () => api.get('/demo/session'),
+    closeSession: () => api.delete('/demo/session'),
+    summary: () => api.get('/demo/summary'),
+    reset: () => api.post('/demo/reset'),
+    list: (type, params) => api.get(`/demo/resources/${type}`, { params }),
+    create: (type, data) => api.post(`/demo/resources/${type}`, data),
+    update: (type, id, data) => api.put(`/demo/resources/${type}/${id}`, data),
+    delete: (type, id) => api.delete(`/demo/resources/${type}/${id}`)
   },
   documents: {
     list: (params) => api.get('/documents', { params }),

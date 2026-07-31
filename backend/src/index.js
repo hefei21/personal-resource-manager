@@ -39,6 +39,7 @@ import {
 
 // 导入路由
 import authRoutes from './routes/auth.js'
+import demoRoutes from './routes/demo.js'
 import documentsRoutes from './routes/documents.js'
 import musicRoutes from './routes/music.js'
 import booksRoutes from './routes/books.js'
@@ -284,6 +285,9 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
 })
 
 // API 路由
+// 演示空间必须在生产访问日志之前挂载，避免演示流量写入生产数据库。
+app.use('/api/demo', demoRoutes)
+
 // 访问日志中间件（记录所有 API 请求）
 app.use('/api', accessLogger)
 
