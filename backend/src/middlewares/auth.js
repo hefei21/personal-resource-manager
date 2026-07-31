@@ -41,6 +41,13 @@ function attachPrincipal(req, res, next, user, auth) {
 }
 
 export function authenticateToken(req, res, next) {
+  if (
+    req.user?.principal === PRINCIPALS.OWNER &&
+    req.auth?.type === 'owner_session'
+  ) {
+    return next()
+  }
+
   const sessionToken = req.cookies?.[OWNER_SESSION_COOKIE]
   if (sessionToken) {
     try {

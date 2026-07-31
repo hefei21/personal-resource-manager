@@ -71,7 +71,7 @@ services:
       - LOGS_PATH=/app/data/logs
       
       # CORS 配置
-      - CORS_ORIGIN=*
+      - CORS_ORIGIN=${CORS_ORIGIN:-}
       
       # 【安全】默认管理员账户（首次启动后请修改密码）
       - DEFAULT_USERNAME=${DEFAULT_USERNAME:-admin}

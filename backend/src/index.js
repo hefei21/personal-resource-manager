@@ -34,6 +34,10 @@ import {
   readLimiter,
   slowQueryDetector
 } from './middlewares/security.js'
+import {
+  enforceOwnerRequestOrigin,
+  isTrustedRequestOrigin
+} from './middlewares/requestOrigin.js'
 
 
 
@@ -74,21 +78,26 @@ app.set('trust proxy', 1)
 
 // 安全中间件
 app.use(securityHeaders)
-app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? (process.env.CORS_ORIGIN?.split(',') || true)
-    : true,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-  exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  maxAge: 86400
+app.use(cors((req, callback) => {
+  const sourceOrigin = req.get('origin')
+  const allowOrigin = sourceOrigin &&
+    isTrustedRequestOrigin(req, sourceOrigin)
+
+  callback(null, {
+    origin: allowOrigin ? sourceOrigin : false,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'X-Requested-With', 'Accept', 'Origin'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    maxAge: 86400
+  })
 }))
 
 // 请求体解析
 app.use(express.json({ limit: '50mb' }))
 app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 app.use(cookieParser())
+app.use(enforceOwnerRequestOrigin)
 
 // 慢查询检测（记录响应时间超过3秒的请求）- 暂时禁用
 // app.use(slowQueryDetector(3000))
@@ -163,7 +172,12 @@ app.use((req, res, next) => {
 const uploadsPath = process.env.UPLOADS_PATH || '/app/data/uploads'
 console.log('[Static] Uploads path:', uploadsPath)
 console.log('[Static] Screenshots exists:', fs.existsSync(path.join(uploadsPath, 'screenshots')))
-app.use('/uploads', express.static(uploadsPath))
+app.use(
+  '/uploads',
+  authenticateToken,
+  requireOwner,
+  express.static(uploadsPath)
+)
 
 // 健康检查
 app.get('/api/health', async (req, res) => {
@@ -202,44 +216,49 @@ app.get('/health', (req, res) => {
 })
 
 // 代理测试
-app.get('/api/proxy-test', async (req, res) => {
-  try {
-    const axios = (await import('axios')).default
-    const { HttpsProxyAgent } = await import('https-proxy-agent')
-    
-    const proxyUrl = process.env.HTTP_PROXY || '未配置'
-    const targetUrl = req.query.url || 'https://www.google.com'
-    const useProxy = req.query.proxy !== 'false'  // 默认使用代理
-    
-    // 创建代理 agent
-    const httpsAgent = useProxy && proxyUrl !== '未配置' 
-      ? new HttpsProxyAgent(proxyUrl) 
-      : undefined
-    
-    // 测试访问目标网站
-    const response = await axios.get(targetUrl, {
-      timeout: 15000,
-      httpsAgent,
-      validateStatus: () => true
-    })
-    
-    res.json({
-      success: true,
-      proxy: useProxy ? proxyUrl : '未使用代理',
-      target: targetUrl,
-      status: response.status,
-      message: '访问成功'
-    })
-  } catch (error) {
-    res.json({
-      success: false,
-      proxy: req.query.proxy !== 'false' ? (process.env.HTTP_PROXY || '未配置') : '未使用代理',
-      target: req.query.url || 'https://www.google.com',
-      error: error.message,
-      message: '访问失败'
-    })
+app.get(
+  '/api/proxy-test',
+  authenticateToken,
+  requireOwner,
+  async (req, res) => {
+    try {
+      const axios = (await import('axios')).default
+      const { HttpsProxyAgent } = await import('https-proxy-agent')
+
+      const proxyUrl = process.env.HTTP_PROXY || '未配置'
+      const targetUrl = req.query.url || 'https://www.google.com'
+      const useProxy = req.query.proxy !== 'false'  // 默认使用代理
+
+      // 创建代理 agent
+      const httpsAgent = useProxy && proxyUrl !== '未配置'
+        ? new HttpsProxyAgent(proxyUrl)
+        : undefined
+
+      // 测试访问目标网站
+      const response = await axios.get(targetUrl, {
+        timeout: 15000,
+        httpsAgent,
+        validateStatus: () => true
+      })
+
+      res.json({
+        success: true,
+        proxy: useProxy ? proxyUrl : '未使用代理',
+        target: targetUrl,
+        status: response.status,
+        message: '访问成功'
+      })
+    } catch (error) {
+      res.json({
+        success: false,
+        proxy: req.query.proxy !== 'false' ? (process.env.HTTP_PROXY || '未配置') : '未使用代理',
+        target: req.query.url || 'https://www.google.com',
+        error: error.message,
+        message: '访问失败'
+      })
+    }
   }
-})
+)
 
 // 统计接口 - 优化仪表盘性能（应用读速率限制）
 app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
@@ -294,17 +313,18 @@ app.use('/api', accessLogger)
 app.use('/api/auth', authRoutes)
 
 // API 路由（authenticateToken 中间件会自动设置数据库上下文）
-app.use('/api/documents', documentsRoutes)
-app.use('/api/music', musicRoutes)
-app.use('/api/ebooks', booksRoutes)  // 改为 ebooks 避免"books"关键词被拦截
-app.use('/api/code', codeRoutes)
-app.use('/api/bookmarks', bookmarksRoutes)
-app.use('/api/anime', animeRoutes)
-app.use('/api/games', gamesRoutes)
-app.use('/api/search', searchRoutes)
-app.use('/api/book-search', bookSearchRoutes)  // 电子书搜索
-app.use('/api/todos', todosRoutes)  // 待办事项
-app.use('/api/blog', blogRoutes)  // 博客管理
+const ownerOnly = [authenticateToken, requireOwner]
+app.use('/api/documents', ...ownerOnly, documentsRoutes)
+app.use('/api/music', ...ownerOnly, musicRoutes)
+app.use('/api/ebooks', ...ownerOnly, booksRoutes)
+app.use('/api/code', ...ownerOnly, codeRoutes)
+app.use('/api/bookmarks', ...ownerOnly, bookmarksRoutes)
+app.use('/api/anime', ...ownerOnly, animeRoutes)
+app.use('/api/games', ...ownerOnly, gamesRoutes)
+app.use('/api/search', ...ownerOnly, searchRoutes)
+app.use('/api/book-search', ...ownerOnly, bookSearchRoutes)
+app.use('/api/todos', ...ownerOnly, todosRoutes)
+app.use('/api/blog', ...ownerOnly, blogRoutes)
 
 // 管理员访问日志接口
 app.get('/api/admin/logs', authenticateToken, requireOwner, (req, res) => {

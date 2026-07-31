@@ -105,6 +105,7 @@ Assert-Condition 'powershell.syntax' ($syntaxErrors.Count -eq 0) `
 $pcCompose = Get-Content -LiteralPath (Get-ProjectFile 'docker-compose.test.yml') -Encoding UTF8 -Raw
 $nasCompose = Get-Content -LiteralPath (Get-ProjectFile 'docker-compose.nas-test.yml') -Encoding UTF8 -Raw
 $productionCompose = Get-Content -LiteralPath (Get-ProjectFile 'docker-compose.nas.yml') -Encoding UTF8 -Raw
+$localCompose = Get-Content -LiteralPath (Get-ProjectFile 'docker-compose.yml') -Encoding UTF8 -Raw
 
 $pcVolumeLines = @(
   $pcCompose -split "`r?`n" |
@@ -157,6 +158,16 @@ $composeSecretsAreVariables = (
 Assert-Condition 'compose.secrets' $composeSecretsAreVariables `
   'Compose secrets are supplied through environment variables.' `
   'A required Compose secret is missing or is not environment-driven.'
+
+$composeCorsIsExact = @(
+  $pcCompose,
+  $nasCompose,
+  $productionCompose,
+  $localCompose
+) | ForEach-Object { $_ -notmatch '(?m)CORS_ORIGIN\s*[:=]\s*\*' }
+Assert-Condition 'compose.cors' ($composeCorsIsExact -notcontains $false) `
+  'Compose files do not enable wildcard credentialed CORS.' `
+  'A Compose file enables CORS_ORIGIN=*.'
 
 # Synthetic fixture generation and package integrity.
 if (Test-Path -LiteralPath $FixtureRoot) {

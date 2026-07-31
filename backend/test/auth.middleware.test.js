@@ -81,3 +81,20 @@ test('owner guards allow owner principals', () => {
   assert.equal(called, true)
   assert.equal(res.statusCode, 200)
 })
+
+test('authentication is idempotent after the owner session is resolved', () => {
+  const req = {
+    user: { id: 1, principal: PRINCIPALS.OWNER, isGuest: false },
+    auth: { type: 'owner_session', tokenHash: 'already-verified' },
+    cookies: {}
+  }
+  const res = responseRecorder()
+  let called = false
+
+  authenticateToken(req, res, () => {
+    called = true
+  })
+
+  assert.equal(called, true)
+  assert.equal(res.statusCode, 200)
+})

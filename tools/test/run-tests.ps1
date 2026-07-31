@@ -16,6 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ApiBase = 'http://127.0.0.1:13000/api'
+$BrowserOrigin = 'http://localhost:15173'
 $EnvPath = Join-Path $RuntimeRoot '.env.test'
 $StatePath = Join-Path $RuntimeRoot 'test-state.json'
 $ResultsPath = Join-Path $RuntimeRoot 'results.ndjson'
@@ -91,6 +92,9 @@ function Invoke-Api {
   }
   if ($Session) {
     $params.WebSession = $Session
+  }
+  if ($Method -notin @('GET', 'HEAD', 'OPTIONS')) {
+    $params.Headers = @{ Origin = $BrowserOrigin }
   }
   if ($null -ne $Body) {
     $params.ContentType = 'application/json'
