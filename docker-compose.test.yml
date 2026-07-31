@@ -26,8 +26,6 @@ services:
       CODE_PATH: /app/data/code
       UPLOADS_PATH: /app/data/uploads
       LOGS_PATH: /app/data/logs
-      JWT_SECRET: ${TEST_JWT_SECRET}
-      JWT_EXPIRE: 1h
       DEFAULT_USERNAME: ${TEST_ADMIN_USERNAME}
       DEFAULT_PASSWORD: ${TEST_ADMIN_PASSWORD}
       PRIVATE_PASSWORD: ${TEST_PRIVATE_PASSWORD}

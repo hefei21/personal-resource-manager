@@ -139,7 +139,7 @@ cp backend/.env.example backend/.env
 
 # 3. 修改配置（重要！）
 # 编辑 docker-compose.yml，修改数据目录路径
-# 编辑 backend/.env，设置 JWT_SECRET
+# 编辑 backend/.env，为首次初始化设置随机 Owner 密码
 
 # 4. 启动服务
 docker-compose up -d
@@ -166,12 +166,11 @@ cd backend && npm run dev
 cd frontend && npm run dev
 ```
 
-### 默认登录
+### 首次登录
 
-- **用户名**：`admin`
-- **密码**：`admin123`
-
-⚠️ **生产环境请立即修改默认密码！**
+- 用户名默认是 `admin`，可通过 `DEFAULT_USERNAME` 修改。
+- 首次安装必须显式设置至少 12 位的 `DEFAULT_PASSWORD`。
+- 系统不再创建或接受公开的默认管理员密码。
 
 ## ⚙️ 配置说明
 
@@ -179,7 +178,8 @@ cd frontend && npm run dev
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `JWT_SECRET` | JWT 密钥（必须修改） | - |
+| `DEFAULT_PASSWORD` | 首次安装 Owner 密码（至少 12 位） | 必填 |
+| `PRIVATE_PASSWORD` | 私密空间下线前的首次初始化密码 | 必填 |
 | `DATA_PATH` | 数据存储路径 | `/app/data` |
 | `HTTP_PROXY` | 代理地址（用于爬虫） | - |
 
@@ -225,11 +225,10 @@ volumes:
 
 ## 🔒 安全提示
 
-1. **修改默认密码**：首次启动后立即修改 admin 密码
-2. **设置 JWT_SECRET**：使用强随机密钥
-3. **HTTPS**：生产环境建议配置 HTTPS
-4. **防火墙**：限制端口访问
-5. **备份**：定期备份数据库和上传文件
+1. **首次凭据**：部署前生成随机 Owner 密码，不使用公开示例值
+2. **HTTPS**：公网或远程访问必须通过可信 HTTPS 入口
+3. **防火墙**：限制后端和 Redis 端口暴露
+4. **备份**：定期备份数据库和上传文件并验证恢复
 
 ## 👥 权限管理
 

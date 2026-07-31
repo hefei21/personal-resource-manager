@@ -24,11 +24,9 @@ services:
       CODE_PATH: /app/data/code
       UPLOADS_PATH: /app/data/uploads
       LOGS_PATH: /app/data/logs
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_EXPIRE: ${JWT_EXPIRE:-7d}
       DEFAULT_USERNAME: ${DEFAULT_USERNAME:-admin}
-      DEFAULT_PASSWORD: ${DEFAULT_PASSWORD}
-      PRIVATE_PASSWORD: ${PRIVATE_PASSWORD}
+      DEFAULT_PASSWORD: ${DEFAULT_PASSWORD:?DEFAULT_PASSWORD is required for first install}
+      PRIVATE_PASSWORD: ${PRIVATE_PASSWORD:?PRIVATE_PASSWORD is required until private-space retirement}
       CORS_ORIGIN: ${CORS_ORIGIN}
       BANGUMI_ACCESS_TOKEN: ${BANGUMI_ACCESS_TOKEN:-}
       REDIS_URL: redis://redis:6379
@@ -89,4 +87,3 @@ networks:
   pr-network:
     name: pr-network
     driver: bridge
-

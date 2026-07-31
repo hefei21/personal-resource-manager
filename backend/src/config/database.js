@@ -1,8 +1,12 @@
 import Database from 'better-sqlite3'
 import fs from 'fs'
 import path from 'path'
-import bcrypt from 'bcryptjs'
-import { getCurrentUsername, getContext } from '../utils/dbContext.js'
+import { getContext } from '../utils/dbContext.js'
+import {
+  initializeOwner,
+  initializePrivateSetting,
+  retireLegacyTestUser
+} from '../services/bootstrapSecurity.js'
 
 const baseDbPath = process.env.DB_PATH || path.join(process.env.DATA_PATH, 'database', 'app.db')
 const dbDir = path.dirname(baseDbPath)
@@ -34,25 +38,8 @@ export function getCurrentReq() {
   return currentReq
 }
 
-// 测试账号配置
-const TEST_DB_NAME = 'app_test.db'
-const TEST_USERNAME = 'test'
-const TEST_PASSWORD = '123456'
-
 /**
- * 根据用户名获取数据库路径
- * @param {string} username - 用户名，为null时使用默认数据库
- * @returns {string} 数据库文件路径
- */
-function getDbPathByUsername(username) {
-  if (username === TEST_USERNAME) {
-    return path.join(dbDir, TEST_DB_NAME)
-  }
-  return baseDbPath
-}
-
-/**
- * 获取数据库连接（支持多用户）
+ * 获取数据库连接
  * @param {Object|string} reqOrUsername - Express请求对象或用户名，为null时使用默认数据库或从上下文获取
  * @returns {Database} better-sqlite3 数据库实例
  */
@@ -82,7 +69,7 @@ function getDatabase(reqOrUsername = null) {
     }
   }
   
-  const dbPath = getDbPathByUsername(username)
+  const dbPath = baseDbPath
   
   if (!dbPool.has(dbPath)) {
     const db = new Database(dbPath)
@@ -117,21 +104,8 @@ function getDatabaseForRequest(req) {
 
 // 初始化数据库表
 function initDatabase() {
-  // 初始化主数据库
   const mainDb = getDatabase()
   initDatabaseInstance(mainDb, 'main')
-  
-  // 初始化测试数据库（如果不存在则创建）
-  const testDbPath = path.join(dbDir, TEST_DB_NAME)
-  const testDb = getDatabase(TEST_USERNAME)
-  initDatabaseInstance(testDb, 'test')
-  
-  // 创建 test 用户（在主数据库中）
-  createTestUser(mainDb)
-  
-  // 为测试数据库插入示例数据
-  insertTestData(testDb)
-  
   return mainDb
 }
 
@@ -1060,49 +1034,15 @@ function initDatabaseInstance(database, dbType = 'main') {
     // 不中断程序，继续初始化
   }
 
-  // 创建默认用户
-  const defaultUsername = process.env.DEFAULT_USERNAME || 'admin'
-  const defaultPassword = process.env.DEFAULT_PASSWORD || 'admin123'
-  
-  // 安全检查：如果使用的是默认密码，发出警告但不记录明文密码
-  const isDefaultPassword = !process.env.DEFAULT_PASSWORD
-  if (isDefaultPassword) {
-    console.warn(`⚠️  警告: 使用默认密码创建用户 ${defaultUsername}`)
-    console.warn('   建议: 在生产环境设置 DEFAULT_PASSWORD 环境变量使用强密码')
-  } else {
-    console.log(`创建默认用户: ${defaultUsername}`)
+  if (retireLegacyTestUser(database, process.env)) {
+    console.warn('✓ 已移除旧版固定测试账号')
   }
-
-  const hashedPassword = bcrypt.hashSync(defaultPassword, 10)
-  // 不记录密码哈希，防止彩虹表攻击
-
-  const stmt = database.prepare(
-    `INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)`
-  )
-
-  try {
-    const result = stmt.run(defaultUsername, hashedPassword)
-    if (result.changes > 0) {
-      console.log(`✓ 默认用户已创建: ${defaultUsername}`)
-    } else {
-      console.log(`✓ 用户已存在: ${defaultUsername}`)
-    }
-  } catch (error) {
-    console.error('创建用户失败:', error)
-    console.error('错误详情:', error.message)
+  const createdOwner = initializeOwner(database, process.env)
+  if (createdOwner) {
+    console.log(`✓ Owner 用户已创建: ${createdOwner}`)
   }
-
-  // 初始化私密空间默认密码
-  const defaultPrivatePassword = process.env.PRIVATE_PASSWORD || '123456'
-  const hashedPrivatePassword = bcrypt.hashSync(defaultPrivatePassword, 10)
-  const privateStmt = database.prepare(
-    `INSERT OR IGNORE INTO private_settings (id, password) VALUES (1, ?)`
-  )
-  try {
-    privateStmt.run(hashedPrivatePassword)
-    console.log(`✓ 私密空间默认密码已设置: ${defaultPrivatePassword}`)
-  } catch (error) {
-    console.error('设置私密空间密码失败:', error)
+  if (initializePrivateSetting(database, process.env)) {
+    console.log('✓ 私密空间凭据已初始化')
   }
 
   // 创建索引以提升查询速度
@@ -1152,23 +1092,6 @@ function initDatabaseInstance(database, dbType = 'main') {
 
   console.log(`========== ${dbType} 数据库初始化完成 ==========\n`)
   return database
-}
-
-/**
- * 创建测试用户
- * @param {Database} mainDb - 主数据库实例
- */
-function createTestUser(mainDb) {
-  const hashedPassword = bcrypt.hashSync(TEST_PASSWORD, 10)
-  const stmt = mainDb.prepare(
-    `INSERT OR IGNORE INTO users (username, password) VALUES (?, ?)`
-  )
-  const result = stmt.run(TEST_USERNAME, hashedPassword)
-  if (result.changes > 0) {
-    console.log(`✓ 测试用户已创建: ${TEST_USERNAME} / ${TEST_PASSWORD}`)
-  } else {
-    console.log(`✓ 测试用户已存在: ${TEST_USERNAME}`)
-  }
 }
 
 /**

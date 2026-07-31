@@ -149,11 +149,10 @@ Assert-Condition 'compose.production.images' `
   'Production NAS Compose contains a build or an unversioned application image.'
 
 $composeSecretsAreVariables = (
-  $nasCompose -match 'JWT_SECRET:\s*\$\{TEST_JWT_SECRET:\?[^}]+\}' -and
   $nasCompose -match 'DEFAULT_PASSWORD:\s*\$\{TEST_ADMIN_PASSWORD:\?[^}]+\}' -and
   $nasCompose -match 'PRIVATE_PASSWORD:\s*\$\{TEST_PRIVATE_PASSWORD:\?[^}]+\}' -and
-  $productionCompose -match 'JWT_SECRET:\s*\$\{JWT_SECRET\}' -and
-  $productionCompose -match 'DEFAULT_PASSWORD:\s*\$\{DEFAULT_PASSWORD\}'
+  $productionCompose -match 'DEFAULT_PASSWORD:\s*\$\{DEFAULT_PASSWORD:\?[^}]+\}' -and
+  $productionCompose -match 'PRIVATE_PASSWORD:\s*\$\{PRIVATE_PASSWORD:\?[^}]+\}'
 )
 Assert-Condition 'compose.secrets' $composeSecretsAreVariables `
   'Compose secrets are supplied through environment variables.' `

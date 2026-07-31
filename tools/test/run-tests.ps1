@@ -266,7 +266,7 @@ function Invoke-SmokeSuite {
   Save-State $state
 
   $fixedTestLogin = Invoke-Api -Method POST -Path '/auth/login' -Body @{ username = 'test'; password = '123456' }
-  Assert-SecurityInvariant 'security.fixed-test-account' $fixedTestLogin
+  Assert-Status 'security.fixed-test-account' 'security' $fixedTestLogin @(401) | Out-Null
 
   $privateList = Invoke-Api -Path '/documents/docs/special/list' -Session $demoSession
   Assert-SecurityInvariant 'security.demo-production-isolation' $privateList
