@@ -565,6 +565,7 @@
         <MdPreview
           v-else-if="previewType === 'markdown'"
           :modelValue="previewContent"
+          :sanitize="sanitizeRichHtml"
           :theme="editorTheme"
           :previewTheme="previewTheme"
           :codeTheme="codeTheme"
@@ -591,7 +592,7 @@
           <div class="office-toolbar">
             <NativeButton size="small" theme="default" @click="handleDownloadPreviewFile">下载文件</NativeButton>
           </div>
-          <div class="word-content" v-html="previewContent"></div>
+          <div class="word-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Excel HTML 预览 -->
@@ -599,7 +600,7 @@
           <div class="office-toolbar">
             <NativeButton size="small" theme="default" @click="handleDownloadPreviewFile">下载文件</NativeButton>
           </div>
-          <div class="excel-content" v-html="previewContent"></div>
+          <div class="excel-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Office 文档预览 -->
@@ -813,6 +814,10 @@ import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
+import {
+  sanitizeHighlightHtml,
+  sanitizeRichHtml
+} from '@/utils/sanitizeHtml'
 import { 
   NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, 
   NativeCheckbox, NativeLoading, NativeIcon, NativeSpace, NativeRadioGroup, NativeRadio,
@@ -1258,8 +1263,16 @@ const lineCount = computed(() => {
 
 const highlightedCode = computed(() => {
   if (!previewContent.value || previewType.value !== 'code') return ''
-  return hljs.highlight(previewContent.value, { language: previewLanguage.value }).value
+  return sanitizeHighlightHtml(
+    hljs.highlight(previewContent.value, {
+      language: previewLanguage.value
+    }).value
+  )
 })
+
+const sanitizedPreviewContent = computed(() =>
+  sanitizeRichHtml(previewContent.value)
+)
 
 async function loadDocuments() {
   loading.value = true
@@ -2427,7 +2440,7 @@ function getPreviewType(ext) {
     return { type: 'office', language: 'ppt', editable: false }
   } else if (['xls', 'xlsx'].includes(ext)) {
     return { type: 'office', language: 'excel', editable: false }
-  } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(ext)) {
+  } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
     return { type: 'image', language: 'image', editable: false }
   } else {
     return { type: 'unsupported', language: 'plaintext', editable: false }

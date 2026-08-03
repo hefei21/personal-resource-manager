@@ -194,10 +194,16 @@ function isOptionSelected(option) {
 }
 
 function highlightMatch(label) {
-  if (!props.filterable || !filterText.value) return label
+  const escapedLabel = String(label)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+  if (!props.filterable || !filterText.value) return escapedLabel
   const searchText = filterText.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const regex = new RegExp(`(${searchText})`, 'gi')
-  return String(label).replace(regex, '<mark>$1</mark>')
+  return escapedLabel.replace(regex, '<mark>$1</mark>')
 }
 
 // 开始监听位置变化（滚动、resize、元素大小变化）

@@ -323,6 +323,7 @@
         <MdPreview
           v-else-if="previewType === 'markdown'"
           :modelValue="previewContent"
+          :sanitize="sanitizeRichHtml"
           :previewTheme="'default'"
           class="mobile-md-preview"
         />
@@ -345,12 +346,12 @@
 
         <!-- Word HTML预览 -->
         <div v-else-if="previewType === 'word-html'" class="word-html-preview">
-          <div class="office-content" v-html="previewContent"></div>
+          <div class="office-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Excel HTML预览 -->
         <div v-else-if="previewType === 'excel-html'" class="excel-html-preview">
-          <div class="office-content" v-html="previewContent"></div>
+          <div class="office-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Office文档不支持预览提示 -->
@@ -396,6 +397,11 @@ import { authenticatedAssetUrl } from '@/utils/authentication'
 import { usePermission } from '@/composables/usePermission'
 import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect } from '@/components/native'
 import { useToast } from '@/composables/useToast'
+import {
+  escapeHtml,
+  sanitizeHighlightHtml,
+  sanitizeRichHtml
+} from '@/utils/sanitizeHtml'
 
 const toast = useToast()
 const { isGuest, canWrite } = usePermission()
@@ -535,13 +541,21 @@ const highlightedCode = computed(() => {
   if (!previewContent.value || previewType.value !== 'code') return ''
   try {
     if (previewLanguage.value && hljs.getLanguage(previewLanguage.value)) {
-      return hljs.highlight(previewContent.value, { language: previewLanguage.value }).value
+      return sanitizeHighlightHtml(
+        hljs.highlight(previewContent.value, {
+          language: previewLanguage.value
+        }).value
+      )
     }
-    return hljs.highlightAuto(previewContent.value).value
+    return sanitizeHighlightHtml(hljs.highlightAuto(previewContent.value).value)
   } catch (e) {
-    return previewContent.value
+    return escapeHtml(previewContent.value)
   }
 })
+
+const sanitizedPreviewContent = computed(() =>
+  sanitizeRichHtml(previewContent.value)
+)
 
 // 创建分类
 const createCategoryDialogVisible = ref(false)
@@ -799,7 +813,7 @@ function getPreviewType(ext) {
   else if (['doc', 'docx'].includes(ext)) return { type: 'office', language: 'word' }
   else if (['ppt', 'pptx'].includes(ext)) return { type: 'office', language: 'ppt' }
   else if (['xls', 'xlsx'].includes(ext)) return { type: 'office', language: 'excel' }
-  else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(ext)) return { type: 'image', language: 'image' }
+  else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) return { type: 'image', language: 'image' }
   else return { type: 'unsupported', language: 'plaintext' }
 }
 

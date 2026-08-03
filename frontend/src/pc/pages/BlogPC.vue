@@ -181,6 +181,7 @@
         <div class="editor-body">
           <MdEditor
             v-model="editForm.content"
+            :sanitize="sanitizeRichHtml"
             :theme="editorTheme"
             :previewTheme="previewTheme"
             :codeTheme="codeTheme"
@@ -233,6 +234,7 @@
         <div class="preview-divider"></div>
         <MdPreview
           :modelValue="previewContent"
+          :sanitize="sanitizeRichHtml"
           :theme="editorTheme"
           :previewTheme="previewTheme"
           :codeTheme="codeTheme"
@@ -306,6 +308,7 @@
 import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
 import { MdEditor, MdPreview } from 'md-editor-v3'
+import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 import 'md-editor-v3/lib/style.css'
 import 'md-editor-v3/lib/preview.css'
 import { usePermission } from '@/composables/usePermission'

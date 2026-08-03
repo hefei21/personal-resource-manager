@@ -1955,36 +1955,27 @@ router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req,
     const zip = new AdmZip(book.file_path)
     const zipEntries = zip.getEntries()
 
-    // 规范化路径：移除 ./ 和多余的 /
-    let normalizedPath = resourcePath.replace(/\\/g, '/')
-    if (normalizedPath.startsWith('./')) {
-      normalizedPath = normalizedPath.substring(2)
+    // EPUB 资源只能按规范化后的精确条目名读取。
+    const rawPath = String(resourcePath).replace(/\\/g, '/')
+    if (rawPath.includes('\0')) {
+      return res.status(400).json({ message: '资源路径无效' })
     }
-    if (normalizedPath.startsWith('/')) {
-      normalizedPath = normalizedPath.substring(1)
+    const normalizedPath = path.posix.normalize(rawPath)
+      .replace(/^\.\//, '')
+      .replace(/^\/+/, '')
+    if (
+      !normalizedPath ||
+      normalizedPath === '..' ||
+      normalizedPath.startsWith('../')
+    ) {
+      return res.status(400).json({ message: '资源路径无效' })
     }
 
     console.log('📷 规范化路径:', normalizedPath)
 
-    // 查找资源文件（多种匹配方式）
-    let resourceEntry = zipEntries.find(e => e.entryName === normalizedPath)
-
-    if (!resourceEntry) {
-      // 尝试匹配结尾路径
-      resourceEntry = zipEntries.find(e =>
-        e.entryName.endsWith('/' + normalizedPath) ||
-        e.entryName.endsWith(normalizedPath)
-      )
-    }
-
-    if (!resourceEntry) {
-      // 尝试只匹配文件名
-      const fileName = normalizedPath.split('/').pop()
-      resourceEntry = zipEntries.find(e => {
-        const entryFileName = e.entryName.split('/').pop()
-        return entryFileName === fileName
-      })
-    }
+    const resourceEntry = zipEntries.find(
+      entry => entry.entryName.replace(/\\/g, '/') === normalizedPath
+    )
 
     if (!resourceEntry) {
       console.log('❌ 资源未找到:', normalizedPath)
@@ -1995,6 +1986,28 @@ router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req,
 
     console.log('✅ 找到资源:', resourceEntry.entryName)
 
+    const ext = path.extname(normalizedPath).toLowerCase()
+    const contentTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.woff': 'font/woff',
+      '.woff2': 'font/woff2',
+      '.ttf': 'font/ttf',
+      '.otf': 'font/otf'
+    }
+    const contentType = contentTypes[ext]
+    if (!contentType) {
+      return res.status(415).json({
+        message: '该 EPUB 资源类型不允许在线加载'
+      })
+    }
+    if ((resourceEntry.header?.size || 0) > 10 * 1024 * 1024) {
+      return res.status(413).json({ message: 'EPUB 资源过大' })
+    }
+
     let data
     try {
       data = resourceEntry.getData()
@@ -2002,27 +2015,9 @@ router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req,
       console.error('❌ 读取资源数据失败:', resourceEntry.entryName, err.message)
       return res.status(500).json({ message: '读取资源失败' })
     }
-    
-    const ext = path.extname(resourcePath).toLowerCase()
 
-    // 设置Content-Type
-    const contentTypes = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp',
-      '.svg': 'image/svg+xml',
-      '.css': 'text/css',
-      '.js': 'application/javascript',
-      '.woff': 'font/woff',
-      '.woff2': 'font/woff2',
-      '.ttf': 'font/ttf',
-      '.otf': 'font/otf'
-    }
-
-    const contentType = contentTypes[ext] || 'application/octet-stream'
     res.setHeader('Content-Type', contentType)
+    res.setHeader('X-Content-Type-Options', 'nosniff')
     res.setHeader('Cache-Control', 'public, max-age=86400') // 缓存1天
     res.send(data)
   } catch (error) {

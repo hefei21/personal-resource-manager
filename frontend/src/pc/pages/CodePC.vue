@@ -179,6 +179,7 @@
                     <MdPreview
                       v-if="isMarkdownFile(currentFile.name)"
                       :modelValue="currentFile.content"
+                      :sanitize="sanitizeRichHtml"
                       :theme="editorTheme"
                       :previewTheme="previewTheme"
                       :codeTheme="codeTheme"
@@ -198,6 +199,7 @@
                     <MdPreview
                       v-if="readmeContent"
                       :modelValue="readmeContent"
+                      :sanitize="sanitizeRichHtml"
                       :theme="editorTheme"
                       :previewTheme="previewTheme"
                       :codeTheme="codeTheme"
@@ -318,6 +320,11 @@ import {
   NativeForm, NativeFormItem, NativeRadio, NativeRadioGroup, NativeTextarea 
 } from '@/components/native'
 import { useToast } from '@/composables/useToast'
+import {
+  escapeHtml,
+  sanitizeHighlightHtml,
+  sanitizeRichHtml
+} from '@/utils/sanitizeHtml'
 import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
 import 'highlight.js/styles/github.css'
@@ -638,12 +645,14 @@ const highlightedCode = computed(() => {
   if (!currentFile.value?.content) return ''
   const lang = getLanguageFromFilename(currentFile.value.name)
   if (lang === 'plaintext') {
-    return currentFile.value.content
+    return escapeHtml(currentFile.value.content)
   }
   try {
-    return hljs.highlight(currentFile.value.content, { language: lang }).value
+    return sanitizeHighlightHtml(
+      hljs.highlight(currentFile.value.content, { language: lang }).value
+    )
   } catch (e) {
-    return currentFile.value.content
+    return escapeHtml(currentFile.value.content)
   }
 })
 

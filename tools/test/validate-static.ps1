@@ -169,6 +169,33 @@ Assert-Condition 'compose.cors' ($composeCorsIsExact -notcontains $false) `
   'Compose files do not enable wildcard credentialed CORS.' `
   'A Compose file enables CORS_ORIGIN=*.'
 
+# Frontend active-content boundaries.
+$vueFiles = @(
+  Get-ChildItem -LiteralPath (Get-ProjectFile 'frontend\src') -Filter '*.vue' -File -Recurse
+)
+$unsafeVHtml = @()
+$unsanitizedMarkdown = @()
+foreach ($file in $vueFiles) {
+  $source = Get-Content -LiteralPath $file.FullName -Encoding UTF8 -Raw
+  foreach ($match in [regex]::Matches($source, 'v-html="([^"]+)"')) {
+    $expression = $match.Groups[1].Value
+    if ($expression -notmatch '^(highlightedCode|sanitizedPreviewContent|currentChapterContent|sanitizeRichHtml\(|highlightMatch\()') {
+      $unsafeVHtml += "$($file.Name): $expression"
+    }
+  }
+  foreach ($match in [regex]::Matches($source, '<Md(?:Preview|Editor)\b[\s\S]*?>')) {
+    if ($match.Value -notmatch ':sanitize="sanitizeRichHtml"') {
+      $unsanitizedMarkdown += $file.Name
+    }
+  }
+}
+Assert-Condition 'frontend.v-html' ($unsafeVHtml.Count -eq 0) `
+  'All v-html sites use an approved sanitizer or escaped highlighter output.' `
+  "Unsafe v-html expressions: $($unsafeVHtml -join ', ')"
+Assert-Condition 'frontend.markdown-sanitize' ($unsanitizedMarkdown.Count -eq 0) `
+  'All Markdown editor and preview components use the shared sanitizer.' `
+  "Markdown components without sanitizer: $($unsanitizedMarkdown -join ', ')"
+
 # Synthetic fixture generation and package integrity.
 if (Test-Path -LiteralPath $FixtureRoot) {
   Remove-Item -LiteralPath $FixtureRoot -Recurse -Force

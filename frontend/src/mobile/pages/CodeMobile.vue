@@ -123,6 +123,7 @@
         <MdPreview
           v-else-if="readmeContent"
           :modelValue="readmeContent"
+          :sanitize="sanitizeRichHtml"
           :theme="editorTheme"
           :previewTheme="previewTheme"
           :codeTheme="codeTheme"
@@ -256,6 +257,7 @@
         <MdPreview
           v-else-if="isMarkdownFile(currentFile?.name)"
           :modelValue="currentFileContent"
+          :sanitize="sanitizeRichHtml"
           :theme="editorTheme"
           :previewTheme="previewTheme"
           :codeTheme="codeTheme"
@@ -285,6 +287,7 @@ import {
 } from '@/components/native'
 import { useToast } from '@/composables/useToast'
 import { MdPreview } from 'md-editor-v3'
+import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 import 'md-editor-v3/lib/style.css'
 
 const toast = useToast()

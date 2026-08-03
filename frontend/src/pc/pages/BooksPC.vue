@@ -597,6 +597,7 @@ import {
   NativeUpload
 } from '@/components/native'
 import { generateCFI, parseCFI, scrollToCFI, getCurrentCFI, ChapterBoundaryCache, CharacterOffsetProgress } from '@/utils/epub-cfi'
+import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 
 const toast = useToast()
 
@@ -693,7 +694,7 @@ const columns = [
 const currentChapterContent = computed(() => {
   if (bookChapters.value.length === 0) return ''
   const chapter = bookChapters.value[currentChapterIndex.value]
-  return chapter?.content || ''
+  return sanitizeRichHtml(chapter?.content || '')
 })
 
 // 字符偏移进度计算器

@@ -828,7 +828,13 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
     const textFormats = ['.txt', '.md', '.json', '.xml', '.html', '.css', '.js', '.ts', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.go', '.rs', '.sql', '.sh', '.bat', '.yml', '.yaml', '.csv', '.log']
     const binaryFormats = ['.pdf', '.zip', '.rar', '.7z', '.tar', '.gz']
     const officeFormats = ['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']
-    const imageFormats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg']
+    const imageFormats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+
+    if (ext === '.svg') {
+      return res.status(415).json({
+        message: 'SVG 含主动内容风险，仅支持下载，不支持在线预览'
+      })
+    }
 
     if (officeFormats.includes(ext)) {
       // Office文件：返回base64编码
