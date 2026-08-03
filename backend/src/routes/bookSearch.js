@@ -1,12 +1,15 @@
 import express from 'express'
-import axios from 'axios'
-import { HttpsProxyAgent } from 'https-proxy-agent'
 import * as cheerio from 'cheerio'
 import fs from 'fs'
 import path from 'path'
 import { scraperLimiter } from '../middlewares/security.js'
 import { authenticateToken, requireOwner } from '../middlewares/auth.js'
 import { cache, CacheTTL } from '../utils/cache.js'
+import {
+  normalizePublicDomain,
+  OutboundRequestError,
+  safeAxiosGet
+} from '../services/outboundRequest.js'
 
 const router = express.Router()
 
@@ -31,7 +34,12 @@ function getConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const data = fs.readFileSync(CONFIG_PATH, 'utf-8')
-      return { ...DEFAULT_CONFIG, ...JSON.parse(data) }
+      const stored = { ...DEFAULT_CONFIG, ...JSON.parse(data) }
+      return {
+        ...stored,
+        annaArchiveDomain: normalizePublicDomain(stored.annaArchiveDomain),
+        nyaaDomain: normalizePublicDomain(stored.nyaaDomain)
+      }
     }
   } catch (error) {
     console.error('读取电子书搜索配置失败:', error.message)
@@ -57,22 +65,15 @@ function saveConfig(config) {
   }
 }
 
-// 创建代理 agent
-function createProxyAgent() {
-  const proxyUrl = process.env.HTTP_PROXY
-  return proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined
-}
-
 // 测试域名可用性
 async function testDomain(domain) {
   try {
-    const httpsAgent = createProxyAgent()
-    const response = await axios.get(`https://${domain}`, {
-      httpsAgent,
+    const safeDomain = normalizePublicDomain(domain)
+    const response = await safeAxiosGet(`https://${safeDomain}`, {
       timeout: 10000,
-      validateStatus: () => true
+      validateStatus: status => status >= 200 && status < 500
     })
-    return response.status === 200
+    return response.status >= 200 && response.status < 400
   } catch (error) {
     return false
   }
@@ -89,23 +90,36 @@ router.get('/config', (req, res) => {
 
 // 更新配置
 router.put('/config', (req, res) => {
-  const { annaArchiveDomain, nyaaDomain } = req.body
-  const config = getConfig()
+  try {
+    const { annaArchiveDomain, nyaaDomain } = req.body
+    const config = getConfig()
+
+    if (annaArchiveDomain) {
+      config.annaArchiveDomain = normalizePublicDomain(annaArchiveDomain)
+    }
+    if (nyaaDomain) config.nyaaDomain = normalizePublicDomain(nyaaDomain)
   
-  if (annaArchiveDomain) config.annaArchiveDomain = annaArchiveDomain
-  if (nyaaDomain) config.nyaaDomain = nyaaDomain
-  
-  if (saveConfig(config)) {
-    res.json({
-      success: true,
-      message: '配置保存成功',
-      data: config
-    })
-  } else {
-    res.status(500).json({
-      success: false,
-      message: '配置保存失败'
-    })
+    if (saveConfig(config)) {
+      res.json({
+        success: true,
+        message: '配置保存成功',
+        data: config
+      })
+    } else {
+      res.status(500).json({
+        success: false,
+        message: '配置保存失败'
+      })
+    }
+  } catch (error) {
+    if (error instanceof OutboundRequestError) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        code: error.code
+      })
+    }
+    throw error
   }
 })
 
@@ -120,10 +134,21 @@ router.get('/test-domain', async (req, res) => {
     })
   }
   
-  const available = await testDomain(domain)
+  let safeDomain
+  try {
+    safeDomain = normalizePublicDomain(domain)
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+      code: error.code
+    })
+  }
+
+  const available = await testDomain(safeDomain)
   res.json({
     success: true,
-    domain,
+    domain: safeDomain,
     available,
     message: available ? '域名可访问' : '域名无法访问，请更换'
   })
@@ -172,15 +197,13 @@ function extractFormatFromTitle(title) {
 
 // Anna's Archive 搜索
 async function searchAnnaArchive(keyword, domain) {
-  const httpsAgent = createProxyAgent()
-  const baseUrl = `https://${domain}`
+  const baseUrl = `https://${normalizePublicDomain(domain)}`
   
   try {
     const searchUrl = `${baseUrl}/search?q=${encodeURIComponent(keyword)}`
     console.log(`[Anna's Archive] 搜索: ${keyword}`)
     
-    const response = await axios.get(searchUrl, {
-      httpsAgent,
+    const response = await safeAxiosGet(searchUrl, {
       timeout: 30000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -340,15 +363,13 @@ async function searchAnnaArchive(keyword, domain) {
 
 // Nyaa 搜索（轻小说/漫画）
 async function searchNyaa(keyword, domain) {
-  const httpsAgent = createProxyAgent()
-  const baseUrl = `https://${domain}`
+  const baseUrl = `https://${normalizePublicDomain(domain)}`
   
   try {
     // Nyaa 搜索 URL（Literature 分类）
     const searchUrl = `${baseUrl}/?f=0&c=3_0&q=${encodeURIComponent(keyword)}`
     
-    const response = await axios.get(searchUrl, {
-      httpsAgent,
+    const response = await safeAxiosGet(searchUrl, {
       timeout: 15000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',

@@ -6,6 +6,7 @@ import { authenticateToken, requireWritePermission } from '../middlewares/auth.j
 import { cache, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
 import { bangumiLimiter, scraperLimiter } from '../middlewares/security.js'
+import { safeAxiosGet } from '../services/outboundRequest.js'
 
 const router = express.Router()
 const BANGUMI_API_BASE = process.env.BANGUMI_API_BASE || 'https://api.bgm.tv'
@@ -29,13 +30,18 @@ const httpsAgent = process.env.HTTP_PROXY
 async function downloadImageAsBase64(imageUrl) {
   if (!imageUrl) return null
   try {
-    const response = await axios.get(imageUrl, {
+    const response = await safeAxiosGet(imageUrl, {
       responseType: 'arraybuffer',
-      httpsAgent,
-      timeout: 15000
+      timeout: 15000,
+      maxContentLength: 5 * 1024 * 1024
     })
+    const contentType = String(response.headers['content-type'] || '')
+      .split(';')[0]
+      .toLowerCase()
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
+      return null
+    }
     const base64 = Buffer.from(response.data, 'binary').toString('base64')
-    const contentType = response.headers['content-type'] || 'image/jpeg'
     const rawBase64 = `data:${contentType};base64,${base64}`
     
     // 压缩图片

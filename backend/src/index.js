@@ -215,48 +215,16 @@ app.get('/health', (req, res) => {
   res.redirect('/api/health')
 })
 
-// 代理测试
+// 旧任意 URL 网络诊断已下线，避免形成通用 SSRF 代理。
 app.get(
   '/api/proxy-test',
   authenticateToken,
   requireOwner,
-  async (req, res) => {
-    try {
-      const axios = (await import('axios')).default
-      const { HttpsProxyAgent } = await import('https-proxy-agent')
-
-      const proxyUrl = process.env.HTTP_PROXY || '未配置'
-      const targetUrl = req.query.url || 'https://www.google.com'
-      const useProxy = req.query.proxy !== 'false'  // 默认使用代理
-
-      // 创建代理 agent
-      const httpsAgent = useProxy && proxyUrl !== '未配置'
-        ? new HttpsProxyAgent(proxyUrl)
-        : undefined
-
-      // 测试访问目标网站
-      const response = await axios.get(targetUrl, {
-        timeout: 15000,
-        httpsAgent,
-        validateStatus: () => true
-      })
-
-      res.json({
-        success: true,
-        proxy: useProxy ? proxyUrl : '未使用代理',
-        target: targetUrl,
-        status: response.status,
-        message: '访问成功'
-      })
-    } catch (error) {
-      res.json({
-        success: false,
-        proxy: req.query.proxy !== 'false' ? (process.env.HTTP_PROXY || '未配置') : '未使用代理',
-        target: req.query.url || 'https://www.google.com',
-        error: error.message,
-        message: '访问失败'
-      })
-    }
+  (req, res) => {
+    res.status(410).json({
+      message: '任意 URL 网络诊断已下线',
+      code: 'NETWORK_DIAGNOSTIC_RETIRED'
+    })
   }
 )
 
