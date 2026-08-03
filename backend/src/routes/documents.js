@@ -12,6 +12,11 @@ import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
 
 const router = express.Router()
+const DOCUMENT_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv',
+  '.json', '.xml', '.html', '.htm', '.rtf', '.odt', '.ods', '.jpg', '.jpeg',
+  '.png', '.gif', '.webp'
+])
 
 // 配置文件上传
 const storage = multer.diskStorage({
@@ -26,7 +31,11 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
+  limits: { fileSize: 50 * 1024 * 1024, files: 1 }, // 50MB
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase()
+    cb(DOCUMENT_EXTENSIONS.has(ext) ? null : new Error('不支持的文件格式'), DOCUMENT_EXTENSIONS.has(ext))
+  }
 })
 
 // 创建分类
