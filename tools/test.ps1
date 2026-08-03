@@ -126,12 +126,10 @@ function Prepare-TestEnvironment {
 
   if (-not (Test-Path -LiteralPath $EnvPath)) {
     $adminPassword = New-RandomSecret 18
-    $privatePassword = New-RandomSecret 18
     $content = @(
       'COMPOSE_PROJECT_NAME=pr-test'
       'TEST_ADMIN_USERNAME=baseline_admin'
       "TEST_ADMIN_PASSWORD=$adminPassword"
-      "TEST_PRIVATE_PASSWORD=$privatePassword"
     )
     [System.IO.File]::WriteAllLines($EnvPath, $content, [System.Text.UTF8Encoding]::new($false))
   }

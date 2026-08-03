@@ -4,9 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import bcrypt from 'bcryptjs'
 import {
   initializeOwner,
-  initializePrivateSetting,
   resolveOwnerBootstrap,
-  resolvePrivateBootstrap,
   retireLegacyTestUser,
   validateBootstrapPassword
 } from '../src/services/bootstrapSecurity.js'
@@ -29,7 +27,6 @@ function createTestDatabase() {
 
 test('existing installations do not require bootstrap credentials again', () => {
   assert.equal(resolveOwnerBootstrap({}, 1), null)
-  assert.equal(resolvePrivateBootstrap({}, true), null)
 })
 
 test('new installations reject missing and known weak passwords', () => {
@@ -39,10 +36,6 @@ test('new installations reject missing and known weak passwords', () => {
   )
   assert.throws(
     () => validateBootstrapPassword('admin123', 'DEFAULT_PASSWORD'),
-    { code: 'BOOTSTRAP_PASSWORD_WEAK' }
-  )
-  assert.throws(
-    () => resolvePrivateBootstrap({ PRIVATE_PASSWORD: '123456' }, false),
     { code: 'BOOTSTRAP_PASSWORD_WEAK' }
   )
 })
@@ -65,27 +58,21 @@ test('strong bootstrap credentials are returned without logging secrets', () => 
     username: 'owner',
     password: 'safe-random-password-123'
   })
-  assert.equal(resolvePrivateBootstrap({
-    PRIVATE_PASSWORD: 'different-random-password-456'
-  }, false), 'different-random-password-456')
 })
 
 test('database bootstrap creates one owner and never creates a test user', () => {
   const db = createTestDatabase()
   const env = {
     DEFAULT_USERNAME: 'owner',
-    DEFAULT_PASSWORD: 'safe-random-password-123',
-    PRIVATE_PASSWORD: 'different-random-password-456'
+    DEFAULT_PASSWORD: 'safe-random-password-123'
   }
 
   assert.equal(initializeOwner(db, env), 'owner')
-  assert.equal(initializePrivateSetting(db, env), true)
   assert.deepEqual(
     db.prepare('SELECT username FROM users').all().map(row => row.username),
     ['owner']
   )
   assert.equal(initializeOwner(db, {}), null)
-  assert.equal(initializePrivateSetting(db, {}), false)
   db.close()
 })
 

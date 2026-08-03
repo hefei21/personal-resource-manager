@@ -57,11 +57,6 @@ export function resolveOwnerBootstrap(env, existingUserCount) {
   }
 }
 
-export function resolvePrivateBootstrap(env, hasExistingSetting) {
-  if (hasExistingSetting) return null
-  return validateBootstrapPassword(env.PRIVATE_PASSWORD, 'PRIVATE_PASSWORD')
-}
-
 function insertOwner(database, credentials) {
   const hashedPassword = bcrypt.hashSync(credentials.password, 10)
   database.prepare(
@@ -96,17 +91,4 @@ export function initializeOwner(database, env) {
   ).get().count
   const credentials = resolveOwnerBootstrap(env, userCount)
   return credentials ? insertOwner(database, credentials) : null
-}
-
-export function initializePrivateSetting(database, env) {
-  const existing = database.prepare(
-    'SELECT id FROM private_settings WHERE id = 1'
-  ).get()
-  const password = resolvePrivateBootstrap(env, Boolean(existing))
-  if (!password) return false
-
-  database.prepare(
-    'INSERT INTO private_settings (id, password) VALUES (1, ?)'
-  ).run(bcrypt.hashSync(password, 10))
-  return true
 }

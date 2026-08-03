@@ -6,7 +6,7 @@ version: '3.8'
 # 
 # 【重要】部署前请修改以下配置：
 # 1. 所有包含 "/path/to/your" 的路径
-# 2. DEFAULT_USERNAME、DEFAULT_PASSWORD 和 PRIVATE_PASSWORD
+# 2. DEFAULT_USERNAME 和 DEFAULT_PASSWORD
 #
 # 使用方法：
 # 1. 复制 .env.example 为 .env
@@ -76,7 +76,6 @@ services:
       # 【安全】默认管理员账户（首次启动后请修改密码）
       - DEFAULT_USERNAME=${DEFAULT_USERNAME:-admin}
       - DEFAULT_PASSWORD=${DEFAULT_PASSWORD:?DEFAULT_PASSWORD is required for first install}
-      - PRIVATE_PASSWORD=${PRIVATE_PASSWORD:?PRIVATE_PASSWORD is required until private-space retirement}
       
       # 【配置】代理配置（用于访问国外 API，如 Bangumi）
       # 如果不需要爬虫功能，可以注释掉这些行

@@ -151,9 +151,8 @@ Assert-Condition 'compose.production.images' `
 
 $composeSecretsAreVariables = (
   $nasCompose -match 'DEFAULT_PASSWORD:\s*\$\{TEST_ADMIN_PASSWORD:\?[^}]+\}' -and
-  $nasCompose -match 'PRIVATE_PASSWORD:\s*\$\{TEST_PRIVATE_PASSWORD:\?[^}]+\}' -and
   $productionCompose -match 'DEFAULT_PASSWORD:\s*\$\{DEFAULT_PASSWORD:\?[^}]+\}' -and
-  $productionCompose -match 'PRIVATE_PASSWORD:\s*\$\{PRIVATE_PASSWORD:\?[^}]+\}'
+  -not ((@($pcCompose, $nasCompose, $productionCompose, $localCompose) -join "`n") -match 'PRIVATE_PASSWORD')
 )
 Assert-Condition 'compose.secrets' $composeSecretsAreVariables `
   'Compose secrets are supplied through environment variables.' `

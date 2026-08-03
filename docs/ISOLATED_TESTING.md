@@ -113,8 +113,6 @@ Import `docker-compose.nas-test.yml` in the NAS GUI and provide:
 - `NAS_HOST`
 - `TEST_ADMIN_USERNAME`
 - `TEST_ADMIN_PASSWORD`
-- `TEST_PRIVATE_PASSWORD`
-- `TEST_JWT_SECRET`
 
 Use a new NAS directory and ports `13000` and `15173`. Never point the test
 Compose file at the production data directory.

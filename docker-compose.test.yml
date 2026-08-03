@@ -28,7 +28,6 @@ services:
       LOGS_PATH: /app/data/logs
       DEFAULT_USERNAME: ${TEST_ADMIN_USERNAME}
       DEFAULT_PASSWORD: ${TEST_ADMIN_PASSWORD}
-      PRIVATE_PASSWORD: ${TEST_PRIVATE_PASSWORD}
       CORS_ORIGIN: http://localhost:15173
       REDIS_URL: redis://redis:6379
       HTTP_PROXY: ""

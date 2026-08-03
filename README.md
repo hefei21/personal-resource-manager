@@ -179,7 +179,6 @@ cd frontend && npm run dev
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `DEFAULT_PASSWORD` | 首次安装 Owner 密码（至少 12 位） | 必填 |
-| `PRIVATE_PASSWORD` | 私密空间下线前的首次初始化密码 | 必填 |
 | `DATA_PATH` | 数据存储路径 | `/app/data` |
 | `HTTP_PROXY` | 代理地址（用于爬虫） | - |
 

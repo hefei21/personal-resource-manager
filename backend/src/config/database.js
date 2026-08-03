@@ -4,7 +4,6 @@ import path from 'path'
 import { getContext } from '../utils/dbContext.js'
 import {
   initializeOwner,
-  initializePrivateSetting,
   retireLegacyTestUser
 } from '../services/bootstrapSecurity.js'
 
@@ -1040,9 +1039,6 @@ function initDatabaseInstance(database, dbType = 'main') {
   const createdOwner = initializeOwner(database, process.env)
   if (createdOwner) {
     console.log(`✓ Owner 用户已创建: ${createdOwner}`)
-  }
-  if (initializePrivateSetting(database, process.env)) {
-    console.log('✓ 私密空间凭据已初始化')
   }
 
   // 创建索引以提升查询速度

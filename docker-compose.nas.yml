@@ -26,7 +26,6 @@ services:
       LOGS_PATH: /app/data/logs
       DEFAULT_USERNAME: ${DEFAULT_USERNAME:-admin}
       DEFAULT_PASSWORD: ${DEFAULT_PASSWORD:?DEFAULT_PASSWORD is required for first install}
-      PRIVATE_PASSWORD: ${PRIVATE_PASSWORD:?PRIVATE_PASSWORD is required until private-space retirement}
       CORS_ORIGIN: ${CORS_ORIGIN}
       BANGUMI_ACCESS_TOKEN: ${BANGUMI_ACCESS_TOKEN:-}
       REDIS_URL: redis://redis:6379
