@@ -28,8 +28,6 @@ export const serverConfig = {
  * 安全配置
  */
 export const securityConfig = {
-  jwtSecret: process.env.JWT_SECRET,
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '24h',
   bcryptSaltRounds: parseInt(process.env.BCRYPT_SALT_ROUNDS) || 10,
   passwordMinLength: 6
 }
@@ -105,18 +103,6 @@ export const cacheConfig = {
  * 启动时检查必要配置
  */
 export function validateConfig() {
-  const errors = []
-  
-  if (!securityConfig.jwtSecret || securityConfig.jwtSecret.length < 32) {
-    errors.push('JWT_SECRET 必须设置且长度不少于32个字符')
-  }
-  
-  if (errors.length > 0) {
-    console.error('配置验证失败:')
-    errors.forEach(e => console.error(`  - ${e}`))
-    process.exit(1)
-  }
-  
   console.log('[Config] 配置验证通过')
 }
 

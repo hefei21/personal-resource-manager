@@ -565,6 +565,7 @@
         <MdPreview
           v-else-if="previewType === 'markdown'"
           :modelValue="previewContent"
+          :sanitize="sanitizeRichHtml"
           :theme="editorTheme"
           :previewTheme="previewTheme"
           :codeTheme="codeTheme"
@@ -591,7 +592,7 @@
           <div class="office-toolbar">
             <NativeButton size="small" theme="default" @click="handleDownloadPreviewFile">下载文件</NativeButton>
           </div>
-          <div class="word-content" v-html="previewContent"></div>
+          <div class="word-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Excel HTML 预览 -->
@@ -599,7 +600,7 @@
           <div class="office-toolbar">
             <NativeButton size="small" theme="default" @click="handleDownloadPreviewFile">下载文件</NativeButton>
           </div>
-          <div class="excel-content" v-html="previewContent"></div>
+          <div class="excel-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Office 文档预览 -->
@@ -806,12 +807,17 @@
 <script setup>
 import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
+import { authenticatedAssetUrl } from '@/utils/authentication'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
+import {
+  sanitizeHighlightHtml,
+  sanitizeRichHtml
+} from '@/utils/sanitizeHtml'
 import { 
   NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, 
   NativeCheckbox, NativeLoading, NativeIcon, NativeSpace, NativeRadioGroup, NativeRadio,
@@ -1257,8 +1263,16 @@ const lineCount = computed(() => {
 
 const highlightedCode = computed(() => {
   if (!previewContent.value || previewType.value !== 'code') return ''
-  return hljs.highlight(previewContent.value, { language: previewLanguage.value }).value
+  return sanitizeHighlightHtml(
+    hljs.highlight(previewContent.value, {
+      language: previewLanguage.value
+    }).value
+  )
 })
+
+const sanitizedPreviewContent = computed(() =>
+  sanitizeRichHtml(previewContent.value)
+)
 
 async function loadDocuments() {
   loading.value = true
@@ -1570,12 +1584,7 @@ function handlePrivateView(row) {
 }
 
 function handlePrivateDownload(row) {
-  const token = localStorage.getItem('token')
-  if (token) {
-    window.open(`${window.location.origin}/api/documents/secure/download/${row.id}?token=${token}`, '_blank')
-  } else {
-    toast.error('无法下载，未登录')
-  }
+  window.open(authenticatedAssetUrl(`/api/documents/secure/download/${row.id}`), '_blank')
 }
 
 async function handlePrivateDelete(id) {
@@ -1813,14 +1822,8 @@ async function handleUploadConfirm() {
 }
 
 function handleView(row) {
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
   console.log('预览文件，row数据:', row)
   console.log('文件路径:', row.filePath)
-
-  if (!token) {
-    toast.error('无法预览，未登录')
-    return
-  }
 
   if (!row || !row.id) {
     toast.error('无法预览，文档ID不存在')
@@ -1831,16 +1834,11 @@ function handleView(row) {
 }
 
 function handleDownload(row) {
-  const token = localStorage.getItem('token')
-  if (token) {
-    window.open(`${window.location.origin}/api/documents/download/${row.id}?token=${token}`, '_blank')
-  } else {
-    toast.error('无法下载，未登录')
-  }
+  window.open(authenticatedAssetUrl(`/api/documents/download/${row.id}`), '_blank')
 }
 
 function handleDownloadVersion(row) {
-  window.open(`${window.location.origin}/api/documents/download/version/${row.id}`, '_blank')
+  window.open(authenticatedAssetUrl(`/api/documents/download/version/${row.id}`), '_blank')
 }
 
 async function handleEdit(row) {
@@ -2442,7 +2440,7 @@ function getPreviewType(ext) {
     return { type: 'office', language: 'ppt', editable: false }
   } else if (['xls', 'xlsx'].includes(ext)) {
     return { type: 'office', language: 'excel', editable: false }
-  } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(ext)) {
+  } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
     return { type: 'image', language: 'image', editable: false }
   } else {
     return { type: 'unsupported', language: 'plaintext', editable: false }

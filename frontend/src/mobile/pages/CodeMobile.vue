@@ -34,7 +34,7 @@
         >
           <div class="repo-header">
             <div class="repo-name">
-              <NativeIcon :name="repo.type === 'svn' ? 'folder' : 'git'" size="18" />
+              <NativeIcon name="git" size="18" />
               <span class="name-text">{{ repo.name }}</span>
               <NativeTag v-if="isCloning(repo.id)" theme="warning" size="small">
                 克隆中 {{ cloneProgress(repo.id) }}%
@@ -123,6 +123,7 @@
         <MdPreview
           v-else-if="readmeContent"
           :modelValue="readmeContent"
+          :sanitize="sanitizeRichHtml"
           :theme="editorTheme"
           :previewTheme="previewTheme"
           :codeTheme="codeTheme"
@@ -214,12 +215,6 @@
         <NativeFormItem label="仓库名称">
           <NativeInput v-model="addForm.name" placeholder="给仓库起个名字" />
         </NativeFormItem>
-        <NativeFormItem label="仓库类型">
-          <NativeRadioGroup v-model="addForm.type">
-            <NativeRadio value="git">Git</NativeRadio>
-            <NativeRadio value="svn">SVN</NativeRadio>
-          </NativeRadioGroup>
-        </NativeFormItem>
         <NativeFormItem label="简介">
           <NativeTextarea v-model="addForm.description" placeholder="仓库简介（可选）" :rows="3" />
         </NativeFormItem>
@@ -262,6 +257,7 @@
         <MdPreview
           v-else-if="isMarkdownFile(currentFile?.name)"
           :modelValue="currentFileContent"
+          :sanitize="sanitizeRichHtml"
           :theme="editorTheme"
           :previewTheme="previewTheme"
           :codeTheme="codeTheme"
@@ -291,6 +287,7 @@ import {
 } from '@/components/native'
 import { useToast } from '@/composables/useToast'
 import { MdPreview } from 'md-editor-v3'
+import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 import 'md-editor-v3/lib/style.css'
 
 const toast = useToast()

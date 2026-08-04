@@ -95,7 +95,7 @@
         <div class="infobox-list">
           <div class="infobox-item" v-for="(item, index) in infoboxList" :key="index">
             <span class="infobox-key">{{ item.key }}</span>
-            <span class="infobox-value" v-html="formatInfoValue(item.value)"></span>
+            <span class="infobox-value">{{ formatInfoValue(item.value) }}</span>
           </div>
         </div>
       </div>

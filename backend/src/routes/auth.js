@@ -1,15 +1,31 @@
 import express from 'express'
 import bcrypt from 'bcryptjs'
 import { getDatabase } from '../config/database.js'
-import { authenticateToken, generateToken, requireWritePermission } from '../middlewares/auth.js'
+import {
+  authenticateToken,
+  requireOwner
+} from '../middlewares/auth.js'
 import { loginLimiter } from '../middlewares/security.js'
+import {
+  OWNER_SESSION_COOKIE,
+  clearOwnerSessionCookieOptions,
+  createOwnerSession,
+  ownerSessionCookieOptions,
+  pruneOwnerSessions,
+  revokeAllOwnerSessions,
+  revokeOwnerSession
+} from '../services/sessions.js'
 
 const router = express.Router()
+
+function getOwnerAuthDatabase() {
+  return getDatabase({ user: { username: '__owner_auth__' } })
+}
 
 // 登录（应用严格的速率限制）
 router.post('/login', loginLimiter, async (req, res) => {
   try {
-    const { username, password } = req.body
+    const { username, password, remember = false } = req.body
 
     console.log('登录请求:', { username })  // 只记录用户名，不记录密码
 
@@ -17,35 +33,42 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(400).json({ message: '用户名和密码不能为空' })
     }
 
-    const db = getDatabase()
-    console.log('数据库连接成功:', db)
+    const db = getOwnerAuthDatabase()
 
     // 使用 better-sqlite3 的正确查询方式
     const stmt = db.prepare('SELECT * FROM users WHERE username = ?')
     const user = stmt.get(username)
-    console.log('查询用户结果:', user)
 
     if (!user) {
-      console.log('用户不存在:', username)
+      console.log('登录失败: 用户名或密码错误', { username })
       return res.status(401).json({ message: '用户名或密码错误' })
     }
 
-    const isMatch = bcrypt.compareSync(password, user.password)
-    console.log('密码匹配结果:', isMatch)
+    const isMatch = await bcrypt.compare(password, user.password)
     
     if (!isMatch) {
-      console.log('密码不匹配')
+      console.log('登录失败: 用户名或密码错误', { username })
       return res.status(401).json({ message: '用户名或密码错误' })
     }
 
-    const token = generateToken(user, false)  // 管理员登录，isGuest = false
-    console.log('生成的 token:', token)
+    pruneOwnerSessions(db)
+    const session = createOwnerSession(db, user, {
+      remember: remember === true,
+      userAgent: req.get('user-agent')
+    })
+    res.cookie(
+      OWNER_SESSION_COOKIE,
+      session.token,
+      ownerSessionCookieOptions(req, remember === true)
+    )
+
+    console.log('登录成功', { username: user.username, userId: user.id })
 
     res.json({
-      token,
       user: {
         id: user.id,
         username: user.username,
+        principal: 'owner',
         isGuest: false
       }
     })
@@ -60,33 +83,16 @@ router.post('/login', loginLimiter, async (req, res) => {
   }
 })
 
-// 游客登录
-router.post('/guest-login', (req, res) => {
-  try {
-    // 创建虚拟游客用户
-    const guestUser = {
-      id: 'guest',
-      username: '游客'
-    }
-    
-    const token = generateToken(guestUser, true)  // 游客登录，isGuest = true
-    
-    res.json({
-      token,
-      user: {
-        id: 'guest',
-        username: '游客',
-        isGuest: true
-      }
-    })
-  } catch (error) {
-    console.error('游客登录错误:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
 // 登出
 router.post('/logout', authenticateToken, (req, res) => {
+  const sessionToken = req.cookies?.[OWNER_SESSION_COOKIE]
+  if (sessionToken) {
+    revokeOwnerSession(getOwnerAuthDatabase(), sessionToken)
+  }
+  res.clearCookie(
+    OWNER_SESSION_COOKIE,
+    clearOwnerSessionCookieOptions(req)
+  )
   res.json({ message: '登出成功' })
 })
 
@@ -95,12 +101,13 @@ router.get('/check', authenticateToken, (req, res) => {
   res.json({ 
     authenticated: true, 
     user: req.user,
+    principal: req.user.principal,
     isGuest: req.user.isGuest || false
   })
 })
 
 // 修改密码 - 仅管理员可用
-router.post('/change-password', authenticateToken, requireWritePermission, async (req, res) => {
+router.post('/change-password', authenticateToken, requireOwner, async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body
     const userId = req.user.id
@@ -113,7 +120,7 @@ router.post('/change-password', authenticateToken, requireWritePermission, async
       return res.status(400).json({ message: '新密码长度至少6位' })
     }
 
-    const db = getDatabase()
+    const db = getOwnerAuthDatabase()
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId)
 
     if (!user) {
@@ -121,18 +128,32 @@ router.post('/change-password', authenticateToken, requireWritePermission, async
     }
 
     // 验证旧密码
-    const isMatch = bcrypt.compareSync(oldPassword, user.password)
+    const isMatch = await bcrypt.compare(oldPassword, user.password)
     if (!isMatch) {
       return res.status(401).json({ message: '旧密码错误' })
     }
 
     // 加密新密码
-    const hashedPassword = bcrypt.hashSync(newPassword, 10)
+    const hashedPassword = await bcrypt.hash(newPassword, 10)
 
     // 更新密码
-    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashedPassword, userId)
+    const updatePassword = db.transaction(() => {
+      db.prepare('UPDATE users SET password = ? WHERE id = ?').run(
+        hashedPassword,
+        userId
+      )
+      revokeAllOwnerSessions(db, userId)
+    })
+    updatePassword()
 
-    res.json({ message: '密码修改成功' })
+    res.clearCookie(
+      OWNER_SESSION_COOKIE,
+      clearOwnerSessionCookieOptions(req)
+    )
+    res.json({
+      message: '密码修改成功，请重新登录',
+      reauthenticationRequired: true
+    })
   } catch (error) {
     console.error('修改密码错误:', error)
     res.status(500).json({ message: '服务器错误', details: error.message })

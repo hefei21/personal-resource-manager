@@ -45,7 +45,7 @@
             :class="{ 'content-hidden': chapter.isLoading }"
             :style="contentStyle"
             :data-chapter-id="chapter.id"
-            v-html="chapter.content"
+            v-html="sanitizeRichHtml(chapter.content)"
           />
           <div v-if="chapter.isLoading" class="chapter-loading-overlay">
             <div class="loading-spinner-small"></div>
@@ -141,6 +141,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import api from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { scrollToCFI, getCurrentCFI, CharacterOffsetProgress } from '@/utils/epub-cfi'
+import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 
 const props = defineProps({
   visible: Boolean,

@@ -12,8 +12,27 @@ import { compressImage } from '../utils/imageCompress.js'
 import { ebookResourceLimiter } from '../middlewares/security.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
+import { inspectChunks, mergeChunkFiles, uploadPath, validateArchiveEntries, validateUploadDescriptor } from '../services/uploadSecurity.js'
 
 const router = express.Router()
+const BOOK_UPLOAD_POLICY = {
+  extensions: ['.txt', '.epub', '.pdf', '.mobi', '.azw', '.azw3', '.fb2', '.html', '.htm'],
+  maxChunks: 1000,
+  maxChunkBytes: 11 * 1024 * 1024,
+  maxTotalBytes: 500 * 1024 * 1024
+}
+
+function validateEpubArchive(filePath) {
+  const archive = new AdmZip(filePath)
+  const entries = archive.getEntries()
+  validateArchiveEntries(entries, {
+    maxEntries: 20000,
+    maxEntryBytes: 100 * 1024 * 1024,
+    maxExpandedBytes: 1024 * 1024 * 1024,
+    maxCompressionRatio: 200
+  })
+  return entries
+}
 
 // 分片上传临时目录
 const chunksDir = path.join(getStoragePath('books'), 'chunks')
@@ -609,9 +628,12 @@ router.put('/categories/reorder', authenticateToken, requireWritePermission, asy
 // 分片上传
 
 // 上传分片
-router.post('/upload-chunk', authenticateToken, multer({ dest: chunksDir }).single('chunk'), async (req, res) => {
+const chunkUpload = multer({ dest: chunksDir, limits: { fileSize: BOOK_UPLOAD_POLICY.maxChunkBytes, files: 1 } })
+
+router.post('/upload-chunk', authenticateToken, requireWritePermission, chunkUpload.single('chunk'), async (req, res) => {
   try {
-    const { index, totalChunks, fileId, fileName } = req.body
+    const descriptor = validateUploadDescriptor(req.body, BOOK_UPLOAD_POLICY)
+    const { chunkIndex: index, totalChunks, fileId, fileName } = descriptor
 
     if (!req.file) {
       return res.status(400).json({ message: '没有接收到分片' })
@@ -620,72 +642,49 @@ router.post('/upload-chunk', authenticateToken, multer({ dest: chunksDir }).sing
     console.log(`📦 收到分片 ${index}/${totalChunks}: ${fileName}`)
 
     // 创建文件专属目录
-    const fileDir = path.join(chunksDir, fileId)
+    const fileDir = uploadPath(chunksDir, fileId)
     if (!fs.existsSync(fileDir)) {
       fs.mkdirSync(fileDir, { recursive: true })
     }
 
     // 移动分片到专属目录
-    const chunkPath = path.join(fileDir, `chunk_${index}`)
+    const chunkPath = uploadPath(fileDir, `chunk_${index}`)
+    if (fs.existsSync(chunkPath)) fs.rmSync(chunkPath, { force: true })
     fs.renameSync(req.file.path, chunkPath)
 
     res.json({ message: '分片上传成功', index: parseInt(index) })
   } catch (error) {
     console.error('上传分片失败:', error)
-    res.status(500).json({ message: '上传分片失败', error: error.message })
+    if (req.file?.path && fs.existsSync(req.file.path)) fs.rmSync(req.file.path, { force: true })
+    res.status(400).json({ message: '上传分片失败' })
   }
 })
 
 // 合并分片并解析元数据
 router.post('/merge-chunks', authenticateToken, requireWritePermission, async (req, res) => {
+  let finalPath
   try {
-    const { fileId, fileName, totalChunks } = req.body
+    const descriptor = validateUploadDescriptor(req.body, BOOK_UPLOAD_POLICY)
+    const { fileId, fileName, totalChunks, extension } = descriptor
 
     console.log(`🔧 开始合并分片: ${fileName}`)
     console.log(`📊 预期分片数: ${totalChunks}`)
 
-    const fileDir = path.join(chunksDir, fileId)
-    const finalPath = path.join(getStoragePath('books'), `${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(fileName)}`)
-
-    // 验证所有分片是否存在
-    const missingChunks = []
-    for (let i = 0; i < totalChunks; i++) {
-      const chunkPath = path.join(fileDir, `chunk_${i}`)
-      if (!fs.existsSync(chunkPath)) {
-        missingChunks.push(i)
-      }
-    }
-
-    if (missingChunks.length > 0) {
-      console.error(`❌ 缺失分片: ${missingChunks.join(', ')}`)
-      return res.status(400).json({ message: `分片不完整，缺失: ${missingChunks.join(', ')}` })
-    }
-
-    // 同步合并分片，确保文件完全写入
-    const chunks = []
-    for (let i = 0; i < totalChunks; i++) {
-      const chunkPath = path.join(fileDir, `chunk_${i}`)
-      if (fs.existsSync(chunkPath)) {
-        chunks.push(fs.readFileSync(chunkPath))
-        fs.unlinkSync(chunkPath) // 删除已合并的分片
-      }
-    }
-
-    // 将所有分片合并写入最终文件
-    const finalBuffer = Buffer.concat(chunks)
-    fs.writeFileSync(finalPath, finalBuffer)
-    console.log(`✅ 分片合并完成: ${finalPath} (${(finalBuffer.length / 1024 / 1024).toFixed(2)}MB)`)
+    const fileDir = uploadPath(chunksDir, fileId)
+    finalPath = uploadPath(getStoragePath('books'), `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`)
+    const inspected = inspectChunks(fileDir, fileId, totalChunks, (_id, index) => `chunk_${index}`, BOOK_UPLOAD_POLICY.maxTotalBytes)
+    await mergeChunkFiles(inspected.paths, finalPath)
+    console.log(`✅ 分片合并完成: ${finalPath} (${(inspected.totalBytes / 1024 / 1024).toFixed(2)}MB)`)
 
     // 验证ZIP文件完整性（对于EPUB）
-    const fileType = path.extname(fileName).toLowerCase().replace('.', '')
+    const fileType = extension.replace('.', '')
     if (fileType === 'epub') {
       try {
-        const testZip = new AdmZip(finalPath)
-        const testEntries = testZip.getEntries()
+        const testEntries = validateEpubArchive(finalPath)
         console.log(`✅ ZIP文件验证通过，条目数: ${testEntries.length}`)
       } catch (zipError) {
         console.error(`❌ ZIP文件验证失败:`, zipError.message)
-        // 不删除文件，让用户可以手动检查
+        fs.rmSync(finalPath, { force: true })
         return res.status(400).json({ 
           message: 'EPUB文件合并后损坏，请重新上传',
           error: zipError.message 
@@ -726,15 +725,17 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     res.json({ data: metadata })
   } catch (error) {
     console.error('合并分片失败:', error)
-    res.status(500).json({ message: '合并失败', error: error.message })
+    if (finalPath && fs.existsSync(finalPath)) fs.rmSync(finalPath, { force: true })
+    res.status(400).json({ message: '合并失败' })
   }
 })
 
 // 取消分片上传（清理临时文件）
 router.delete('/cancel-upload', authenticateToken, async (req, res) => {
   try {
-    const { fileId } = req.body
-    const fileDir = path.join(chunksDir, fileId)
+    const fileId = String(req.body?.fileId || '')
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(fileId)) return res.status(400).json({ message: '上传标识无效' })
+    const fileDir = uploadPath(chunksDir, fileId)
 
     if (fs.existsSync(fileDir)) {
       fs.rmSync(fileDir, { recursive: true, force: true })
@@ -876,10 +877,13 @@ router.get('/', authenticateToken, async (req, res) => {
 })
 
 // 上传书籍
-router.post('/upload', authenticateToken, upload.single('file'), async (req, res) => {
+router.post('/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
+  let storedFilePath
+  let bookInserted = false
   try {
     const { title, author, year, publisher, isbn, description, categoryId } = req.body
     const filePath = req.file.path
+    storedFilePath = filePath
     const fileSize = fs.statSync(filePath).size
     const fileType = path.extname(req.file.originalname).toLowerCase().replace('.', '')
 
@@ -919,6 +923,7 @@ router.post('/upload', authenticateToken, upload.single('file'), async (req, res
     // 提取封面图片
     let coverImagePath = null
     if (fileType === 'epub') {
+      validateEpubArchive(filePath)
       console.log('🖼️ 开始提取EPUB封面...')
       const cover = extractEpubCover(filePath)
       if (cover) {
@@ -959,6 +964,7 @@ router.post('/upload', authenticateToken, upload.single('file'), async (req, res
       totalPages,
       coverImagePath
     )
+    bookInserted = true
 
     // 创建初始阅读进度
     db.prepare(
@@ -979,14 +985,18 @@ router.post('/upload', authenticateToken, upload.single('file'), async (req, res
     res.json({ id: result.lastInsertRowid, title: finalTitle, message: '上传成功' })
   } catch (error) {
     console.error('❌ 上传书籍失败:', error)
-    res.status(500).json({ message: '上传失败', error: error.message })
+    if (!bookInserted && storedFilePath && fs.existsSync(storedFilePath)) fs.rmSync(storedFilePath, { force: true })
+    res.status(400).json({ message: '上传失败' })
   }
 })
 
 // 使用已上传的文件路径创建书籍（分片上传后调用）
-router.post('/upload-with-path', authenticateToken, async (req, res) => {
+router.post('/upload-with-path', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { filePath, title, author, year, publisher, isbn, description, categoryId } = req.body
+    const { title, author, year, publisher, isbn, description, categoryId } = req.body
+    const booksRoot = getStoragePath('books')
+    const submittedPath = String(req.body.filePath || '')
+    const filePath = uploadPath(booksRoot, path.relative(booksRoot, submittedPath))
 
     console.log('📤 收到upload-with-path请求:', {
       文件路径: filePath,
@@ -1007,6 +1017,9 @@ router.post('/upload-with-path', authenticateToken, async (req, res) => {
 
     const fileSize = fs.statSync(filePath).size
     const fileType = path.extname(filePath).toLowerCase().replace('.', '')
+    if (!BOOK_UPLOAD_POLICY.extensions.includes(`.${fileType}`)) {
+      return res.status(400).json({ message: '不支持的文件格式' })
+    }
 
     console.log('📤 文件信息:', {
       文件路径: filePath,
@@ -1044,6 +1057,7 @@ router.post('/upload-with-path', authenticateToken, async (req, res) => {
     // 提取封面图片
     let coverImagePath = null
     if (fileType === 'epub') {
+      validateEpubArchive(filePath)
       console.log('🖼️ 开始提取EPUB封面...')
       const cover = extractEpubCover(filePath)
       if (cover) {
@@ -1183,19 +1197,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
 // 阅读器
 
 // 获取书籍内容
-router.get('/:id/content', async (req, res) => {
+router.get('/:id/content', authenticateToken, async (req, res) => {
   try {
     console.log('📖 获取书籍内容请求, ID:', req.params.id)
-
-    // 支持通过 URL query 参数或 header 传递 token
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    // 验证 token
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
 
     const db = getDatabase()
     const book = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id)
@@ -1245,17 +1249,13 @@ router.get('/:id/content', async (req, res) => {
         try {
           console.log('📖 使用缓存内容')
           const cachedData = JSON.parse(book.content_cache)
-          const currentToken = req.query.token
-          
-          // 替换缓存中的旧token为当前token（解决token过期问题）
-          if (currentToken && cachedData.chapters) {
+          // 清理旧缓存中曾经嵌入的 URL 凭据。
+          if (cachedData.chapters) {
             cachedData.chapters = cachedData.chapters.map(chapter => {
               if (chapter.content) {
-                // 替换图片URL中的token参数
-                chapter.content = chapter.content.replace(
-                  /token=[^&"']+/g,
-                  `token=${currentToken}`
-                )
+                chapter.content = chapter.content
+                  .replace(/&token=[^&"']+/g, '')
+                  .replace(/\?token=[^&"']+/g, '')
               }
               return chapter
             })
@@ -1353,7 +1353,6 @@ router.get('/:id/content', async (req, res) => {
 
         // 构建章节内容（保留HTML格式，支持图片）
         const bookId = req.params.id
-        const token = req.query.token
         const chapterContents = []
         
         console.log('📖 开始处理 spine 章节...')
@@ -1398,7 +1397,7 @@ router.get('/:id/content', async (req, res) => {
                     } else {
                       imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
                     }
-                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                     return match.replace(src, apiUrl)
                   }
                   return match
@@ -1413,7 +1412,7 @@ router.get('/:id/content', async (req, res) => {
                     } else {
                       imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
                     }
-                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                     return match.replace(src, apiUrl)
                   }
                   return match
@@ -1428,7 +1427,7 @@ router.get('/:id/content', async (req, res) => {
                     } else {
                       imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
                     }
-                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                    const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                     return match.replace(src, apiUrl)
                   }
                   return match
@@ -1485,7 +1484,7 @@ router.get('/:id/content', async (req, res) => {
               htmlContent = htmlContent.replace(/<img[^>]*src=["']([^"']+)["']/gi, (match, src) => {
                 if (!src.startsWith('http') && !src.startsWith('data:')) {
                   let imgPath = src.startsWith('/') ? src.substring(1) : path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
-                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                   return match.replace(src, apiUrl)
                 }
                 return match
@@ -1495,7 +1494,7 @@ router.get('/:id/content', async (req, res) => {
               htmlContent = htmlContent.replace(/url\(["']?([^"')]+)["']?\)/gi, (match, src) => {
                 if (!src.startsWith('http') && !src.startsWith('data:') && !src.startsWith('#')) {
                   let imgPath = src.startsWith('/') ? src.substring(1) : path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
-                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                   return match.replace(src, apiUrl)
                 }
                 return match
@@ -1505,7 +1504,7 @@ router.get('/:id/content', async (req, res) => {
               htmlContent = htmlContent.replace(/<image[^>]*href=["']([^"']+)["']/gi, (match, src) => {
                 if (!src.startsWith('http') && !src.startsWith('data:')) {
                   let imgPath = src.startsWith('/') ? src.substring(1) : path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
-                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                  const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                   return match.replace(src, apiUrl)
                 }
                 return match
@@ -1655,19 +1654,11 @@ router.get('/:id/content', async (req, res) => {
 })
 
 // 分页获取章节内容
-router.get('/:id/chapters', async (req, res) => {
+router.get('/:id/chapters', authenticateToken, async (req, res) => {
   try {
     const bookId = req.params.id
     const startIndex = parseInt(req.query.start) || 0
     const count = parseInt(req.query.count) || 5
-    
-    // 验证 token
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
     
     const db = getDatabase()
     const book = db.prepare('SELECT * FROM books WHERE id = ?').get(bookId)
@@ -1682,22 +1673,19 @@ router.get('/:id/chapters', async (req, res) => {
     let allChapters = []
     let toc = []
     
-    const currentToken = req.query.token
-    
     if (book.content_cache) {
       try {
         const cached = JSON.parse(book.content_cache)
         allChapters = cached.chapters || []
         toc = cached.toc || []
         
-        // 替换缓存中的旧token为当前token
-        if (currentToken && allChapters.length > 0) {
+        // 清理旧缓存中曾经嵌入的 URL 凭据。
+        if (allChapters.length > 0) {
           allChapters = allChapters.map(chapter => {
             if (chapter.content) {
-              chapter.content = chapter.content.replace(
-                /token=[^&"']+/g,
-                `token=${currentToken}`
-              )
+              chapter.content = chapter.content
+                .replace(/&token=[^&"']+/g, '')
+                .replace(/\?token=[^&"']+/g, '')
             }
             return chapter
           })
@@ -1808,7 +1796,7 @@ router.get('/:id/chapters', async (req, res) => {
                 } else {
                   imgPath = path.normalize(path.join(chapterDir, src)).replace(/\\/g, '/')
                 }
-                const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}&token=${token}`
+                const apiUrl = `/api/ebooks/${bookId}/resource?path=${encodeURIComponent(imgPath)}`
                 return match.replace(src, apiUrl)
               }
               return match
@@ -1962,18 +1950,9 @@ router.delete('/:id/cache', authenticateToken, async (req, res) => {
 })
 
 // 获取EPUB资源（图片、CSS等）- 应用专门的限流器
-router.get('/:id/resource', ebookResourceLimiter, async (req, res) => {
+router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req, res) => {
   try {
     const { path: resourcePath } = req.query
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     if (!resourcePath) {
       return res.status(400).json({ message: '缺少资源路径' })
     }
@@ -1990,36 +1969,27 @@ router.get('/:id/resource', ebookResourceLimiter, async (req, res) => {
     const zip = new AdmZip(book.file_path)
     const zipEntries = zip.getEntries()
 
-    // 规范化路径：移除 ./ 和多余的 /
-    let normalizedPath = resourcePath.replace(/\\/g, '/')
-    if (normalizedPath.startsWith('./')) {
-      normalizedPath = normalizedPath.substring(2)
+    // EPUB 资源只能按规范化后的精确条目名读取。
+    const rawPath = String(resourcePath).replace(/\\/g, '/')
+    if (rawPath.includes('\0')) {
+      return res.status(400).json({ message: '资源路径无效' })
     }
-    if (normalizedPath.startsWith('/')) {
-      normalizedPath = normalizedPath.substring(1)
+    const normalizedPath = path.posix.normalize(rawPath)
+      .replace(/^\.\//, '')
+      .replace(/^\/+/, '')
+    if (
+      !normalizedPath ||
+      normalizedPath === '..' ||
+      normalizedPath.startsWith('../')
+    ) {
+      return res.status(400).json({ message: '资源路径无效' })
     }
 
     console.log('📷 规范化路径:', normalizedPath)
 
-    // 查找资源文件（多种匹配方式）
-    let resourceEntry = zipEntries.find(e => e.entryName === normalizedPath)
-
-    if (!resourceEntry) {
-      // 尝试匹配结尾路径
-      resourceEntry = zipEntries.find(e =>
-        e.entryName.endsWith('/' + normalizedPath) ||
-        e.entryName.endsWith(normalizedPath)
-      )
-    }
-
-    if (!resourceEntry) {
-      // 尝试只匹配文件名
-      const fileName = normalizedPath.split('/').pop()
-      resourceEntry = zipEntries.find(e => {
-        const entryFileName = e.entryName.split('/').pop()
-        return entryFileName === fileName
-      })
-    }
+    const resourceEntry = zipEntries.find(
+      entry => entry.entryName.replace(/\\/g, '/') === normalizedPath
+    )
 
     if (!resourceEntry) {
       console.log('❌ 资源未找到:', normalizedPath)
@@ -2030,6 +2000,28 @@ router.get('/:id/resource', ebookResourceLimiter, async (req, res) => {
 
     console.log('✅ 找到资源:', resourceEntry.entryName)
 
+    const ext = path.extname(normalizedPath).toLowerCase()
+    const contentTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.woff': 'font/woff',
+      '.woff2': 'font/woff2',
+      '.ttf': 'font/ttf',
+      '.otf': 'font/otf'
+    }
+    const contentType = contentTypes[ext]
+    if (!contentType) {
+      return res.status(415).json({
+        message: '该 EPUB 资源类型不允许在线加载'
+      })
+    }
+    if ((resourceEntry.header?.size || 0) > 10 * 1024 * 1024) {
+      return res.status(413).json({ message: 'EPUB 资源过大' })
+    }
+
     let data
     try {
       data = resourceEntry.getData()
@@ -2037,27 +2029,9 @@ router.get('/:id/resource', ebookResourceLimiter, async (req, res) => {
       console.error('❌ 读取资源数据失败:', resourceEntry.entryName, err.message)
       return res.status(500).json({ message: '读取资源失败' })
     }
-    
-    const ext = path.extname(resourcePath).toLowerCase()
 
-    // 设置Content-Type
-    const contentTypes = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp',
-      '.svg': 'image/svg+xml',
-      '.css': 'text/css',
-      '.js': 'application/javascript',
-      '.woff': 'font/woff',
-      '.woff2': 'font/woff2',
-      '.ttf': 'font/ttf',
-      '.otf': 'font/otf'
-    }
-
-    const contentType = contentTypes[ext] || 'application/octet-stream'
     res.setHeader('Content-Type', contentType)
+    res.setHeader('X-Content-Type-Options', 'nosniff')
     res.setHeader('Cache-Control', 'public, max-age=86400') // 缓存1天
     res.send(data)
   } catch (error) {

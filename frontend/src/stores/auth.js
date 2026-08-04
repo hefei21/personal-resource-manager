@@ -3,29 +3,26 @@ import { ref } from 'vue'
 import api from '@/api'
 
 export const useAuthStore = defineStore('auth', () => {
-  // 优先从 localStorage 读取，其次从 sessionStorage
-  const token = ref(
-    localStorage.getItem('token') || sessionStorage.getItem('token') || ''
-  )
-  const user = ref(
-    JSON.parse(localStorage.getItem('user') || sessionStorage.getItem('user') || 'null')
-  )
-  const isAuthenticated = ref(!!token.value)
+  // Authentication credentials live only in HttpOnly cookies.
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  sessionStorage.removeItem('token')
+  sessionStorage.removeItem('user')
+
+  const user = ref(null)
+  const isAuthenticated = ref(false)
+  const demoMode = ref(sessionStorage.getItem('pr_demo_mode') === 'true')
+  let authChecked = false
+  let authCheckPromise = null
 
   async function login(username, password, remember = true) {
     try {
       const response = await api.auth.login({ username, password, remember })
-      token.value = response.data.token
       user.value = response.data.user
       isAuthenticated.value = true
-
-      if (remember) {
-        localStorage.setItem('token', token.value)
-        localStorage.setItem('user', JSON.stringify(user.value))
-      } else {
-        sessionStorage.setItem('token', token.value)
-        sessionStorage.setItem('user', JSON.stringify(user.value))
-      }
+      demoMode.value = false
+      sessionStorage.removeItem('pr_demo_mode')
+      authChecked = true
 
       return { success: true }
     } catch (error) {
@@ -38,36 +35,95 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function guestLogin() {
     try {
-      const response = await api.auth.guestLogin()
-      token.value = response.data.token
+      const response = await api.demo.createSession()
       user.value = response.data.user
       isAuthenticated.value = true
-
-      // 游客模式使用 sessionStorage（关闭浏览器后自动清除）
-      sessionStorage.setItem('token', token.value)
-      sessionStorage.setItem('user', JSON.stringify(user.value))
+      demoMode.value = true
+      sessionStorage.setItem('pr_demo_mode', 'true')
+      authChecked = true
 
       return { success: true }
     } catch (error) {
       return {
         success: false,
-        message: error.response?.data?.message || '游客登录失败'
+        message: error.response?.data?.message || '无法创建演示会话'
       }
     }
   }
 
-  function logout() {
-    token.value = ''
+  async function logout() {
+    try {
+      if (isAuthenticated.value) {
+        if (demoMode.value) {
+          await api.demo.closeSession()
+        } else {
+          await api.auth.logout()
+        }
+      }
+    } catch {
+      // Local state must still be cleared when the server is unavailable.
+    }
     user.value = null
     isAuthenticated.value = false
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    sessionStorage.removeItem('token')
-    sessionStorage.removeItem('user')
+    demoMode.value = false
+    sessionStorage.removeItem('pr_demo_mode')
+    authChecked = true
   }
 
-  function checkAuth() {
-    return !!token.value
+  async function checkAuth() {
+    if (authChecked) return isAuthenticated.value
+    if (authCheckPromise) return authCheckPromise
+
+    async function resolveSession() {
+      const checks = demoMode.value
+        ? [
+            { demo: true, request: () => api.demo.checkSession() },
+            { demo: false, request: () => api.auth.check() }
+          ]
+        : [
+            { demo: false, request: () => api.auth.check() },
+            { demo: true, request: () => api.demo.checkSession() }
+          ]
+
+      for (const check of checks) {
+        try {
+          return {
+            response: await check.request(),
+            demo: check.demo
+          }
+        } catch {
+          // The other session type may still be valid, especially in a new tab.
+        }
+      }
+
+      throw new Error('No active session')
+    }
+
+    authCheckPromise = resolveSession()
+      .then(({ response, demo }) => {
+        user.value = response.data.user
+        isAuthenticated.value = response.data.authenticated === true
+        demoMode.value = demo
+        if (demo) {
+          sessionStorage.setItem('pr_demo_mode', 'true')
+        } else {
+          sessionStorage.removeItem('pr_demo_mode')
+        }
+        return isAuthenticated.value
+      })
+      .catch(() => {
+        user.value = null
+        isAuthenticated.value = false
+        demoMode.value = false
+        sessionStorage.removeItem('pr_demo_mode')
+        return false
+      })
+      .finally(() => {
+        authChecked = true
+        authCheckPromise = null
+      })
+
+    return authCheckPromise
   }
 
   function isGuest() {
@@ -75,13 +131,13 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function isAdmin() {
-    return user.value?.username === 'admin'
+    return user.value?.principal === 'owner'
   }
 
   return {
-    token,
     user,
     isAuthenticated,
+    demoMode,
     login,
     guestLogin,
     logout,

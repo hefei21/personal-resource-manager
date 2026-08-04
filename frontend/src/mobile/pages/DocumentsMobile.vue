@@ -323,6 +323,7 @@
         <MdPreview
           v-else-if="previewType === 'markdown'"
           :modelValue="previewContent"
+          :sanitize="sanitizeRichHtml"
           :previewTheme="'default'"
           class="mobile-md-preview"
         />
@@ -345,12 +346,12 @@
 
         <!-- Word HTML预览 -->
         <div v-else-if="previewType === 'word-html'" class="word-html-preview">
-          <div class="office-content" v-html="previewContent"></div>
+          <div class="office-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Excel HTML预览 -->
         <div v-else-if="previewType === 'excel-html'" class="excel-html-preview">
-          <div class="office-content" v-html="previewContent"></div>
+          <div class="office-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Office文档不支持预览提示 -->
@@ -392,9 +393,15 @@ import hljs from 'highlight.js'
 import mammoth from 'mammoth'
 import * as XLSX from 'xlsx'
 import api from '@/api'
+import { authenticatedAssetUrl } from '@/utils/authentication'
 import { usePermission } from '@/composables/usePermission'
 import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect } from '@/components/native'
 import { useToast } from '@/composables/useToast'
+import {
+  escapeHtml,
+  sanitizeHighlightHtml,
+  sanitizeRichHtml
+} from '@/utils/sanitizeHtml'
 
 const toast = useToast()
 const { isGuest, canWrite } = usePermission()
@@ -490,10 +497,7 @@ const uploadForm = ref({
   categoryPath: ''
 })
 const uploadAction = computed(() => '/api/documents/upload')
-const uploadHeaders = computed(() => {
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-  return { Authorization: `Bearer ${token}` }
-})
+const uploadHeaders = computed(() => ({}))
 
 // 批量编辑
 const batchEditDialogVisible = ref(false)
@@ -537,13 +541,21 @@ const highlightedCode = computed(() => {
   if (!previewContent.value || previewType.value !== 'code') return ''
   try {
     if (previewLanguage.value && hljs.getLanguage(previewLanguage.value)) {
-      return hljs.highlight(previewContent.value, { language: previewLanguage.value }).value
+      return sanitizeHighlightHtml(
+        hljs.highlight(previewContent.value, {
+          language: previewLanguage.value
+        }).value
+      )
     }
-    return hljs.highlightAuto(previewContent.value).value
+    return sanitizeHighlightHtml(hljs.highlightAuto(previewContent.value).value)
   } catch (e) {
-    return previewContent.value
+    return escapeHtml(previewContent.value)
   }
 })
+
+const sanitizedPreviewContent = computed(() =>
+  sanitizeRichHtml(previewContent.value)
+)
 
 // 创建分类
 const createCategoryDialogVisible = ref(false)
@@ -801,7 +813,7 @@ function getPreviewType(ext) {
   else if (['doc', 'docx'].includes(ext)) return { type: 'office', language: 'word' }
   else if (['ppt', 'pptx'].includes(ext)) return { type: 'office', language: 'ppt' }
   else if (['xls', 'xlsx'].includes(ext)) return { type: 'office', language: 'excel' }
-  else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'].includes(ext)) return { type: 'image', language: 'image' }
+  else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) return { type: 'image', language: 'image' }
   else return { type: 'unsupported', language: 'plaintext' }
 }
 
@@ -901,20 +913,16 @@ function nextPage() {
 function handleDownloadFile() {
   const doc = documents.value.find(d => d.id === previewDocumentId.value)
   if (!doc) return
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
   // 根据是否是私密文档使用不同的下载链接
   const downloadUrl = doc.isPrivate
-    ? `/api/documents/secure/download/${doc.id}?token=${token}&download=1`
-    : `/api/documents/${doc.id}/content?token=${token}&download=1`
+    ? authenticatedAssetUrl(`/api/documents/secure/download/${doc.id}?download=1`)
+    : authenticatedAssetUrl(`/api/documents/${doc.id}/content?download=1`)
   window.open(downloadUrl, '_blank')
 }
 
 // 预览文档（与PC端逻辑完全对齐）
 async function previewDocument(doc) {
   try {
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-    // 游客也可以预览（不需要token检查，游客登录时也有token）
-
     // 标记该条目为loading状态
     previewingDocIds.value.add(doc.id)
 
@@ -937,8 +945,8 @@ async function previewDocument(doc) {
       currentDoc.value = doc
       // 私密文档使用不同的图片预览链接
       previewImageUrl.value = doc.isPrivate
-        ? `/api/documents/docs/special/view/${doc.id}?token=${token}`
-        : `/api/documents/${doc.id}/content?token=${token}`
+        ? authenticatedAssetUrl(`/api/documents/docs/special/view/${doc.id}`)
+        : authenticatedAssetUrl(`/api/documents/${doc.id}/content`)
       imagePreviewVisible.value = true
       previewingDocIds.value.delete(doc.id)
       return
@@ -1291,8 +1299,7 @@ async function restoreVersion(ver) {
 // 预览版本
 function previewVersion(ver) {
   // 简化处理：打开对应版本的文件
-  const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-  const url = `/api/documents/${currentDoc.value.id}/content?token=${token}&version=${ver.version}`
+  const url = authenticatedAssetUrl(`/api/documents/${currentDoc.value.id}/content?version=${ver.version}`)
   window.open(url, '_blank')
 }
 

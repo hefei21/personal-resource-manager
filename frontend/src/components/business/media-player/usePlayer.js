@@ -1,5 +1,6 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '@/api'
+import { authenticatedAssetUrl } from '@/utils/authentication'
 import { getCoverFromCache, saveCoverToCache, initCoverDB } from '@/utils/coverCache'
 import { equalizer } from '@/utils/Equalizer.js'
 import { usePermission } from '@/composables/usePermission'
@@ -135,8 +136,7 @@ export function usePlayer() {
 
   async function loadAndPlay() {
     if (!currentSong.value || !audioRef.value) return
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token')
-    audioRef.value.src = `/api/music/play/${currentSong.value.id}?token=${token}`
+    audioRef.value.src = authenticatedAssetUrl(`/api/music/play/${currentSong.value.id}`)
     audioRef.value.volume = volume.value / 100
     audioRef.value.load()
     

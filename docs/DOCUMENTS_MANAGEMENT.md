@@ -425,7 +425,9 @@ function convertToUTC8(utcTime) {
 |--------|------|--------|
 | `DATA_PATH` | 数据存储根目录 | - |
 | `DB_PATH` | 数据库文件路径 | `{DATA_PATH}/database/app.db` |
-| `PRIVATE_PASSWORD` | 私密空间默认密码 | `123456` |
+
+> 私密空间已进入只读迁移期，新安装不再创建二次密码。旧数据应先通过
+> Owner 清点接口确认并迁移，不能依赖历史默认密码配置。
 
 ### 存储结构
 

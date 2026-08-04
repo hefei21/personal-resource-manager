@@ -1,14 +1,14 @@
 # 构建阶段
-FROM node:18-slim as build-stage
+FROM node:22-slim AS build-stage
 
 WORKDIR /app
 
 # 优先复制 package 文件，利用 Docker 缓存
-# 只有 package.json 变化时才重新安装依赖
-COPY package.json ./
+# 只有 package 文件变化时才重新安装依赖
+COPY package.json package-lock.json ./
 
-# 安装依赖（如果 package.json 没变，这层会被缓存）
-RUN npm install
+# 安装锁定依赖（如果 package 文件没变，这层会被缓存）
+RUN npm ci
 
 # 复制源代码（放在最后，因为源代码变化最频繁）
 COPY . .

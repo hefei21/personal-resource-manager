@@ -210,6 +210,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import api from '@/api'
+import { authenticatedAssetUrl } from '@/utils/authentication'
 import { useAuthStore } from '@/stores/auth'
 import BookReader from '@/mobile/components/BookReader.vue'
 
@@ -355,8 +356,7 @@ async function loadBooks() {
 // 获取封面URL
 function getCoverUrl(book) {
   if (book.coverImage) {
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || ''
-    return `${window.location.origin}/api/ebooks/${book.id}/cover?token=${token}`
+    return authenticatedAssetUrl(`/api/ebooks/${book.id}/cover`)
   }
   return null
 }

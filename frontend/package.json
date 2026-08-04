@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22 <25"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -21,7 +24,8 @@
     "xlsx": "^0.18.5",
     "lunar-javascript": "^1.6.12",
     "md-editor-v3": "^4.13.2",
-    "@phosphor-icons/vue": "^2.0.0"
+    "@phosphor-icons/vue": "^2.0.0",
+    "dompurify": "^3.4.12"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.2",

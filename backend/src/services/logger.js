@@ -356,16 +356,23 @@ function extractDetails(req) {
 // 脱敏处理请求体
 function sanitizeBody(body) {
   if (!body || typeof body !== 'object') return null
-  
-  const safe = { ...body }
-  delete safe.password
-  delete safe.token
-  delete safe.newPassword
-  delete safe.oldPassword
-  delete safe.privatePassword
-  
-  const keys = Object.keys(safe)
-  return keys.length > 0 ? JSON.stringify(safe) : null
+
+  const sensitiveKey = /(password|passwd|token|secret|authorization|cookie|api[-_]?key|credential|private[-_]?key)/i
+  const redact = (value, depth = 0) => {
+    if (depth > 4) return '[TRUNCATED]'
+    if (Array.isArray(value)) return value.slice(0, 20).map(item => redact(item, depth + 1))
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value).slice(0, 50).map(([key, child]) => [
+        key,
+        sensitiveKey.test(key) ? '[REDACTED]' : redact(child, depth + 1)
+      ]))
+    }
+    if (typeof value === 'string' && value.length > 500) return `${value.slice(0, 500)}[TRUNCATED]`
+    return value
+  }
+
+  const safe = redact(body)
+  return Object.keys(safe).length > 0 ? JSON.stringify(safe) : null
 }
 
 // 获取真实 IP

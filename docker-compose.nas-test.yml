@@ -1,0 +1,89 @@
+services:
+  backend:
+    image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG:?IMAGE_TAG is required}
+    container_name: pr-test-backend
+    restart: unless-stopped
+    ports:
+      - "13000:3000"
+    volumes:
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/db:/app/data/database
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/documents:/app/data/documents
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/music:/app/data/music
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/books:/app/data/books
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/code:/app/data/code
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/uploads:/app/data/uploads
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/logs:/app/data/logs
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATA_PATH: /app/data
+      DB_PATH: /app/data/database/app.db
+      DOCUMENTS_PATH: /app/data/documents
+      MUSIC_PATH: /app/data/music
+      BOOKS_PATH: /app/data/books
+      CODE_PATH: /app/data/code
+      UPLOADS_PATH: /app/data/uploads
+      LOGS_PATH: /app/data/logs
+      DEFAULT_USERNAME: ${TEST_ADMIN_USERNAME:?TEST_ADMIN_USERNAME is required}
+      DEFAULT_PASSWORD: ${TEST_ADMIN_PASSWORD:?TEST_ADMIN_PASSWORD is required}
+      # HTTPS 内网穿透在容器外终止 TLS，必须显式信任浏览器看到的精确 Origin。
+      CORS_ORIGIN: ${TEST_PUBLIC_ORIGIN:-}
+      REDIS_URL: redis://redis:6379
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      NO_PROXY: localhost,127.0.0.1,redis,backend
+      BANGUMI_ACCESS_TOKEN: ""
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - pr-test-network
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>r.json()).then(h=>{if(h?.services?.database!=='ok')process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: pr-test-redis
+    restart: unless-stopped
+    volumes:
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/redis:/data
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    networks:
+      - pr-test-network
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    image: ghcr.io/hefei21/personal-resource-manager-frontend:${IMAGE_TAG:?IMAGE_TAG is required}
+    container_name: pr-test-frontend
+    restart: unless-stopped
+    ports:
+      - "15173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - pr-test-network
+
+networks:
+  pr-test-network:
+    name: pr-test-network
+    driver: bridge

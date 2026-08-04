@@ -21,9 +21,10 @@ class CacheManager {
    * 启动缓存失效队列处理任务
    */
   startInvalidationWorker() {
-    setInterval(() => {
+    this.invalidationTimer = setInterval(() => {
       this.processInvalidationQueue()
     }, 30000)
+    this.invalidationTimer.unref?.()
   }
   
   /**

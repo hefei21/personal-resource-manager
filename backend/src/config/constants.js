@@ -70,7 +70,6 @@ export const STEAM = {
 
 // 安全配置
 export const SECURITY = {
-  JWT_SECRET_MIN_LENGTH: 32,
   BCRYPT_SALT_ROUNDS: 10,
   MAX_LOGIN_ATTEMPTS: 5,
   LOGIN_LOCKOUT_TIME: 900          // 15分钟

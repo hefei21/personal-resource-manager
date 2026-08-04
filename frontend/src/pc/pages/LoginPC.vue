@@ -41,7 +41,7 @@
               @click="handleGuestLogin"
               class="login-btn"
             >
-              游客访问
+              体验演示空间
             </NativeButton>
           </div>
         </div>
@@ -106,12 +106,12 @@ async function handleGuestLogin() {
     error.value = ''
     const result = await authStore.guestLogin()
     if (result.success) {
-      window.location.href = '/'
+      window.location.href = '/demo'
     } else {
-      error.value = result.message || '游客登录失败'
+      error.value = result.message || '无法创建演示会话'
     }
   } catch (err) {
-    error.value = '游客登录失败'
+    error.value = '无法创建演示会话'
   } finally {
     guestLoading.value = false
   }

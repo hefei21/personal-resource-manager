@@ -586,6 +586,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import api from '@/api'
+import { authenticatedAssetUrl } from '@/utils/authentication'
 import BookSearchDialog from '@/components/BookSearchDialog.vue'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
@@ -596,6 +597,7 @@ import {
   NativeUpload
 } from '@/components/native'
 import { generateCFI, parseCFI, scrollToCFI, getCurrentCFI, ChapterBoundaryCache, CharacterOffsetProgress } from '@/utils/epub-cfi'
+import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 
 const toast = useToast()
 
@@ -692,7 +694,7 @@ const columns = [
 const currentChapterContent = computed(() => {
   if (bookChapters.value.length === 0) return ''
   const chapter = bookChapters.value[currentChapterIndex.value]
-  return chapter?.content || ''
+  return sanitizeRichHtml(chapter?.content || '')
 })
 
 // 字符偏移进度计算器
@@ -1206,12 +1208,7 @@ async function handleBatchDelete() {
 
 // 下载书籍
 function handleDownload(row) {
-  const token = localStorage.getItem('token')
-  if (token) {
-    window.open(`${window.location.origin}/api/ebooks/download/${row.id}?token=${token}`, '_blank')
-  } else {
-    toast.error('无法下载，未登录')
-  }
+  window.open(authenticatedAssetUrl(`/api/ebooks/download/${row.id}`), '_blank')
 }
 
 // 阅读器
@@ -1969,8 +1966,7 @@ watch(sidebarVisible, async () => {
 function getCoverUrl(book) {
   if (book.coverImage) {
     // 如果是绝对路径，说明是服务器上的文件，使用封面API
-    const token = localStorage.getItem('token')
-    return `${window.location.origin}/api/ebooks/${book.id}/cover?token=${token}`
+    return authenticatedAssetUrl(`/api/ebooks/${book.id}/cover`)
   }
   return null
 }
@@ -2008,11 +2004,9 @@ function getFileTypeLabel(fileType) {
 function handleBeforeUnload() {
   // 只在进度加载完成且不在恢复过程中才保存（避免保存错误位置）
   if (currentBook.value && readerDialogVisible.value && isProgressLoaded && !isRestoringPosition) {
-    const token = localStorage.getItem('token')
-    if (token) {
-      // 使用 CFI 获取当前位置
-      const readerContent = document.querySelector('.reader-content')
-      const cfi = getCurrentCFI(readerContent)
+    // 使用 CFI 获取当前位置
+    const readerContent = document.querySelector('.reader-content')
+    const cfi = getCurrentCFI(readerContent)
       
       const data = {
         currentPage: currentChapterIndex.value,
@@ -2024,7 +2018,7 @@ function handleBeforeUnload() {
       console.log('💾 页面卸载，保存进度:', data)
       
       // 使用 fetch with keepalive 确保在页面卸载时也能保存
-      fetch(`${window.location.origin}/api/ebooks/${currentBook.value.id}/progress?token=${token}`, {
+      fetch(`${window.location.origin}/api/ebooks/${currentBook.value.id}/progress`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -2034,7 +2028,6 @@ function handleBeforeUnload() {
       }).catch(err => {
         console.error('页面卸载时保存进度失败:', err)
       })
-    }
   }
 }
 

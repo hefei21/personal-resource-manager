@@ -1,9 +1,11 @@
 import express from 'express'
-import axios from 'axios'
-import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
 import { cache, CacheTTL } from '../utils/cache.js'
+import {
+  OutboundRequestError,
+  safeAxiosGet
+} from '../services/outboundRequest.js'
 
 const router = express.Router()
 
@@ -11,19 +13,13 @@ const router = express.Router()
 async function downloadImageAsBase64(imageUrl, maxSizeKB = 100) {
   if (!imageUrl) return null
   try {
-    // 配置代理（如果环境变量中有设置）
-    const proxyUrl = process.env.HTTP_PROXY
-    const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined
-    
     // 限制最大下载大小（防止下载过大的图标）
     const maxSizeBytes = maxSizeKB * 1024
-    
-    const response = await axios.get(imageUrl, {
+
+    const response = await safeAxiosGet(imageUrl, {
       responseType: 'arraybuffer',
       timeout: 10000,
-      maxContentLength: maxSizeBytes, // axios 限制
-      httpsAgent,
-      proxy: false
+      maxContentLength: maxSizeBytes
     })
     
     // 再次检查实际大小
@@ -34,7 +30,18 @@ async function downloadImageAsBase64(imageUrl, maxSizeKB = 100) {
     }
     
     const base64 = buffer.toString('base64')
-    const contentType = response.headers['content-type'] || 'image/x-icon'
+    const contentType = String(response.headers['content-type'] || '')
+      .split(';')[0]
+      .toLowerCase()
+    const allowedTypes = new Set([
+      'image/png',
+      'image/jpeg',
+      'image/gif',
+      'image/webp',
+      'image/x-icon',
+      'image/vnd.microsoft.icon'
+    ])
+    if (!allowedTypes.has(contentType)) return null
     return `data:${contentType};base64,${base64}`
   } catch (error) {
     console.error('下载图片失败:', imageUrl, error.message)
@@ -58,21 +65,15 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
       return res.json(cached)
     }
 
-    const urlObj = new URL(url)
-    
-    // 配置代理
-    const proxyUrl = process.env.HTTP_PROXY
-    const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined
-    
-    // 获取网页内容（使用 axios 支持代理）
-    const response = await axios.get(url, {
+    const response = await safeAxiosGet(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
       timeout: 15000,
-      httpsAgent,
-      proxy: false
+      maxContentLength: 2 * 1024 * 1024,
+      responseType: 'text'
     })
+    const urlObj = new URL(response.safeFinalUrl || url)
     
     const html = response.data
     
@@ -107,19 +108,15 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
     }
     
     // 处理相对路径
-    if (iconUrl && !iconUrl.startsWith('http') && !iconUrl.startsWith('data:')) {
-      if (iconUrl.startsWith('//')) {
-        iconUrl = urlObj.protocol + iconUrl
-      } else if (iconUrl.startsWith('/')) {
-        iconUrl = `${urlObj.protocol}//${urlObj.host}${iconUrl}`
-      } else {
-        iconUrl = `${urlObj.protocol}//${urlObj.host}/${iconUrl}`
-      }
+    if (iconUrl && !iconUrl.startsWith('data:')) {
+      iconUrl = new URL(iconUrl, urlObj).toString()
     }
     
     // 如果是 data URL，直接使用（但检查大小）
     if (iconUrl && iconUrl.startsWith('data:')) {
-      if (iconUrl.length < 100 * 1024 * 1.37) { // base64 约比原数据大 37%
+      const safeDataImage = /^data:image\/(?:png|jpeg|gif|webp|x-icon);base64,/i
+        .test(iconUrl)
+      if (safeDataImage && iconUrl.length < 100 * 1024 * 1.37) {
         const result = { title, icon: iconUrl, iconData: iconUrl }
         await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
         res.json(result)
@@ -142,15 +139,7 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
     const appleIconMatch = html.match(/<link[^>]*rel=["']apple-touch-icon["'][^>]*href=["']([^"']+)["'][^>]*>/i)
     if (appleIconMatch) {
       let appleIconUrl = appleIconMatch[1]
-      if (!appleIconUrl.startsWith('http')) {
-        if (appleIconUrl.startsWith('//')) {
-          appleIconUrl = urlObj.protocol + appleIconUrl
-        } else if (appleIconUrl.startsWith('/')) {
-          appleIconUrl = `${urlObj.protocol}//${urlObj.host}${appleIconUrl}`
-        } else {
-          appleIconUrl = `${urlObj.protocol}//${urlObj.host}/${appleIconUrl}`
-        }
-      }
+      appleIconUrl = new URL(appleIconUrl, urlObj).toString()
       iconData = await downloadImageAsBase64(appleIconUrl, 50) // 更严格的大小限制
       if (iconData) {
         const result = { title, icon: appleIconUrl, iconData }
@@ -165,6 +154,12 @@ router.get('/fetch-title', authenticateToken, async (req, res) => {
     await cache.set(cacheKey, result, CacheTTL.VERY_LONG)
     res.json(result)
   } catch (error) {
+    if (error instanceof OutboundRequestError) {
+      return res.status(400).json({
+        message: error.message,
+        code: error.code
+      })
+    }
     // 失败时返回空数据
     try {
       const urlObj = new URL(req.query.url)

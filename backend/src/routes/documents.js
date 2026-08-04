@@ -10,8 +10,14 @@ import { privateSpaceLimiter } from '../middlewares/security.js'
 import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
+import { collectPrivateSpaceInventory } from '../services/privateSpaceInventory.js'
 
 const router = express.Router()
+const DOCUMENT_EXTENSIONS = new Set([
+  '.txt', '.md', '.markdown', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv',
+  '.json', '.xml', '.html', '.htm', '.rtf', '.odt', '.ods', '.jpg', '.jpeg',
+  '.png', '.gif', '.webp'
+])
 
 // 配置文件上传
 const storage = multer.diskStorage({
@@ -26,7 +32,11 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
+  limits: { fileSize: 50 * 1024 * 1024, files: 1 }, // 50MB
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase()
+    cb(DOCUMENT_EXTENSIONS.has(ext) ? null : new Error('不支持的文件格式'), DOCUMENT_EXTENSIONS.has(ext))
+  }
 })
 
 // 创建分类
@@ -800,16 +810,8 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
 })
 
 // 获取文档内容用于编辑或预览
-router.get('/:id/content', async (req, res) => {
+router.get('/:id/content', authenticateToken, async (req, res) => {
   try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM documents WHERE id = ?')
     const document = stmt.get(req.params.id)
@@ -836,7 +838,13 @@ router.get('/:id/content', async (req, res) => {
     const textFormats = ['.txt', '.md', '.json', '.xml', '.html', '.css', '.js', '.ts', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.go', '.rs', '.sql', '.sh', '.bat', '.yml', '.yaml', '.csv', '.log']
     const binaryFormats = ['.pdf', '.zip', '.rar', '.7z', '.tar', '.gz']
     const officeFormats = ['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']
-    const imageFormats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg']
+    const imageFormats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+
+    if (ext === '.svg') {
+      return res.status(415).json({
+        message: 'SVG 含主动内容风险，仅支持下载，不支持在线预览'
+      })
+    }
 
     if (officeFormats.includes(ext)) {
       // Office文件：返回base64编码
@@ -1064,18 +1072,8 @@ router.put('/batch/update', authenticateToken, requireWritePermission, async (re
 })
 
 // 下载文档
-router.get('/download/:id', async (req, res) => {
+router.get('/download/:id', authenticateToken, async (req, res) => {
   try {
-    // 支持 token 参数认证
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    // 验证 token（简化版，实际应该使用 authenticateToken 中间件）
-    const jwt = await import('jsonwebtoken')
-    const decoded = jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM documents WHERE id = ?')
     const document = stmt.get(req.params.id)
@@ -1201,37 +1199,25 @@ router.post('/docs/special/verify', authenticateToken, privateSpaceLimiter, asyn
   }
 })
 
-// 修改私密空间密码（路径使用中性命名）
-router.post('/docs/special/update-auth', authenticateToken, async (req, res) => {
+const privateSpaceFrozen = (req, res) => res.status(410).json({
+  message: '私密空间已冻结，等待数据迁移',
+  code: 'PRIVATE_SPACE_FROZEN'
+})
+
+// 仅统计记录和受管文件状态，不读取标题、路径或文件内容。
+router.get('/docs/special/inventory', authenticateToken, (req, res) => {
   try {
-    const { oldPassword, newPassword } = req.body
-    if (!oldPassword || !newPassword) {
-      return res.status(400).json({ message: '请填写所有字段' })
-    }
-
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT password FROM private_settings WHERE id = 1')
-    const settings = stmt.get()
-
-    if (!settings) {
-      return res.status(500).json({ message: '私密空间未初始化' })
-    }
-
-    const isValid = bcrypt.compareSync(oldPassword, settings.password)
-
-    if (!isValid) {
-      return res.status(401).json({ message: '当前密码错误' })
-    }
-
-    const hashedPassword = bcrypt.hashSync(newPassword, 10)
-    const updateStmt = db.prepare('UPDATE private_settings SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1')
-    updateStmt.run(hashedPassword)
-
-    res.json({ message: '密码修改成功' })
+    const inventory = collectPrivateSpaceInventory(getDatabase(), getStoragePath('uploads'))
+    res.json({ data: inventory })
   } catch (error) {
-    console.error('修改密码失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('私密空间盘点失败:', error)
+    res.status(500).json({ message: '盘点失败' })
   }
+})
+
+// 私密空间已进入只读迁移期，禁止改密。
+router.post('/docs/special/update-auth', authenticateToken, async (req, res) => {
+  privateSpaceFrozen(req, res)
 })
 
 // 获取私密文件列表（路径使用中性命名）
@@ -1278,55 +1264,11 @@ router.get('/docs/special/list', authenticateToken, async (req, res) => {
 })
 
 // 上传私密文件（路径避免敏感词）
-router.post('/secure/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
-  try {
-    const { title } = req.body
-    const filePath = req.file.path
-
-    // 获取文件大小
-    const size = fs.statSync(filePath).size
-
-    const db = getDatabase()
-
-    // 检查重名并自动添加后缀
-    let finalTitle = title
-    let suffix = 1
-    let unique = false
-
-    while (!unique) {
-      const checkStmt = db.prepare('SELECT * FROM private_documents WHERE title = ?')
-      const existing = checkStmt.get(finalTitle)
-      if (!existing) {
-        unique = true
-      } else {
-        finalTitle = `${title} (${suffix})`
-        suffix++
-      }
-    }
-
-    const stmt = db.prepare(
-      `INSERT INTO private_documents (title, file_path, size) VALUES (?, ?, ?)`
-    )
-    const result = stmt.run(finalTitle, filePath, size)
-
-    res.json({ id: result.lastInsertRowid, title: finalTitle, message: '上传成功' })
-  } catch (error) {
-    console.error('上传私密文件失败:', error)
-    res.status(500).json({ message: '上传失败', error: error.message })
-  }
-})
+router.post('/secure/upload', authenticateToken, requireWritePermission, privateSpaceFrozen)
 
 // 下载私密文件（路径避免敏感词）
-router.get('/secure/download/:id', async (req, res) => {
+router.get('/secure/download/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
     const document = stmt.get(req.params.id)
@@ -1354,37 +1296,11 @@ router.get('/secure/download/:id', async (req, res) => {
 })
 
 // 删除私密文件（路径避免敏感词）
-router.delete('/secure/files/:id', authenticateToken, requireWritePermission, async (req, res) => {
-  try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    if (document && document.file_path && fs.existsSync(document.file_path)) {
-      fs.unlinkSync(document.file_path)
-    }
-
-    const deleteStmt = db.prepare('DELETE FROM private_documents WHERE id = ?')
-    deleteStmt.run(req.params.id)
-
-    res.json({ message: '删除成功' })
-  } catch (error) {
-    console.error('删除私密文件失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
+router.delete('/secure/files/:id', authenticateToken, requireWritePermission, privateSpaceFrozen)
 
 // 获取私密文件内容用于预览（路径使用中性命名）
-router.get('/docs/special/view/:id', async (req, res) => {
+router.get('/docs/special/view/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
     const document = stmt.get(req.params.id)

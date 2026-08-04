@@ -7,6 +7,7 @@ import { cache, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION, TIMEOUT } from '../config/constants.js'
+import { safeAxiosGet } from '../services/outboundRequest.js'
 
 const router = express.Router()
 
@@ -20,17 +21,30 @@ const steamAgent = process.env.HTTP_PROXY
   ? new HttpsProxyAgent(process.env.HTTP_PROXY)
   : undefined
 
+const STEAM_IMAGE_HOSTS = [
+  'steamcdn-a.akamaihd.net',
+  'cdn.cloudflare.steamstatic.com',
+  'shared.cloudflare.steamstatic.com',
+  'avatars.akamai.steamstatic.com'
+]
+
 // 下载图片并转换为base64（带压缩）
 async function downloadImageAsBase64(imageUrl) {
   if (!imageUrl) return null
   try {
-    const response = await axios.get(imageUrl, {
+    const response = await safeAxiosGet(imageUrl, {
       responseType: 'arraybuffer',
-      httpsAgent,
-      timeout: 15000
+      timeout: 15000,
+      maxContentLength: 5 * 1024 * 1024,
+      allowedHosts: STEAM_IMAGE_HOSTS
     })
+    const contentType = String(response.headers['content-type'] || '')
+      .split(';')[0]
+      .toLowerCase()
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
+      return null
+    }
     const base64 = Buffer.from(response.data, 'binary').toString('base64')
-    const contentType = response.headers['content-type'] || 'image/jpeg'
     const rawBase64 = `data:${contentType};base64,${base64}`
     
     // 压缩图片
@@ -533,14 +547,16 @@ router.get('/', authenticateToken, async (req, res) => {
   }
 })
 
-// 代理获取 Steam 封面图片（解决前端直接访问 CDN 被墙问题）
-// 注意：此接口不需要鉴权，因为封面图片是公开资源，且通过 <img> 标签加载无法携带 Token
+// 代理获取 Steam 封面图片（生产模块在挂载层统一要求 Owner）
 // 必须放在 /:id 路由之前，否则会被当作 ID 处理
 router.get('/cover-proxy', async (req, res) => {
   const { appid, type = 'library' } = req.query
   
-  if (!appid) {
-    return res.status(400).json({ message: '缺少 appid 参数' })
+  if (!/^\d{1,12}$/.test(String(appid || ''))) {
+    return res.status(400).json({ message: 'appid 参数无效' })
+  }
+  if (!['library', 'header'].includes(type)) {
+    return res.status(400).json({ message: '封面类型无效' })
   }
   
   // 构建封面 URL
@@ -554,16 +570,22 @@ router.get('/cover-proxy', async (req, res) => {
   
   for (const url of coverUrls) {
     try {
-      const response = await axios.get(url, {
-        httpsAgent,
+      const response = await safeAxiosGet(url, {
         responseType: 'arraybuffer',
         timeout: 15000,
+        maxContentLength: 5 * 1024 * 1024,
+        allowedHosts: STEAM_IMAGE_HOSTS,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       })
       
-      const contentType = response.headers['content-type'] || 'image/jpeg'
+      const contentType = String(response.headers['content-type'] || '')
+        .split(';')[0]
+        .toLowerCase()
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
+        continue
+      }
       res.set('Content-Type', contentType)
       res.set('Cache-Control', 'public, max-age=86400') // 缓存1天
       return res.send(Buffer.from(response.data, 'binary'))

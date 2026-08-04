@@ -2,7 +2,7 @@ import express from 'express'
 import multer from 'multer'
 import path from 'path'
 import fs from 'fs'
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
@@ -13,8 +13,15 @@ import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION, TIMEOUT } from '../config/constants.js'
+import { inspectChunks, mergeChunkFiles, readFileHeader, uploadPath, validateUploadDescriptor } from '../services/uploadSecurity.js'
 
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+const MUSIC_UPLOAD_POLICY = {
+  extensions: ['.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac', '.ape'],
+  maxChunks: 1000,
+  maxChunkBytes: 11 * 1024 * 1024,
+  maxTotalBytes: 1024 * 1024 * 1024
+}
 
 // 创建代理 agent
 const httpsAgent = process.env.HTTP_PROXY
@@ -248,12 +255,16 @@ const storage = multer.diskStorage({
     cb(null, tempDir)
   },
   filename: (req, file, cb) => {
-    const { fileId, chunkIndex } = req.body
-    cb(null, `${fileId}_${chunkIndex}`)
+    try {
+      const descriptor = validateUploadDescriptor(req.body, MUSIC_UPLOAD_POLICY)
+      cb(null, `${descriptor.fileId}_${descriptor.chunkIndex}`)
+    } catch (error) {
+      cb(error)
+    }
   }
 })
 
-const upload = multer({ storage })
+const upload = multer({ storage, limits: { fileSize: MUSIC_UPLOAD_POLICY.maxChunkBytes, files: 1 } })
 
 // 解析音乐元数据（三层降级策略）
 async function parseMusicMetadata(filePath, originalName) {
@@ -270,8 +281,8 @@ async function parseMusicMetadata(filePath, originalName) {
   // 第一层：尝试使用 FFprobe（最可靠，需要 FFmpeg）
   try {
     console.log('[元数据解析] 第一层：尝试 FFprobe...')
-    const { stdout } = await execAsync(
-      `ffprobe -v quiet -print_format json -show_format -show_streams "${filePath}"`,
+    const { stdout } = await execFileAsync(
+      'ffprobe', ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
       { maxBuffer: 50 * 1024 * 1024, timeout: 10000 }
     )
 
@@ -297,8 +308,8 @@ async function parseMusicMetadata(filePath, originalName) {
     if (videoStream) {
       console.log('[FFprobe] 提取封面中...')
       try {
-        const { stdout: coverData } = await execAsync(
-          `ffmpeg -v quiet -i "${filePath}" -an -vcodec copy -f image2pipe -`,
+        const { stdout: coverData } = await execFileAsync(
+          'ffmpeg', ['-v', 'quiet', '-i', filePath, '-an', '-vcodec', 'copy', '-f', 'image2pipe', '-'],
           { 
             encoding: 'buffer',
             maxBuffer: 10 * 1024 * 1024,
@@ -375,9 +386,8 @@ async function parseMusicMetadata(filePath, originalName) {
 // 上传分片
 router.post('/upload-chunk', authenticateToken, requireWritePermission, upload.single('chunk'), async (req, res) => {
   try {
-    const { fileId, chunkIndex, totalChunks, fileName } = req.body
-    const chunkIdx = parseInt(chunkIndex)
-    const totalChs = parseInt(totalChunks)
+    const descriptor = validateUploadDescriptor(req.body, MUSIC_UPLOAD_POLICY)
+    const { fileId, fileName, chunkIndex: chunkIdx, totalChunks: totalChs } = descriptor
     
     console.log(`收到分片: ${fileId}, 分片 ${chunkIdx}/${totalChs}`)
     
@@ -411,7 +421,8 @@ router.post('/upload-chunk', authenticateToken, requireWritePermission, upload.s
     })
   } catch (error) {
     console.error('分片上传失败:', error)
-    res.status(500).json({ message: '上传失败' })
+    if (req.file?.path && fs.existsSync(req.file.path)) fs.rmSync(req.file.path, { force: true })
+    res.status(400).json({ message: '上传失败' })
   }
 })
 
@@ -491,7 +502,9 @@ router.post('/check-duplicate', authenticateToken, async (req, res) => {
 // 合并分片
 router.post('/merge-chunks', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { fileId, fileName, totalChunks, skipDuplicate } = req.body
+    const descriptor = validateUploadDescriptor(req.body, MUSIC_UPLOAD_POLICY)
+    const { fileId, fileName, totalChunks, extension: ext } = descriptor
+    const { skipDuplicate } = req.body
     const db = getDatabase()
     
     // 检查是否已取消
@@ -508,13 +521,8 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     }
     
     // 先计算文件大小（通过分片）
-    let totalSize = 0
-    for (let i = 0; i < totalChunks; i++) {
-      const chunkPath = path.join(tempDir, `${fileId}_${i}`)
-      if (fs.existsSync(chunkPath)) {
-        totalSize += fs.statSync(chunkPath).size
-      }
-    }
+    const inspected = inspectChunks(tempDir, fileId, totalChunks, (id, index) => `${id}_${index}`, MUSIC_UPLOAD_POLICY.maxTotalBytes)
+    const totalSize = inspected.totalBytes
     
     // 检查重复（除非明确跳过）
     if (!skipDuplicate) {
@@ -548,14 +556,11 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     }
     
     // 生成最终文件名
-    const ext = path.extname(fileName).toLowerCase()
-    let finalExt = ext
-    
     // 生成最终路径和临时路径（使用临时文件+原子重命名）
     const finalFileName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}${ext}`
     const finalPath = path.join(musicDir, finalFileName)
     const tempFinalPath = path.join(tempDir, `${finalFileName}.tmp`)
-    const lockFile = path.join(tempDir, `${fileId}.lock`)
+    const lockFile = uploadPath(tempDir, `${fileId}.lock`)
     
     // 文件锁：防止并发上传同一文件
     if (fs.existsSync(lockFile)) {
@@ -568,35 +573,12 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     // 创建锁文件
     fs.writeFileSync(lockFile, process.pid.toString())
     
-    let writeStream = null
-    let mergeSuccess = false
-    
     try {
       // 使用临时文件路径写入，避免产生不完整的目标文件
-      writeStream = fs.createWriteStream(tempFinalPath)
-      
-      for (let i = 0; i < totalChunks; i++) {
-        const chunkPath = path.join(tempDir, `${fileId}_${i}`)
-        if (fs.existsSync(chunkPath)) {
-          const chunkData = fs.readFileSync(chunkPath)
-          writeStream.write(chunkData)
-          // 延迟删除分片，直到合并成功后再统一清理
-        } else {
-          throw new Error(`分片 ${i} 不存在`)
-        }
-      }
-      
-      writeStream.end()
-      
-      // 等待写入完成
-      await new Promise((resolve, reject) => {
-        writeStream.on('finish', resolve)
-        writeStream.on('error', reject)
-      })
+      await mergeChunkFiles(inspected.paths, tempFinalPath)
       
       // 原子重命名：确保目标文件要么完整存在，要么不存在
       fs.renameSync(tempFinalPath, finalPath)
-      mergeSuccess = true
       
       // 合并成功后清理分片
       for (let i = 0; i < totalChunks; i++) {
@@ -610,9 +592,6 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
       console.error(`文件合并失败: ${error.message}`)
       
       // 清理临时文件
-      if (writeStream) {
-        writeStream.destroy()
-      }
       if (fs.existsSync(tempFinalPath)) {
         fs.unlinkSync(tempFinalPath)
       }
@@ -629,9 +608,8 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     }
 
     // 验证文件完整性（检查文件魔数/签名）
-    const fileBuffer = fs.readFileSync(finalPath)
-    const fileSize = fileBuffer.length
-    const fileHeader = fileBuffer.slice(0, 16).toString('hex')
+    const fileSize = fs.statSync(finalPath).size
+    const fileHeader = readFileHeader(finalPath).toString('hex')
     
     console.log(`[文件验证] ${fileName}, 大小: ${fileSize} 字节`)
     console.log(`[文件验证] 文件头: ${fileHeader}`)
@@ -712,7 +690,8 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
 // 取消上传（清理临时文件 + 设置取消标志）
 router.delete('/cancel-upload', authenticateToken, async (req, res) => {
   try {
-    const { fileId } = req.body
+    const fileId = String(req.body?.fileId || '')
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(fileId)) return res.status(400).json({ message: '上传标识无效' })
     
     console.log(`[上传取消] 收到取消请求: ${fileId}`)
     
@@ -722,7 +701,7 @@ router.delete('/cancel-upload', authenticateToken, async (req, res) => {
     const files = fs.readdirSync(tempDir)
     let deletedCount = 0
     files.forEach(file => {
-      if (file.startsWith(fileId)) {
+      if (file.startsWith(`${fileId}_`) || file === `${fileId}.lock`) {
         fs.unlinkSync(path.join(tempDir, file))
         deletedCount++
       }
@@ -773,7 +752,12 @@ router.get('/upload-progress', authenticateToken, async (req, res) => {
 // 开始上传会话（保存文件元数据）
 router.post('/start-upload', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { fileId, fileName, fileSize, totalChunks } = req.body
+    const descriptor = validateUploadDescriptor(req.body, MUSIC_UPLOAD_POLICY)
+    const { fileId, fileName, totalChunks } = descriptor
+    const fileSize = Number(req.body.fileSize)
+    if (!Number.isSafeInteger(fileSize) || fileSize < 1 || fileSize > MUSIC_UPLOAD_POLICY.maxTotalBytes) {
+      return res.status(400).json({ message: '文件大小无效' })
+    }
     
     uploadProgress.set(fileId, {
       fileName,
@@ -789,7 +773,7 @@ router.post('/start-upload', authenticateToken, requireWritePermission, async (r
     res.json({ message: '上传会话已创建', fileId })
   } catch (error) {
     console.error('创建上传会话失败:', error)
-    res.status(500).json({ message: '创建失败' })
+    res.status(400).json({ message: '创建失败' })
   }
 })
 
@@ -1385,16 +1369,8 @@ router.post('/remove-duplicates', authenticateToken, async (req, res) => {
 })
 
 // 播放音乐（返回文件流）
-router.get('/play/:id', async (req, res) => {
+router.get('/play/:id', authenticateToken, async (req, res) => {
   try {
-    const token = req.query.token || req.headers.authorization?.replace('Bearer ', '')
-    if (!token) {
-      return res.status(401).json({ message: '需要认证' })
-    }
-
-    const jwt = await import('jsonwebtoken')
-    const decoded = jwt.default.verify(token, process.env.JWT_SECRET || 'your-secret-key')
-
     const db = getDatabase()
     const music = db.prepare('SELECT * FROM music WHERE id = ?').get(req.params.id)
 

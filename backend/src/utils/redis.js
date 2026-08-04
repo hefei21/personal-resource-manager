@@ -1,7 +1,16 @@
 import { createClient } from 'redis'
 
 let redisClient = null
-let isConnected = false
+let reconnectAttempts = 0
+let lastErrorLogAt = 0
+
+const INITIAL_CONNECT_WAIT_MS = 2000
+const ERROR_LOG_INTERVAL_MS = 30000
+
+export function redisReconnectDelay(retries) {
+  const safeRetries = Number.isFinite(retries) ? Math.max(0, retries) : 0
+  return Math.min(250 * (2 ** Math.min(safeRetries, 6)), 10000)
+}
 
 /**
  * 初始化 Redis 连接
@@ -16,41 +25,57 @@ export async function initRedis() {
   redisClient = createClient({
     url: redisUrl,
     socket: {
-      reconnectStrategy: (retries) => {
-        // 重连策略：最多重试 5 次，每次间隔递增
-        if (retries > 5) {
-          console.error('Redis 连接失败，已达到最大重试次数')
-          return new Error('Redis 连接失败')
-        }
-        console.log(`Redis 重连中... 第 ${retries} 次`)
-        return Math.min(retries * 100, 3000) // 最多 3 秒
-      }
+      // NAS 长期在线，Redis 可能被单独重启；持续退避重连而不是永久放弃。
+      reconnectStrategy: redisReconnectDelay
     }
   })
 
   redisClient.on('error', (err) => {
-    console.error('Redis 错误:', err)
-    isConnected = false
+    const now = Date.now()
+    if (now - lastErrorLogAt >= ERROR_LOG_INTERVAL_MS) {
+      console.error('Redis 暂不可用:', {
+        code: err?.code || 'UNKNOWN',
+        message: err?.message || '连接错误',
+        reconnectAttempts
+      })
+      lastErrorLogAt = now
+    }
   })
 
   redisClient.on('connect', () => {
-    console.log('Redis 连接成功')
-    isConnected = true
+    console.log('Redis TCP 连接已建立')
   })
 
-  redisClient.on('disconnect', () => {
-    console.log('Redis 断开连接')
-    isConnected = false
+  redisClient.on('ready', () => {
+    console.log(reconnectAttempts > 0 ? 'Redis 已恢复连接' : 'Redis 连接成功')
+    reconnectAttempts = 0
+    lastErrorLogAt = 0
   })
 
-  try {
-    await redisClient.connect()
-    return redisClient
-  } catch (error) {
-    console.error('Redis 连接失败:', error)
-    // 连接失败时返回 null，缓存功能将降级为不缓存
-    return null
+  redisClient.on('reconnecting', () => {
+    reconnectAttempts++
+    if (reconnectAttempts === 1 || reconnectAttempts % 10 === 0) {
+      console.warn(`Redis 重连等待中（第 ${reconnectAttempts} 次）`)
+    }
+  })
+
+  redisClient.on('end', () => {
+    console.log('Redis 连接已关闭')
+  })
+
+  const connectionAttempt = redisClient.connect()
+  connectionAttempt.catch((error) => {
+    console.error('Redis 连接循环已停止:', error?.message || error)
+  })
+
+  const connectedDuringStartup = await Promise.race([
+    connectionAttempt.then(() => true).catch(() => false),
+    new Promise(resolve => setTimeout(() => resolve(false), INITIAL_CONNECT_WAIT_MS))
+  ])
+  if (!connectedDuringStartup) {
+    console.warn('Redis 启动连接尚未就绪，应用暂时使用内存缓存并继续后台重连')
   }
+  return redisClient
 }
 
 /**
@@ -64,7 +89,7 @@ export function getRedisClient() {
  * 检查 Redis 是否已连接
  */
 export function isRedisConnected() {
-  return isConnected && redisClient !== null
+  return Boolean(redisClient?.isReady)
 }
 
 /**
@@ -72,8 +97,17 @@ export function isRedisConnected() {
  */
 export async function closeRedis() {
   if (redisClient) {
-    await redisClient.quit()
+    try {
+      if (redisClient.isReady) {
+        await redisClient.quit()
+      } else if (redisClient.isOpen) {
+        await redisClient.disconnect()
+      }
+    } catch (error) {
+      console.warn('关闭 Redis 连接时出现非阻断错误:', error?.message || error)
+    }
     redisClient = null
-    isConnected = false
+    reconnectAttempts = 0
+    lastErrorLogAt = 0
   }
 }
