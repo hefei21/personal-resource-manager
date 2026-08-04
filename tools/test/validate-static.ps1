@@ -168,6 +168,11 @@ Assert-Condition 'compose.cors' ($composeCorsIsExact -notcontains $false) `
   'Compose files do not enable wildcard credentialed CORS.' `
   'A Compose file enables CORS_ORIGIN=*.'
 
+Assert-Condition 'compose.nas.public-origin' `
+  ($nasCompose -match 'CORS_ORIGIN:\s*\$\{TEST_PUBLIC_ORIGIN:-\}') `
+  'NAS test Compose accepts an explicit HTTPS tunnel Origin.' `
+  'NAS test Compose cannot declare the browser-visible public Origin.'
+
 # Frontend active-content boundaries.
 $vueFiles = @(
   Get-ChildItem -LiteralPath (Get-ProjectFile 'frontend\src') -Filter '*.vue' -File -Recurse

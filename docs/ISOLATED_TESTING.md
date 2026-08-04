@@ -110,9 +110,11 @@ Import `docker-compose.nas-test.yml` in the NAS GUI and provide:
 
 - `IMAGE_TAG`
 - `TEST_DATA_ROOT`
-- `NAS_HOST`
 - `TEST_ADMIN_USERNAME`
 - `TEST_ADMIN_PASSWORD`
+- `TEST_PUBLIC_ORIGIN`：可选；通过 HTTPS 内网穿透访问时填写浏览器地址栏中的
+  精确 Origin，例如 `https://remote-access-15173.example.test`，不包含路径和
+  末尾斜杠。仅在局域网 HTTP 同源访问时可留空。
 
 Use a new NAS directory and ports `13000` and `15173`. Never point the test
 Compose file at the production data directory.

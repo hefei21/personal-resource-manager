@@ -26,8 +26,8 @@ services:
       LOGS_PATH: /app/data/logs
       DEFAULT_USERNAME: ${TEST_ADMIN_USERNAME:?TEST_ADMIN_USERNAME is required}
       DEFAULT_PASSWORD: ${TEST_ADMIN_PASSWORD:?TEST_ADMIN_PASSWORD is required}
-      # 浏览器通过 frontend 的 /api 同源代理访问后端，无需预先知道 NAS 地址。
-      CORS_ORIGIN: ""
+      # HTTPS 内网穿透在容器外终止 TLS，必须显式信任浏览器看到的精确 Origin。
+      CORS_ORIGIN: ${TEST_PUBLIC_ORIGIN:-}
       REDIS_URL: redis://redis:6379
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
