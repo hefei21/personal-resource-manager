@@ -19,11 +19,14 @@ const codeRouteSource = fs.readFileSync(
 function withRepository(callback) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-code-security-'))
   const repository = path.join(root, 'managed-repository')
+  const repositorySibling = path.join(root, 'managed-repository-sibling')
   fs.mkdirSync(repository)
+  fs.mkdirSync(repositorySibling)
   fs.writeFileSync(path.join(repository, 'README.md'), '# fixture')
+  fs.writeFileSync(path.join(repositorySibling, 'x'), 'outside fixture')
 
   try {
-    callback({ root, repository })
+    callback({ root, repository, repositorySibling })
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
@@ -47,7 +50,7 @@ test('managed repository paths must be children of the code storage root', () =>
 })
 
 test('repository entries reject traversal and sibling-prefix paths', () => {
-  withRepository(({ root, repository }) => {
+  withRepository(({ root, repository, repositorySibling }) => {
     assert.equal(
       resolveRepositoryEntry(root, repository, 'README.md'),
       fs.realpathSync(path.join(repository, 'README.md'))
@@ -57,7 +60,11 @@ test('repository entries reject traversal and sibling-prefix paths', () => {
       { code: 'REPOSITORY_PATH_OUTSIDE_ROOT' }
     )
     assert.throws(
-      () => resolveRepositoryEntry(root, repository, '..\\repo-sibling\\x'),
+      () => resolveRepositoryEntry(
+        root,
+        repository,
+        path.relative(repository, path.join(repositorySibling, 'x'))
+      ),
       { code: 'REPOSITORY_PATH_OUTSIDE_ROOT' }
     )
   })
