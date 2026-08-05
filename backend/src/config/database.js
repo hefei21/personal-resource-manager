@@ -1,6 +1,6 @@
-import Database from 'better-sqlite3'
 import fs from 'fs'
 import path from 'path'
+import { openDatabaseConnection } from './sqliteConnection.js'
 import { getContext } from '../utils/dbContext.js'
 import {
   initializeOwner,
@@ -71,8 +71,7 @@ function getDatabase(reqOrUsername = null) {
   const dbPath = baseDbPath
   
   if (!dbPool.has(dbPath)) {
-    const db = new Database(dbPath)
-    db.pragma('journal_mode = WAL')
+    const db = openDatabaseConnection(dbPath)
     console.log(`数据库已连接: ${dbPath}${username ? ` (用户: ${username})` : ''}`)
     dbPool.set(dbPath, db)
   }
