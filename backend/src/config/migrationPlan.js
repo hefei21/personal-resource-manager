@@ -1,0 +1,304 @@
+import { createHash } from 'node:crypto'
+
+const MIGRATION_ID_PATTERN = /^\d{4}_[a-z0-9][a-z0-9._-]*$/
+const CHECKSUM_PATTERN = /^[a-f0-9]{64}$/
+const APPLIED_STATUSES = new Set(['applied', 'failed', 'running'])
+
+/**
+ * Stable, deliberately simple ordering for migration identifiers.
+ *
+ * The comparison is based on code points rather than localeCompare(), whose
+ * result can vary with the host locale. Migration IDs are ASCII-only anyway,
+ * so this also makes the ordering easy to reproduce in other runtimes.
+ */
+function compareMigrationIds(left, right) {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
+}
+
+function fail(code, message, details = {}) {
+  throw new MigrationPlanError(code, message, details)
+}
+
+function assertMigrationId(id) {
+  if (typeof id !== 'string' || !MIGRATION_ID_PATTERN.test(id)) {
+    fail(
+      'MIGRATION_ID_INVALID',
+      'Migration id must match /^\\d{4}_[a-z0-9][a-z0-9._-]*$/.',
+      { id: typeof id === 'string' ? id : undefined }
+    )
+  }
+}
+
+function assertChecksum(checksum, fieldName = 'checksum') {
+  if (typeof checksum !== 'string' || !CHECKSUM_PATTERN.test(checksum)) {
+    fail(
+      'MIGRATION_CHECKSUM_INVALID',
+      `${fieldName} must be a lowercase SHA-256 hex digest.`,
+      { fieldName }
+    )
+  }
+}
+
+function publicMigration(migration) {
+  return Object.freeze({ id: migration.id, checksum: migration.checksum })
+}
+
+function publicRecord(record) {
+  return Object.freeze({
+    id: record.id,
+    checksum: record.checksum,
+    status: record.status
+  })
+}
+
+/**
+ * Error raised for a malformed registry or a plan that cannot safely run.
+ * Callers can branch on `code` without parsing human-readable messages.
+ */
+export class MigrationPlanError extends Error {
+  constructor(code, message, details = {}) {
+    super(message)
+    this.name = 'MigrationPlanError'
+    this.code = code
+    this.details = Object.freeze({ ...details })
+  }
+}
+
+/**
+ * Compute the checksum of the exact explicit migration source text.
+ * No function serialization or runtime formatting is involved.
+ */
+export function computeMigrationChecksum(source) {
+  if (typeof source !== 'string' || source.trim().length === 0) {
+    fail('MIGRATION_SOURCE_INVALID', 'Migration source must be non-empty text.')
+  }
+
+  const normalizedSource = source.replace(/\r\n?/g, '\n')
+  return createHash('sha256').update(Buffer.from(normalizedSource, 'utf8')).digest('hex')
+}
+
+/**
+ * Validate and normalize one migration definition.
+ *
+ * `source` is intentionally a required explicit text representation (SQL or
+ * another documented migration source format). Its exact UTF-8 bytes are
+ * hashed after CRLF and CR are normalized to LF. Other source bytes are kept
+ * unchanged.
+ */
+export function defineMigration(definition) {
+  if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+    fail('MIGRATION_DEFINITION_INVALID', 'Migration definition must be an object.')
+  }
+
+  const { id, source } = definition
+  assertMigrationId(id)
+  const computedChecksum = computeMigrationChecksum(source)
+
+  if (definition.checksum !== undefined) {
+    assertChecksum(definition.checksum)
+    if (definition.checksum !== computedChecksum) {
+      fail(
+        'MIGRATION_CHECKSUM_MISMATCH',
+        `Migration ${id} checksum does not match its explicit source.`,
+        { id }
+      )
+    }
+  }
+
+  return Object.freeze({
+    id,
+    source,
+    checksum: computedChecksum
+  })
+}
+
+/**
+ * Create a deterministic immutable registry. Definitions are sorted by ID and
+ * duplicate IDs are rejected before a registry is returned.
+ */
+export function createMigrationRegistry(definitions = []) {
+  if (!Array.isArray(definitions)) {
+    fail('MIGRATION_REGISTRY_INVALID', 'Migration definitions must be an array.')
+  }
+
+  const migrations = definitions.map(defineMigration).sort((left, right) =>
+    compareMigrationIds(left.id, right.id)
+  )
+
+  for (let index = 1; index < migrations.length; index += 1) {
+    if (migrations[index - 1].id === migrations[index].id) {
+      fail('MIGRATION_ID_DUPLICATE', `Migration id ${migrations[index].id} is duplicated.`, {
+        id: migrations[index].id
+      })
+    }
+  }
+
+  return Object.freeze({ migrations: Object.freeze(migrations) })
+}
+
+/**
+ * Return a new registry with one definition added; the existing registry is
+ * never mutated.
+ */
+export function registerMigration(registry, definition) {
+  assertRegistry(registry)
+  return createMigrationRegistry([...registry.migrations, definition])
+}
+
+function assertRegistry(registry) {
+  if (
+    !registry ||
+    !Array.isArray(registry.migrations) ||
+    registry.migrations.some((migration) => !migration || typeof migration.id !== 'string')
+  ) {
+    fail('MIGRATION_REGISTRY_INVALID', 'Expected a registry created by createMigrationRegistry.')
+  }
+}
+
+function normalizeAppliedRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    fail('MIGRATION_RECORD_INVALID', 'Applied migration records must be objects.')
+  }
+
+  if (typeof record.id !== 'string' || record.id.length === 0) {
+    fail('MIGRATION_RECORD_INVALID', 'Applied migration record id must be non-empty text.')
+  }
+
+  assertChecksum(record.checksum, 'record checksum')
+
+  const status = record.status ?? 'applied'
+  if (!APPLIED_STATUSES.has(status)) {
+    fail(
+      'MIGRATION_RECORD_STATUS_INVALID',
+      `Migration record ${record.id} has unsupported status ${String(status)}.`,
+      { id: record.id }
+    )
+  }
+
+  return { id: record.id, checksum: record.checksum, status }
+}
+
+function resolveTargetVersion(migrations, targetVersion) {
+  if (migrations.length === 0) {
+    if (targetVersion !== undefined && targetVersion !== null) {
+      fail('MIGRATION_TARGET_UNKNOWN', `Migration target ${String(targetVersion)} is not registered.`)
+    }
+    return null
+  }
+
+  const resolvedTarget = targetVersion ?? migrations[migrations.length - 1].id
+  const targetIndex = migrations.findIndex(({ id }) => id === resolvedTarget)
+  if (targetIndex === -1) {
+    fail('MIGRATION_TARGET_UNKNOWN', `Migration target ${String(resolvedTarget)} is not registered.`, {
+      targetVersion: resolvedTarget
+    })
+  }
+
+  return { targetVersion: resolvedTarget, targetIndex }
+}
+
+/**
+ * Build a read-only migration plan from registry metadata and an applied-record
+ * snapshot. This function has no database, filesystem, or application-startup
+ * side effects.
+ */
+export function createMigrationPlan(registry, appliedRecords = [], options = {}) {
+  assertRegistry(registry)
+  if (!Array.isArray(appliedRecords)) {
+    fail('MIGRATION_RECORDS_INVALID', 'Applied migration records must be an array.')
+  }
+
+  const records = appliedRecords.map(normalizeAppliedRecord)
+  const recordsById = new Map()
+  for (const record of records) {
+    if (recordsById.has(record.id)) {
+      fail('MIGRATION_RECORD_DUPLICATE', `Migration record ${record.id} is duplicated.`, {
+        id: record.id
+      })
+    }
+    recordsById.set(record.id, record)
+  }
+
+  for (const record of records) {
+    if (record.status === 'failed' || record.status === 'running') {
+      fail(
+        'MIGRATION_RECORD_BLOCKED',
+        `Migration record ${record.id} has blocking status ${record.status}.`,
+        { id: record.id, status: record.status }
+      )
+    }
+  }
+
+  const { targetVersion, targetIndex } = resolveTargetVersion(
+    registry.migrations,
+    options.targetVersion
+  ) ?? { targetVersion: null, targetIndex: -1 }
+  const registeredById = new Map(registry.migrations.map((migration) => [migration.id, migration]))
+
+  for (const record of records) {
+    const migration = registeredById.get(record.id)
+    if (migration && migration.checksum !== record.checksum) {
+      fail(
+        'MIGRATION_CHECKSUM_DRIFT',
+        `Applied migration ${record.id} checksum differs from the registered checksum.`,
+        { id: record.id }
+      )
+    }
+  }
+
+  const appliedRegisteredIndexes = registry.migrations
+    .map((migration, index) => (recordsById.has(migration.id) ? index : -1))
+    .filter((index) => index !== -1)
+
+  const appliedBeyondTarget = appliedRegisteredIndexes.filter((index) => index > targetIndex)
+  if (appliedBeyondTarget.length > 0) {
+    const appliedIds = appliedBeyondTarget.map((index) => registry.migrations[index].id)
+    fail(
+      'MIGRATION_TARGET_BEHIND_APPLIED',
+      `Migration target ${String(targetVersion)} is earlier than applied migrations ${appliedIds.join(', ')}.`,
+      { targetVersion, appliedIds }
+    )
+  }
+
+  if (appliedRegisteredIndexes.length > 0) {
+    const lastAppliedIndex = appliedRegisteredIndexes[appliedRegisteredIndexes.length - 1]
+    const missingIds = registry.migrations
+      .slice(0, lastAppliedIndex)
+      .filter(({ id }) => !recordsById.has(id))
+      .map(({ id }) => id)
+
+    if (missingIds.length > 0) {
+      const subsequentAppliedIds = appliedRegisteredIndexes
+        .filter((index) => index > 0 && recordsById.has(registry.migrations[index].id))
+        .map((index) => registry.migrations[index].id)
+      fail(
+        'MIGRATION_HISTORY_GAP',
+        `Applied migration history is missing ${missingIds.join(', ')} before ${registry.migrations[lastAppliedIndex].id}.`,
+        { missingIds, subsequentAppliedIds }
+      )
+    }
+  }
+
+  const inScope = registry.migrations.slice(0, targetIndex + 1)
+  const deferred = registry.migrations.slice(targetIndex + 1)
+  const applied = inScope.filter(({ id }) => recordsById.has(id)).map(publicMigration)
+  const pending = inScope.filter(({ id }) => !recordsById.has(id)).map(publicMigration)
+  const deferredMigrations = deferred.map(publicMigration)
+  const unknownHistory = records
+    .filter(({ id }) => !registeredById.has(id))
+    .sort((left, right) => compareMigrationIds(left.id, right.id))
+    .map(publicRecord)
+
+  return Object.freeze({
+    targetVersion,
+    registered: Object.freeze(registry.migrations.map(publicMigration)),
+    applied: Object.freeze(applied),
+    pending: Object.freeze(pending),
+    deferred: Object.freeze(deferredMigrations),
+    unknownHistory: Object.freeze(unknownHistory)
+  })
+}
+
+export { MIGRATION_ID_PATTERN }
