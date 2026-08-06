@@ -84,5 +84,215 @@ export const applicationMigrationRegistry = createMigrationRegistry([
         defaultValue: null
       }
     }
+  },
+  {
+    id: '0007_anime_name_cn',
+    source: 'ALTER TABLE anime ADD COLUMN name_cn TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'name_cn',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0008_anime_name_original',
+    source: 'ALTER TABLE anime ADD COLUMN name_original TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'name_original',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0009_anime_rating_count',
+    source: 'ALTER TABLE anime ADD COLUMN rating_count INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'rating_count',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0010_anime_air_date',
+    source: 'ALTER TABLE anime ADD COLUMN air_date TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'air_date',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0011_anime_eps',
+    source: 'ALTER TABLE anime ADD COLUMN eps INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'eps',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0012_anime_eps_total',
+    source: 'ALTER TABLE anime ADD COLUMN eps_total INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'eps_total',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0013_anime_author',
+    source: 'ALTER TABLE anime ADD COLUMN author TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'author',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0014_anime_director',
+    source: 'ALTER TABLE anime ADD COLUMN director TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'director',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0015_anime_studio',
+    source: 'ALTER TABLE anime ADD COLUMN studio TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'studio',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0016_anime_infobox',
+    source: 'ALTER TABLE anime ADD COLUMN infobox TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'infobox',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0017_anime_characters',
+    source: 'ALTER TABLE anime ADD COLUMN characters TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'characters',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0018_anime_staff',
+    source: 'ALTER TABLE anime ADD COLUMN staff TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'staff',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0019_anime_user_rating',
+    source: 'ALTER TABLE anime ADD COLUMN user_rating INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'user_rating',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0020_anime_is_hidden',
+    source: 'ALTER TABLE anime ADD COLUMN is_hidden INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'is_hidden',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0021_anime_cover_image_data',
+    source: 'ALTER TABLE anime ADD COLUMN cover_image_data TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'anime',
+      column: {
+        name: 'cover_image_data',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
   }
 ])

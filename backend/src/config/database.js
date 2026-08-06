@@ -260,6 +260,9 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       staff TEXT,
       status TEXT DEFAULT 'none',
       is_favorite INTEGER DEFAULT 0,
+      user_rating INTEGER DEFAULT 0,
+      is_hidden INTEGER DEFAULT 0,
+      cover_image_data TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
@@ -551,44 +554,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       database.exec('DROP TABLE documents')
       database.exec('ALTER TABLE documents_new RENAME TO documents')
       console.log('✓ version 字段类型修改成功')
-    }
-
-    // 检查并添加动漫表新字段
-    const animeColumns = database.prepare("PRAGMA table_info(anime)").all()
-    const animeNewFields = [
-      { name: 'name_cn', sql: 'ALTER TABLE anime ADD COLUMN name_cn TEXT' },
-      { name: 'name_original', sql: 'ALTER TABLE anime ADD COLUMN name_original TEXT' },
-      { name: 'rating_count', sql: 'ALTER TABLE anime ADD COLUMN rating_count INTEGER DEFAULT 0' },
-      { name: 'air_date', sql: 'ALTER TABLE anime ADD COLUMN air_date TEXT' },
-      { name: 'eps', sql: 'ALTER TABLE anime ADD COLUMN eps INTEGER DEFAULT 0' },
-      { name: 'eps_total', sql: 'ALTER TABLE anime ADD COLUMN eps_total INTEGER DEFAULT 0' },
-      { name: 'author', sql: 'ALTER TABLE anime ADD COLUMN author TEXT' },
-      { name: 'director', sql: 'ALTER TABLE anime ADD COLUMN director TEXT' },
-      { name: 'studio', sql: 'ALTER TABLE anime ADD COLUMN studio TEXT' },
-      { name: 'infobox', sql: 'ALTER TABLE anime ADD COLUMN infobox TEXT' },
-      { name: 'characters', sql: 'ALTER TABLE anime ADD COLUMN characters TEXT' },
-      { name: 'staff', sql: 'ALTER TABLE anime ADD COLUMN staff TEXT' },
-      { name: 'user_rating', sql: 'ALTER TABLE anime ADD COLUMN user_rating INTEGER DEFAULT 0' },
-      { name: 'is_hidden', sql: 'ALTER TABLE anime ADD COLUMN is_hidden INTEGER DEFAULT 0' }
-    ]
-
-    for (const field of animeNewFields) {
-      const hasField = animeColumns.some(col => col.name === field.name)
-      if (!hasField) {
-        console.log(`添加 ${field.name} 字段到 anime 表...`)
-        database.exec(field.sql)
-        console.log(`✓ ${field.name} 字段添加成功`)
-      }
-    }
-
-    // 检查并添加 cover_image_data 字段到 anime 表（复用前面已声明的 animeColumns）
-    console.log('anime 表当前字段:', animeColumns.map(c => c.name).join(', '))
-
-    const hasCoverImageData = animeColumns.some(col => col.name === 'cover_image_data')
-    if (!hasCoverImageData) {
-      console.log('添加 cover_image_data 字段到 anime 表...')
-      database.exec('ALTER TABLE anime ADD COLUMN cover_image_data TEXT')
-      console.log('✓ cover_image_data 字段添加成功')
     }
 
     // 检查并添加成就字段到 games 表
