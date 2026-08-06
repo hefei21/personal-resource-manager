@@ -231,6 +231,8 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       category TEXT,
       tags TEXT,
       description TEXT,
+      icon TEXT,
+      icon_data TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
@@ -579,27 +581,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       }
     }
 
-    // 检查并添加 icon 字段到 bookmarks 表
-    const bookmarkColumns = database.prepare("PRAGMA table_info(bookmarks)").all()
-    console.log('bookmarks 表当前字段:', bookmarkColumns.map(c => c.name).join(', '))
-    
-    const hasIcon = bookmarkColumns.some(col => col.name === 'icon')
-    if (!hasIcon) {
-      console.log('添加 icon 字段到 bookmarks 表...')
-      database.exec('ALTER TABLE bookmarks ADD COLUMN icon TEXT')
-      console.log('✓ icon 字段添加成功')
-    } else {
-      console.log('✓ icon 字段已存在')
-    }
-    
-    // 检查并添加 icon_data 字段到 bookmarks 表（存储图标base64数据）
-    const hasIconData = bookmarkColumns.some(col => col.name === 'icon_data')
-    if (!hasIconData) {
-      console.log('添加 icon_data 字段到 bookmarks 表...')
-      database.exec('ALTER TABLE bookmarks ADD COLUMN icon_data TEXT')
-      console.log('✓ icon_data 字段添加成功')
-    }
-    
     // 检查并添加 cover_image_data 字段到 anime 表（复用前面已声明的 animeColumns）
     console.log('anime 表当前字段:', animeColumns.map(c => c.name).join(', '))
 

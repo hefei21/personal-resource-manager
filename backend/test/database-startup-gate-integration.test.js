@@ -100,17 +100,19 @@ function assertApplicationMigrationLedger(database, expectedAttemptCount) {
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count, expectedAttemptCount)
 }
 
-test('application registry freezes exactly the four C2c single-column migrations', () => {
+test('application registry freezes exactly the six C2c single-column migrations', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
-  assert.equal(applicationMigrationRegistry.migrations.length, 4)
+  assert.equal(applicationMigrationRegistry.migrations.length, 6)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
       '0001_documents_subcategory',
       '0002_categories_sort_order',
       '0003_todos_confirmed',
-      '0004_books_content_cache'
+      '0004_books_content_cache',
+      '0005_bookmarks_icon',
+      '0006_bookmarks_icon_data'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.map(({ id, source, checksum, compatibility }) => ({
@@ -158,6 +160,26 @@ test('application registry freezes exactly the four C2c single-column migrations
         table: 'books',
         column: { name: 'content_cache', type: 'TEXT', notNull: false, defaultValue: null }
       }
+    },
+    {
+      id: '0005_bookmarks_icon',
+      source: 'ALTER TABLE bookmarks ADD COLUMN icon TEXT;',
+      checksum: '25da26a2261ef28419cf88fe7340b9012484ff3a8a611cd3cbb8b190a92a8248',
+      compatibility: {
+        kind: 'column',
+        table: 'bookmarks',
+        column: { name: 'icon', type: 'TEXT', notNull: false, defaultValue: null }
+      }
+    },
+    {
+      id: '0006_bookmarks_icon_data',
+      source: 'ALTER TABLE bookmarks ADD COLUMN icon_data TEXT;',
+      checksum: 'bea2993a676e2de164f685992a0710655e798b88f113696bbb9a7b05d5a59326',
+      compatibility: {
+        kind: 'column',
+        table: 'bookmarks',
+        column: { name: 'icon_data', type: 'TEXT', notNull: false, defaultValue: null }
+      }
     }
   ])
 })
@@ -176,12 +198,23 @@ test('static contract runs the startup gate once after base tables and before al
   assert.doesNotMatch(databaseSource, /ALTER TABLE todos ADD COLUMN confirmed/u)
   assert.doesNotMatch(databaseSource, /PRAGMA table_info\(categories\)/u)
   assert.doesNotMatch(databaseSource, /PRAGMA table_info\(todos\)/u)
+  assert.match(databaseSource, /CREATE TABLE IF NOT EXISTS bookmarks \([\s\S]*icon TEXT,[\s\S]*icon_data TEXT/u)
+  assert.doesNotMatch(databaseSource, /bookmarkColumns|hasIcon|hasIconData|ALTER TABLE bookmarks ADD COLUMN icon/u)
   assert.match(databaseSource, /const versionCol = documentColumns\.find\(col => col\.name === 'version'\)/u)
   assert.match(databaseSource, /last_read_at DATETIME,\s+content_cache TEXT/u)
   assert.doesNotMatch(databaseSource, /hasContentCache|ALTER TABLE books ADD COLUMN content_cache TEXT/u)
   assert.doesNotMatch(databaseSource, /AS notNull|AS defaultValue/u)
   assert.match(databaseMigrationsSource, /id: '0004_books_content_cache'/u)
   assert.match(databaseMigrationsSource, /source: 'ALTER TABLE books ADD COLUMN content_cache TEXT;'/u)
+  assert.match(databaseMigrationsSource, /id: '0005_bookmarks_icon'/u)
+  assert.match(databaseMigrationsSource, /source: 'ALTER TABLE bookmarks ADD COLUMN icon TEXT;'/u)
+  assert.match(databaseMigrationsSource, /id: '0006_bookmarks_icon_data'/u)
+  assert.match(databaseMigrationsSource, /source: 'ALTER TABLE bookmarks ADD COLUMN icon_data TEXT;'/u)
+  assert.match(databaseSource, /animeNewFields[\s\S]*cover_image_data/u)
+  assert.match(databaseSource, /gameNewFields[\s\S]*achievements_total/u)
+  assert.match(databaseSource, /musicNewFields[\s\S]*lyrics_source/u)
+  assert.match(databaseSource, /codeColumns[\s\S]*languages/u)
+  assert.match(databaseSource, /readingProgressColumns[\s\S]*hasCfi/u)
 
   const instanceCall = databaseSource.indexOf("initDatabaseInstance(mainDb, 'main', () => {")
   const gateCall = databaseSource.indexOf('runMigrationStartupGate({', instanceCall)
@@ -219,7 +252,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.ok(initializeCatch > listenCall)
 })
 
-test('empty database adopts all four registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
+test('empty database adopts all six registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   try {
@@ -234,11 +267,13 @@ test('empty database adopts all four registered columns without executing ALTER 
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 4)
+      assertApplicationMigrationLedger(verification, 6)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'books', 'content_cache', 'TEXT', 0, null)
+      assertRegisteredColumn(verification, 'bookmarks', 'icon', 'TEXT', 0, null)
+      assertRegisteredColumn(verification, 'bookmarks', 'icon_data', 'TEXT', 0, null)
     } finally {
       verification.close()
     }
@@ -272,7 +307,7 @@ test('restarting the current database does not add registered migration attempts
         ledger: verification.prepare('SELECT COUNT(*) AS count FROM prm_schema_migrations').get().count,
         attempts: verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count
       }, firstCounts)
-      assertApplicationMigrationLedger(verification, 4)
+      assertApplicationMigrationLedger(verification, 6)
     } finally {
       verification.close()
     }
@@ -466,7 +501,108 @@ test('incompatible books.content_cache prevents indexes, inline upgrades, and Ow
   }
 })
 
-test('old schema executes the four registered columns before remaining inline upgrades', nativeTestOptions, () => {
+test('incompatible bookmarks columns fail closed at the matching migration with only the successful prefix recorded', nativeTestOptions, () => {
+  const cases = [
+    { column: 'icon', type: 'INTEGER', expectedPrefixLength: 4 },
+    { column: 'icon_data', type: 'INTEGER', expectedPrefixLength: 5 }
+  ]
+
+  for (const { column, type, expectedPrefixLength } of cases) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    try {
+      database.exec(`
+        CREATE TABLE documents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          category TEXT,
+          tags TEXT,
+          file_path TEXT NOT NULL,
+          version REAL DEFAULT 1.0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE categories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          parent_id INTEGER,
+          path TEXT NOT NULL,
+          level INTEGER NOT NULL DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE todos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          text TEXT NOT NULL,
+          date TEXT NOT NULL,
+          completed INTEGER DEFAULT 0,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE books (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          last_read_at DATETIME
+        );
+        CREATE TABLE bookmarks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          url TEXT NOT NULL,
+          category TEXT,
+          tags TEXT,
+          description TEXT,
+          ${column} ${type},
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `)
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.notEqual(result.status, 0)
+      assert.deepEqual(readChildResult(output), {
+        ready: false,
+        code: 'MIGRATION_STARTUP_GATE_FAILED'
+      })
+
+      const verification = new Database(databasePath)
+      try {
+        assert.deepEqual(
+          verification.prepare('SELECT migration_id FROM prm_schema_migrations ORDER BY migration_id').all(),
+          applicationMigrationRegistry.migrations
+            .slice(0, expectedPrefixLength)
+            .map(({ id }) => ({ migration_id: id }))
+        )
+        assert.equal(
+          verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count,
+          expectedPrefixLength
+        )
+        assert.equal(verification.prepare(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_title'"
+        ).get().count, 0)
+        assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
+        assert.equal(verification.prepare(
+          "SELECT COUNT(*) AS count FROM pragma_table_info('anime') WHERE name = 'cover_image_data'"
+        ).get().count, 0)
+        assert.equal(verification.prepare(
+          "SELECT COUNT(*) AS count FROM pragma_table_info('games') WHERE name = 'achievements_total'"
+        ).get().count, 0)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('old schema executes the six registered columns before remaining inline upgrades', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -506,6 +642,16 @@ test('old schema executes the four registered columns before remaining inline up
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         last_read_at DATETIME
       );
+      CREATE TABLE bookmarks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        url TEXT NOT NULL,
+        category TEXT,
+        tags TEXT,
+        description TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
     `)
   } finally {
     database.close()
@@ -523,11 +669,13 @@ test('old schema executes the four registered columns before remaining inline up
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 4)
+      assertApplicationMigrationLedger(verification, 6)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'books', 'content_cache', 'TEXT', 0, null)
+      assertRegisteredColumn(verification, 'bookmarks', 'icon', 'TEXT', 0, null)
+      assertRegisteredColumn(verification, 'bookmarks', 'icon_data', 'TEXT', 0, null)
       assert.equal(verification.prepare(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_categories_sort_order'"
       ).get().count, 1)

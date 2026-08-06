@@ -56,5 +56,33 @@ export const applicationMigrationRegistry = createMigrationRegistry([
         defaultValue: null
       }
     }
+  },
+  {
+    id: '0005_bookmarks_icon',
+    source: 'ALTER TABLE bookmarks ADD COLUMN icon TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'bookmarks',
+      column: {
+        name: 'icon',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0006_bookmarks_icon_data',
+    source: 'ALTER TABLE bookmarks ADD COLUMN icon_data TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'bookmarks',
+      column: {
+        name: 'icon_data',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
   }
 ])
