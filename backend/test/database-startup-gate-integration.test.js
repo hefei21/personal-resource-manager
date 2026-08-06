@@ -78,7 +78,7 @@ function readChildResult(output) {
 
 function readColumn(database, table, column) {
   return database.prepare(
-    'SELECT name, type, "notnull" AS notNull, dflt_value AS defaultValue, hidden FROM pragma_table_xinfo(?) WHERE name = ?'
+    'SELECT name, type, "notnull" AS not_null, dflt_value AS default_value, hidden FROM pragma_table_xinfo(?) WHERE name = ?'
   ).get(table, column)
 }
 
@@ -86,8 +86,8 @@ function assertRegisteredColumn(database, table, column, type, notNull, defaultV
   assert.deepEqual(readColumn(database, table, column), {
     name: column,
     type,
-    notNull,
-    defaultValue,
+    not_null: notNull,
+    default_value: defaultValue,
     hidden: 0
   })
 }
