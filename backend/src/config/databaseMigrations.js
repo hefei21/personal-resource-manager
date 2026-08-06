@@ -42,5 +42,19 @@ export const applicationMigrationRegistry = createMigrationRegistry([
         defaultValue: '0'
       }
     }
+  },
+  {
+    id: '0004_books_content_cache',
+    source: 'ALTER TABLE books ADD COLUMN content_cache TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'books',
+      column: {
+        name: 'content_cache',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
   }
 ])

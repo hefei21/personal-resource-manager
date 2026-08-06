@@ -306,6 +306,7 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       last_read_at DATETIME,
+      content_cache TEXT,
       FOREIGN KEY (category_id) REFERENCES book_categories(id) ON DELETE SET NULL
     )`,
 
@@ -548,16 +549,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       database.exec('DROP TABLE documents')
       database.exec('ALTER TABLE documents_new RENAME TO documents')
       console.log('✓ version 字段类型修改成功')
-    }
-
-    // 检查并添加 content_cache 字段到 books 表（用于缓存解析结果）
-    const bookColumns = database.prepare("PRAGMA table_info(books)").all()
-    const hasContentCache = bookColumns.some(col => col.name === 'content_cache')
-
-    if (!hasContentCache) {
-      console.log('添加 content_cache 字段到 books 表...')
-      database.exec('ALTER TABLE books ADD COLUMN content_cache TEXT')
-      console.log('✓ content_cache 字段添加成功')
     }
 
     // 检查并添加动漫表新字段

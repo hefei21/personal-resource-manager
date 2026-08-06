@@ -100,22 +100,29 @@ function assertApplicationMigrationLedger(database, expectedAttemptCount) {
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count, expectedAttemptCount)
 }
 
-test('application registry freezes exactly the three C2c single-column migrations', () => {
+test('application registry freezes exactly the four C2c single-column migrations', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
-  assert.equal(applicationMigrationRegistry.migrations.length, 3)
+  assert.equal(applicationMigrationRegistry.migrations.length, 4)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
-    ['0001_documents_subcategory', '0002_categories_sort_order', '0003_todos_confirmed']
+    [
+      '0001_documents_subcategory',
+      '0002_categories_sort_order',
+      '0003_todos_confirmed',
+      '0004_books_content_cache'
+    ]
   )
-  assert.deepEqual(applicationMigrationRegistry.migrations.map(({ id, source, compatibility }) => ({
+  assert.deepEqual(applicationMigrationRegistry.migrations.map(({ id, source, checksum, compatibility }) => ({
     id,
     source,
+    checksum,
     compatibility
   })), [
     {
       id: '0001_documents_subcategory',
       source: 'ALTER TABLE documents ADD COLUMN subcategory TEXT;',
+      checksum: '9a05c2803d06c7ebaac7841b0d08ab5e024aa1e92b7a9494ae29f88dc18d4646',
       compatibility: {
         kind: 'column',
         table: 'documents',
@@ -125,6 +132,7 @@ test('application registry freezes exactly the three C2c single-column migration
     {
       id: '0002_categories_sort_order',
       source: 'ALTER TABLE categories ADD COLUMN sort_order INTEGER DEFAULT 0;',
+      checksum: '815d6f288d7daa7cecd94e9ea161fc6a278c9921516b95ec0ae07e2c6a4e5247',
       compatibility: {
         kind: 'column',
         table: 'categories',
@@ -134,10 +142,21 @@ test('application registry freezes exactly the three C2c single-column migration
     {
       id: '0003_todos_confirmed',
       source: 'ALTER TABLE todos ADD COLUMN confirmed INTEGER DEFAULT 0;',
+      checksum: '4c15f429d72185876d7f36e8aef9c11a848a286e5c504f492034bbfa24bc63ed',
       compatibility: {
         kind: 'column',
         table: 'todos',
         column: { name: 'confirmed', type: 'INTEGER', notNull: false, defaultValue: '0' }
+      }
+    },
+    {
+      id: '0004_books_content_cache',
+      source: 'ALTER TABLE books ADD COLUMN content_cache TEXT;',
+      checksum: '81d4063c0f155df031608f631b6ae5103b7cdfceb2e2dcd1eee04ea2f4468ed0',
+      compatibility: {
+        kind: 'column',
+        table: 'books',
+        column: { name: 'content_cache', type: 'TEXT', notNull: false, defaultValue: null }
       }
     }
   ])
@@ -158,8 +177,11 @@ test('static contract runs the startup gate once after base tables and before al
   assert.doesNotMatch(databaseSource, /PRAGMA table_info\(categories\)/u)
   assert.doesNotMatch(databaseSource, /PRAGMA table_info\(todos\)/u)
   assert.match(databaseSource, /const versionCol = documentColumns\.find\(col => col\.name === 'version'\)/u)
-  assert.match(databaseSource, /ALTER TABLE books ADD COLUMN content_cache TEXT/u)
-  assert.doesNotMatch(databaseMigrationsSource, /content_cache/u)
+  assert.match(databaseSource, /last_read_at DATETIME,\s+content_cache TEXT/u)
+  assert.doesNotMatch(databaseSource, /hasContentCache|ALTER TABLE books ADD COLUMN content_cache TEXT/u)
+  assert.doesNotMatch(databaseSource, /AS notNull|AS defaultValue/u)
+  assert.match(databaseMigrationsSource, /id: '0004_books_content_cache'/u)
+  assert.match(databaseMigrationsSource, /source: 'ALTER TABLE books ADD COLUMN content_cache TEXT;'/u)
 
   const instanceCall = databaseSource.indexOf("initDatabaseInstance(mainDb, 'main', () => {")
   const gateCall = databaseSource.indexOf('runMigrationStartupGate({', instanceCall)
@@ -197,7 +219,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.ok(initializeCatch > listenCall)
 })
 
-test('empty database adopts all three registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
+test('empty database adopts all four registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   try {
@@ -212,10 +234,11 @@ test('empty database adopts all three registered columns without executing ALTER
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 3)
+      assertApplicationMigrationLedger(verification, 4)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
+      assertRegisteredColumn(verification, 'books', 'content_cache', 'TEXT', 0, null)
     } finally {
       verification.close()
     }
@@ -249,7 +272,7 @@ test('restarting the current database does not add registered migration attempts
         ledger: verification.prepare('SELECT COUNT(*) AS count FROM prm_schema_migrations').get().count,
         attempts: verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count
       }, firstCounts)
-      assertApplicationMigrationLedger(verification, 3)
+      assertApplicationMigrationLedger(verification, 4)
     } finally {
       verification.close()
     }
@@ -397,22 +420,20 @@ test('does not report READY when the startup gate rejects an incompatible contro
   }
 })
 
-test('incompatible registered column prevents indexes, inline upgrades, and Owner initialization', nativeTestOptions, () => {
+test('incompatible books.content_cache prevents indexes, inline upgrades, and Owner initialization', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
   try {
     database.exec(`
-      CREATE TABLE documents (
+      CREATE TABLE books (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
-        category TEXT,
-        subcategory INTEGER,
-        tags TEXT,
         file_path TEXT NOT NULL,
-        version REAL DEFAULT 1.0,
+        content_cache INTEGER,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_read_at DATETIME
       );
     `)
   } finally {
@@ -429,11 +450,13 @@ test('incompatible registered column prevents indexes, inline upgrades, and Owne
 
     const verification = new Database(databasePath)
     try {
-      const documentColumns = verification.pragma('table_info(documents)')
-      assert.equal(documentColumns.find(column => column.name === 'subcategory').type, 'INTEGER')
+      const bookColumns = verification.pragma('table_info(books)')
+      assert.equal(bookColumns.find(column => column.name === 'content_cache').type, 'INTEGER')
       assert.equal(verification.prepare(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_title'"
       ).get().count, 0)
+      assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM prm_schema_migrations').get().count, 0)
+      assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count, 0)
       assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
     } finally {
       verification.close()
@@ -443,7 +466,7 @@ test('incompatible registered column prevents indexes, inline upgrades, and Owne
   }
 })
 
-test('old schema executes the three registered columns before remaining inline upgrades', nativeTestOptions, () => {
+test('old schema executes the four registered columns before remaining inline upgrades', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -475,6 +498,14 @@ test('old schema executes the three registered columns before remaining inline u
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE TABLE books (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_read_at DATETIME
+      );
     `)
   } finally {
     database.close()
@@ -492,10 +523,11 @@ test('old schema executes the three registered columns before remaining inline u
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 3)
+      assertApplicationMigrationLedger(verification, 4)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
+      assertRegisteredColumn(verification, 'books', 'content_cache', 'TEXT', 0, null)
       assert.equal(verification.prepare(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_categories_sort_order'"
       ).get().count, 1)
