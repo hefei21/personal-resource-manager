@@ -64,6 +64,25 @@ function definition(id, source) {
   return defineMigration({ id, source })
 }
 
+function compatibilityDefinition(id, source, table, column, options = {}) {
+  return defineMigration({
+    id,
+    source,
+    compatibility: {
+      kind: 'column',
+      table,
+      column: {
+        name: column,
+        type: options.type ?? 'TEXT',
+        notNull: options.notNull ?? true,
+        defaultValue: Object.hasOwn(options, 'defaultValue')
+          ? options.defaultValue
+          : "'ready'"
+      }
+    }
+  })
+}
+
 function thrown(action) {
   try {
     action()
@@ -179,6 +198,12 @@ test('runs an empty registry without creating the legacy table', nativeTestOptio
     })
     assert.deepEqual(summary, {
       recovery: { scannedCount: 0, appliedCount: 0, interruptedCount: 0 },
+      adoption: {
+        adoptedCount: 0,
+        skippedCount: 0,
+        totalAdoptable: 0,
+        records: []
+      },
       execution: { executedCount: 0, skippedCount: 0, total: 0, records: [] },
       targetVersion: null,
       legacyTablePresent: false
@@ -201,12 +226,113 @@ test('executes pending migrations and reports only safe records', nativeTestOpti
     ])
     const summary = runMigrationStartupGate({ database, mainDbPath: database.name, registry, now: () => FIXED_NOW })
     assert.equal(summary.execution.executedCount, 2)
+    assert.deepEqual(summary.adoption, {
+      adoptedCount: 0,
+      skippedCount: 0,
+      totalAdoptable: 0,
+      records: [],
+      stopped: { id: '0001_initial', reason: 'requires-execution' }
+    })
     assert.deepEqual(summary.execution.records.map(({ id, status }) => ({ id, status })), [
       { id: '0001_initial', status: 'applied' },
       { id: '0002_second', status: 'applied' }
     ])
     assert.equal(JSON.stringify(summary).includes('checksum'), false)
     assert.equal(JSON.stringify(summary).includes('hash'), false)
+  } finally {
+    database.close()
+    cleanup(directory)
+  }
+})
+
+test('adopts satisfied schema without executing dangerous source', nativeTestOptions, () => {
+  const directory = tempDirectory()
+  const database = openDatabase(directory)
+  try {
+    database.exec(`
+      CREATE TABLE private_resources (private_title TEXT NOT NULL DEFAULT 'ready');
+      CREATE TABLE must_survive (id INTEGER);
+    `)
+    const registry = createMigrationRegistry([
+      compatibilityDefinition(
+        '0001_adopt',
+        'DROP TABLE must_survive;',
+        'private_resources',
+        'private_title'
+      )
+    ])
+
+    const summary = runMigrationStartupGate({
+      database,
+      mainDbPath: database.name,
+      registry,
+      now: () => FIXED_NOW
+    })
+
+    assert.deepEqual(summary.adoption, {
+      adoptedCount: 1,
+      skippedCount: 0,
+      totalAdoptable: 1,
+      records: [{ id: '0001_adopt', status: 'adopted' }]
+    })
+    assert.equal(summary.execution.executedCount, 0)
+    assert.ok(database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'must_survive'").get())
+    assert.ok(Object.isFrozen(summary.adoption))
+    assert.ok(Object.isFrozen(summary.adoption.records))
+    assert.ok(Object.isFrozen(summary.adoption.records[0]))
+    const serialized = JSON.stringify(summary)
+    assert.doesNotMatch(serialized, /private_resources|private_title|DROP TABLE|checksum|[A-Za-z]:\\/)
+  } finally {
+    database.close()
+    cleanup(directory)
+  }
+})
+
+test('adopts a satisfied prefix then executes from the missing stop', nativeTestOptions, () => {
+  const directory = tempDirectory()
+  const database = openDatabase(directory)
+  try {
+    database.exec(`
+      CREATE TABLE first_table (first_column TEXT NOT NULL DEFAULT 'ready');
+      CREATE TABLE second_table (id INTEGER);
+      CREATE TABLE must_survive (id INTEGER);
+    `)
+    const registry = createMigrationRegistry([
+      compatibilityDefinition(
+        '0001_first',
+        'DROP TABLE must_survive;',
+        'first_table',
+        'first_column'
+      ),
+      compatibilityDefinition(
+        '0002_second',
+        "ALTER TABLE second_table ADD COLUMN second_column TEXT NOT NULL DEFAULT 'ready';",
+        'second_table',
+        'second_column'
+      )
+    ])
+
+    const summary = runMigrationStartupGate({
+      database,
+      mainDbPath: database.name,
+      registry,
+      now: () => FIXED_NOW
+    })
+
+    assert.deepEqual(summary.adoption, {
+      adoptedCount: 1,
+      skippedCount: 0,
+      totalAdoptable: 1,
+      records: [{ id: '0001_first', status: 'adopted' }],
+      stopped: { id: '0002_second', reason: 'missing' }
+    })
+    assert.deepEqual(summary.execution.records, [
+      { id: '0002_second', status: 'applied' }
+    ])
+    assert.equal(summary.execution.executedCount, 1)
+    assert.ok(database.pragma('table_xinfo(second_table)').some(({ name }) => name === 'second_column'))
+    assert.ok(database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'must_survive'").get())
+    assert.ok(Object.isFrozen(summary.adoption.stopped))
   } finally {
     database.close()
     cleanup(directory)
@@ -221,20 +347,31 @@ test('preserves the legacy schema and rows, including special text', nativeTestO
       CREATE TABLE schema_migrations (version TEXT, note TEXT);
       INSERT INTO schema_migrations (version, note) VALUES ('v1', 'a; ''quoted''');
       INSERT INTO schema_migrations (version, note) VALUES ('v2', '汉字');
+      CREATE TABLE adoption_probe (ready TEXT NOT NULL DEFAULT 'ready');
     `)
     const beforeSchema = database.prepare("SELECT sql FROM sqlite_master WHERE name = 'schema_migrations'").get()
     const beforeRows = database.prepare('SELECT * FROM schema_migrations ORDER BY version').all()
     const summary = runMigrationStartupGate({
       database,
       mainDbPath: database.name,
-      registry: createMigrationRegistry([definition('0001_new', 'CREATE TABLE new_table (id INTEGER);')]),
+      registry: createMigrationRegistry([
+        compatibilityDefinition(
+          '0001_adopt',
+          'DROP TABLE adoption_probe;',
+          'adoption_probe',
+          'ready'
+        )
+      ]),
       now: () => FIXED_NOW
     })
     const afterSchema = database.prepare("SELECT sql FROM sqlite_master WHERE name = 'schema_migrations'").get()
     const afterRows = database.prepare('SELECT * FROM schema_migrations ORDER BY version').all()
     assert.equal(summary.legacyTablePresent, true)
+    assert.equal(summary.adoption.adoptedCount, 1)
+    assert.equal(summary.execution.executedCount, 0)
     assert.deepEqual(afterSchema, beforeSchema)
     assert.deepEqual(afterRows, beforeRows)
+    assert.ok(database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'adoption_probe'").get())
   } finally {
     database.close()
     cleanup(directory)
@@ -314,6 +451,8 @@ test('reconciles an applied started attempt without re-executing it', nativeTest
     const summary = runMigrationStartupGate({ database, mainDbPath: database.name, registry, now: () => FIXED_NOW })
     assert.equal(summary.recovery.appliedCount, 1)
     assert.equal(summary.recovery.interruptedCount, 0)
+    assert.equal(summary.adoption.totalAdoptable, 0)
+    assert.deepEqual(summary.adoption.records, [])
     assert.equal(summary.execution.executedCount, 0)
     assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE name = 'must_not_execute'").get(), undefined)
   } finally {
@@ -363,9 +502,22 @@ test('supports deferred target versions', nativeTestOptions, () => {
   const directory = tempDirectory()
   const database = openDatabase(directory)
   try {
+    database.exec('CREATE TABLE first (id INTEGER);')
     const registry = createMigrationRegistry([
-      definition('0001_initial', 'CREATE TABLE first (id INTEGER);'),
-      definition('0002_deferred', 'CREATE TABLE deferred (id INTEGER);')
+      compatibilityDefinition(
+        '0001_initial',
+        'DROP TABLE first;',
+        'first',
+        'id',
+        { type: 'INTEGER', notNull: false, defaultValue: null }
+      ),
+      compatibilityDefinition(
+        '0002_deferred',
+        'CREATE TABLE deferred (id INTEGER);',
+        'deferred',
+        'id',
+        { type: 'INTEGER', notNull: false, defaultValue: null }
+      )
     ])
     const summary = runMigrationStartupGate({
       database,
@@ -375,8 +527,58 @@ test('supports deferred target versions', nativeTestOptions, () => {
       now: () => FIXED_NOW
     })
     assert.equal(summary.targetVersion, '0001_initial')
-    assert.equal(summary.execution.executedCount, 1)
+    assert.equal(summary.adoption.adoptedCount, 1)
+    assert.deepEqual(summary.adoption.records, [{ id: '0001_initial', status: 'adopted' }])
+    assert.equal(summary.execution.executedCount, 0)
+    assert.ok(database.prepare("SELECT name FROM sqlite_master WHERE name = 'first'").get())
     assert.equal(database.prepare("SELECT name FROM sqlite_master WHERE name = 'deferred'").get(), undefined)
+  } finally {
+    database.close()
+    cleanup(directory)
+  }
+})
+
+test('maps adoption failures safely and releases the sidecar lock', nativeTestOptions, () => {
+  const directory = tempDirectory()
+  const database = openDatabase(directory)
+  try {
+    database.exec(`
+      CREATE TABLE schema_migrations (version TEXT NOT NULL);
+      INSERT INTO schema_migrations VALUES ('legacy-1');
+      CREATE TABLE private_resources (
+        private_title INTEGER NOT NULL DEFAULT 'ready'
+      );
+      CREATE TABLE must_survive (id INTEGER);
+    `)
+    const registry = createMigrationRegistry([
+      compatibilityDefinition(
+        '0001_incompatible',
+        'DROP TABLE must_survive;',
+        'private_resources',
+        'private_title'
+      )
+    ])
+    const beforeLegacy = database.prepare('SELECT * FROM schema_migrations').all()
+
+    const error = thrown(() => runMigrationStartupGate({
+      database,
+      mainDbPath: database.name,
+      registry,
+      now: () => FIXED_NOW
+    }))
+
+    assert.equal(error.code, MIGRATION_STARTUP_GATE_ERROR_CODES.FAILED)
+    assert.equal(error.cause?.code, 'MIGRATION_ADOPTION_SCHEMA_INCOMPATIBLE')
+    assert.doesNotMatch(
+      error.message,
+      /private_resources|private_title|DROP TABLE|must_survive|schema_migrations|checksum|\\|\//
+    )
+    assert.deepEqual(database.prepare('SELECT * FROM schema_migrations').all(), beforeLegacy)
+    assert.ok(database.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'must_survive'").get())
+
+    const lock = acquireMigrationLock(database.name, { busyTimeoutMs: 100 })
+    assert.equal(lock.state, 'active')
+    lock.release()
   } finally {
     database.close()
     cleanup(directory)

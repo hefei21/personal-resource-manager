@@ -7,6 +7,7 @@ import {
   isMigrationLockBusyError,
   MIGRATION_LOCK_BUSY
 } from './migrationLock.js'
+import { adoptMigrationPrefix } from './migrationAdoption.js'
 import { createMigrationPlan } from './migrationPlan.js'
 import {
   ensureMigrationControlTables,
@@ -397,6 +398,7 @@ function runLockedGate({ database, mainDbPath, registry, targetVersion, now, loc
   if (legacyBefore.present) installLegacyReadOnlyGuards(database)
   ensureMigrationControlTables(database)
   const recovery = reconcileStartedMigrationAttempts({ database, lock, now })
+  const adoption = adoptMigrationPrefix({ database, registry, lock, targetVersion, now })
   const appliedRecords = mapAppliedRecords(listAppliedMigrations(database))
   const plan = createMigrationPlan(registry, appliedRecords, { targetVersion })
   const execution = executeMigrationBatch({ database, registry, plan, lock, now })
@@ -408,6 +410,13 @@ function runLockedGate({ database, mainDbPath, registry, targetVersion, now, loc
       scannedCount: recovery.scannedCount,
       appliedCount: recovery.appliedCount,
       interruptedCount: recovery.interruptedCount
+    },
+    adoption: {
+      adoptedCount: adoption.adoptedCount,
+      skippedCount: adoption.skippedCount,
+      totalAdoptable: adoption.totalAdoptable,
+      records: [...adoption.adopted, ...adoption.skipped].map(({ id, status }) => ({ id, status })),
+      ...(adoption.stopped ? { stopped: { ...adoption.stopped } } : {})
     },
     execution: {
       executedCount: execution.executedCount,
