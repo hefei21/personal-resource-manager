@@ -775,12 +775,12 @@ test('incompatible bookmarks columns fail closed at the matching migration with 
 
 test('incompatible anime columns stop at early, middle, and final migration prefixes', nativeTestOptions, () => {
   const cases = [
-    { column: 'name_cn', type: 'INTEGER', expectedPrefixLength: 6 },
-    { column: 'eps', type: 'TEXT', expectedPrefixLength: 10 },
-    { column: 'cover_image_data', type: 'INTEGER', expectedPrefixLength: 20 }
+    { column: 'name_cn', type: 'INTEGER', conflictIndex: 0, expectedPrefixLength: 0 },
+    { column: 'eps', type: 'TEXT', conflictIndex: 4, expectedPrefixLength: 10 },
+    { column: 'cover_image_data', type: 'INTEGER', conflictIndex: 14, expectedPrefixLength: 20 }
   ]
 
-  for (const { column, type, expectedPrefixLength } of cases) {
+  for (const { column, type, conflictIndex, expectedPrefixLength } of cases) {
     const directory = temporaryDirectory()
     const databasePath = path.join(directory, 'app.db')
     const database = new Database(databasePath)
@@ -826,10 +826,10 @@ test('incompatible anime columns stop at early, middle, and final migration pref
           expectedPrefixLength
         )
 
-        const conflictIndex = expectedPrefixLength - 6
         for (const { name, type: expectedType, notNull, defaultValue } of expectedAnimeMigrations.slice(0, conflictIndex).map(({ compatibility }) => compatibility.column)) {
           assertRegisteredColumn(verification, 'anime', name, expectedType, notNull ? 1 : 0, defaultValue)
         }
+        assert.equal(readColumn(verification, 'anime', column).type, type)
         for (const { name } of expectedAnimeMigrations.slice(conflictIndex + 1).map(({ compatibility }) => compatibility.column)) {
           assert.equal(
             verification.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('anime') WHERE name = ?").get(name).count,
