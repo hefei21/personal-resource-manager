@@ -253,11 +253,54 @@ const expectedAnimeMigrations = [
   }
 ]
 
-test('application registry freezes exactly the 21 C2c single-column migrations', () => {
+const expectedGamesMigrations = [
+  {
+    id: '0022_games_achievements_total',
+    source: 'ALTER TABLE games ADD COLUMN achievements_total INTEGER DEFAULT 0;',
+    checksum: 'd4f81027f3ce90dc323216db9bc9ab85280e6509726c93ef0158f5c3862dd201',
+    compatibility: {
+      kind: 'column',
+      table: 'games',
+      column: { name: 'achievements_total', type: 'INTEGER', notNull: false, defaultValue: '0' }
+    }
+  },
+  {
+    id: '0023_games_achievements_completed',
+    source: 'ALTER TABLE games ADD COLUMN achievements_completed INTEGER DEFAULT 0;',
+    checksum: '6ffd948cc9379723232f041b69a48115b642c7ca64c5e4549fcc9606bd179424',
+    compatibility: {
+      kind: 'column',
+      table: 'games',
+      column: { name: 'achievements_completed', type: 'INTEGER', notNull: false, defaultValue: '0' }
+    }
+  },
+  {
+    id: '0024_games_header_cover_image',
+    source: 'ALTER TABLE games ADD COLUMN header_cover_image TEXT;',
+    checksum: '8f404920018e9d44c137960df21a3225aa5e745936ca2148b70612c764295ce4',
+    compatibility: {
+      kind: 'column',
+      table: 'games',
+      column: { name: 'header_cover_image', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0025_games_header_cover_image_data',
+    source: 'ALTER TABLE games ADD COLUMN header_cover_image_data TEXT;',
+    checksum: '8e8d124c6726134aea35c08c4729ce6654ed836d7a829f7d62d1f97952f1b037',
+    compatibility: {
+      kind: 'column',
+      table: 'games',
+      column: { name: 'header_cover_image_data', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  }
+]
+
+test('application registry freezes exactly the 25 C2c single-column migrations', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 21)
+  assert.equal(applicationMigrationRegistry.migrations.length, 25)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -267,7 +310,8 @@ test('application registry freezes exactly the 21 C2c single-column migrations',
       '0004_books_content_cache',
       '0005_bookmarks_icon',
       '0006_bookmarks_icon_data',
-      ...expectedAnimeMigrations.map(({ id }) => id)
+      ...expectedAnimeMigrations.map(({ id }) => id),
+      ...expectedGamesMigrations.map(({ id }) => id)
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -337,7 +381,8 @@ test('application registry freezes exactly the 21 C2c single-column migrations',
       }
     }
   ])
-  assert.deepEqual(applicationMigrationRegistry.migrations.slice(6), expectedAnimeMigrations)
+  assert.deepEqual(applicationMigrationRegistry.migrations.slice(6, 21), expectedAnimeMigrations)
+  assert.deepEqual(applicationMigrationRegistry.migrations.slice(21), expectedGamesMigrations)
 })
 
 test('static contract runs the startup gate once after base tables and before all later initialization', () => {
@@ -379,7 +424,19 @@ test('static contract runs the startup gate once after base tables and before al
       new RegExp(`${name}\\s+${type}${defaultClause}\\s*,`, 'u')
     )
   }
-  assert.match(databaseSource, /gameNewFields[\s\S]*achievements_total/u)
+  assert.doesNotMatch(databaseSource, /gameColumns|gameNewFields|ALTER TABLE games ADD COLUMN/u)
+  const gamesTableStart = databaseSource.indexOf('CREATE TABLE IF NOT EXISTS games (')
+  const gamesTableEnd = databaseSource.indexOf('    )`,', gamesTableStart)
+  assert.ok(gamesTableStart >= 0)
+  assert.ok(gamesTableEnd > gamesTableStart)
+  const baseGamesSource = databaseSource.slice(gamesTableStart, gamesTableEnd)
+  for (const { name, type, defaultValue } of expectedGamesMigrations.map(({ compatibility }) => compatibility.column)) {
+    const defaultClause = defaultValue === null ? '' : `\\s+DEFAULT\\s+${defaultValue}`
+    assert.match(
+      baseGamesSource,
+      new RegExp(`${name}\\s+${type}${defaultClause}\\s*,`, 'u')
+    )
+  }
   assert.match(databaseSource, /musicNewFields[\s\S]*lyrics_source/u)
   assert.match(databaseSource, /codeColumns[\s\S]*languages/u)
   assert.match(databaseSource, /readingProgressColumns[\s\S]*hasCfi/u)
@@ -420,7 +477,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.ok(initializeCatch > listenCall)
 })
 
-test('empty database adopts all 21 registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
+test('empty database adopts all 25 registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   try {
@@ -435,7 +492,7 @@ test('empty database adopts all 21 registered columns without executing ALTER an
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 21)
+      assertApplicationMigrationLedger(verification, 25)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
@@ -444,6 +501,9 @@ test('empty database adopts all 21 registered columns without executing ALTER an
       assertRegisteredColumn(verification, 'bookmarks', 'icon_data', 'TEXT', 0, null)
       for (const { name, type, notNull, defaultValue } of expectedAnimeMigrations.map(({ compatibility }) => compatibility.column)) {
         assertRegisteredColumn(verification, 'anime', name, type, notNull ? 1 : 0, defaultValue)
+      }
+      for (const { name, type, notNull, defaultValue } of expectedGamesMigrations.map(({ compatibility }) => compatibility.column)) {
+        assertRegisteredColumn(verification, 'games', name, type, notNull ? 1 : 0, defaultValue)
       }
     } finally {
       verification.close()
@@ -478,7 +538,7 @@ test('restarting the current database does not add registered migration attempts
         ledger: verification.prepare('SELECT COUNT(*) AS count FROM prm_schema_migrations').get().count,
         attempts: verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count
       }, firstCounts)
-      assertApplicationMigrationLedger(verification, 21)
+      assertApplicationMigrationLedger(verification, 25)
     } finally {
       verification.close()
     }
@@ -837,12 +897,6 @@ test('incompatible anime columns stop at early, middle, and final migration pref
           "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_title'"
         ).get().count, 0)
         assert.equal(verification.prepare(
-          "SELECT COUNT(*) AS count FROM pragma_table_info('games') WHERE name = 'achievements_total'"
-        ).get().count, 0)
-        assert.equal(verification.prepare(
-          "SELECT COUNT(*) AS count FROM pragma_table_info('music') WHERE name = 'has_lyrics'"
-        ).get().count, 0)
-        assert.equal(verification.prepare(
           "SELECT COUNT(*) AS count FROM pragma_table_info('code_repositories') WHERE name = 'languages'"
         ).get().count, 0)
         assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
@@ -855,7 +909,78 @@ test('incompatible anime columns stop at early, middle, and final migration pref
   }
 })
 
-test('old anime schema executes all 21 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
+test('incompatible games columns preserve the frozen adoption and execution prefixes', nativeTestOptions, () => {
+  const cases = [
+    { column: 'achievements_total', type: 'TEXT', conflictIndex: 0, expectedPrefixLength: 0 },
+    { column: 'achievements_completed', type: 'TEXT', conflictIndex: 1, expectedPrefixLength: 22 },
+    { column: 'header_cover_image', type: 'INTEGER', conflictIndex: 2, expectedPrefixLength: 23 },
+    { column: 'header_cover_image_data', type: 'INTEGER', conflictIndex: 3, expectedPrefixLength: 24 }
+  ]
+
+  for (const { column, type, conflictIndex, expectedPrefixLength } of cases) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    try {
+      database.exec(`
+        CREATE TABLE games (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          steam_appid INTEGER UNIQUE,
+          title TEXT NOT NULL,
+          ${column} ${type}
+        );
+      `)
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.notEqual(result.status, 0, output)
+      assert.deepEqual(readChildResult(output), {
+        ready: false,
+        code: 'MIGRATION_STARTUP_GATE_FAILED'
+      })
+
+      const verification = new Database(databasePath)
+      try {
+        assert.deepEqual(
+          verification.prepare('SELECT migration_id FROM prm_schema_migrations ORDER BY migration_id').all(),
+          applicationMigrationRegistry.migrations
+            .slice(0, expectedPrefixLength)
+            .map(({ id }) => ({ migration_id: id }))
+        )
+        assert.equal(
+          verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count,
+          expectedPrefixLength
+        )
+        for (const { name, type: expectedType, notNull, defaultValue } of expectedGamesMigrations
+          .slice(0, conflictIndex)
+          .map(({ compatibility }) => compatibility.column)) {
+          assertRegisteredColumn(verification, 'games', name, expectedType, notNull ? 1 : 0, defaultValue)
+        }
+        assert.equal(readColumn(verification, 'games', column).type, type)
+        for (const { name } of expectedGamesMigrations
+          .slice(conflictIndex + 1)
+          .map(({ compatibility }) => compatibility.column)) {
+          assert.equal(
+            verification.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('games') WHERE name = ?").get(name).count,
+            0
+          )
+        }
+        assert.equal(verification.prepare(
+          "SELECT COUNT(*) AS count FROM pragma_table_info('code_repositories') WHERE name = 'languages'"
+        ).get().count, 0)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('old anime and games schemas execute all 25 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -918,6 +1043,11 @@ test('old anime schema executes all 21 registered migrations before remaining in
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE TABLE games (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        steam_appid INTEGER UNIQUE,
+        title TEXT NOT NULL
+      );
     `)
   } finally {
     database.close()
@@ -935,7 +1065,7 @@ test('old anime schema executes all 21 registered migrations before remaining in
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 21)
+      assertApplicationMigrationLedger(verification, 25)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
@@ -944,6 +1074,9 @@ test('old anime schema executes all 21 registered migrations before remaining in
       assertRegisteredColumn(verification, 'bookmarks', 'icon_data', 'TEXT', 0, null)
       for (const { name, type, notNull, defaultValue } of expectedAnimeMigrations.map(({ compatibility }) => compatibility.column)) {
         assertRegisteredColumn(verification, 'anime', name, type, notNull ? 1 : 0, defaultValue)
+      }
+      for (const { name, type, notNull, defaultValue } of expectedGamesMigrations.map(({ compatibility }) => compatibility.column)) {
+        assertRegisteredColumn(verification, 'games', name, type, notNull ? 1 : 0, defaultValue)
       }
       assert.equal(verification.prepare(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_categories_sort_order'"

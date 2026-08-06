@@ -354,6 +354,8 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       cover_image_data TEXT,
       header_cover_image TEXT,
       header_cover_image_data TEXT,
+      achievements_total INTEGER DEFAULT 0,
+      achievements_completed INTEGER DEFAULT 0,
       description TEXT,
       developers TEXT,
       publishers TEXT,
@@ -554,39 +556,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       database.exec('DROP TABLE documents')
       database.exec('ALTER TABLE documents_new RENAME TO documents')
       console.log('✓ version 字段类型修改成功')
-    }
-
-    // 检查并添加成就字段到 games 表
-    const gameColumns = database.prepare("PRAGMA table_info(games)").all()
-    console.log('games 表当前字段:', gameColumns.map(c => c.name).join(', '))
-
-    const gameNewFields = [
-      { name: 'achievements_total', sql: 'ALTER TABLE games ADD COLUMN achievements_total INTEGER DEFAULT 0' },
-      { name: 'achievements_completed', sql: 'ALTER TABLE games ADD COLUMN achievements_completed INTEGER DEFAULT 0' }
-    ]
-
-    for (const field of gameNewFields) {
-      const hasField = gameColumns.some(col => col.name === field.name)
-      if (!hasField) {
-        console.log(`添加 ${field.name} 字段到 games 表...`)
-        database.exec(field.sql)
-        console.log(`✓ ${field.name} 字段添加成功`)
-      }
-    }
-
-    // 检查并添加横向封面字段到 games 表
-    const hasHeaderCoverImage = gameColumns.some(col => col.name === 'header_cover_image')
-    if (!hasHeaderCoverImage) {
-      console.log('添加 header_cover_image 字段到 games 表...')
-      database.exec('ALTER TABLE games ADD COLUMN header_cover_image TEXT')
-      console.log('✓ header_cover_image 字段添加成功')
-    }
-
-    const hasHeaderCoverImageData = gameColumns.some(col => col.name === 'header_cover_image_data')
-    if (!hasHeaderCoverImageData) {
-      console.log('添加 header_cover_image_data 字段到 games 表...')
-      database.exec('ALTER TABLE games ADD COLUMN header_cover_image_data TEXT')
-      console.log('✓ header_cover_image_data 字段添加成功')
     }
 
     // 检查并添加 music 表新字段（支持新版音乐管理）

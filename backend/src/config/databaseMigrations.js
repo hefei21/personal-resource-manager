@@ -294,5 +294,61 @@ export const applicationMigrationRegistry = createMigrationRegistry([
         defaultValue: null
       }
     }
+  },
+  {
+    id: '0022_games_achievements_total',
+    source: 'ALTER TABLE games ADD COLUMN achievements_total INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'games',
+      column: {
+        name: 'achievements_total',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0023_games_achievements_completed',
+    source: 'ALTER TABLE games ADD COLUMN achievements_completed INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'games',
+      column: {
+        name: 'achievements_completed',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0024_games_header_cover_image',
+    source: 'ALTER TABLE games ADD COLUMN header_cover_image TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'games',
+      column: {
+        name: 'header_cover_image',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0025_games_header_cover_image_data',
+    source: 'ALTER TABLE games ADD COLUMN header_cover_image_data TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'games',
+      column: {
+        name: 'header_cover_image_data',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
   }
 ])
