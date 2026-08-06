@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { createMigrationRegistry, MigrationPlanError } from './migrationPlan.js'
 import {
   finishMigrationAttempt,
@@ -92,7 +93,17 @@ function normalizeRegistry(registry) {
 
   let normalized
   try {
-    normalized = createMigrationRegistry(registry.migrations.map(({ id, source, checksum }) => ({ id, source, checksum })))
+    normalized = createMigrationRegistry(registry.migrations.map((migration) => {
+      const definition = {
+        id: migration.id,
+        source: migration.source,
+        checksum: migration.checksum
+      }
+      if (Object.hasOwn(migration, 'compatibility')) {
+        definition.compatibility = migration.compatibility
+      }
+      return definition
+    }))
   } catch (error) {
     if (error instanceof MigrationPlanError) {
       fail('MIGRATION_EXECUTOR_REGISTRY_INVALID', 'Migration registry is invalid.', error)
@@ -109,7 +120,9 @@ function normalizeRegistry(registry) {
     if (
       source.id !== migration.id ||
       source.checksum !== migration.checksum ||
-      source.source !== migration.source
+      source.source !== migration.source ||
+      Object.hasOwn(source, 'compatibility') !== Object.hasOwn(migration, 'compatibility') ||
+      !isDeepStrictEqual(source.compatibility, migration.compatibility)
     ) {
       fail('MIGRATION_EXECUTOR_REGISTRY_INVALID', 'Migration registry is invalid.')
     }

@@ -52,6 +52,24 @@ function definition(id, source) {
   return { id, source }
 }
 
+function compatibilityDefinition(id, source, overrides = {}) {
+  return {
+    id,
+    source,
+    compatibility: {
+      kind: 'column',
+      table: 'resources',
+      column: {
+        name: 'title',
+        type: 'TEXT',
+        notNull: true,
+        defaultValue: "'ready'"
+      },
+      ...overrides
+    }
+  }
+}
+
 function batch(definitions, appliedRecords = []) {
   const registry = createMigrationRegistry(definitions)
   return {
@@ -143,6 +161,79 @@ test('rejects malformed plans and registry checksum/source mismatches', () => {
 
   const mismatchedPlan = { ...request.plan, pending: [{ id: '0001_initial', checksum: 'b'.repeat(64) }] }
   assert.equal(thrown(() => executeMigrationBatch({ ...request, database: fakeDatabase(), plan: mismatchedPlan })).code, 'MIGRATION_EXECUTOR_PLAN_REGISTRY_MISMATCH')
+})
+
+test('preserves normalized compatibility while validating the registry', () => {
+  const request = batch([
+    compatibilityDefinition('0001_expand', 'ALTER TABLE resources ADD COLUMN title TEXT NOT NULL DEFAULT \'ready\';')
+  ])
+  const probe = probeDatabase()
+  const error = thrown(() => executeMigrationBatch({ ...request, database: probe.database }))
+
+  assert.equal(error.code, 'MIGRATION_EXECUTION_FAILED')
+  assert.notEqual(error.code, 'MIGRATION_EXECUTOR_REGISTRY_INVALID')
+  assert.deepEqual(probe.counts, { prepareCalls: 1, execCalls: 0, transactionCalls: 0 })
+})
+
+test('rejects stripped, altered, or non-normalized compatibility before any database access', () => {
+  const request = batch([
+    compatibilityDefinition('0001_expand', 'ALTER TABLE resources ADD COLUMN title TEXT NOT NULL DEFAULT \'ready\';')
+  ])
+  const migration = request.registry.migrations[0]
+  const base = {
+    id: migration.id,
+    source: migration.source,
+    checksum: migration.checksum
+  }
+  const validCompatibility = migration.compatibility
+  const invalidRegistries = [
+    { migrations: [{ ...base }] },
+    {
+      migrations: [{
+        ...base,
+        compatibility: {
+          ...validCompatibility,
+          column: { ...validCompatibility.column, type: 'INTEGER' }
+        }
+      }]
+    },
+    {
+      migrations: [{
+        ...base,
+        compatibility: {
+          ...validCompatibility,
+          column: { ...validCompatibility.column, type: ' text ' }
+        }
+      }]
+    },
+    {
+      migrations: [{
+        ...base,
+        checksum: 'a'.repeat(64),
+        compatibility: validCompatibility
+      }]
+    },
+    {
+      migrations: [{
+        ...base,
+        compatibility: { ...validCompatibility, unsupported: true }
+      }]
+    },
+    {
+      migrations: [{ ...base, compatibility: undefined }]
+    }
+  ]
+
+  for (const registry of invalidRegistries) {
+    const probe = probeDatabase()
+    const error = thrown(() => executeMigrationBatch({
+      ...request,
+      database: probe.database,
+      registry
+    }))
+    assert.equal(error.code, 'MIGRATION_EXECUTOR_REGISTRY_INVALID')
+    assert.deepEqual(probe.counts, { prepareCalls: 0, execCalls: 0, transactionCalls: 0 })
+  }
 })
 
 test('requires applied, pending, and deferred segments to be complete and ordered', () => {
@@ -277,6 +368,49 @@ test('executes pending migrations in order and records applied attempts', native
     assert.equal(Object.isFrozen(summary), true)
     assert.equal(Object.isFrozen(summary.executed), true)
     assert.equal('source' in summary, false)
+  } finally {
+    database.close()
+  }
+})
+
+test('executes a pending compatibility migration without exposing its condition', nativeTestOptions, () => {
+  const database = openDatabase()
+  try {
+    database.exec('CREATE TABLE private_resources (id INTEGER);')
+    const request = batch([{
+      id: '0001_expand',
+      source: "ALTER TABLE private_resources ADD COLUMN private_title TEXT NOT NULL DEFAULT '/synthetic/private.db';",
+      compatibility: {
+        kind: 'column',
+        table: 'private_resources',
+        column: {
+          name: 'private_title',
+          type: 'TEXT',
+          notNull: true,
+          defaultValue: "'/synthetic/private.db'"
+        }
+      }
+    }])
+    const migration = request.registry.migrations[0]
+
+    const summary = executeMigrationBatch({ database, ...request })
+
+    assert.deepEqual(summary, {
+      executed: [{ id: '0001_expand', status: 'applied' }],
+      skipped: [],
+      executedCount: 1,
+      skippedCount: 0,
+      total: 1
+    })
+    assert.ok(database.pragma('table_xinfo(private_resources)').some(({ name }) => name === 'private_title'))
+    assert.equal(getAppliedMigration(database, migration.id).checksum, migration.checksum)
+    assert.deepEqual(listMigrationAttempts(database).map(({ migrationId, status }) => ({ migrationId, status })), [
+      { migrationId: '0001_expand', status: 'applied' }
+    ])
+
+    const serialized = JSON.stringify(summary)
+    assert.doesNotMatch(serialized, /private_resources|private_title|ALTER TABLE|synthetic\/private\.db/)
+    assert.equal(serialized.includes(migration.checksum), false)
   } finally {
     database.close()
   }
