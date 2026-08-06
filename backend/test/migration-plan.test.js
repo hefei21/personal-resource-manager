@@ -12,6 +12,28 @@ import {
 const source = (name) => `-- migration ${name}\nCREATE TABLE ${name} (id INTEGER);\n`
 const definition = (id) => ({ id, source: source(id) })
 
+function tableShape(overrides = {}) {
+  return {
+    strict: false,
+    withoutRowid: false,
+    columns: [
+      { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
+      { name: 'title', type: 'TEXT', notNull: true, defaultValue: "'ready'", primaryKeyPosition: 0 }
+    ],
+    ...overrides
+  }
+}
+
+function tableTransition(overrides = {}) {
+  return {
+    kind: 'table-transition',
+    table: 'items',
+    target: tableShape(),
+    legacy: [tableShape({ strict: true })],
+    ...overrides
+  }
+}
+
 function errorCode(action) {
   return thrownError(action).code
 }
@@ -143,6 +165,50 @@ test('includes normalized compatibility content in the checksum', () => {
   ]) {
     assert.notEqual(
       defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: { kind: 'column', ...change } }).checksum,
+      checksum
+    )
+  }
+})
+
+test('includes normalized table-transition shape, flags, and legacy alternatives in the checksum', () => {
+  const base = tableTransition()
+  const checksum = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: base
+  }).checksum
+  const migration = defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: base })
+
+  assert.ok(Object.isFrozen(migration.compatibility))
+  assert.ok(Object.isFrozen(migration.compatibility.target))
+  assert.ok(Object.isFrozen(migration.compatibility.target.columns))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].columns))
+
+  const changes = [
+    {
+      ...base,
+      target: tableShape({ columns: [base.target.columns[1], base.target.columns[0]] })
+    },
+    {
+      ...base,
+      target: tableShape({ strict: true }),
+      legacy: [tableShape({ withoutRowid: true })]
+    },
+    { ...base, target: tableShape({ withoutRowid: true }) },
+    {
+      ...base,
+      legacy: [tableShape({
+        columns: base.target.columns.map((column) =>
+          column.name === 'title' ? { ...column, defaultValue: '0' } : column
+        )
+      })]
+    }
+  ]
+
+  for (const compatibility of changes) {
+    assert.notEqual(
+      defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility }).checksum,
       checksum
     )
   }

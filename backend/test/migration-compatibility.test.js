@@ -3,7 +3,8 @@ import { createRequire } from 'node:module'
 import test from 'node:test'
 import {
   checkMigrationCompatibility,
-  MigrationCompatibilityError
+  MigrationCompatibilityError,
+  normalizeMigrationCompatibility
 } from '../src/config/migrationCompatibility.js'
 
 const require = createRequire(import.meta.url)
@@ -42,6 +43,28 @@ function compatibility(overrides = {}) {
   }
 }
 
+function tableShape(overrides = {}) {
+  return {
+    strict: false,
+    withoutRowid: false,
+    columns: [
+      { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
+      { name: 'title', type: 'TEXT', notNull: true, defaultValue: "'ready'", primaryKeyPosition: 0 }
+    ],
+    ...overrides
+  }
+}
+
+function tableTransition(overrides = {}) {
+  return {
+    kind: 'table-transition',
+    table: 'items',
+    target: tableShape(),
+    legacy: [tableShape({ strict: true })],
+    ...overrides
+  }
+}
+
 function openDatabase(schema) {
   const database = new Database(':memory:')
   database.exec(schema)
@@ -57,6 +80,320 @@ function metadataDatabase(column) {
     }
   }
 }
+
+function tableMetadataColumns(shape) {
+  return shape.columns.map((column, cid) => ({
+    cid,
+    name: column.name,
+    type: column.type,
+    not_null: column.notNull ? 1 : 0,
+    dflt_value: column.defaultValue,
+    pk: column.primaryKeyPosition,
+    hidden: 0
+  }))
+}
+
+test('normalizes, detaches, and deeply freezes a table-transition condition', () => {
+  const input = tableTransition({
+    target: tableShape({
+      strict: true,
+      columns: tableShape().columns.map((column) => ({ ...column, type: ` ${column.type.toLowerCase()} ` }))
+    }),
+    legacy: [tableShape(), tableShape({ withoutRowid: true })]
+  })
+  const normalized = normalizeMigrationCompatibility(input)
+
+  assert.deepEqual(normalized.target.columns[0], {
+    name: 'id',
+    type: 'INTEGER',
+    notNull: false,
+    defaultValue: null,
+    primaryKeyPosition: 1
+  })
+  assert.ok(Object.isFrozen(normalized))
+  assert.ok(Object.isFrozen(normalized.target))
+  assert.ok(Object.isFrozen(normalized.target.columns))
+  assert.ok(normalized.target.columns.every(Object.isFrozen))
+  assert.ok(Object.isFrozen(normalized.legacy))
+  assert.ok(normalized.legacy.every(Object.isFrozen))
+  assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.columns)))
+
+  input.table = 'changed'
+  input.target.columns[0].name = 'changed'
+  input.legacy[0].columns.push({
+    name: 'extra', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0
+  })
+  assert.equal(normalized.table, 'items')
+  assert.equal(normalized.target.columns[0].name, 'id')
+  assert.equal(normalized.legacy[0].columns.length, 2)
+})
+
+test('rejects malformed table-transition shapes and unsupported keys', () => {
+  const valid = tableTransition()
+  const targetWithoutStrict = { ...valid.target }
+  delete targetWithoutStrict.strict
+  const invalidInputs = [
+    { ...valid, extra: true },
+    { ...valid, target: targetWithoutStrict },
+    { ...valid, target: { ...valid.target, columns: [] } },
+    { ...valid, target: { ...valid.target, strict: 'false' } },
+    { ...valid, target: { ...valid.target, withoutRowid: 0 } },
+    { ...valid, target: { ...valid.target, columns: [valid.target.columns[0], valid.target.columns[0]] } },
+    {
+      ...valid,
+      target: {
+        ...valid.target,
+        columns: valid.target.columns.map((column) => ({ ...column, primaryKeyPosition: 2 }))
+      }
+    },
+    { ...valid, legacy: [] },
+    { ...valid, legacy: [valid.legacy[0], { ...valid.legacy[0] }] },
+    {
+      ...valid,
+      target: {
+        ...valid.target,
+        columns: valid.target.columns.map((column) => ({ ...column, unknown: true }))
+      }
+    }
+  ]
+  const invalidPrimaryKey = tableShape({
+    columns: tableShape().columns.map((column) => ({ ...column, primaryKeyPosition: -1 }))
+  })
+  invalidInputs.push({ ...valid, target: invalidPrimaryKey })
+
+  for (const input of invalidInputs) {
+    assert.throws(
+      () => normalizeMigrationCompatibility(input),
+      (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+    )
+  }
+})
+
+test('rejects a table-transition target duplicated in legacy', () => {
+  assert.throws(
+    () => normalizeMigrationCompatibility(tableTransition({ legacy: [tableShape()] })),
+    (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+  )
+})
+
+test('reports a matching table-transition target as satisfied', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready');"
+  )
+  try {
+    const result = checkMigrationCompatibility(database, tableTransition())
+    assert.deepEqual(result, {
+      status: 'satisfied',
+      kind: 'table-transition',
+      table: 'items',
+      reason: 'matched'
+    })
+    assert.ok(Object.isFrozen(result))
+  } finally {
+    database.close()
+  }
+})
+
+test('reports a matching legacy table-transition shape as missing', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');"
+  )
+  try {
+    const result = checkMigrationCompatibility(database, tableTransition({
+      target: tableShape(),
+      legacy: [tableShape({
+        columns: tableShape().columns.map((column) =>
+          column.name === 'title' ? { ...column, notNull: false } : column
+        )
+      })]
+    }))
+    assert.deepEqual(result, {
+      status: 'missing',
+      kind: 'table-transition',
+      table: 'items',
+      reason: 'legacy-matched'
+    })
+  } finally {
+    database.close()
+  }
+})
+
+test('reports a missing table-transition table as incompatible', nativeTestOptions, () => {
+  const database = openDatabase('CREATE TABLE other (id INTEGER);')
+  try {
+    assert.deepEqual(checkMigrationCompatibility(database, tableTransition()), {
+      status: 'incompatible',
+      kind: 'table-transition',
+      table: 'items',
+      reason: 'table-missing'
+    })
+  } finally {
+    database.close()
+  }
+})
+
+test('reports missing, extra, and reordered table columns as incompatible', nativeTestOptions, () => {
+  const schemas = [
+    'CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT, extra BLOB);',
+    'CREATE TABLE items (id INTEGER PRIMARY KEY);',
+    'CREATE TABLE items (title TEXT, id INTEGER PRIMARY KEY);'
+  ]
+  for (const schema of schemas) {
+    const database = openDatabase(schema)
+    try {
+      const result = checkMigrationCompatibility(database, tableTransition())
+      assert.deepEqual(result, {
+        status: 'incompatible',
+        kind: 'table-transition',
+        table: 'items',
+        reason: 'table-shape-incompatible'
+      })
+    } finally {
+      database.close()
+    }
+  }
+})
+
+test('compares STRICT and WITHOUT ROWID table flags', nativeTestOptions, () => {
+  const strictDatabase = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready') STRICT;"
+  )
+  try {
+    assert.equal(
+      checkMigrationCompatibility(strictDatabase, tableTransition({
+        target: tableShape({ strict: true }),
+        legacy: [tableShape()]
+      })).status,
+      'satisfied'
+    )
+    assert.equal(
+      checkMigrationCompatibility(strictDatabase, tableTransition({
+        legacy: [tableShape({ withoutRowid: true })]
+      })).reason,
+      'table-shape-incompatible'
+    )
+  } finally {
+    strictDatabase.close()
+  }
+
+  const withoutRowidShape = tableShape({
+    withoutRowid: true,
+    columns: [
+      { name: 'id', type: 'INTEGER', notNull: true, defaultValue: null, primaryKeyPosition: 1 },
+      { name: 'title', type: 'TEXT', notNull: true, defaultValue: "'ready'", primaryKeyPosition: 0 }
+    ]
+  })
+  const withoutRowidDatabase = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready') WITHOUT ROWID;"
+  )
+  try {
+    assert.equal(
+      checkMigrationCompatibility(withoutRowidDatabase, tableTransition({
+        target: withoutRowidShape
+      })).status,
+      'satisfied'
+    )
+  } finally {
+    withoutRowidDatabase.close()
+  }
+})
+
+test('reports a generated column as incompatible for table-transition', nativeTestOptions, () => {
+  const database = openDatabase(
+    'CREATE TABLE items (id INTEGER PRIMARY KEY, source TEXT, title TEXT GENERATED ALWAYS AS (source) STORED);'
+  )
+  try {
+    const result = checkMigrationCompatibility(database, tableTransition({
+      target: tableShape({
+        columns: [
+          tableShape().columns[0],
+          { name: 'source', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+          { name: 'title', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 }
+        ]
+      })
+    }))
+    assert.deepEqual(result, {
+      status: 'incompatible',
+      kind: 'table-transition',
+      table: 'items',
+      reason: 'table-shape-incompatible'
+    })
+  } finally {
+    database.close()
+  }
+})
+
+test('keeps table-transition summaries redacted and uses bound read-only metadata queries', () => {
+  const prepared = []
+  const boundValues = []
+  const shape = tableShape()
+  const database = {
+    prepare(sql) {
+      prepared.push(sql)
+      if (sql.includes('sqlite_schema')) {
+        return {
+          get: (...values) => {
+            boundValues.push(values)
+            return { present: 1 }
+          }
+        }
+      }
+      if (sql.includes('pragma_table_list')) {
+        return {
+          get: (...values) => {
+            boundValues.push(values)
+            return { wr: 0, strict: 0 }
+          }
+        }
+      }
+      if (sql.includes('pragma_table_xinfo')) {
+        return {
+          all: (...values) => {
+            boundValues.push(values)
+            return tableMetadataColumns({
+              ...shape,
+              columns: [
+                { ...shape.columns[0], defaultValue: "'/private/secret.db'" },
+                shape.columns[1]
+              ]
+            })
+          }
+        }
+      }
+      throw new Error('unexpected query')
+    }
+  }
+  const result = checkMigrationCompatibility(database, tableTransition())
+  assert.deepEqual(result, {
+    status: 'incompatible',
+    kind: 'table-transition',
+    table: 'items',
+    reason: 'table-shape-incompatible'
+  })
+  assert.ok(prepared.every((sql) => !sql.includes('items')))
+  const tableListSql = prepared.find((sql) => sql.includes('pragma_table_list'))
+  assert.match(tableListSql, /schema = 'main'/)
+  assert.match(tableListSql, /type = 'table'/)
+  assert.deepEqual(boundValues, [['items'], ['items'], ['items']])
+  assert.doesNotMatch(JSON.stringify(result), /private|secret|id|title/)
+})
+
+test('redacts table-transition metadata query failures', () => {
+  const database = {
+    prepare() {
+      throw new Error('C:\\private\\nas.sqlite secret-business-row')
+    }
+  }
+  assert.throws(
+    () => checkMigrationCompatibility(database, tableTransition()),
+    (error) => {
+      assert.ok(error instanceof MigrationCompatibilityError)
+      assert.equal(error.code, 'MIGRATION_COMPATIBILITY_CHECK_FAILED')
+      assert.doesNotMatch(error.message, /nas\.sqlite|secret-business-row|items|title/)
+      return true
+    }
+  )
+})
 
 test('reports a missing table as incompatible', nativeTestOptions, () => {
   const database = openDatabase('CREATE TABLE other (id INTEGER);')

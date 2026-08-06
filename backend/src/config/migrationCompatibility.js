@@ -1,6 +1,10 @@
 const COMPATIBILITY_KIND = 'column'
+const TABLE_TRANSITION_COMPATIBILITY_KIND = 'table-transition'
 const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
+const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
+const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns']
+const TABLE_COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue', 'primaryKeyPosition']
 
 const COMPATIBILITY_STATUSES = Object.freeze({
   SATISFIED: 'satisfied',
@@ -36,6 +40,110 @@ function normalizeRequiredText(value, fieldName) {
   return value.trim()
 }
 
+function normalizeColumnShape(column, fieldName, includePrimaryKeyPosition) {
+  assertPlainObject(column, fieldName)
+  assertExactKeys(
+    column,
+    includePrimaryKeyPosition ? TABLE_COLUMN_KEYS : COLUMN_KEYS,
+    fieldName
+  )
+
+  const name = normalizeRequiredText(column.name, `${fieldName}.name`)
+  const type = normalizeSQLiteType(column.type, `${fieldName}.type`)
+  if (typeof column.notNull !== 'boolean') {
+    fail(`${fieldName}.notNull must be boolean.`)
+  }
+  const defaultValue = normalizeSQLiteDefaultValue(
+    column.defaultValue,
+    `${fieldName}.defaultValue`
+  )
+
+  const normalized = {
+    name,
+    type,
+    notNull: column.notNull,
+    defaultValue
+  }
+  if (includePrimaryKeyPosition) {
+    if (!Number.isSafeInteger(column.primaryKeyPosition) || column.primaryKeyPosition < 0) {
+      fail(`${fieldName}.primaryKeyPosition must be a non-negative safe integer.`)
+    }
+    normalized.primaryKeyPosition = column.primaryKeyPosition
+  }
+  return Object.freeze(normalized)
+}
+
+function normalizeTableShape(shape, fieldName) {
+  assertPlainObject(shape, fieldName)
+  assertExactKeys(shape, TABLE_SHAPE_KEYS, fieldName)
+  if (typeof shape.strict !== 'boolean') fail(`${fieldName}.strict must be boolean.`)
+  if (typeof shape.withoutRowid !== 'boolean') {
+    fail(`${fieldName}.withoutRowid must be boolean.`)
+  }
+  if (!Array.isArray(shape.columns) || shape.columns.length === 0) {
+    fail(`${fieldName}.columns must be a non-empty array.`)
+  }
+
+  const names = new Set()
+  const primaryKeyPositions = new Set()
+  const columns = Array.from(shape.columns, (column, index) => {
+    const normalized = normalizeColumnShape(column, `${fieldName}.columns[${index}]`, true)
+    if (names.has(normalized.name)) {
+      fail(`${fieldName}.columns contains a duplicate column name.`)
+    }
+    names.add(normalized.name)
+    if (normalized.primaryKeyPosition !== 0) {
+      if (primaryKeyPositions.has(normalized.primaryKeyPosition)) {
+        fail(`${fieldName}.columns contains a duplicate primary key position.`)
+      }
+      primaryKeyPositions.add(normalized.primaryKeyPosition)
+    }
+    return normalized
+  })
+
+  const sortedPrimaryKeyPositions = [...primaryKeyPositions].sort((left, right) => left - right)
+  if (sortedPrimaryKeyPositions.some((position, index) => position !== index + 1)) {
+    fail(`${fieldName}.columns primary key positions must be continuous from 1.`)
+  }
+
+  return Object.freeze({
+    strict: shape.strict,
+    withoutRowid: shape.withoutRowid,
+    columns: Object.freeze(columns)
+  })
+}
+
+function normalizeTableTransitionCompatibility(compatibility) {
+  assertExactKeys(compatibility, TABLE_TRANSITION_KEYS, 'compatibility')
+  if (compatibility.kind !== TABLE_TRANSITION_COMPATIBILITY_KIND) {
+    fail(`compatibility kind must be ${TABLE_TRANSITION_COMPATIBILITY_KIND}.`)
+  }
+  const table = normalizeRequiredText(compatibility.table, 'compatibility.table')
+  const target = normalizeTableShape(compatibility.target, 'compatibility.target')
+  if (!Array.isArray(compatibility.legacy) || compatibility.legacy.length === 0) {
+    fail('compatibility.legacy must be a non-empty array.')
+  }
+
+  const legacy = Array.from(compatibility.legacy, (shape, index) =>
+    normalizeTableShape(shape, `compatibility.legacy[${index}]`)
+  )
+  const targetKey = JSON.stringify(target)
+  const legacyKeys = new Set()
+  for (const shape of legacy) {
+    const key = JSON.stringify(shape)
+    if (key === targetKey) fail('compatibility.target must differ from every legacy shape.')
+    if (legacyKeys.has(key)) fail('compatibility.legacy contains a duplicate shape.')
+    legacyKeys.add(key)
+  }
+
+  return Object.freeze({
+    kind: TABLE_TRANSITION_COMPATIBILITY_KIND,
+    table,
+    target,
+    legacy: Object.freeze(legacy)
+  })
+}
+
 /**
  * Normalize a SQLite type declaration without changing its declared type.
  * Only case and formatting whitespace around punctuation are normalized;
@@ -67,34 +175,20 @@ export function normalizeSQLiteDefaultValue(value, fieldName = 'defaultValue') {
  */
 export function normalizeMigrationCompatibility(compatibility) {
   assertPlainObject(compatibility, 'compatibility')
+  if (compatibility.kind === TABLE_TRANSITION_COMPATIBILITY_KIND) {
+    return normalizeTableTransitionCompatibility(compatibility)
+  }
+
   assertExactKeys(compatibility, COMPATIBILITY_KEYS, 'compatibility')
   if (compatibility.kind !== COMPATIBILITY_KIND) {
     fail(`compatibility kind must be ${COMPATIBILITY_KIND}.`)
   }
 
   const table = normalizeRequiredText(compatibility.table, 'compatibility.table')
-  assertPlainObject(compatibility.column, 'compatibility.column')
-  assertExactKeys(compatibility.column, COLUMN_KEYS, 'compatibility.column')
-
-  const name = normalizeRequiredText(compatibility.column.name, 'compatibility.column.name')
-  const type = normalizeSQLiteType(compatibility.column.type, 'compatibility.column.type')
-  if (typeof compatibility.column.notNull !== 'boolean') {
-    fail('compatibility.column.notNull must be boolean.')
-  }
-  const defaultValue = normalizeSQLiteDefaultValue(
-    compatibility.column.defaultValue,
-    'compatibility.column.defaultValue'
-  )
-
   return Object.freeze({
     kind: COMPATIBILITY_KIND,
     table,
-    column: Object.freeze({
-      name,
-      type,
-      notNull: compatibility.column.notNull,
-      defaultValue
-    })
+    column: normalizeColumnShape(compatibility.column, 'compatibility.column', false)
   })
 }
 
@@ -104,6 +198,15 @@ function summary(status, compatibility, reason) {
     kind: compatibility.kind,
     table: compatibility.table,
     column: compatibility.column.name,
+    reason
+  })
+}
+
+function tableTransitionSummary(status, compatibility, reason) {
+  return Object.freeze({
+    status,
+    kind: compatibility.kind,
+    table: compatibility.table,
     reason
   })
 }
@@ -135,6 +238,34 @@ function columnMatches(actual, expected) {
   )
 }
 
+function tableFlagsMatch(actual, expected) {
+  if (
+    !actual ||
+    (actual.wr !== 0 && actual.wr !== 1) ||
+    (actual.strict !== 0 && actual.strict !== 1)
+  ) {
+    return false
+  }
+  return (
+    actual.strict === (expected.strict ? 1 : 0) &&
+    actual.wr === (expected.withoutRowid ? 1 : 0)
+  )
+}
+
+function tableColumnMatches(actual, expected, index) {
+  if (!actual || actual.cid !== index) return false
+  if (!columnMatches(actual, expected)) return false
+  return Number(actual.pk) === expected.primaryKeyPosition
+}
+
+function tableShapeMatches(tableInfo, columns, expected) {
+  if (!tableFlagsMatch(tableInfo, expected)) return false
+  if (!Array.isArray(columns) || columns.length !== expected.columns.length) return false
+  return expected.columns.every((column, index) =>
+    tableColumnMatches(columns[index], column, index)
+  )
+}
+
 /**
  * Read-only proof of one migration's schema postcondition.
  *
@@ -150,7 +281,34 @@ export function checkMigrationCompatibility(database, compatibility) {
       .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
       .get(normalized.table)
     if (!table) {
-      return summary(COMPATIBILITY_STATUSES.INCOMPATIBLE, normalized, 'table-missing')
+      return normalized.kind === TABLE_TRANSITION_COMPATIBILITY_KIND
+        ? tableTransitionSummary(COMPATIBILITY_STATUSES.INCOMPATIBLE, normalized, 'table-missing')
+        : summary(COMPATIBILITY_STATUSES.INCOMPATIBLE, normalized, 'table-missing')
+    }
+
+    if (normalized.kind === TABLE_TRANSITION_COMPATIBILITY_KIND) {
+      const tableInfo = database
+        .prepare(
+          "SELECT wr, strict FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND name = ?"
+        )
+        .get(normalized.table)
+      const columns = database
+        .prepare(
+          'SELECT cid, name, type, "notnull" AS not_null, dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid'
+        )
+        .all(normalized.table)
+
+      if (tableShapeMatches(tableInfo, columns, normalized.target)) {
+        return tableTransitionSummary(COMPATIBILITY_STATUSES.SATISFIED, normalized, 'matched')
+      }
+      if (normalized.legacy.some((shape) => tableShapeMatches(tableInfo, columns, shape))) {
+        return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
+      }
+      return tableTransitionSummary(
+        COMPATIBILITY_STATUSES.INCOMPATIBLE,
+        normalized,
+        'table-shape-incompatible'
+      )
     }
 
     const column = database
@@ -184,4 +342,8 @@ export class MigrationCompatibilityError extends Error {
   }
 }
 
-export { COMPATIBILITY_KIND, COMPATIBILITY_STATUSES }
+export {
+  COMPATIBILITY_KIND,
+  TABLE_TRANSITION_COMPATIBILITY_KIND,
+  COMPATIBILITY_STATUSES
+}
