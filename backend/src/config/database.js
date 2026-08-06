@@ -1,6 +1,8 @@
 import fs from 'fs'
 import path from 'path'
 import { openDatabaseConnection } from './sqliteConnection.js'
+import { runMigrationStartupGate } from './migrationStartupGate.js'
+import { applicationMigrationRegistry } from './databaseMigrations.js'
 import { getContext } from '../utils/dbContext.js'
 import {
   initializeOwner,
@@ -104,6 +106,11 @@ function getDatabaseForRequest(req) {
 function initDatabase() {
   const mainDb = getDatabase()
   initDatabaseInstance(mainDb, 'main')
+  runMigrationStartupGate({
+    database: mainDb,
+    mainDbPath: baseDbPath,
+    registry: applicationMigrationRegistry
+  })
   return mainDb
 }
 
@@ -115,199 +122,7 @@ function initDatabase() {
 function initDatabaseInstance(database, dbType = 'main') {
   console.log(`\n========== 初始化 ${dbType} 数据库 ==========`)
 
-  // 处理旧的 schema_migrations 表结构（如果存在）
-  try {
-    const tableInfo = database.prepare(`
-      SELECT name FROM sqlite_master 
-      WHERE type='table' AND name='schema_migrations'
-    `).get()
-    
-    if (tableInfo) {
-      // 检查表结构
-      const columns = database.pragma('table_info(schema_migrations)')
-      const hasMigrationKey = columns.some(col => col.name === 'migration_key')
-      
-      if (!hasMigrationKey) {
-        // 旧表结构，需要重建（使用事务保护）
-        console.log('🔄 检测到 schema_migrations 表为旧结构，正在重建...')
-        
-        // 备份现有迁移记录（旧表只有 version 字段）
-        let oldMigrations = []
-        try {
-          oldMigrations = database.prepare('SELECT * FROM schema_migrations').all()
-          console.log(`   📦 备份 ${oldMigrations.length} 条迁移记录`)
-        } catch (backupError) {
-          console.log('   ⚠️ 备份旧数据失败，可能是空表:', backupError.message)
-        }
-        
-        // 使用事务确保原子性
-        const rebuildSchemaMigrations = database.transaction(() => {
-          // 删除旧表
-          database.exec('DROP TABLE schema_migrations')
-          
-          // 创建新表
-          database.exec(`
-            CREATE TABLE schema_migrations (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              migration_key TEXT NOT NULL UNIQUE,
-              version TEXT NOT NULL,
-              executed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-              description TEXT
-            )
-          `)
-          
-          // 恢复迁移记录（将 version 作为 migration_key）
-          if (oldMigrations.length > 0) {
-            const insertStmt = database.prepare(`
-              INSERT INTO schema_migrations (migration_key, version, description)
-              VALUES (?, ?, ?)
-            `)
-            oldMigrations.forEach(row => {
-              const key = row.version || row.migration_name || 'unknown'
-              const version = row.version || row.migration_name || '1.0.0'
-              insertStmt.run(key, version, '从旧表迁移')
-            })
-            console.log(`   ✅ 已恢复 ${oldMigrations.length} 条迁移记录`)
-          }
-        })
-        
-        // 执行重建
-        rebuildSchemaMigrations()
-        console.log('✅ schema_migrations 表重建完成')
-      }
-    }
-  } catch (error) {
-    console.error('[schema_migrations 表检查] 错误:', error.message)
-    console.error('❌ 迁移失败，数据库保持原状')
-    // 删除损坏的表，让后续代码重新创建
-    try {
-      database.exec('DROP TABLE IF EXISTS schema_migrations')
-      console.log('   🗑️ 已删除损坏的 schema_migrations 表，将重新创建')
-    } catch (dropError) {
-      console.error('   删除表失败:', dropError.message)
-    }
-  }
-
-  // 创建迁移记录表（如果不存在）
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      migration_key TEXT NOT NULL UNIQUE,
-      version TEXT NOT NULL,
-      executed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      description TEXT
-    )
-  `)
-
-  // 检查 reading_progress 表是否需要迁移
-  let shouldCreateReadingProgress = true
-  const MIGRATION_KEY = 'reading_progress_add_user_id'
-  
-  try {
-    // 先确保 schema_migrations 表存在
-    database.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        migration_key TEXT NOT NULL UNIQUE,
-        version TEXT NOT NULL,
-        executed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        description TEXT
-      )
-    `)
-    
-    // 检查是否已执行过迁移
-    const migrationRecord = database.prepare(`
-      SELECT * FROM schema_migrations WHERE migration_key = ?
-    `).get(MIGRATION_KEY)
-    
-    if (!migrationRecord) {
-      // 检查表是否存在
-      const tableExists = database.prepare(`
-        SELECT name FROM sqlite_master 
-        WHERE type='table' AND name='reading_progress'
-      `).get()
-      
-      if (tableExists) {
-        // 检查是否有 user_id 字段
-        const columns = database.pragma('table_info(reading_progress)')
-        const hasUserId = columns.some(col => col.name === 'user_id')
-        
-        if (!hasUserId) {
-          // 执行自动迁移
-          console.log('🔄 检测到 reading_progress 表为旧结构，开始自动迁移...')
-          
-          // 备份现有数据
-          const existingProgress = database.prepare('SELECT * FROM reading_progress').all()
-          console.log(`   📦 备份 ${existingProgress.length} 条进度记录`)
-          
-          // 使用事务迁移
-          const migrate = database.transaction(() => {
-            // 删除旧表
-            database.exec('DROP TABLE reading_progress')
-            
-            // 创建新表（带 user_id 字段，使用 CFI 新结构）
-            database.exec(`
-              CREATE TABLE reading_progress (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                book_id INTEGER NOT NULL,
-                user_id INTEGER,
-                current_page INTEGER DEFAULT 0,
-                cfi TEXT,
-                progress REAL DEFAULT 0,
-                font_size INTEGER DEFAULT 16,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                UNIQUE(book_id, user_id)
-              )
-            `)
-            
-            // 恢复数据（将现有进度分配给管理员 user_id = 1，进度重置为0）
-            if (existingProgress.length > 0) {
-              const insertStmt = database.prepare(`
-                INSERT INTO reading_progress 
-                (book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at)
-                VALUES (?, 1, 0, NULL, 0, ?, ?, ?)
-              `)
-              
-              existingProgress.forEach(row => {
-                insertStmt.run(
-                  row.book_id,
-                  row.font_size || 16,
-                  row.created_at,
-                  row.updated_at
-                )
-              })
-              console.log(`   ✅ 已恢复 ${existingProgress.length} 条进度记录（进度已重置）`)
-            }
-            
-            // 记录迁移状态
-            database.prepare(`
-              INSERT INTO schema_migrations (migration_key, version, description)
-              VALUES (?, '1.0.0', '添加 user_id 字段，支持多用户独立进度')
-            `).run(MIGRATION_KEY)
-          })
-          
-          // 执行迁移
-          migrate()
-          console.log('✅ reading_progress 表迁移完成')
-          
-          // 跳过后续创建
-          shouldCreateReadingProgress = false
-        }
-      }
-    } else {
-      // 已迁移过，跳过创建
-      shouldCreateReadingProgress = false
-      console.log('✓ reading_progress 表已迁移，跳过创建')
-    }
-  } catch (error) {
-    console.error('❌ 迁移检查失败:', error)
-    console.error('⚠️ 继续初始化，但 reading_progress 表可能需要手动修复')
-    // 不终止程序，继续初始化
-    shouldCreateReadingProgress = true
-  }
+  const shouldCreateReadingProgress = true
 
   // 先创建所有表
   const tables = [
@@ -492,8 +307,7 @@ function initDatabaseInstance(database, dbType = 'main') {
       FOREIGN KEY (category_id) REFERENCES book_categories(id) ON DELETE SET NULL
     )`,
 
-    // 阅读进度表（智能判断是否创建）
-    // 如果检测到旧表结构，跳过创建，等待迁移脚本处理
+    // 阅读进度表
     ...(shouldCreateReadingProgress ? [
       `CREATE TABLE IF NOT EXISTS reading_progress (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1006,27 +820,6 @@ function initDatabaseInstance(database, dbType = 'main') {
       // 表可能不存在，忽略错误
     }
 
-    // 检查是否已执行过动漫状态迁移
-    const animeMigrationKey = 'anime_status_v1'
-    const animeMigrationExecuted = database.prepare(
-      'SELECT * FROM schema_migrations WHERE migration_key = ?'
-    ).get(animeMigrationKey)
-
-    if (!animeMigrationExecuted) {
-      // 仅执行一次：迁移动漫状态（之前的 'watching' 表示"想看"，现在应该改为 'want_to_watch'）
-      try {
-        console.log('执行一次性迁移：动漫状态（watching -> want_to_watch）...')
-        database.exec("UPDATE anime SET status = 'want_to_watch' WHERE status = 'watching'")
-        database.prepare(
-          'INSERT INTO schema_migrations (migration_key, version, description) VALUES (?, ?, ?)'
-        ).run(animeMigrationKey, '1.0.0', '迁移动漫状态（watching -> want_to_watch）')
-        console.log('✓ 动漫状态迁移完成，此迁移仅执行一次')
-      } catch (e) {
-        console.log('[动漫状态迁移] 警告:', e.message)
-      }
-    } else {
-      console.log('✓ 动漫状态迁移已执行过，跳过')
-    }
   } catch (error) {
     console.error('数据库字段更新失败:', error)
     // 不中断程序，继续初始化
