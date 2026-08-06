@@ -74,7 +74,7 @@ function readChildResult(output) {
   return JSON.parse(json)
 }
 
-test('static contract removes retired migration branches and keeps the startup gate before return', () => {
+test('static contract runs the startup gate once after base tables and before all later initialization', () => {
   const databaseSource = fs.readFileSync(databaseSourcePath, 'utf8')
   const indexSource = fs.readFileSync(indexSourcePath, 'utf8').replace(/\r\n?/gu, '\n')
 
@@ -82,12 +82,27 @@ test('static contract removes retired migration branches and keeps the startup g
   assert.doesNotMatch(databaseSource, /reading_progress_add_user_id/u)
   assert.doesNotMatch(databaseSource, /anime_status_v1/u)
 
-  const instanceCall = databaseSource.indexOf("initDatabaseInstance(mainDb, 'main')")
+  const instanceCall = databaseSource.indexOf("initDatabaseInstance(mainDb, 'main', () => {")
   const gateCall = databaseSource.indexOf('runMigrationStartupGate({', instanceCall)
   const returnCall = databaseSource.indexOf('return mainDb', gateCall)
   assert.ok(instanceCall >= 0)
   assert.ok(gateCall > instanceCall)
   assert.ok(returnCall > gateCall)
+  assert.equal(databaseSource.match(/runMigrationStartupGate\(\{/gu)?.length, 1)
+
+  const instanceDefinition = databaseSource.indexOf('function initDatabaseInstance(')
+  const baseTableLoop = databaseSource.indexOf('tables.forEach(sql => {', instanceDefinition)
+  const schemaGateHook = databaseSource.indexOf('runBaseSchemaGate()', baseTableLoop)
+  const firstIndexes = databaseSource.indexOf('const indexes = [', schemaGateHook)
+  const firstPragma = databaseSource.indexOf('PRAGMA table_info(documents)', schemaGateHook)
+  const ownerInitialization = databaseSource.indexOf('initializeOwner(database, process.env)', schemaGateHook)
+  assert.ok(instanceDefinition >= 0)
+  assert.ok(baseTableLoop > instanceDefinition)
+  assert.ok(schemaGateHook > baseTableLoop)
+  assert.equal(databaseSource.match(/runBaseSchemaGate\(\)/gu)?.length, 1)
+  assert.ok(firstIndexes > schemaGateHook)
+  assert.ok(firstPragma > schemaGateHook)
+  assert.ok(ownerInitialization > schemaGateHook)
 
   const initializeStart = indexSource.indexOf('async function initialize()')
   const initializeTry = indexSource.indexOf('try {', initializeStart)
@@ -253,6 +268,100 @@ test('does not report READY when the startup gate rejects an incompatible contro
       ready: false,
       code: 'MIGRATION_STARTUP_GATE_FAILED'
     })
+  } finally {
+    removeTemporaryDirectory(directory)
+  }
+})
+
+test('startup gate failure prevents indexes, inline ALTER, and Owner initialization', nativeTestOptions, () => {
+  const directory = temporaryDirectory()
+  const databasePath = path.join(directory, 'app.db')
+  const database = new Database(databasePath)
+  try {
+    database.exec(`
+      CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        category TEXT,
+        tags TEXT,
+        file_path TEXT NOT NULL,
+        version REAL DEFAULT 1.0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE prm_schema_migrations (
+        migration_id TEXT PRIMARY KEY NOT NULL,
+        checksum TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      );
+    `)
+  } finally {
+    database.close()
+  }
+
+  try {
+    const { output, result } = runChild(directory)
+    assert.notEqual(result.status, 0)
+    assert.deepEqual(readChildResult(output), {
+      ready: false,
+      code: 'MIGRATION_STARTUP_GATE_FAILED'
+    })
+
+    const verification = new Database(databasePath)
+    try {
+      const documentColumns = verification.pragma('table_info(documents)')
+      assert.equal(documentColumns.some(column => column.name === 'subcategory'), false)
+      assert.equal(verification.prepare(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_title'"
+      ).get().count, 0)
+      assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
+    } finally {
+      verification.close()
+    }
+  } finally {
+    removeTemporaryDirectory(directory)
+  }
+})
+
+test('successful startup gate allows the existing inline document upgrade to continue', nativeTestOptions, () => {
+  const directory = temporaryDirectory()
+  const databasePath = path.join(directory, 'app.db')
+  const database = new Database(databasePath)
+  try {
+    database.exec(`
+      CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        category TEXT,
+        tags TEXT,
+        file_path TEXT NOT NULL,
+        version REAL DEFAULT 1.0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `)
+  } finally {
+    database.close()
+  }
+
+  try {
+    const { output, result } = runChild(directory)
+    assert.equal(result.status, 0, output)
+    assert.deepEqual(readChildResult(output), {
+      ready: true,
+      legacyTablePresent: false,
+      controlTablesPresent: true,
+      legacyGuardCount: 0
+    })
+
+    const verification = new Database(databasePath)
+    try {
+      const documentColumns = verification.pragma('table_info(documents)')
+      assert.equal(documentColumns.some(column => column.name === 'subcategory'), true)
+      assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 1)
+    } finally {
+      verification.close()
+    }
   } finally {
     removeTemporaryDirectory(directory)
   }

@@ -105,11 +105,12 @@ function getDatabaseForRequest(req) {
 // 初始化数据库表
 function initDatabase() {
   const mainDb = getDatabase()
-  initDatabaseInstance(mainDb, 'main')
-  runMigrationStartupGate({
-    database: mainDb,
-    mainDbPath: baseDbPath,
-    registry: applicationMigrationRegistry
+  initDatabaseInstance(mainDb, 'main', () => {
+    runMigrationStartupGate({
+      database: mainDb,
+      mainDbPath: baseDbPath,
+      registry: applicationMigrationRegistry
+    })
   })
   return mainDb
 }
@@ -118,8 +119,9 @@ function initDatabase() {
  * 初始化单个数据库实例
  * @param {Database} database - 数据库实例
  * @param {string} dbType - 数据库类型（main/test）
+ * @param {Function|null} runBaseSchemaGate - 基础表创建后的同步 schema gate
  */
-function initDatabaseInstance(database, dbType = 'main') {
+function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = null) {
   console.log(`\n========== 初始化 ${dbType} 数据库 ==========`)
 
   const shouldCreateReadingProgress = true
@@ -468,6 +470,10 @@ function initDatabaseInstance(database, dbType = 'main') {
   tables.forEach(sql => {
     database.exec(sql)
   })
+
+  if (runBaseSchemaGate) {
+    runBaseSchemaGate()
+  }
 
   // 创建索引以提升查询性能
   const indexes = [
