@@ -296,11 +296,114 @@ const expectedGamesMigrations = [
   }
 ]
 
-test('application registry freezes exactly the 25 C2c single-column migrations', () => {
+const expectedMusicMigrations = [
+  {
+    id: '0026_music_artist',
+    source: 'ALTER TABLE music ADD COLUMN artist TEXT;',
+    checksum: 'c2557c2b70533cabfd915d4222f66062606acba8adce8fb49321db56e075b547',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'artist', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0027_music_album',
+    source: 'ALTER TABLE music ADD COLUMN album TEXT;',
+    checksum: 'a077b2e3935fda667528c6aeb8a3857864937c526b54f7b6ff571f40b9455b01',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'album', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0028_music_duration',
+    source: 'ALTER TABLE music ADD COLUMN duration INTEGER DEFAULT 0;',
+    checksum: '9daecdb79ccbc3d5d4edcdd1b7228fa34ff7f2ac99b2038a7d880416b5629686',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'duration', type: 'INTEGER', notNull: false, defaultValue: '0' }
+    }
+  },
+  {
+    id: '0029_music_file_size',
+    source: 'ALTER TABLE music ADD COLUMN file_size INTEGER DEFAULT 0;',
+    checksum: 'ea38efbf459c3d2302404060a7fa23dc98ecca0c1663224667da8a35952d6279',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'file_size', type: 'INTEGER', notNull: false, defaultValue: '0' }
+    }
+  },
+  {
+    id: '0030_music_file_type',
+    source: 'ALTER TABLE music ADD COLUMN file_type TEXT;',
+    checksum: 'fd01511b5daee2093b2839f182191abc7c4044f9ea2488e6c7269d0ba8b6c7d2',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'file_type', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0031_music_cover_image',
+    source: 'ALTER TABLE music ADD COLUMN cover_image TEXT;',
+    checksum: 'fdf65f6536b6720bafef0ac3e959e9196067dc45607469924c5e9b4d8ad4d35a',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'cover_image', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0032_music_lyrics',
+    source: 'ALTER TABLE music ADD COLUMN lyrics TEXT;',
+    checksum: '03a2f87293a4110b28a80b816d2ffa9797412460598239af371294e074fde780',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'lyrics', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0033_music_lyrics_source',
+    source: 'ALTER TABLE music ADD COLUMN lyrics_source TEXT;',
+    checksum: '8a65dfa65a99124614385190b8d3506f6e47f75fa02d6a384627ae36746d7174',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'lyrics_source', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0034_music_has_lyrics',
+    source: 'ALTER TABLE music ADD COLUMN has_lyrics INTEGER DEFAULT 0;',
+    checksum: '52b6a0c2383a86cf1cad0f2bdc610c1bcd36f9dc18d46b734117f69f9362d0b5',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'has_lyrics', type: 'INTEGER', notNull: false, defaultValue: '0' }
+    }
+  },
+  {
+    id: '0035_music_lyrics_updated_at',
+    source: 'ALTER TABLE music ADD COLUMN lyrics_updated_at TEXT;',
+    checksum: '9f385b9c05124817c611b4c9977aeeea407714dde72ef9062242370e50a5cd2c',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: { name: 'lyrics_updated_at', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  }
+]
+
+test('application registry freezes exactly the 35 C2c single-column migrations', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 25)
+  assert.equal(applicationMigrationRegistry.migrations.length, 35)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -311,7 +414,8 @@ test('application registry freezes exactly the 25 C2c single-column migrations',
       '0005_bookmarks_icon',
       '0006_bookmarks_icon_data',
       ...expectedAnimeMigrations.map(({ id }) => id),
-      ...expectedGamesMigrations.map(({ id }) => id)
+      ...expectedGamesMigrations.map(({ id }) => id),
+      ...expectedMusicMigrations.map(({ id }) => id)
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -382,7 +486,8 @@ test('application registry freezes exactly the 25 C2c single-column migrations',
     }
   ])
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(6, 21), expectedAnimeMigrations)
-  assert.deepEqual(applicationMigrationRegistry.migrations.slice(21), expectedGamesMigrations)
+  assert.deepEqual(applicationMigrationRegistry.migrations.slice(21, 25), expectedGamesMigrations)
+  assert.deepEqual(applicationMigrationRegistry.migrations.slice(25), expectedMusicMigrations)
 })
 
 test('static contract runs the startup gate once after base tables and before all later initialization', () => {
@@ -437,7 +542,27 @@ test('static contract runs the startup gate once after base tables and before al
       new RegExp(`${name}\\s+${type}${defaultClause}\\s*,`, 'u')
     )
   }
-  assert.match(databaseSource, /musicNewFields[\s\S]*lyrics_source/u)
+  assert.doesNotMatch(databaseSource, /musicColumns|musicNewFields|ALTER TABLE music ADD COLUMN/u)
+  const musicTableStart = databaseSource.indexOf('CREATE TABLE IF NOT EXISTS music (')
+  const musicTableEnd = databaseSource.indexOf('    )`,', musicTableStart)
+  assert.ok(musicTableStart >= 0)
+  assert.ok(musicTableEnd > musicTableStart)
+  const baseMusicSource = databaseSource.slice(musicTableStart, musicTableEnd)
+  for (const { name, type, defaultValue } of expectedMusicMigrations.map(({ compatibility }) => compatibility.column)) {
+    const defaultClause = defaultValue === null ? '' : `\\s+DEFAULT\\s+${defaultValue}`
+    assert.match(
+      baseMusicSource,
+      new RegExp(`${name}\\s+${type}${defaultClause}\\s*,`, 'u')
+    )
+  }
+  const indexesStart = databaseSource.indexOf('const indexes = [')
+  const indexesEnd = databaseSource.indexOf('  ]', indexesStart)
+  assert.ok(indexesStart >= 0)
+  assert.ok(indexesEnd > indexesStart)
+  assert.equal(databaseSource.match(/idx_music_has_lyrics/gu)?.length, 1)
+  const lyricsIndex = databaseSource.indexOf('idx_music_has_lyrics')
+  assert.ok(lyricsIndex > indexesStart)
+  assert.ok(lyricsIndex < indexesEnd)
   assert.match(databaseSource, /codeColumns[\s\S]*languages/u)
   assert.match(databaseSource, /readingProgressColumns[\s\S]*hasCfi/u)
 
@@ -477,7 +602,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.ok(initializeCatch > listenCall)
 })
 
-test('empty database adopts all 25 registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
+test('empty database adopts all 35 registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   try {
@@ -492,7 +617,7 @@ test('empty database adopts all 25 registered columns without executing ALTER an
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 25)
+      assertApplicationMigrationLedger(verification, 35)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
@@ -504,6 +629,9 @@ test('empty database adopts all 25 registered columns without executing ALTER an
       }
       for (const { name, type, notNull, defaultValue } of expectedGamesMigrations.map(({ compatibility }) => compatibility.column)) {
         assertRegisteredColumn(verification, 'games', name, type, notNull ? 1 : 0, defaultValue)
+      }
+      for (const { name, type, notNull, defaultValue } of expectedMusicMigrations.map(({ compatibility }) => compatibility.column)) {
+        assertRegisteredColumn(verification, 'music', name, type, notNull ? 1 : 0, defaultValue)
       }
     } finally {
       verification.close()
@@ -538,7 +666,7 @@ test('restarting the current database does not add registered migration attempts
         ledger: verification.prepare('SELECT COUNT(*) AS count FROM prm_schema_migrations').get().count,
         attempts: verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count
       }, firstCounts)
-      assertApplicationMigrationLedger(verification, 25)
+      assertApplicationMigrationLedger(verification, 35)
     } finally {
       verification.close()
     }
@@ -980,7 +1108,82 @@ test('incompatible games columns preserve the frozen adoption and execution pref
   }
 })
 
-test('old anime and games schemas execute all 25 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
+test('incompatible music columns execute the prefix and stop at the explicit conflict index', nativeTestOptions, () => {
+  const cases = [
+    { column: 'artist', type: 'INTEGER', conflictIndex: 0, expectedLedgerCount: 0 },
+    { column: 'album', type: 'INTEGER', conflictIndex: 1, expectedLedgerCount: 26 },
+    { column: 'cover_image', type: 'INTEGER', conflictIndex: 5, expectedLedgerCount: 30 },
+    { column: 'lyrics', type: 'INTEGER', conflictIndex: 6, expectedLedgerCount: 31 },
+    { column: 'has_lyrics', type: 'TEXT', conflictIndex: 8, expectedLedgerCount: 33 },
+    { column: 'lyrics_updated_at', type: 'INTEGER', conflictIndex: 9, expectedLedgerCount: 34 }
+  ]
+
+  for (const { column, type, conflictIndex, expectedLedgerCount } of cases) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    try {
+      database.exec(`
+        CREATE TABLE music (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          ${column} ${type},
+          file_path TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `)
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.notEqual(result.status, 0, output)
+      assert.deepEqual(readChildResult(output), {
+        ready: false,
+        code: 'MIGRATION_STARTUP_GATE_FAILED'
+      })
+
+      const verification = new Database(databasePath)
+      try {
+        assert.deepEqual(
+          verification.prepare('SELECT migration_id FROM prm_schema_migrations ORDER BY migration_id').all(),
+          applicationMigrationRegistry.migrations
+            .slice(0, expectedLedgerCount)
+            .map(({ id }) => ({ migration_id: id }))
+        )
+        assert.equal(
+          verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count,
+          expectedLedgerCount
+        )
+        for (const { name, type: expectedType, notNull, defaultValue } of expectedMusicMigrations
+          .slice(0, conflictIndex)
+          .map(({ compatibility }) => compatibility.column)) {
+          assertRegisteredColumn(verification, 'music', name, expectedType, notNull ? 1 : 0, defaultValue)
+        }
+        assert.equal(readColumn(verification, 'music', column).type, type)
+        for (const { name } of expectedMusicMigrations
+          .slice(conflictIndex + 1)
+          .map(({ compatibility }) => compatibility.column)) {
+          assert.equal(
+            verification.prepare("SELECT COUNT(*) AS count FROM pragma_table_info('music') WHERE name = ?").get(name).count,
+            0
+          )
+        }
+        assert.equal(verification.prepare(
+          "SELECT COUNT(*) AS count FROM pragma_table_info('code_repositories') WHERE name = 'languages'"
+        ).get().count, 0)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('old anime, games, and music schemas execute all 35 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -1048,6 +1251,19 @@ test('old anime and games schemas execute all 25 registered migrations before re
         steam_appid INTEGER UNIQUE,
         title TEXT NOT NULL
       );
+      CREATE TABLE music (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        artist TEXT,
+        album TEXT,
+        duration INTEGER DEFAULT 0,
+        file_path TEXT,
+        file_size INTEGER DEFAULT 0,
+        file_type TEXT,
+        cover_image TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
     `)
   } finally {
     database.close()
@@ -1065,7 +1281,7 @@ test('old anime and games schemas execute all 25 registered migrations before re
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 25)
+      assertApplicationMigrationLedger(verification, 35)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
@@ -1077,6 +1293,9 @@ test('old anime and games schemas execute all 25 registered migrations before re
       }
       for (const { name, type, notNull, defaultValue } of expectedGamesMigrations.map(({ compatibility }) => compatibility.column)) {
         assertRegisteredColumn(verification, 'games', name, type, notNull ? 1 : 0, defaultValue)
+      }
+      for (const { name, type, notNull, defaultValue } of expectedMusicMigrations.map(({ compatibility }) => compatibility.column)) {
+        assertRegisteredColumn(verification, 'music', name, type, notNull ? 1 : 0, defaultValue)
       }
       assert.equal(verification.prepare(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_categories_sort_order'"

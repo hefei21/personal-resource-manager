@@ -350,5 +350,145 @@ export const applicationMigrationRegistry = createMigrationRegistry([
         defaultValue: null
       }
     }
+  },
+  {
+    id: '0026_music_artist',
+    source: 'ALTER TABLE music ADD COLUMN artist TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'artist',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0027_music_album',
+    source: 'ALTER TABLE music ADD COLUMN album TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'album',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0028_music_duration',
+    source: 'ALTER TABLE music ADD COLUMN duration INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'duration',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0029_music_file_size',
+    source: 'ALTER TABLE music ADD COLUMN file_size INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'file_size',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0030_music_file_type',
+    source: 'ALTER TABLE music ADD COLUMN file_type TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'file_type',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0031_music_cover_image',
+    source: 'ALTER TABLE music ADD COLUMN cover_image TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'cover_image',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0032_music_lyrics',
+    source: 'ALTER TABLE music ADD COLUMN lyrics TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'lyrics',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0033_music_lyrics_source',
+    source: 'ALTER TABLE music ADD COLUMN lyrics_source TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'lyrics_source',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0034_music_has_lyrics',
+    source: 'ALTER TABLE music ADD COLUMN has_lyrics INTEGER DEFAULT 0;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'has_lyrics',
+        type: 'INTEGER',
+        notNull: false,
+        defaultValue: '0'
+      }
+    }
+  },
+  {
+    id: '0035_music_lyrics_updated_at',
+    source: 'ALTER TABLE music ADD COLUMN lyrics_updated_at TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'lyrics_updated_at',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
   }
 ])

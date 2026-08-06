@@ -183,6 +183,10 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       file_size INTEGER DEFAULT 0,
       file_type TEXT,
       cover_image TEXT,
+      lyrics TEXT,
+      lyrics_source TEXT,
+      has_lyrics INTEGER DEFAULT 0,
+      lyrics_updated_at TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
@@ -490,6 +494,7 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
     'CREATE INDEX IF NOT EXISTS idx_music_album ON music(album)',
     'CREATE INDEX IF NOT EXISTS idx_music_title ON music(title)',
     'CREATE INDEX IF NOT EXISTS idx_music_created_at ON music(created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_music_has_lyrics ON music(has_lyrics)',
     // 歌单歌曲关联表索引
     'CREATE INDEX IF NOT EXISTS idx_playlist_songs_playlist_id ON playlist_songs(playlist_id)',
     'CREATE INDEX IF NOT EXISTS idx_playlist_songs_music_id ON playlist_songs(music_id)',
@@ -556,40 +561,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       database.exec('DROP TABLE documents')
       database.exec('ALTER TABLE documents_new RENAME TO documents')
       console.log('✓ version 字段类型修改成功')
-    }
-
-    // 检查并添加 music 表新字段（支持新版音乐管理）
-    const musicColumns = database.prepare("PRAGMA table_info(music)").all()
-    console.log('music 表当前字段:', musicColumns.map(c => c.name).join(', '))
-
-    const musicNewFields = [
-      { name: 'artist', sql: 'ALTER TABLE music ADD COLUMN artist TEXT' },
-      { name: 'album', sql: 'ALTER TABLE music ADD COLUMN album TEXT' },
-      { name: 'duration', sql: 'ALTER TABLE music ADD COLUMN duration INTEGER DEFAULT 0' },
-      { name: 'file_size', sql: 'ALTER TABLE music ADD COLUMN file_size INTEGER DEFAULT 0' },
-      { name: 'file_type', sql: 'ALTER TABLE music ADD COLUMN file_type TEXT' },
-      { name: 'cover_image', sql: 'ALTER TABLE music ADD COLUMN cover_image TEXT' },
-      { name: 'lyrics', sql: 'ALTER TABLE music ADD COLUMN lyrics TEXT' },
-      { name: 'lyrics_source', sql: 'ALTER TABLE music ADD COLUMN lyrics_source TEXT' },
-      { name: 'has_lyrics', sql: 'ALTER TABLE music ADD COLUMN has_lyrics INTEGER DEFAULT 0' },
-      { name: 'lyrics_updated_at', sql: 'ALTER TABLE music ADD COLUMN lyrics_updated_at TEXT' }
-    ]
-
-    for (const field of musicNewFields) {
-      const hasField = musicColumns.some(col => col.name === field.name)
-      if (!hasField) {
-        console.log(`添加 ${field.name} 字段到 music 表...`)
-        database.exec(field.sql)
-        console.log(`✓ ${field.name} 字段添加成功`)
-      }
-    }
-
-    // 创建歌词索引
-    try {
-      database.exec('CREATE INDEX IF NOT EXISTS idx_music_has_lyrics ON music(has_lyrics)')
-      console.log('✓ 歌词索引创建完成')
-    } catch (e) {
-      console.log('[索引创建] 警告:', e.message)
     }
 
     // 检查并迁移代码仓库表结构
