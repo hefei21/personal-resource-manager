@@ -521,18 +521,9 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
 
   // 为现有数据库添加新字段（在表创建之后）
   try {
-    // 检查并添加 subcategory 字段到 documents 表
-    const columns = database.prepare("PRAGMA table_info(documents)").all()
-    const hasSubcategory = columns.some(col => col.name === 'subcategory')
-
-    if (!hasSubcategory) {
-      console.log('添加 subcategory 字段到 documents 表...')
-      database.exec('ALTER TABLE documents ADD COLUMN subcategory TEXT')
-      console.log('✓ subcategory 字段添加成功')
-    }
-
     // 检查 version 字段类型，如果不是 REAL 则修改
-    const versionCol = columns.find(col => col.name === 'version')
+    const documentColumns = database.prepare("PRAGMA table_info(documents)").all()
+    const versionCol = documentColumns.find(col => col.name === 'version')
     if (versionCol && versionCol.type !== 'REAL') {
       console.log('修改 version 字段类型为 REAL...')
       // SQLite 不支持直接修改列类型，需要重建表
@@ -557,16 +548,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       database.exec('DROP TABLE documents')
       database.exec('ALTER TABLE documents_new RENAME TO documents')
       console.log('✓ version 字段类型修改成功')
-    }
-
-    // 检查并添加 sort_order 字段到 categories 表
-    const categoryColumns = database.prepare("PRAGMA table_info(categories)").all()
-    const hasSortOrder = categoryColumns.some(col => col.name === 'sort_order')
-
-    if (!hasSortOrder) {
-      console.log('添加 sort_order 字段到 categories 表...')
-      database.exec('ALTER TABLE categories ADD COLUMN sort_order INTEGER DEFAULT 0')
-      console.log('✓ sort_order 字段添加成功')
     }
 
     // 检查并添加 content_cache 字段到 books 表（用于缓存解析结果）
@@ -742,17 +723,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       console.log('添加 languages 字段到 code_repositories 表...')
       database.exec('ALTER TABLE code_repositories ADD COLUMN languages TEXT DEFAULT "{}"')
       console.log('✓ 语言统计字段添加成功')
-    }
-
-    // 检查并添加 confirmed 字段到 todos 表
-    const todosColumns = database.prepare("PRAGMA table_info(todos)").all()
-    console.log('todos 表当前字段:', todosColumns.map(c => c.name).join(', '))
-    
-    const hasConfirmed = todosColumns.some(col => col.name === 'confirmed')
-    if (!hasConfirmed) {
-      console.log('添加 confirmed 字段到 todos 表...')
-      database.exec('ALTER TABLE todos ADD COLUMN confirmed INTEGER DEFAULT 0')
-      console.log('✓ confirmed 字段添加成功')
     }
 
     // 检查 reading_progress 表字段
