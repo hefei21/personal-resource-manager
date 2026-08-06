@@ -129,7 +129,7 @@ function columnMatches(actual, expected) {
   return (
     actual.name === expected.name &&
     actualType === expected.type &&
-    Number(actual.notnull) === (expected.notNull ? 1 : 0) &&
+    Number(actual.not_null) === (expected.notNull ? 1 : 0) &&
     Number(actual.hidden) === 0 &&
     actualDefault === expected.defaultValue
   )
@@ -155,7 +155,7 @@ export function checkMigrationCompatibility(database, compatibility) {
 
     const column = database
       .prepare(
-        'SELECT name, type, notnull, dflt_value, hidden FROM pragma_table_xinfo(?) WHERE name = ?'
+        'SELECT name, type, "notnull" AS not_null, dflt_value, hidden FROM pragma_table_xinfo(?) WHERE name = ?'
       )
       .get(normalized.table, normalized.column.name)
     if (!column) {

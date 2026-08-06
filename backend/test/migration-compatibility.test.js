@@ -174,10 +174,10 @@ test('does not expose database paths, default expressions, or row content on che
 
 test('treats unexpected column metadata as incompatible without native SQLite', () => {
   for (const column of [
-    { name: 'other', type: 'TEXT', notnull: 1, dflt_value: "'ready'", hidden: 0 },
-    { name: 'title', type: '', notnull: 1, dflt_value: "'ready'", hidden: 0 },
-    { name: 'title', type: 'VARCHAR(255)', notnull: 1, dflt_value: "'ready'", hidden: 0 },
-    { name: 'title', type: 'TEXT', notnull: 1, dflt_value: "('ready')", hidden: 0 }
+    { name: 'other', type: 'TEXT', not_null: 1, dflt_value: "'ready'", hidden: 0 },
+    { name: 'title', type: '', not_null: 1, dflt_value: "'ready'", hidden: 0 },
+    { name: 'title', type: 'VARCHAR(255)', not_null: 1, dflt_value: "'ready'", hidden: 0 },
+    { name: 'title', type: 'TEXT', not_null: 1, dflt_value: "('ready')", hidden: 0 }
   ]) {
     assert.equal(
       checkMigrationCompatibility(metadataDatabase(column), compatibility()).status,
@@ -190,7 +190,7 @@ test('requires hidden metadata to identify an ordinary column without native SQL
   const ordinary = {
     name: 'title',
     type: 'TEXT',
-    notnull: 1,
+    not_null: 1,
     dflt_value: "'ready'",
     hidden: 0
   }
