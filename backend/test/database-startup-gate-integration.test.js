@@ -759,10 +759,7 @@ test('incompatible bookmarks columns fail closed at the matching migration with 
         ).get().count, 0)
         assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
         assert.equal(verification.prepare(
-          "SELECT COUNT(*) AS count FROM pragma_table_info('anime') WHERE name = 'cover_image_data'"
-        ).get().count, 0)
-        assert.equal(verification.prepare(
-          "SELECT COUNT(*) AS count FROM pragma_table_info('games') WHERE name = 'achievements_total'"
+          "SELECT COUNT(*) AS count FROM pragma_table_info('code_repositories') WHERE name = 'languages'"
         ).get().count, 0)
       } finally {
         verification.close()
