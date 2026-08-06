@@ -665,14 +665,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       console.log('✓ 旧字段已删除，所有进度已重置为0')
     }
 
-    // 删除 code_versions 表（不再需要）
-    try {
-      database.exec('DROP TABLE IF EXISTS code_versions')
-      console.log('✓ 已删除 code_versions 表')
-    } catch (e) {
-      // 表可能不存在，忽略错误
-    }
-
   } catch (error) {
     console.error('数据库字段更新失败:', error)
     // 不中断程序，继续初始化

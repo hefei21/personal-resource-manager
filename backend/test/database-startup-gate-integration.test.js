@@ -509,6 +509,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.match(databaseSource, /const versionCol = documentColumns\.find\(col => col\.name === 'version'\)/u)
   assert.match(databaseSource, /last_read_at DATETIME,\s+content_cache TEXT/u)
   assert.doesNotMatch(databaseSource, /hasContentCache|ALTER TABLE books ADD COLUMN content_cache TEXT/u)
+  assert.doesNotMatch(databaseSource, /DROP TABLE IF EXISTS code_versions/u)
   assert.doesNotMatch(databaseSource, /AS notNull|AS defaultValue/u)
   assert.match(databaseMigrationsSource, /id: '0004_books_content_cache'/u)
   assert.match(databaseMigrationsSource, /source: 'ALTER TABLE books ADD COLUMN content_cache TEXT;'/u)
@@ -516,6 +517,8 @@ test('static contract runs the startup gate once after base tables and before al
   assert.match(databaseMigrationsSource, /source: 'ALTER TABLE bookmarks ADD COLUMN icon TEXT;'/u)
   assert.match(databaseMigrationsSource, /id: '0006_bookmarks_icon_data'/u)
   assert.match(databaseMigrationsSource, /source: 'ALTER TABLE bookmarks ADD COLUMN icon_data TEXT;'/u)
+  assert.doesNotMatch(databaseMigrationsSource, /DROP TABLE(?: IF EXISTS)? code_versions/u)
+  assert.ok(applicationMigrationRegistry.migrations.every(({ source }) => !/DROP TABLE(?: IF EXISTS)? code_versions/u.test(source)))
   assert.doesNotMatch(databaseSource, /animeColumns|animeNewFields|ALTER TABLE anime ADD COLUMN/u)
   const animeTableStart = databaseSource.indexOf('CREATE TABLE IF NOT EXISTS anime (')
   const animeTableEnd = databaseSource.indexOf('    )`,', animeTableStart)
@@ -710,6 +713,67 @@ test('preserves a version-only legacy table and installs three connection-local 
       assert.deepEqual(verification.prepare('SELECT * FROM schema_migrations').all(), [
         { version: 'v1', note: 'preserve me' }
       ])
+    } finally {
+      verification.close()
+    }
+  } finally {
+    removeTemporaryDirectory(directory)
+  }
+})
+
+test('preserves unowned historical code_versions table and rows', nativeTestOptions, () => {
+  const directory = temporaryDirectory()
+  const databasePath = path.join(directory, 'app.db')
+  const database = new Database(databasePath)
+  let beforeSchema
+  let beforeColumns
+  let beforeRows
+  try {
+    database.exec(`
+      CREATE TABLE code_versions (
+        id INTEGER PRIMARY KEY,
+        code_repository_id INTEGER NOT NULL,
+        version_label TEXT NOT NULL,
+        legacy_extra TEXT,
+        historical_payload TEXT
+      );
+      INSERT INTO code_versions (
+        id, code_repository_id, version_label, legacy_extra, historical_payload
+      ) VALUES (7, 42, 'v0.9', 'unknown-history-field', '合成历史文本 / apostrophe: O''Reilly');
+    `)
+    beforeSchema = database.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'code_versions'"
+    ).get().sql
+    beforeColumns = database.prepare('PRAGMA table_info(code_versions)').all()
+    beforeRows = database.prepare('SELECT * FROM code_versions ORDER BY id').all()
+  } finally {
+    database.close()
+  }
+
+  try {
+    const { output, result } = runChild(directory)
+    assert.equal(result.status, 0, output)
+    assert.deepEqual(readChildResult(output), {
+      ready: true,
+      legacyTablePresent: false,
+      controlTablesPresent: true,
+      legacyGuardCount: 0
+    })
+
+    const verification = new Database(databasePath)
+    try {
+      assertApplicationMigrationLedger(verification, 35)
+      assert.equal(verification.prepare(
+        "SELECT COUNT(*) AS count FROM prm_schema_migrations WHERE migration_id LIKE '%code_versions%'"
+      ).get().count, 0)
+      assert.equal(verification.prepare(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'code_versions'"
+      ).get().count, 1)
+      assert.equal(verification.prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'code_versions'"
+      ).get().sql, beforeSchema)
+      assert.deepEqual(verification.prepare('PRAGMA table_info(code_versions)').all(), beforeColumns)
+      assert.deepEqual(verification.prepare('SELECT * FROM code_versions ORDER BY id').all(), beforeRows)
     } finally {
       verification.close()
     }
