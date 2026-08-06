@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto'
+import {
+  MigrationCompatibilityError,
+  normalizeMigrationCompatibility
+} from './migrationCompatibility.js'
 
 const MIGRATION_ID_PATTERN = /^\d{4}_[a-z0-9][a-z0-9._-]*$/
 const CHECKSUM_PATTERN = /^[a-f0-9]{64}$/
@@ -42,7 +46,11 @@ function assertChecksum(checksum, fieldName = 'checksum') {
 }
 
 function publicMigration(migration) {
-  return Object.freeze({ id: migration.id, checksum: migration.checksum })
+  const publicValue = { id: migration.id, checksum: migration.checksum }
+  if (migration.compatibility !== undefined) {
+    publicValue.compatibility = migration.compatibility
+  }
+  return Object.freeze(publicValue)
 }
 
 function publicRecord(record) {
@@ -68,15 +76,34 @@ export class MigrationPlanError extends Error {
 
 /**
  * Compute the checksum of the exact explicit migration source text.
- * No function serialization or runtime formatting is involved.
+ * When supplied, the normalized compatibility condition is appended to a
+ * separate hash domain. No function serialization or runtime formatting is
+ * involved.
  */
-export function computeMigrationChecksum(source) {
+export function computeMigrationChecksum(source, compatibility) {
   if (typeof source !== 'string' || source.trim().length === 0) {
     fail('MIGRATION_SOURCE_INVALID', 'Migration source must be non-empty text.')
   }
 
   const normalizedSource = source.replace(/\r\n?/g, '\n')
-  return createHash('sha256').update(Buffer.from(normalizedSource, 'utf8')).digest('hex')
+  const hash = createHash('sha256').update(Buffer.from(normalizedSource, 'utf8'))
+  if (compatibility !== undefined) {
+    const normalizedCompatibility = normalizeCompatibilityForPlan(compatibility)
+    hash.update(Buffer.from('\n\\0migration-compatibility\\0', 'utf8'))
+    hash.update(Buffer.from(JSON.stringify(normalizedCompatibility), 'utf8'))
+  }
+  return hash.digest('hex')
+}
+
+function normalizeCompatibilityForPlan(compatibility) {
+  try {
+    return normalizeMigrationCompatibility(compatibility)
+  } catch (error) {
+    if (error instanceof MigrationCompatibilityError) {
+      fail(error.code, error.message, error.details)
+    }
+    throw error
+  }
 }
 
 /**
@@ -94,7 +121,10 @@ export function defineMigration(definition) {
 
   const { id, source } = definition
   assertMigrationId(id)
-  const computedChecksum = computeMigrationChecksum(source)
+  const compatibility = definition.compatibility === undefined
+    ? undefined
+    : normalizeCompatibilityForPlan(definition.compatibility)
+  const computedChecksum = computeMigrationChecksum(source, compatibility)
 
   if (definition.checksum !== undefined) {
     assertChecksum(definition.checksum)
@@ -107,11 +137,13 @@ export function defineMigration(definition) {
     }
   }
 
-  return Object.freeze({
+  const migration = {
     id,
     source,
     checksum: computedChecksum
-  })
+  }
+  if (compatibility !== undefined) migration.compatibility = compatibility
+  return Object.freeze(migration)
 }
 
 /**

@@ -71,6 +71,83 @@ test('computes a repeatable SHA-256 checksum from exact source text', () => {
   )
 })
 
+test('keeps the checksum of a migration without compatibility unchanged', () => {
+  assert.equal(
+    defineMigration({ id: '0001_initial', source: 'SELECT 1;' }).checksum,
+    '17db4fd369edb9244b9f91d9aeed145c3d04ad8ba6e95d06247f07a63527d11a'
+  )
+})
+
+test('normalizes and freezes a column compatibility condition', () => {
+  const input = {
+    kind: 'column',
+    table: 'items',
+    column: {
+      name: 'title',
+      type: ' varchar ( 255 ) ',
+      notNull: true,
+      defaultValue: " 'ready' "
+    }
+  }
+  const migration = defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: input })
+
+  assert.deepEqual(migration.compatibility, {
+    kind: 'column',
+    table: 'items',
+    column: {
+      name: 'title',
+      type: 'VARCHAR(255)',
+      notNull: true,
+      defaultValue: "'ready'"
+    }
+  })
+  assert.ok(Object.isFrozen(migration))
+  assert.ok(Object.isFrozen(migration.compatibility))
+  assert.ok(Object.isFrozen(migration.compatibility.column))
+
+  input.table = 'changed'
+  input.column.type = 'INTEGER'
+  input.column.defaultValue = 'changed'
+  assert.equal(migration.compatibility.table, 'items')
+  assert.equal(migration.compatibility.column.type, 'VARCHAR(255)')
+  assert.equal(migration.compatibility.column.defaultValue, "'ready'")
+
+  const plan = createMigrationPlan(createMigrationRegistry([migration]))
+  assert.deepEqual(plan.pending[0].compatibility, migration.compatibility)
+  assert.ok(Object.isFrozen(plan.pending[0].compatibility))
+})
+
+test('includes normalized compatibility content in the checksum', () => {
+  const base = {
+    kind: 'column',
+    table: 'items',
+    column: { name: 'title', type: 'TEXT', notNull: false, defaultValue: null }
+  }
+  const checksum = defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: base }).checksum
+  const reordered = {
+    column: { defaultValue: null, notNull: false, type: ' text ', name: 'title' },
+    table: 'items',
+    kind: 'column'
+  }
+  assert.equal(
+    defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: reordered }).checksum,
+    checksum
+  )
+
+  for (const change of [
+    { table: 'other', column: base.column },
+    { table: base.table, column: { ...base.column, name: 'summary' } },
+    { table: base.table, column: { ...base.column, type: 'INTEGER' } },
+    { table: base.table, column: { ...base.column, notNull: true } },
+    { table: base.table, column: { ...base.column, defaultValue: '0' } }
+  ]) {
+    assert.notEqual(
+      defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: { kind: 'column', ...change } }).checksum,
+      checksum
+    )
+  }
+})
+
 test('registerMigration returns a new immutable registry', () => {
   const initial = createMigrationRegistry([definition('0001_initial')])
   const extended = registerMigration(initial, definition('0002_add_index'))
