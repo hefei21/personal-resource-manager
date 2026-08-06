@@ -38,6 +38,8 @@ export const MIGRATION_STARTUP_GATE_ERROR_CODES = Object.freeze({
   DATABASE_PATH_MISMATCH: 'MIGRATION_STARTUP_GATE_DATABASE_PATH_MISMATCH',
   LEGACY_MUTATION_BLOCKED: 'MIGRATION_STARTUP_GATE_LEGACY_MUTATION_BLOCKED',
   LEGACY_FINGERPRINT_CHANGED: 'MIGRATION_STARTUP_GATE_LEGACY_FINGERPRINT_CHANGED',
+  PROGRESS_STALLED: 'MIGRATION_STARTUP_GATE_PROGRESS_STALLED',
+  ITERATION_LIMIT_EXCEEDED: 'MIGRATION_STARTUP_GATE_ITERATION_LIMIT_EXCEEDED',
   FAILED: 'MIGRATION_STARTUP_GATE_FAILED',
   RELEASE_FAILED: 'MIGRATION_STARTUP_GATE_RELEASE_FAILED'
 })
@@ -49,6 +51,8 @@ const SAFE_MESSAGES = Object.freeze({
   [MIGRATION_STARTUP_GATE_ERROR_CODES.DATABASE_PATH_MISMATCH]: 'Migration startup gate database path does not match the connection.',
   [MIGRATION_STARTUP_GATE_ERROR_CODES.LEGACY_MUTATION_BLOCKED]: 'Migration startup gate rejected a legacy table mutation.',
   [MIGRATION_STARTUP_GATE_ERROR_CODES.LEGACY_FINGERPRINT_CHANGED]: 'Migration startup gate detected a legacy table change.',
+  [MIGRATION_STARTUP_GATE_ERROR_CODES.PROGRESS_STALLED]: 'Migration startup gate made no progress.',
+  [MIGRATION_STARTUP_GATE_ERROR_CODES.ITERATION_LIMIT_EXCEEDED]: 'Migration startup gate exceeded its iteration limit.',
   [MIGRATION_STARTUP_GATE_ERROR_CODES.FAILED]: 'Migration startup gate failed.',
   [MIGRATION_STARTUP_GATE_ERROR_CODES.RELEASE_FAILED]: 'Migration startup gate could not release its lock.'
 })
@@ -372,6 +376,35 @@ function mapAppliedRecords(records) {
   }))
 }
 
+function targetScopeMigrations(registry, targetVersion) {
+  if (registry.migrations.length === 0) return []
+  if (targetVersion === undefined || targetVersion === null) return registry.migrations
+  const targetIndex = registry.migrations.findIndex(({ id }) => id === targetVersion)
+  return targetIndex === -1 ? registry.migrations : registry.migrations.slice(0, targetIndex + 1)
+}
+
+function countAppliedInScope(records, scopeIds) {
+  return records.reduce(
+    (count, { migrationId }) => count + (scopeIds.has(migrationId) ? 1 : 0),
+    0
+  )
+}
+
+function mergeRecords(recordsById, records) {
+  for (const record of records) {
+    const existing = recordsById.get(record.id)
+    if (!existing || (existing.status === 'skipped' && record.status !== 'skipped')) {
+      recordsById.set(record.id, { id: record.id, status: record.status })
+    }
+  }
+}
+
+function orderedRecords(registry, recordsById) {
+  return registry.migrations
+    .filter(({ id }) => recordsById.has(id))
+    .map(({ id }) => recordsById.get(id))
+}
+
 function safeOperationError(error) {
   if (error instanceof MigrationStartupGateError) return error
   if (isMigrationLockBusyError(error) || error?.code === MIGRATION_LOCK_BUSY) {
@@ -398,12 +431,52 @@ function runLockedGate({ database, mainDbPath, registry, targetVersion, now, loc
   if (legacyBefore.present) installLegacyReadOnlyGuards(database)
   ensureMigrationControlTables(database)
   const recovery = reconcileStartedMigrationAttempts({ database, lock, now })
-  const adoption = adoptMigrationPrefix({ database, registry, lock, targetVersion, now })
-  const appliedRecords = mapAppliedRecords(listAppliedMigrations(database))
-  const plan = createMigrationPlan(registry, appliedRecords, { targetVersion })
-  const execution = executeMigrationBatch({ database, registry, plan, lock, now })
+  const adoptionRecordsById = new Map()
+  const executionRecordsById = new Map()
+  const scopeMigrations = targetScopeMigrations(registry, targetVersion)
+  const scopeIds = new Set(scopeMigrations.map(({ id }) => id))
+  const iterationLimit = scopeMigrations.length + 1
+  let iterationCount = 0
+  let plan
+
+  while (true) {
+    if (iterationCount >= iterationLimit) {
+      fail(MIGRATION_STARTUP_GATE_ERROR_CODES.ITERATION_LIMIT_EXCEEDED)
+    }
+    iterationCount += 1
+
+    const adoption = adoptMigrationPrefix({ database, registry, lock, targetVersion, now })
+    mergeRecords(adoptionRecordsById, [...adoption.adopted, ...adoption.skipped])
+
+    const authoritativeLedger = listAppliedMigrations(database)
+    const appliedRecords = mapAppliedRecords(authoritativeLedger)
+    plan = createMigrationPlan(registry, appliedRecords, { targetVersion })
+    if (plan.pending.length === 0) break
+
+    const appliedBefore = countAppliedInScope(authoritativeLedger, scopeIds)
+    const singleStepPlan = createMigrationPlan(registry, appliedRecords, {
+      targetVersion: plan.pending[0].id
+    })
+    const execution = executeMigrationBatch({
+      database,
+      registry,
+      plan: singleStepPlan,
+      lock,
+      now
+    })
+    mergeRecords(executionRecordsById, [...execution.executed, ...execution.skipped])
+
+    const appliedAfter = countAppliedInScope(listAppliedMigrations(database), scopeIds)
+    if (appliedAfter <= appliedBefore) {
+      fail(MIGRATION_STARTUP_GATE_ERROR_CODES.PROGRESS_STALLED)
+    }
+  }
+
   const legacyAfter = readLegacyFingerprint(database)
   assertLegacyFingerprintUnchanged(legacyBefore, legacyAfter)
+
+  const adoptionRecords = orderedRecords(registry, adoptionRecordsById)
+  const executionRecords = orderedRecords(registry, executionRecordsById)
 
   return deepFreeze({
     recovery: {
@@ -412,17 +485,16 @@ function runLockedGate({ database, mainDbPath, registry, targetVersion, now, loc
       interruptedCount: recovery.interruptedCount
     },
     adoption: {
-      adoptedCount: adoption.adoptedCount,
-      skippedCount: adoption.skippedCount,
-      totalAdoptable: adoption.totalAdoptable,
-      records: [...adoption.adopted, ...adoption.skipped].map(({ id, status }) => ({ id, status })),
-      ...(adoption.stopped ? { stopped: { ...adoption.stopped } } : {})
+      adoptedCount: adoptionRecords.filter(({ status }) => status === 'adopted').length,
+      skippedCount: adoptionRecords.filter(({ status }) => status === 'skipped').length,
+      totalAdoptable: adoptionRecords.length,
+      records: adoptionRecords
     },
     execution: {
-      executedCount: execution.executedCount,
-      skippedCount: execution.skippedCount,
-      total: execution.total,
-      records: [...execution.executed, ...execution.skipped].map(({ id, status }) => ({ id, status }))
+      executedCount: executionRecords.filter(({ status }) => status === 'applied').length,
+      skippedCount: executionRecords.filter(({ status }) => status === 'skipped').length,
+      total: executionRecords.length,
+      records: executionRecords
     },
     targetVersion: plan.targetVersion,
     legacyTablePresent: legacyBefore.present
