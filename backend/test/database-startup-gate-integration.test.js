@@ -5,11 +5,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 const require = createRequire(import.meta.url)
-const databaseSourcePath = path.resolve('backend/src/config/database.js')
-const indexSourcePath = path.resolve('backend/src/index.js')
-const childPath = path.resolve('backend/test/fixtures/database-startup-child.js')
+const testDirectory = path.dirname(fileURLToPath(import.meta.url))
+const backendDirectory = path.resolve(testDirectory, '..')
+const databaseSourcePath = path.join(backendDirectory, 'src', 'config', 'database.js')
+const indexSourcePath = path.join(backendDirectory, 'src', 'index.js')
+const childPath = path.join(testDirectory, 'fixtures', 'database-startup-child.js')
 
 function isKnownNativeBindingMissingError(error) {
   const message = String(error?.message ?? '')
@@ -44,9 +47,10 @@ function removeTemporaryDirectory(directory) {
 function runChild(directory, password = PLACEHOLDER_PASSWORD) {
   const databasePath = path.join(directory, 'app.db')
   const result = spawnSync(process.execPath, [childPath], {
-    cwd: path.resolve('backend'),
+    cwd: backendDirectory,
     env: {
       ...process.env,
+      PR_DATABASE_STARTUP_CHILD: '1',
       DATA_PATH: directory,
       DB_PATH: databasePath,
       DEFAULT_USERNAME: 'ci-owner',

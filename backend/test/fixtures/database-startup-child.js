@@ -1,3 +1,7 @@
+if (process.env.PR_DATABASE_STARTUP_CHILD !== '1') {
+  process.exit(0)
+}
+
 const capturedOutput = []
 for (const method of ['log', 'error', 'warn']) {
   console[method] = (...args) => {
