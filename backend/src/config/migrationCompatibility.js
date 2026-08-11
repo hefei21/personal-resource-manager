@@ -3,8 +3,22 @@ const TABLE_TRANSITION_COMPATIBILITY_KIND = 'table-transition'
 const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
 const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
-const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns']
+const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns', 'foreignKeys']
 const TABLE_COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue', 'primaryKeyPosition']
+const TABLE_FOREIGN_KEY_KEYS = [
+  'columns',
+  'referencedTable',
+  'referencedColumns',
+  'onUpdate',
+  'onDelete'
+]
+const SQLITE_FOREIGN_KEY_ACTIONS = new Set([
+  'NO ACTION',
+  'RESTRICT',
+  'SET NULL',
+  'SET DEFAULT',
+  'CASCADE'
+])
 
 const COMPATIBILITY_STATUSES = Object.freeze({
   SATISFIED: 'satisfied',
@@ -73,6 +87,85 @@ function normalizeColumnShape(column, fieldName, includePrimaryKeyPosition) {
   return Object.freeze(normalized)
 }
 
+function normalizeSQLiteForeignKeyAction(value, fieldName) {
+  const normalized = normalizeRequiredText(value, fieldName)
+    .replace(/\s+/g, ' ')
+    .toUpperCase()
+  if (!SQLITE_FOREIGN_KEY_ACTIONS.has(normalized)) {
+    fail(`${fieldName} must be a supported SQLite foreign key action.`)
+  }
+  return normalized
+}
+
+function normalizeForeignKey(foreignKey, fieldName, localColumnNames) {
+  assertPlainObject(foreignKey, fieldName)
+  assertExactKeys(foreignKey, TABLE_FOREIGN_KEY_KEYS, fieldName)
+  if (!Array.isArray(foreignKey.columns) || foreignKey.columns.length === 0) {
+    fail(`${fieldName}.columns must be a non-empty array.`)
+  }
+  if (
+    !Array.isArray(foreignKey.referencedColumns) ||
+    foreignKey.referencedColumns.length !== foreignKey.columns.length
+  ) {
+    fail(`${fieldName}.referencedColumns must be a non-empty array with the same length as columns.`)
+  }
+
+  const columns = foreignKey.columns.map((column, index) => {
+    const normalized = normalizeRequiredText(column, `${fieldName}.columns[${index}]`)
+    if (localColumnNames && !localColumnNames.has(normalized)) {
+      fail(`${fieldName}.columns[${index}] must name a declared table column.`)
+    }
+    return normalized
+  })
+  if (new Set(columns).size !== columns.length) {
+    fail(`${fieldName}.columns must not contain duplicates.`)
+  }
+
+  const referencedColumns = foreignKey.referencedColumns.map((column, index) =>
+    column === null
+      ? null
+      : normalizeRequiredText(column, `${fieldName}.referencedColumns[${index}]`)
+  )
+  const normalized = {
+    columns,
+    referencedTable: normalizeRequiredText(foreignKey.referencedTable, `${fieldName}.referencedTable`),
+    referencedColumns,
+    onUpdate: normalizeSQLiteForeignKeyAction(foreignKey.onUpdate, `${fieldName}.onUpdate`),
+    onDelete: normalizeSQLiteForeignKeyAction(foreignKey.onDelete, `${fieldName}.onDelete`)
+  }
+  return Object.freeze({
+    ...normalized,
+    columns: Object.freeze(columns),
+    referencedColumns: Object.freeze(referencedColumns)
+  })
+}
+
+function foreignKeyCanonicalKey(foreignKey) {
+  return JSON.stringify(foreignKey)
+}
+
+function normalizeForeignKeys(foreignKeys, fieldName, localColumnNames) {
+  if (!Array.isArray(foreignKeys)) {
+    fail(`${fieldName} must be an array.`)
+  }
+  const normalized = foreignKeys.map((foreignKey, index) =>
+    normalizeForeignKey(foreignKey, `${fieldName}[${index}]`, localColumnNames)
+  )
+  normalized.sort((left, right) => {
+    const leftKey = foreignKeyCanonicalKey(left)
+    const rightKey = foreignKeyCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  for (let index = 1; index < normalized.length; index += 1) {
+    if (foreignKeyCanonicalKey(normalized[index - 1]) === foreignKeyCanonicalKey(normalized[index])) {
+      fail(`${fieldName} contains a duplicate foreign key.`)
+    }
+  }
+  return Object.freeze(normalized)
+}
+
 function normalizeTableShape(shape, fieldName) {
   assertPlainObject(shape, fieldName)
   assertExactKeys(shape, TABLE_SHAPE_KEYS, fieldName)
@@ -106,10 +199,17 @@ function normalizeTableShape(shape, fieldName) {
     fail(`${fieldName}.columns primary key positions must be continuous from 1.`)
   }
 
+  const foreignKeys = normalizeForeignKeys(
+    shape.foreignKeys,
+    `${fieldName}.foreignKeys`,
+    names
+  )
+
   return Object.freeze({
     strict: shape.strict,
     withoutRowid: shape.withoutRowid,
-    columns: Object.freeze(columns)
+    columns: Object.freeze(columns),
+    foreignKeys
   })
 }
 
@@ -258,12 +358,79 @@ function tableColumnMatches(actual, expected, index) {
   return Number(actual.pk) === expected.primaryKeyPosition
 }
 
-function tableShapeMatches(tableInfo, columns, expected) {
+function tableShapeMatches(tableInfo, columns, foreignKeys, expected) {
   if (!tableFlagsMatch(tableInfo, expected)) return false
   if (!Array.isArray(columns) || columns.length !== expected.columns.length) return false
-  return expected.columns.every((column, index) =>
+  if (!Array.isArray(foreignKeys)) return false
+  if (!expected.columns.every((column, index) =>
     tableColumnMatches(columns[index], column, index)
-  )
+  )) return false
+  return JSON.stringify(foreignKeys) === JSON.stringify(expected.foreignKeys)
+}
+
+function readTableForeignKeys(database, table) {
+  const rows = database
+    .prepare(
+      'SELECT id, seq, "table" AS referenced_table, "from" AS local_column, "to" AS referenced_column, on_update, on_delete FROM pragma_foreign_key_list(?) ORDER BY id, seq'
+    )
+    .all(table)
+  if (!Array.isArray(rows)) return null
+
+  const groups = new Map()
+  for (const row of rows) {
+    if (!row || !Number.isSafeInteger(row.id) || row.id < 0 || !Number.isSafeInteger(row.seq) || row.seq < 0) {
+      return null
+    }
+    if (!groups.has(row.id)) groups.set(row.id, [])
+    groups.get(row.id).push(row)
+  }
+
+  const foreignKeys = []
+  try {
+    for (const [id, group] of groups) {
+      const ordered = [...group].sort((left, right) => left.seq - right.seq)
+      if (ordered.some((row, index) => row.seq !== index)) return null
+
+      const first = ordered[0]
+      const normalizedRows = ordered.map((row, index) => normalizeForeignKey({
+        columns: [row.local_column],
+        referencedTable: row.referenced_table,
+        referencedColumns: [row.referenced_column],
+        onUpdate: row.on_update,
+        onDelete: row.on_delete
+      }, `SQLite foreign key ${id} row ${index}`))
+      const metadata = normalizedRows[0]
+      if (normalizedRows.some((row) => (
+        row.referencedTable !== metadata.referencedTable ||
+        row.onUpdate !== metadata.onUpdate ||
+        row.onDelete !== metadata.onDelete
+      ))) return null
+
+      foreignKeys.push(normalizeForeignKey({
+        columns: normalizedRows.map((row) => row.columns[0]),
+        referencedTable: first.referenced_table,
+        referencedColumns: normalizedRows.map((row) => row.referencedColumns[0]),
+        onUpdate: first.on_update,
+        onDelete: first.on_delete
+      }, `SQLite foreign key ${id}`))
+    }
+  } catch {
+    return null
+  }
+
+  foreignKeys.sort((left, right) => {
+    const leftKey = foreignKeyCanonicalKey(left)
+    const rightKey = foreignKeyCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  for (let index = 1; index < foreignKeys.length; index += 1) {
+    if (foreignKeyCanonicalKey(foreignKeys[index - 1]) === foreignKeyCanonicalKey(foreignKeys[index])) {
+      return null
+    }
+  }
+  return foreignKeys
 }
 
 /**
@@ -297,11 +464,12 @@ export function checkMigrationCompatibility(database, compatibility) {
           'SELECT cid, name, type, "notnull" AS not_null, dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid'
         )
         .all(normalized.table)
+      const foreignKeys = readTableForeignKeys(database, normalized.table)
 
-      if (tableShapeMatches(tableInfo, columns, normalized.target)) {
+      if (tableShapeMatches(tableInfo, columns, foreignKeys, normalized.target)) {
         return tableTransitionSummary(COMPATIBILITY_STATUSES.SATISFIED, normalized, 'matched')
       }
-      if (normalized.legacy.some((shape) => tableShapeMatches(tableInfo, columns, shape))) {
+      if (normalized.legacy.some((shape) => tableShapeMatches(tableInfo, columns, foreignKeys, shape))) {
         return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
       }
       return tableTransitionSummary(

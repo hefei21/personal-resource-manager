@@ -51,6 +51,7 @@ function tableShape(overrides = {}) {
       { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
       { name: 'title', type: 'TEXT', notNull: true, defaultValue: "'ready'", primaryKeyPosition: 0 }
     ],
+    foreignKeys: [],
     ...overrides
   }
 }
@@ -63,6 +64,29 @@ function tableTransition(overrides = {}) {
     legacy: [tableShape({ strict: true })],
     ...overrides
   }
+}
+
+function foreignKey(overrides = {}) {
+  return {
+    columns: ['parent_id'],
+    referencedTable: 'parents',
+    referencedColumns: ['id'],
+    onUpdate: 'CASCADE',
+    onDelete: 'SET NULL',
+    ...overrides
+  }
+}
+
+function tableShapeWithParent(overrides = {}) {
+  return tableShape({
+    columns: [
+      tableShape().columns[0],
+      tableShape().columns[1],
+      { name: 'parent_id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 }
+    ],
+    foreignKeys: [foreignKey()],
+    ...overrides
+  })
 }
 
 function openDatabase(schema) {
@@ -113,10 +137,12 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
   assert.ok(Object.isFrozen(normalized))
   assert.ok(Object.isFrozen(normalized.target))
   assert.ok(Object.isFrozen(normalized.target.columns))
+  assert.ok(Object.isFrozen(normalized.target.foreignKeys))
   assert.ok(normalized.target.columns.every(Object.isFrozen))
   assert.ok(Object.isFrozen(normalized.legacy))
   assert.ok(normalized.legacy.every(Object.isFrozen))
   assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.columns)))
+  assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.foreignKeys)))
 
   input.table = 'changed'
   input.target.columns[0].name = 'changed'
@@ -172,6 +198,88 @@ test('rejects malformed table-transition shapes and unsupported keys', () => {
 test('rejects a table-transition target duplicated in legacy', () => {
   assert.throws(
     () => normalizeMigrationCompatibility(tableTransition({ legacy: [tableShape()] })),
+    (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+  )
+})
+
+test('normalizes foreign key actions, null references, canonical order, and nested freezes', () => {
+  const first = foreignKey({
+    columns: [' title '],
+    referencedTable: ' parent_labels ',
+    referencedColumns: [null],
+    onUpdate: ' set   null ',
+    onDelete: ' no  action '
+  })
+  const second = foreignKey({
+    columns: ['id'],
+    referencedTable: 'parents',
+    referencedColumns: ['id'],
+    onUpdate: ' RESTRICT ',
+    onDelete: ' SET DEFAULT '
+  })
+  const input = tableTransition({ target: tableShape({ foreignKeys: [first, second] }) })
+  const normalized = normalizeMigrationCompatibility(input)
+
+  assert.deepEqual(normalized.target.foreignKeys, [
+    {
+      columns: ['id'],
+      referencedTable: 'parents',
+      referencedColumns: ['id'],
+      onUpdate: 'RESTRICT',
+      onDelete: 'SET DEFAULT'
+    },
+    {
+      columns: ['title'],
+      referencedTable: 'parent_labels',
+      referencedColumns: [null],
+      onUpdate: 'SET NULL',
+      onDelete: 'NO ACTION'
+    }
+  ])
+  assert.ok(Object.isFrozen(normalized.target.foreignKeys[0]))
+  assert.ok(Object.isFrozen(normalized.target.foreignKeys[0].columns))
+  assert.ok(Object.isFrozen(normalized.target.foreignKeys[0].referencedColumns))
+
+  first.columns[0] = 'changed'
+  first.referencedColumns[0] = 'changed'
+  assert.equal(normalized.target.foreignKeys[1].columns[0], 'title')
+  assert.equal(normalized.target.foreignKeys[1].referencedColumns[0], null)
+})
+
+test('rejects malformed foreign keys, unsupported actions, unknown columns, and duplicates', () => {
+  const valid = tableTransition()
+  const invalidForeignKeys = [
+    { ...foreignKey(), columns: [] },
+    { ...foreignKey(), referencedColumns: [] },
+    { ...foreignKey(), referencedColumns: ['id', 'other'] },
+    { ...foreignKey(), columns: ['title', 'title'], referencedColumns: ['id', null] },
+    { ...foreignKey(), columns: ['unknown'] },
+    { ...foreignKey(), onUpdate: 'NOT VALID' },
+    { ...foreignKey(), onDelete: 'NOT VALID' }
+  ]
+
+  for (const invalid of invalidForeignKeys) {
+    assert.throws(
+      () => normalizeMigrationCompatibility({
+        ...valid,
+        target: tableShape({ foreignKeys: [invalid] })
+      }),
+      (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+    )
+  }
+  assert.throws(
+    () => normalizeMigrationCompatibility({
+      ...valid,
+      target: tableShape({ foreignKeys: [foreignKey(), foreignKey()] })
+    }),
+    (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+  )
+})
+
+test('includes foreign keys in target and legacy duplicate detection', () => {
+  const shape = tableShape({ foreignKeys: [foreignKey({ columns: ['title'] })] })
+  assert.throws(
+    () => normalizeMigrationCompatibility(tableTransition({ target: shape, legacy: [tableShape({ foreignKeys: [foreignKey({ columns: ['title'] })] })] })),
     (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
   )
 })
@@ -323,6 +431,131 @@ test('reports a generated column as incompatible for table-transition', nativeTe
   }
 })
 
+test('reports a matching single-column foreign key target as satisfied', nativeTestOptions, () => {
+  const database = openDatabase(
+    'CREATE TABLE parents (id INTEGER PRIMARY KEY);' +
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', parent_id INTEGER, FOREIGN KEY (parent_id) REFERENCES parents(id) ON UPDATE CASCADE ON DELETE SET NULL);"
+  )
+  try {
+    assert.deepEqual(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShapeWithParent(),
+        legacy: [tableShapeWithParent({ foreignKeys: [] })]
+      })),
+      { status: 'satisfied', kind: 'table-transition', table: 'items', reason: 'matched' }
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('reports a known legacy table without a foreign key as missing', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', parent_id INTEGER);"
+  )
+  try {
+    assert.deepEqual(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShapeWithParent(),
+        legacy: [tableShapeWithParent({ foreignKeys: [] })]
+      })),
+      { status: 'missing', kind: 'table-transition', table: 'items', reason: 'legacy-matched' }
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('reports a matching composite foreign key with ordered column mappings', nativeTestOptions, () => {
+  const compositeForeignKey = foreignKey({
+    columns: ['parent_a', 'parent_b'],
+    referencedColumns: ['code_a', 'code_b'],
+    onUpdate: 'CASCADE',
+    onDelete: 'RESTRICT'
+  })
+  const compositeShape = tableShape({
+    columns: [
+      tableShape().columns[0],
+      tableShape().columns[1],
+      { name: 'parent_a', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+      { name: 'parent_b', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 }
+    ],
+    foreignKeys: [compositeForeignKey]
+  })
+  const database = openDatabase(
+    'CREATE TABLE parents (code_a INTEGER, code_b INTEGER, PRIMARY KEY (code_a, code_b));' +
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', parent_a INTEGER, parent_b INTEGER, FOREIGN KEY (parent_a, parent_b) REFERENCES parents(code_a, code_b) ON UPDATE CASCADE ON DELETE RESTRICT);"
+  )
+  try {
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({ target: compositeShape, legacy: [tableShape({ columns: compositeShape.columns, foreignKeys: [] })] })).status,
+      'satisfied'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('treats foreign key action, mapping, and reference differences as incompatible', nativeTestOptions, () => {
+  const schema =
+    'CREATE TABLE parents (id INTEGER PRIMARY KEY);' +
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', parent_id INTEGER, FOREIGN KEY (parent_id) REFERENCES parents(id) ON UPDATE CASCADE ON DELETE SET NULL);"
+  const changes = [
+    { columns: ['title'] },
+    { referencedTable: 'other_parents' },
+    { referencedColumns: ['code'] },
+    { onUpdate: 'RESTRICT' },
+    { onDelete: 'CASCADE' }
+  ]
+  for (const change of changes) {
+    const database = openDatabase(schema)
+    try {
+      assert.equal(
+        checkMigrationCompatibility(database, tableTransition({
+          target: tableShapeWithParent({ foreignKeys: [foreignKey(change)] }),
+          legacy: [tableShapeWithParent({ foreignKeys: [] })]
+        })).status,
+        'incompatible'
+      )
+    } finally {
+      database.close()
+    }
+  }
+})
+
+test('treats an otherwise matching extra foreign key as incompatible', nativeTestOptions, () => {
+  const extraDatabase = openDatabase(
+    'CREATE TABLE parents (id INTEGER PRIMARY KEY);' +
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', parent_id INTEGER, other_id INTEGER, FOREIGN KEY (parent_id) REFERENCES parents(id) ON UPDATE CASCADE ON DELETE SET NULL, FOREIGN KEY (other_id) REFERENCES parents(id));"
+  )
+  try {
+    const shape = tableShapeWithParent({
+      columns: [
+        ...tableShapeWithParent().columns,
+        { name: 'other_id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 }
+      ]
+    })
+    assert.equal(checkMigrationCompatibility(extraDatabase, tableTransition({ target: shape, legacy: [tableShape({ columns: shape.columns, foreignKeys: [] })] })).status, 'incompatible')
+  } finally {
+    extraDatabase.close()
+  }
+})
+
+test('treats an otherwise matching missing foreign key as incompatible', nativeTestOptions, () => {
+  const schema =
+    'CREATE TABLE parents (id INTEGER PRIMARY KEY);' +
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', parent_id INTEGER, FOREIGN KEY (parent_id) REFERENCES parents(id) ON UPDATE CASCADE ON DELETE SET NULL);"
+  const missingDatabase = openDatabase(schema)
+  try {
+    const shape = tableShapeWithParent({
+      foreignKeys: [foreignKey(), foreignKey({ columns: ['title'], referencedColumns: ['id'] })]
+    })
+    assert.equal(checkMigrationCompatibility(missingDatabase, tableTransition({ target: shape, legacy: [tableShapeWithParent({ foreignKeys: [] })] })).status, 'incompatible')
+  } finally {
+    missingDatabase.close()
+  }
+})
+
 test('keeps table-transition summaries redacted and uses bound read-only metadata queries', () => {
   const prepared = []
   const boundValues = []
@@ -360,6 +593,14 @@ test('keeps table-transition summaries redacted and uses bound read-only metadat
           }
         }
       }
+      if (sql.includes('pragma_foreign_key_list')) {
+        return {
+          all: (...values) => {
+            boundValues.push(values)
+            return []
+          }
+        }
+      }
       throw new Error('unexpected query')
     }
   }
@@ -374,8 +615,29 @@ test('keeps table-transition summaries redacted and uses bound read-only metadat
   const tableListSql = prepared.find((sql) => sql.includes('pragma_table_list'))
   assert.match(tableListSql, /schema = 'main'/)
   assert.match(tableListSql, /type = 'table'/)
-  assert.deepEqual(boundValues, [['items'], ['items'], ['items']])
+  const foreignKeySql = prepared.find((sql) => sql.includes('pragma_foreign_key_list'))
+  assert.match(foreignKeySql, /FROM pragma_foreign_key_list\(\?\)/i)
+  assert.doesNotMatch(foreignKeySql, /(?:^|\s)(?:INSERT|UPDATE|DELETE)(?:\s|$)|writable_schema/i)
+  assert.deepEqual(boundValues, [['items'], ['items'], ['items'], ['items']])
   assert.doesNotMatch(JSON.stringify(result), /private|secret|id|title/)
+})
+
+test('treats malformed foreign key pragma metadata as incompatible without exposing metadata', () => {
+  const shape = tableShape()
+  const database = {
+    prepare(sql) {
+      if (sql.includes('sqlite_schema')) return { get: () => ({ present: 1 }) }
+      if (sql.includes('pragma_table_list')) return { get: () => ({ wr: 0, strict: 0 }) }
+      if (sql.includes('pragma_table_xinfo')) return { all: () => tableMetadataColumns(shape) }
+      if (sql.includes('pragma_foreign_key_list')) {
+        return { all: () => [{ id: 0, seq: 1, referenced_table: 'parents', local_column: 'title', referenced_column: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION' }] }
+      }
+      throw new Error('unexpected query')
+    }
+  }
+  assert.deepEqual(checkMigrationCompatibility(database, tableTransition()), {
+    status: 'incompatible', kind: 'table-transition', table: 'items', reason: 'table-shape-incompatible'
+  })
 })
 
 test('redacts table-transition metadata query failures', () => {

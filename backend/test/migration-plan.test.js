@@ -20,6 +20,7 @@ function tableShape(overrides = {}) {
       { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
       { name: 'title', type: 'TEXT', notNull: true, defaultValue: "'ready'", primaryKeyPosition: 0 }
     ],
+    foreignKeys: [],
     ...overrides
   }
 }
@@ -30,6 +31,17 @@ function tableTransition(overrides = {}) {
     table: 'items',
     target: tableShape(),
     legacy: [tableShape({ strict: true })],
+    ...overrides
+  }
+}
+
+function foreignKey(overrides = {}) {
+  return {
+    columns: ['title'],
+    referencedTable: 'labels',
+    referencedColumns: [null],
+    onUpdate: 'NO ACTION',
+    onDelete: 'CASCADE',
     ...overrides
   }
 }
@@ -182,6 +194,12 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
   assert.ok(Object.isFrozen(migration.compatibility))
   assert.ok(Object.isFrozen(migration.compatibility.target))
   assert.ok(Object.isFrozen(migration.compatibility.target.columns))
+  assert.ok(Object.isFrozen(migration.compatibility.target.foreignKeys))
+  assert.ok(migration.compatibility.target.foreignKeys.every((foreignKey) => {
+    return Object.isFrozen(foreignKey) &&
+      Object.isFrozen(foreignKey.columns) &&
+      Object.isFrozen(foreignKey.referencedColumns)
+  }))
   assert.ok(Object.isFrozen(migration.compatibility.legacy))
   assert.ok(Object.isFrozen(migration.compatibility.legacy[0].columns))
 
@@ -203,6 +221,12 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
           column.name === 'title' ? { ...column, defaultValue: '0' } : column
         )
       })]
+    },
+    {
+      ...base,
+      target: tableShape({
+        foreignKeys: [foreignKey()]
+      })
     }
   ]
 
