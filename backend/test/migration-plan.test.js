@@ -26,12 +26,18 @@ function tableShape(overrides = {}) {
   }
 }
 
+const DUMMY_DDL_HASH = 'a'.repeat(64)
+
+function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH) {
+  return { shape, createTableSqlSha256 }
+}
+
 function tableTransition(overrides = {}) {
   return {
     kind: 'table-transition',
     table: 'items',
     target: tableShape(),
-    legacy: [tableShape({ strict: true })],
+    legacy: [legacyProof(tableShape({ strict: true }))],
     ...overrides
   }
 }
@@ -215,8 +221,10 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
       Object.isFrozen(foreignKey.referencedColumns)
   }))
   assert.ok(Object.isFrozen(migration.compatibility.legacy))
-  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].columns))
-  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].uniqueConstraints))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0]))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape.columns))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape.uniqueConstraints))
 
   const changes = [
     {
@@ -226,16 +234,16 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
     {
       ...base,
       target: tableShape({ strict: true }),
-      legacy: [tableShape({ withoutRowid: true })]
+      legacy: [legacyProof(tableShape({ withoutRowid: true }))]
     },
     { ...base, target: tableShape({ withoutRowid: true }) },
     {
       ...base,
-      legacy: [tableShape({
+      legacy: [legacyProof(tableShape({
         columns: base.target.columns.map((column) =>
           column.name === 'title' ? { ...column, defaultValue: '0' } : column
         )
-      })]
+      }))]
     },
     {
       ...base,
@@ -257,6 +265,33 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
       checksum
     )
   }
+
+  const fingerprintChanged = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: {
+      ...base,
+      legacy: [legacyProof(tableShape({ strict: true }), 'b'.repeat(64))]
+    }
+  }).checksum
+  assert.notEqual(fingerprintChanged, checksum)
+
+  const alternatives = [
+    legacyProof(tableShape({ strict: true }), 'c'.repeat(64)),
+    legacyProof(tableShape({ strict: true }), 'b'.repeat(64)),
+    legacyProof(tableShape({ withoutRowid: true }), 'd'.repeat(64))
+  ]
+  const forward = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: { ...base, legacy: alternatives }
+  }).checksum
+  const reverse = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: { ...base, legacy: [...alternatives].reverse() }
+  }).checksum
+  assert.equal(forward, reverse)
 })
 
 test('registerMigration returns a new immutable registry', () => {

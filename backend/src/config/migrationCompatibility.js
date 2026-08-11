@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto'
+
 const COMPATIBILITY_KIND = 'column'
 const TABLE_TRANSITION_COMPATIBILITY_KIND = 'table-transition'
 const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
 const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
+const TABLE_TRANSITION_LEGACY_PROOF_KEYS = ['shape', 'createTableSqlSha256']
 const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns', 'foreignKeys', 'uniqueConstraints']
 const TABLE_COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue', 'primaryKeyPosition']
 const TABLE_UNIQUE_CONSTRAINT_KEYS = ['columns']
@@ -291,6 +294,33 @@ function normalizeTableShape(shape, fieldName) {
   })
 }
 
+function normalizeCreateTableSqlSha256(value, fieldName) {
+  if (typeof value !== 'string') {
+    fail(`${fieldName} must be a SHA-256 hex digest.`)
+  }
+  const normalized = value.trim()
+  if (!/^[a-f0-9]{64}$/i.test(normalized)) {
+    fail(`${fieldName} must be a SHA-256 hex digest.`)
+  }
+  return normalized.toLowerCase()
+}
+
+function normalizeTableTransitionLegacyProof(proof, fieldName) {
+  assertPlainObject(proof, fieldName)
+  assertExactKeys(proof, TABLE_TRANSITION_LEGACY_PROOF_KEYS, fieldName)
+  return Object.freeze({
+    shape: normalizeTableShape(proof.shape, `${fieldName}.shape`),
+    createTableSqlSha256: normalizeCreateTableSqlSha256(
+      proof.createTableSqlSha256,
+      `${fieldName}.createTableSqlSha256`
+    )
+  })
+}
+
+function tableTransitionLegacyProofCanonicalKey(proof) {
+  return `${JSON.stringify(proof.shape)}\u0000${proof.createTableSqlSha256}`
+}
+
 function normalizeTableTransitionCompatibility(compatibility) {
   assertExactKeys(compatibility, TABLE_TRANSITION_KEYS, 'compatibility')
   if (compatibility.kind !== TABLE_TRANSITION_COMPATIBILITY_KIND) {
@@ -302,17 +332,31 @@ function normalizeTableTransitionCompatibility(compatibility) {
     fail('compatibility.legacy must be a non-empty array.')
   }
 
-  const legacy = Array.from(compatibility.legacy, (shape, index) =>
-    normalizeTableShape(shape, `compatibility.legacy[${index}]`)
+  const legacy = Array.from(compatibility.legacy, (proof, index) =>
+    normalizeTableTransitionLegacyProof(proof, `compatibility.legacy[${index}]`)
   )
   const targetKey = JSON.stringify(target)
-  const legacyKeys = new Set()
-  for (const shape of legacy) {
-    const key = JSON.stringify(shape)
-    if (key === targetKey) fail('compatibility.target must differ from every legacy shape.')
-    if (legacyKeys.has(key)) fail('compatibility.legacy contains a duplicate shape.')
-    legacyKeys.add(key)
+  const legacyShapeKeys = new Set()
+  const legacyProofKeys = new Set()
+  for (const proof of legacy) {
+    const shapeKey = JSON.stringify(proof.shape)
+    if (shapeKey === targetKey) fail('compatibility.target must differ from every legacy shape.')
+    if (legacyShapeKeys.has(shapeKey)) {
+      const proofKey = tableTransitionLegacyProofCanonicalKey(proof)
+      if (legacyProofKeys.has(proofKey)) {
+        fail('compatibility.legacy contains a duplicate proof.')
+      }
+    }
+    legacyShapeKeys.add(shapeKey)
+    legacyProofKeys.add(tableTransitionLegacyProofCanonicalKey(proof))
   }
+  legacy.sort((left, right) => {
+    const leftKey = tableTransitionLegacyProofCanonicalKey(left)
+    const rightKey = tableTransitionLegacyProofCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
 
   return Object.freeze({
     kind: TABLE_TRANSITION_COMPATIBILITY_KIND,
@@ -446,6 +490,20 @@ function tableShapeMatches(tableInfo, columns, foreignKeys, uniqueConstraints, e
   )) return false
   return JSON.stringify(foreignKeys) === JSON.stringify(expected.foreignKeys) &&
     JSON.stringify(uniqueConstraints) === JSON.stringify(expected.uniqueConstraints)
+}
+
+function readTableCreateTableSql(database, table) {
+  const row = database
+    .prepare(
+      "SELECT sql FROM main.sqlite_schema WHERE type = 'table' AND name = ?"
+    )
+    .get(table)
+  if (!row || typeof row.sql !== 'string' || row.sql.trim().length === 0) return null
+  return row.sql
+}
+
+function createTableSqlSha256(sql) {
+  return createHash('sha256').update(Buffer.from(sql, 'utf8')).digest('hex')
 }
 
 function readTableForeignKeys(database, table) {
@@ -609,7 +667,9 @@ export function checkMigrationCompatibility(database, compatibility) {
 
   try {
     const table = database
-      .prepare("SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .prepare(normalized.kind === TABLE_TRANSITION_COMPATIBILITY_KIND
+        ? "SELECT 1 AS present FROM main.sqlite_schema WHERE type = 'table' AND name = ?"
+        : "SELECT 1 AS present FROM sqlite_schema WHERE type = 'table' AND name = ?")
       .get(normalized.table)
     if (!table) {
       return normalized.kind === TABLE_TRANSITION_COMPATIBILITY_KIND
@@ -663,14 +723,23 @@ export function checkMigrationCompatibility(database, compatibility) {
       if (tableShapeMatches(tableInfo, columns, foreignKeys, uniqueConstraints, normalized.target)) {
         return tableTransitionSummary(COMPATIBILITY_STATUSES.SATISFIED, normalized, 'matched')
       }
-      if (normalized.legacy.some((shape) => tableShapeMatches(
+      const matchingLegacyProofs = normalized.legacy.filter((proof) => tableShapeMatches(
         tableInfo,
         columns,
         foreignKeys,
         uniqueConstraints,
-        shape
-      ))) {
-        return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
+        proof.shape
+      ))
+      if (matchingLegacyProofs.length > 0) {
+        const createTableSql = readTableCreateTableSql(database, normalized.table)
+        if (
+          createTableSql !== null &&
+          matchingLegacyProofs.some((proof) => (
+            createTableSqlSha256(createTableSql) === proof.createTableSqlSha256
+          ))
+        ) {
+          return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
+        }
       }
       return tableTransitionSummary(
         COMPATIBILITY_STATUSES.INCOMPATIBLE,

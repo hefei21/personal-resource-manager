@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import {
@@ -57,12 +58,18 @@ function tableShape(overrides = {}) {
   }
 }
 
+const DUMMY_DDL_HASH = 'a'.repeat(64)
+
+function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH) {
+  return { shape, createTableSqlSha256 }
+}
+
 function tableTransition(overrides = {}) {
   return {
     kind: 'table-transition',
     table: 'items',
     target: tableShape(),
-    legacy: [tableShape({ strict: true })],
+    legacy: [legacyProof(tableShape({ strict: true }))],
     ...overrides
   }
 }
@@ -103,6 +110,15 @@ function openDatabase(schema) {
   return database
 }
 
+function tableSqlSha256(database, table = 'items') {
+  const row = database
+    .prepare("SELECT sql FROM main.sqlite_schema WHERE type = 'table' AND name = ?")
+    .get(table)
+  assert.equal(typeof row?.sql, 'string')
+  assert.ok(row.sql.length > 0)
+  return createHash('sha256').update(Buffer.from(row.sql, 'utf8')).digest('hex')
+}
+
 function metadataDatabase(column) {
   let query = 0
   return {
@@ -131,7 +147,7 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
       strict: true,
       columns: tableShape().columns.map((column) => ({ ...column, type: ` ${column.type.toLowerCase()} ` }))
     }),
-    legacy: [tableShape(), tableShape({ withoutRowid: true })]
+    legacy: [legacyProof(tableShape()), legacyProof(tableShape({ withoutRowid: true }))]
   })
   const normalized = normalizeMigrationCompatibility(input)
 
@@ -150,18 +166,23 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
   assert.ok(normalized.target.columns.every(Object.isFrozen))
   assert.ok(Object.isFrozen(normalized.legacy))
   assert.ok(normalized.legacy.every(Object.isFrozen))
-  assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.columns)))
-  assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.foreignKeys)))
-  assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.uniqueConstraints)))
+  assert.ok(normalized.legacy.every((proof) => (
+    Object.isFrozen(proof.shape) &&
+    Object.isFrozen(proof.shape.columns) &&
+    Object.isFrozen(proof.shape.foreignKeys) &&
+    Object.isFrozen(proof.shape.uniqueConstraints) &&
+    typeof proof.createTableSqlSha256 === 'string'
+  )))
+  assert.equal(normalized.legacy[0].createTableSqlSha256, DUMMY_DDL_HASH)
 
   input.table = 'changed'
   input.target.columns[0].name = 'changed'
-  input.legacy[0].columns.push({
+  input.legacy[0].shape.columns.push({
     name: 'extra', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0
   })
   assert.equal(normalized.table, 'items')
   assert.equal(normalized.target.columns[0].name, 'id')
-  assert.equal(normalized.legacy[0].columns.length, 2)
+  assert.equal(normalized.legacy[0].shape.columns.length, 2)
 })
 
 test('normalizes unique constraint collations, canonical order, and nested freezes', () => {
@@ -216,6 +237,9 @@ test('rejects malformed table-transition shapes and unsupported keys', () => {
     },
     { ...valid, legacy: [] },
     { ...valid, legacy: [valid.legacy[0], { ...valid.legacy[0] }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], unsupported: true }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], createTableSqlSha256: 'not-a-hash' }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], createTableSqlSha256: 'A'.repeat(63) }] },
     {
       ...valid,
       target: {
@@ -258,7 +282,37 @@ test('rejects malformed table-transition shapes and unsupported keys', () => {
 
 test('rejects a table-transition target duplicated in legacy', () => {
   assert.throws(
-    () => normalizeMigrationCompatibility(tableTransition({ legacy: [tableShape()] })),
+    () => normalizeMigrationCompatibility(tableTransition({ legacy: [legacyProof(tableShape())] })),
+    (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+  )
+})
+
+test('normalizes legacy DDL fingerprints, sorts proofs canonically, and allows hash variants per shape', () => {
+  const strictShape = tableShape({ strict: true })
+  const withoutRowidShape = tableShape({ withoutRowid: true })
+  const input = tableTransition({
+    legacy: [
+      legacyProof(withoutRowidShape, `  ${'B'.repeat(64)}  `),
+      legacyProof(strictShape, 'a'.repeat(64)),
+      legacyProof(strictShape, 'c'.repeat(64))
+    ]
+  })
+  const normalized = normalizeMigrationCompatibility(input)
+
+  assert.deepEqual(normalized.legacy.map((proof) => proof.createTableSqlSha256), [
+    'b'.repeat(64),
+    'a'.repeat(64),
+    'c'.repeat(64)
+  ])
+  assert.deepEqual(normalized.legacy.map((proof) => proof.shape.strict), [false, true, true])
+  assert.ok(normalized.legacy.every((proof) => Object.isFrozen(proof)))
+  assert.ok(normalized.legacy.every((proof) => Object.isFrozen(proof.shape)))
+  assert.ok(normalized.legacy.every((proof) => Object.isFrozen(proof.shape.columns)))
+
+  assert.throws(
+    () => normalizeMigrationCompatibility(tableTransition({
+      legacy: [legacyProof(strictShape, 'a'.repeat(64)), legacyProof(strictShape, 'a'.repeat(64))]
+    })),
     (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
   )
 })
@@ -340,7 +394,7 @@ test('rejects malformed foreign keys, unsupported actions, unknown columns, and 
 test('includes foreign keys in target and legacy duplicate detection', () => {
   const shape = tableShape({ foreignKeys: [foreignKey({ columns: ['title'] })] })
   assert.throws(
-    () => normalizeMigrationCompatibility(tableTransition({ target: shape, legacy: [tableShape({ foreignKeys: [foreignKey({ columns: ['title'] })] })] })),
+    () => normalizeMigrationCompatibility(tableTransition({ target: shape, legacy: [legacyProof(tableShape({ foreignKeys: [foreignKey({ columns: ['title'] })] }))] })),
     (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
   )
 })
@@ -350,7 +404,7 @@ test('includes unique constraints in target and legacy duplicate detection', () 
   assert.throws(
     () => normalizeMigrationCompatibility(tableTransition({
       target: shape,
-      legacy: [tableShape({ uniqueConstraints: [uniqueConstraint()] })]
+      legacy: [legacyProof(tableShape({ uniqueConstraints: [uniqueConstraint()] }))]
     })),
     (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
   )
@@ -379,13 +433,14 @@ test('reports a matching legacy table-transition shape as missing', nativeTestOp
     "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');"
   )
   try {
+    const legacyShape = tableShape({
+      columns: tableShape().columns.map((column) =>
+        column.name === 'title' ? { ...column, notNull: false } : column
+      )
+    })
     const result = checkMigrationCompatibility(database, tableTransition({
       target: tableShape(),
-      legacy: [tableShape({
-        columns: tableShape().columns.map((column) =>
-          column.name === 'title' ? { ...column, notNull: false } : column
-        )
-      })]
+      legacy: [legacyProof(legacyShape, tableSqlSha256(database))]
     }))
     assert.deepEqual(result, {
       status: 'missing',
@@ -393,6 +448,84 @@ test('reports a matching legacy table-transition shape as missing', nativeTestOp
       table: 'items',
       reason: 'legacy-matched'
     })
+  } finally {
+    database.close()
+  }
+})
+
+test('requires an exact CREATE TABLE hash after a legacy shape match', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');"
+  )
+  try {
+    const legacyShape = tableShape({
+      columns: tableShape().columns.map((column) =>
+        column.name === 'title' ? { ...column, notNull: false } : column
+      )
+    })
+    const target = tableShape()
+    const wrongProof = legacyProof(legacyShape, 'b'.repeat(64))
+    assert.equal(checkMigrationCompatibility(database, tableTransition({ target, legacy: [wrongProof] })).status, 'incompatible')
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target,
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database))]
+      })).status,
+      'missing'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('fails closed for a semantically matching MATCH FULL foreign-key DDL variant', nativeTestOptions, () => {
+  const database = openDatabase(
+    'CREATE TABLE parents (id INTEGER PRIMARY KEY);' +
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', parent_id INTEGER, FOREIGN KEY (parent_id) REFERENCES parents(id) MATCH FULL ON UPDATE CASCADE ON DELETE SET NULL);"
+  )
+  try {
+    const legacyShape = tableShapeWithParent()
+    const target = tableShapeWithParent({ foreignKeys: [] })
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target,
+        legacy: [legacyProof(legacyShape, 'c'.repeat(64))]
+      })).status,
+      'incompatible'
+    )
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target,
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database))]
+      })).status,
+      'missing'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('fails closed for a semantically matching named UNIQUE constraint DDL variant', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', CONSTRAINT uq_items_title UNIQUE (title));"
+  )
+  try {
+    const legacyShape = tableShape({ uniqueConstraints: [uniqueConstraint()] })
+    const target = tableShape()
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target,
+        legacy: [legacyProof(legacyShape, 'd'.repeat(64))]
+      })).status,
+      'incompatible'
+    )
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target,
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database))]
+      })).status,
+      'missing'
+    )
   } finally {
     database.close()
   }
@@ -442,13 +575,13 @@ test('compares STRICT and WITHOUT ROWID table flags', nativeTestOptions, () => {
     assert.equal(
       checkMigrationCompatibility(strictDatabase, tableTransition({
         target: tableShape({ strict: true }),
-        legacy: [tableShape()]
+        legacy: [legacyProof(tableShape())]
       })).status,
       'satisfied'
     )
     assert.equal(
       checkMigrationCompatibility(strictDatabase, tableTransition({
-        legacy: [tableShape({ withoutRowid: true })]
+        legacy: [legacyProof(tableShape({ withoutRowid: true }))]
       })).reason,
       'table-shape-incompatible'
     )
@@ -512,7 +645,7 @@ test('reports a matching single-column foreign key target as satisfied', nativeT
     assert.deepEqual(
       checkMigrationCompatibility(database, tableTransition({
         target: tableShapeWithParent(),
-        legacy: [tableShapeWithParent({ foreignKeys: [] })]
+        legacy: [legacyProof(tableShapeWithParent({ foreignKeys: [] }))]
       })),
       { status: 'satisfied', kind: 'table-transition', table: 'items', reason: 'matched' }
     )
@@ -526,10 +659,11 @@ test('reports a known legacy table without a foreign key as missing', nativeTest
     "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', parent_id INTEGER);"
   )
   try {
+    const legacyShape = tableShapeWithParent({ foreignKeys: [] })
     assert.deepEqual(
       checkMigrationCompatibility(database, tableTransition({
         target: tableShapeWithParent(),
-        legacy: [tableShapeWithParent({ foreignKeys: [] })]
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database))]
       })),
       { status: 'missing', kind: 'table-transition', table: 'items', reason: 'legacy-matched' }
     )
@@ -560,7 +694,7 @@ test('reports a matching composite foreign key with ordered column mappings', na
   )
   try {
     assert.equal(
-      checkMigrationCompatibility(database, tableTransition({ target: compositeShape, legacy: [tableShape({ columns: compositeShape.columns, foreignKeys: [] })] })).status,
+      checkMigrationCompatibility(database, tableTransition({ target: compositeShape, legacy: [legacyProof(tableShape({ columns: compositeShape.columns, foreignKeys: [] }))] })).status,
       'satisfied'
     )
   } finally {
@@ -585,7 +719,7 @@ test('treats foreign key action, mapping, and reference differences as incompati
       assert.equal(
         checkMigrationCompatibility(database, tableTransition({
           target: tableShapeWithParent({ foreignKeys: [foreignKey(change)] }),
-          legacy: [tableShapeWithParent({ foreignKeys: [] })]
+          legacy: [legacyProof(tableShapeWithParent({ foreignKeys: [] }))]
         })).status,
         'incompatible'
       )
@@ -607,7 +741,7 @@ test('treats an otherwise matching extra foreign key as incompatible', nativeTes
         { name: 'other_id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 }
       ]
     })
-    assert.equal(checkMigrationCompatibility(extraDatabase, tableTransition({ target: shape, legacy: [tableShape({ columns: shape.columns, foreignKeys: [] })] })).status, 'incompatible')
+    assert.equal(checkMigrationCompatibility(extraDatabase, tableTransition({ target: shape, legacy: [legacyProof(tableShape({ columns: shape.columns, foreignKeys: [] }))] })).status, 'incompatible')
   } finally {
     extraDatabase.close()
   }
@@ -622,7 +756,7 @@ test('treats an otherwise matching missing foreign key as incompatible', nativeT
     const shape = tableShapeWithParent({
       foreignKeys: [foreignKey(), foreignKey({ columns: ['title'], referencedColumns: ['id'] })]
     })
-    assert.equal(checkMigrationCompatibility(missingDatabase, tableTransition({ target: shape, legacy: [tableShapeWithParent({ foreignKeys: [] })] })).status, 'incompatible')
+    assert.equal(checkMigrationCompatibility(missingDatabase, tableTransition({ target: shape, legacy: [legacyProof(tableShapeWithParent({ foreignKeys: [] }))] })).status, 'incompatible')
   } finally {
     missingDatabase.close()
   }
@@ -647,7 +781,7 @@ test('reports a matching single-column UNIQUE constraint as satisfied', nativeTe
     assert.equal(
       checkMigrationCompatibility(database, tableTransition({
         target: tableShape({ uniqueConstraints: [uniqueConstraint()] }),
-        legacy: [tableShape()]
+        legacy: [legacyProof(tableShape())]
       })).status,
       'satisfied'
     )
@@ -661,10 +795,11 @@ test('reports a known legacy table without UNIQUE as missing', nativeTestOptions
     "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready');"
   )
   try {
+    const legacyShape = tableShape()
     assert.equal(
       checkMigrationCompatibility(database, tableTransition({
         target: tableShape({ uniqueConstraints: [uniqueConstraint()] }),
-        legacy: [tableShape()]
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database))]
       })).status,
       'missing'
     )
@@ -685,14 +820,14 @@ test('preserves composite UNIQUE column order and compares every UNIQUE detail',
     assert.equal(
       checkMigrationCompatibility(database, tableTransition({
         target: tableShape({ uniqueConstraints: [{ columns: composite }] }),
-        legacy: [tableShape({ strict: true })]
+        legacy: [legacyProof(tableShape({ strict: true }))]
       })).status,
       'satisfied'
     )
     assert.equal(
       checkMigrationCompatibility(database, tableTransition({
         target: tableShape({ uniqueConstraints: [{ columns: [...composite].reverse() }] }),
-        legacy: [tableShape({ strict: true })]
+        legacy: [legacyProof(tableShape({ strict: true }))]
       })).status,
       'incompatible'
     )
@@ -726,7 +861,7 @@ test('treats extra, missing, direction, and collation UNIQUE differences as inco
       assert.equal(
         checkMigrationCompatibility(database, tableTransition({
           target,
-          legacy: [tableShape({ strict: true })]
+          legacy: [legacyProof(tableShape({ strict: true }))]
         })).status,
         'incompatible'
       )
@@ -751,7 +886,7 @@ test('proves NOCASE and DESC metadata for a table UNIQUE constraint', nativeTest
             ]
           }]
         }),
-        legacy: [tableShape({ strict: true })]
+        legacy: [legacyProof(tableShape({ strict: true }))]
       })).status,
       'satisfied'
     )
@@ -769,7 +904,7 @@ test('ignores CREATE UNIQUE INDEX origin c in this node and defers it to C2d-2b3
     assert.equal(
       checkMigrationCompatibility(database, tableTransition({
         target: tableShape({ uniqueConstraints: [uniqueConstraint()] }),
-        legacy: [tableShape({ strict: true })]
+        legacy: [legacyProof(tableShape({ strict: true }))]
       })).status,
       'incompatible'
     )
@@ -876,6 +1011,68 @@ test('keeps table-transition summaries redacted and uses bound read-only metadat
   assert.doesNotMatch(JSON.stringify(result), /private|secret|id|title/)
 })
 
+test('reads exact CREATE TABLE SQL with a bound mock query and never exposes it', () => {
+  const secretSql = "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'secret-default');"
+  const legacyShape = tableShape()
+  const expectedHash = createHash('sha256').update(Buffer.from(secretSql, 'utf8')).digest('hex')
+  const prepared = []
+  const boundValues = []
+  const database = {
+    prepare(sql) {
+      prepared.push(sql)
+      if (sql.includes('SELECT 1 AS present')) return { get: (...values) => { boundValues.push(values); return { present: 1 } } }
+      if (sql.includes('SELECT sql FROM main.sqlite_schema')) return { get: (...values) => { boundValues.push(values); return { sql: secretSql } } }
+      if (sql.includes('pragma_table_list')) return { get: (...values) => { boundValues.push(values); return { wr: 0, strict: 0 } } }
+      if (sql.includes('pragma_table_xinfo')) return { all: (...values) => { boundValues.push(values); return tableMetadataColumns(legacyShape) } }
+      if (sql.includes('pragma_foreign_key_list')) return { all: (...values) => { boundValues.push(values); return [] } }
+      if (sql.includes('pragma_index_list')) return { all: (...values) => { boundValues.push(values); return [] } }
+      throw new Error('unexpected query')
+    }
+  }
+
+  const result = checkMigrationCompatibility(database, tableTransition({
+    target: tableShape({ strict: true }),
+    legacy: [legacyProof(legacyShape, expectedHash)]
+  }))
+  assert.deepEqual(result, {
+    status: 'missing',
+    kind: 'table-transition',
+    table: 'items',
+    reason: 'legacy-matched'
+  })
+  assert.deepEqual(boundValues, [['items'], ['items'], ['items'], ['items'], ['items'], ['items']])
+  const schemaSql = prepared.find((sql) => sql.includes('SELECT sql FROM main.sqlite_schema'))
+  assert.match(schemaSql, /FROM main\.sqlite_schema/i)
+  assert.match(schemaSql, /type = 'table'/i)
+  assert.match(schemaSql, /name = \?/i)
+  assert.doesNotMatch(schemaSql, /secret-default|items/)
+  assert.doesNotMatch(JSON.stringify(result), /secret-default/)
+})
+
+test('treats malformed CREATE TABLE SQL metadata as incompatible without disclosure', () => {
+  const legacyShape = tableShape()
+  for (const sqlValue of ['', 42, null]) {
+    const database = {
+      prepare(sql) {
+        if (sql.includes('SELECT 1 AS present')) return { get: () => ({ present: 1 }) }
+        if (sql.includes('SELECT sql FROM main.sqlite_schema')) return { get: () => ({ sql: sqlValue }) }
+        if (sql.includes('pragma_table_list')) return { get: () => ({ wr: 0, strict: 0 }) }
+        if (sql.includes('pragma_table_xinfo')) return { all: () => tableMetadataColumns(legacyShape) }
+        if (sql.includes('pragma_foreign_key_list')) return { all: () => [] }
+        if (sql.includes('pragma_index_list')) return { all: () => [] }
+        throw new Error('unexpected query')
+      }
+    }
+    assert.deepEqual(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShape({ strict: true }),
+        legacy: [legacyProof(legacyShape, DUMMY_DDL_HASH)]
+      })),
+      { status: 'incompatible', kind: 'table-transition', table: 'items', reason: 'table-shape-incompatible' }
+    )
+  }
+})
+
 test('rejects UNIQUE xinfo cid/name mismatches without exposing metadata', () => {
   const shape = tableShape({ uniqueConstraints: [uniqueConstraint()] })
   const database = {
@@ -901,7 +1098,7 @@ test('rejects UNIQUE xinfo cid/name mismatches without exposing metadata', () =>
 
   const result = checkMigrationCompatibility(database, tableTransition({
     target: shape,
-    legacy: [tableShape({ strict: true })]
+    legacy: [legacyProof(tableShape({ strict: true }))]
   }))
   assert.deepEqual(result, {
     status: 'incompatible',
