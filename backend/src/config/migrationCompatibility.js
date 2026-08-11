@@ -5,8 +5,9 @@ const TABLE_TRANSITION_COMPATIBILITY_KIND = 'table-transition'
 const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
 const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
-const TABLE_TRANSITION_LEGACY_PROOF_KEYS = ['shape', 'createTableSqlSha256', 'indexes']
+const TABLE_TRANSITION_LEGACY_PROOF_KEYS = ['shape', 'createTableSqlSha256', 'indexes', 'triggers']
 const TABLE_TRANSITION_LEGACY_INDEX_KEYS = ['name', 'createIndexSqlSha256']
+const TABLE_TRANSITION_LEGACY_TRIGGER_KEYS = ['name', 'createTriggerSqlSha256']
 const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns', 'foreignKeys', 'uniqueConstraints']
 const TABLE_COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue', 'primaryKeyPosition']
 const TABLE_UNIQUE_CONSTRAINT_KEYS = ['columns']
@@ -343,6 +344,43 @@ function normalizeTableTransitionLegacyIndexes(indexes, fieldName) {
   return Object.freeze(normalized)
 }
 
+function normalizeTableTransitionLegacyTrigger(trigger, fieldName) {
+  assertPlainObject(trigger, fieldName)
+  assertExactKeys(trigger, TABLE_TRANSITION_LEGACY_TRIGGER_KEYS, fieldName)
+  return Object.freeze({
+    name: normalizeRequiredText(trigger.name, `${fieldName}.name`),
+    createTriggerSqlSha256: normalizeCreateTableSqlSha256(
+      trigger.createTriggerSqlSha256,
+      `${fieldName}.createTriggerSqlSha256`
+    )
+  })
+}
+
+function tableTransitionLegacyTriggerCanonicalKey(trigger) {
+  return JSON.stringify(trigger)
+}
+
+function normalizeTableTransitionLegacyTriggers(triggers, fieldName) {
+  if (!Array.isArray(triggers)) fail(`${fieldName} must be an array.`)
+
+  const normalized = triggers.map((trigger, position) =>
+    normalizeTableTransitionLegacyTrigger(trigger, `${fieldName}[${position}]`)
+  )
+  const names = new Set()
+  for (const trigger of normalized) {
+    if (names.has(trigger.name)) fail(`${fieldName} contains a duplicate trigger name.`)
+    names.add(trigger.name)
+  }
+  normalized.sort((left, right) => {
+    const leftKey = tableTransitionLegacyTriggerCanonicalKey(left)
+    const rightKey = tableTransitionLegacyTriggerCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  return Object.freeze(normalized)
+}
+
 function normalizeTableTransitionLegacyProof(proof, fieldName) {
   assertPlainObject(proof, fieldName)
   assertExactKeys(proof, TABLE_TRANSITION_LEGACY_PROOF_KEYS, fieldName)
@@ -352,12 +390,13 @@ function normalizeTableTransitionLegacyProof(proof, fieldName) {
       proof.createTableSqlSha256,
       `${fieldName}.createTableSqlSha256`
     ),
-    indexes: normalizeTableTransitionLegacyIndexes(proof.indexes, `${fieldName}.indexes`)
+    indexes: normalizeTableTransitionLegacyIndexes(proof.indexes, `${fieldName}.indexes`),
+    triggers: normalizeTableTransitionLegacyTriggers(proof.triggers, `${fieldName}.triggers`)
   })
 }
 
 function tableTransitionLegacyProofCanonicalKey(proof) {
-  return `${JSON.stringify(proof.shape)}\u0000${proof.createTableSqlSha256}\u0000${JSON.stringify(proof.indexes)}`
+  return `${JSON.stringify(proof.shape)}\u0000${proof.createTableSqlSha256}\u0000${JSON.stringify(proof.indexes)}\u0000${JSON.stringify(proof.triggers)}`
 }
 
 function normalizeTableTransitionCompatibility(compatibility) {
@@ -728,6 +767,38 @@ function readTableExplicitIndexProof(database, table, indexNames) {
   return Object.freeze(indexes)
 }
 
+function readTablePersistentTriggerProof(database, table) {
+  const rows = database
+    .prepare(
+      "SELECT name, sql FROM main.sqlite_schema WHERE type = 'trigger' AND tbl_name = ? ORDER BY name"
+    )
+    .all(table)
+  if (!Array.isArray(rows)) return null
+
+  const names = new Set()
+  const triggers = []
+  for (const row of rows) {
+    const name = typeof row?.name === 'string' ? row.name.trim() : ''
+    if (name.length === 0 || names.has(name) || typeof row.sql !== 'string' || row.sql.trim().length === 0) {
+      return null
+    }
+    names.add(name)
+    triggers.push({
+      name,
+      createTriggerSqlSha256: createTableSqlSha256(row.sql)
+    })
+  }
+
+  triggers.sort((left, right) => {
+    const leftKey = tableTransitionLegacyTriggerCanonicalKey(left)
+    const rightKey = tableTransitionLegacyTriggerCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  return Object.freeze(triggers)
+}
+
 /**
  * Read-only proof of one migration's schema postcondition.
  *
@@ -830,7 +901,19 @@ export function checkMigrationCompatibility(database, compatibility) {
                 JSON.stringify(explicitIndexes) === JSON.stringify(proof.indexes)
               ))
             ) {
-              return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
+              const persistentTriggers = readTablePersistentTriggerProof(
+                database,
+                normalized.table
+              )
+              if (
+                persistentTriggers !== null &&
+                matchingLegacyFingerprints.some((proof) => (
+                  JSON.stringify(explicitIndexes) === JSON.stringify(proof.indexes) &&
+                  JSON.stringify(persistentTriggers) === JSON.stringify(proof.triggers)
+                ))
+              ) {
+                return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
+              }
             }
           }
         }

@@ -60,8 +60,8 @@ function tableShape(overrides = {}) {
 
 const DUMMY_DDL_HASH = 'a'.repeat(64)
 
-function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = []) {
-  return { shape, createTableSqlSha256, indexes }
+function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = [], triggers = []) {
+  return { shape, createTableSqlSha256, indexes, triggers }
 }
 
 function tableTransition(overrides = {}) {
@@ -128,6 +128,15 @@ function indexSqlSha256(database, name, table = 'items') {
   return createHash('sha256').update(Buffer.from(row.sql, 'utf8')).digest('hex')
 }
 
+function triggerSqlSha256(database, name, table = 'items') {
+  const row = database
+    .prepare("SELECT sql FROM main.sqlite_schema WHERE type = 'trigger' AND tbl_name = ? AND name = ?")
+    .get(table, name)
+  assert.equal(typeof row?.sql, 'string')
+  assert.ok(row.sql.length > 0)
+  return createHash('sha256').update(Buffer.from(row.sql, 'utf8')).digest('hex')
+}
+
 function metadataDatabase(column) {
   let query = 0
   return {
@@ -182,10 +191,13 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
     Object.isFrozen(proof.shape.uniqueConstraints) &&
     Object.isFrozen(proof.indexes) &&
     proof.indexes.every(Object.isFrozen) &&
+    Object.isFrozen(proof.triggers) &&
+    proof.triggers.every(Object.isFrozen) &&
     typeof proof.createTableSqlSha256 === 'string'
   )))
   assert.equal(normalized.legacy[0].createTableSqlSha256, DUMMY_DDL_HASH)
   assert.deepEqual(normalized.legacy[0].indexes, [])
+  assert.deepEqual(normalized.legacy[0].triggers, [])
 
   input.table = 'changed'
   input.target.columns[0].name = 'changed'
@@ -256,6 +268,10 @@ test('rejects malformed table-transition shapes and unsupported keys', () => {
     { ...valid, legacy: [{ ...valid.legacy[0], indexes: [{ name: 'idx', createIndexSqlSha256: 'not-a-hash' }] }] },
     { ...valid, legacy: [{ ...valid.legacy[0], indexes: [{ name: ' ', createIndexSqlSha256: DUMMY_DDL_HASH }] }] },
     { ...valid, legacy: [{ ...valid.legacy[0], indexes: [{ name: 'idx', createIndexSqlSha256: DUMMY_DDL_HASH, extra: true }] }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], triggers: 'none' }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], triggers: [{ name: 'hook', createTriggerSqlSha256: 'not-a-hash' }] }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], triggers: [{ name: ' ', createTriggerSqlSha256: DUMMY_DDL_HASH }] }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], triggers: [{ name: 'hook', createTriggerSqlSha256: DUMMY_DDL_HASH, extra: true }] }] },
     {
       ...valid,
       legacy: [{
@@ -357,6 +373,39 @@ test('normalizes legacy fingerprints and explicit indexes canonically', () => {
       legacyProof(strictShape, 'a'.repeat(64), [{ name: 'idx', createIndexSqlSha256: 'b'.repeat(64) }])
     ]
   })))
+})
+
+test('normalizes legacy persistent trigger fingerprints canonically and rejects duplicates', () => {
+  const strictShape = tableShape({ strict: true })
+  const input = tableTransition({
+    legacy: [legacyProof(strictShape, DUMMY_DDL_HASH, [], [
+      { name: 'z_hook', createTriggerSqlSha256: 'B'.repeat(64) },
+      { name: 'a_hook', createTriggerSqlSha256: `  ${'A'.repeat(64)}  ` }
+    ])]
+  })
+  const normalized = normalizeMigrationCompatibility(input)
+
+  assert.deepEqual(normalized.legacy[0].triggers, [
+    { name: 'a_hook', createTriggerSqlSha256: 'a'.repeat(64) },
+    { name: 'z_hook', createTriggerSqlSha256: 'b'.repeat(64) }
+  ])
+  assert.ok(Object.isFrozen(normalized.legacy[0].triggers))
+  assert.ok(normalized.legacy[0].triggers.every(Object.isFrozen))
+  assert.doesNotThrow(() => normalizeMigrationCompatibility(tableTransition({
+    legacy: [
+      legacyProof(strictShape, DUMMY_DDL_HASH, [], [{ name: 'hook', createTriggerSqlSha256: 'a'.repeat(64) }]),
+      legacyProof(strictShape, DUMMY_DDL_HASH, [], [{ name: 'hook', createTriggerSqlSha256: 'b'.repeat(64) }])
+    ]
+  })))
+  assert.throws(
+    () => normalizeMigrationCompatibility(tableTransition({
+      legacy: [legacyProof(strictShape, DUMMY_DDL_HASH, [], [
+        { name: 'hook', createTriggerSqlSha256: 'a'.repeat(64) },
+        { name: 'hook', createTriggerSqlSha256: 'b'.repeat(64) }
+      ])]
+    })),
+    (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+  )
 })
 
 test('normalizes foreign key actions, null references, canonical order, and nested freezes', () => {
@@ -607,6 +656,60 @@ test('proves ordinary, UNIQUE, partial, and expression explicit indexes by exact
     } finally {
       database.close()
     }
+  }
+})
+
+test('proves persistent BEFORE and AFTER triggers by exact SQL hash', nativeTestOptions, () => {
+  const database = openDatabase([
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');",
+    'CREATE TRIGGER items_before_insert BEFORE INSERT ON items WHEN NEW.title IS NOT NULL BEGIN SELECT NEW.title; END;',
+    'CREATE TRIGGER items_after_update AFTER UPDATE OF title ON items BEGIN SELECT NEW.title; END;'
+  ].join('\n'))
+  try {
+    const legacyShape = tableShape({
+      columns: tableShape().columns.map((column) =>
+        column.name === 'title' ? { ...column, notNull: false } : column
+      )
+    })
+    const triggers = [
+      { name: 'items_after_update', createTriggerSqlSha256: triggerSqlSha256(database, 'items_after_update') },
+      { name: 'items_before_insert', createTriggerSqlSha256: triggerSqlSha256(database, 'items_before_insert') }
+    ]
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShape(),
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database), [], triggers)]
+      })).status,
+      'missing'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('treats missing, extra, and same-name-wrong-hash triggers as incompatible', nativeTestOptions, () => {
+  const schema = [
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');",
+    'CREATE TRIGGER items_hook BEFORE INSERT ON items BEGIN SELECT NEW.title; END;'
+  ].join('\n')
+  const database = openDatabase(schema)
+  try {
+    const legacyShape = tableShape({
+      columns: tableShape().columns.map((column) =>
+        column.name === 'title' ? { ...column, notNull: false } : column
+      )
+    })
+    const exact = { name: 'items_hook', createTriggerSqlSha256: triggerSqlSha256(database, 'items_hook') }
+    const proof = (triggers) => tableTransition({
+      target: tableShape(),
+      legacy: [legacyProof(legacyShape, tableSqlSha256(database), [], triggers)]
+    })
+    assert.equal(checkMigrationCompatibility(database, proof([])).status, 'incompatible')
+    assert.equal(checkMigrationCompatibility(database, proof([{ ...exact, name: 'missing_hook' }])).status, 'incompatible')
+    assert.equal(checkMigrationCompatibility(database, proof([{ ...exact, createTriggerSqlSha256: 'b'.repeat(64) }])).status, 'incompatible')
+    assert.equal(checkMigrationCompatibility(database, proof([exact])).status, 'missing')
+  } finally {
+    database.close()
   }
 })
 
@@ -1181,6 +1284,7 @@ test('reads exact CREATE TABLE SQL with a bound mock query and never exposes it'
       prepared.push(sql)
       if (sql.includes('SELECT 1 AS present')) return { get: (...values) => { boundValues.push(values); return { present: 1 } } }
       if (sql.includes("type = 'index'")) return { get: (...values) => { boundValues.push(values); return { sql: secretIndexSql } } }
+      if (sql.includes("type = 'trigger'")) return { all: (...values) => { boundValues.push(values); return [] } }
       if (sql.includes('SELECT sql FROM main.sqlite_schema')) return { get: (...values) => { boundValues.push(values); return { sql: secretSql } } }
       if (sql.includes('pragma_table_list')) return { get: (...values) => { boundValues.push(values); return { wr: 0, strict: 0 } } }
       if (sql.includes('pragma_table_xinfo')) return { all: (...values) => { boundValues.push(values); return tableMetadataColumns(legacyShape) } }
@@ -1202,7 +1306,7 @@ test('reads exact CREATE TABLE SQL with a bound mock query and never exposes it'
     table: 'items',
     reason: 'legacy-matched'
   })
-  assert.deepEqual(boundValues, [['items'], ['items'], ['items'], ['items'], ['items'], ['items'], ['items', 'secret-index']])
+  assert.deepEqual(boundValues, [['items'], ['items'], ['items'], ['items'], ['items'], ['items'], ['items', 'secret-index'], ['items']])
   const schemaSql = prepared.find((sql) => sql.includes("type = 'table'"))
   assert.match(schemaSql, /FROM main\.sqlite_schema/i)
   assert.match(schemaSql, /type = 'table'/i)
@@ -1213,6 +1317,99 @@ test('reads exact CREATE TABLE SQL with a bound mock query and never exposes it'
   assert.doesNotMatch(schemaSql, /secret-default|items/)
   assert.doesNotMatch(indexSchemaSql, /secret-index|lower|title|IS NOT NULL/)
   assert.doesNotMatch(JSON.stringify(result), /secret-default/)
+})
+
+test('reads trigger SQL with a bound table name and never exposes trigger metadata', () => {
+  const secretTriggerSql = 'CREATE TRIGGER secret-hook AFTER INSERT ON items BEGIN SELECT NEW.title; END;'
+  const secretTableSql = "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');"
+  const legacyShape = tableShape()
+  const expectedTableHash = createHash('sha256').update(Buffer.from(secretTableSql, 'utf8')).digest('hex')
+  const expectedHash = createHash('sha256').update(Buffer.from(secretTriggerSql, 'utf8')).digest('hex')
+  const prepared = []
+  const boundValues = []
+  const database = {
+    prepare(sql) {
+      prepared.push(sql)
+      if (sql.includes('SELECT 1 AS present')) return { get: (...values) => { boundValues.push(values); return { present: 1 } } }
+      if (sql.includes("type = 'trigger'")) {
+        return { all: (...values) => { boundValues.push(values); return [{ name: 'secret-hook', sql: secretTriggerSql }] } }
+      }
+      if (sql.includes('SELECT sql FROM main.sqlite_schema')) return { get: (...values) => { boundValues.push(values); return { sql: secretTableSql } } }
+      if (sql.includes('pragma_table_list')) return { get: (...values) => { boundValues.push(values); return { wr: 0, strict: 0 } } }
+      if (sql.includes('pragma_table_xinfo')) return { all: (...values) => { boundValues.push(values); return tableMetadataColumns(legacyShape) } }
+      if (sql.includes('pragma_foreign_key_list')) return { all: (...values) => { boundValues.push(values); return [] } }
+      if (sql.includes('pragma_index_list')) return { all: (...values) => { boundValues.push(values); return [] } }
+      throw new Error('unexpected query')
+    }
+  }
+
+  const result = checkMigrationCompatibility(database, tableTransition({
+    target: tableShape({ strict: true }),
+    legacy: [legacyProof(legacyShape, expectedTableHash, [], [{ name: 'secret-hook', createTriggerSqlSha256: expectedHash }])]
+  }))
+  assert.deepEqual(result, {
+    status: 'missing',
+    kind: 'table-transition',
+    table: 'items',
+    reason: 'legacy-matched'
+  })
+  assert.deepEqual(boundValues, [['items'], ['items'], ['items'], ['items'], ['items'], ['items'], ['items']])
+  const triggerSql = prepared.find((sql) => sql.includes("type = 'trigger'"))
+  assert.match(triggerSql, /FROM main\.sqlite_schema/i)
+  assert.match(triggerSql, /tbl_name = \?/i)
+  assert.match(triggerSql, /ORDER BY name/i)
+  assert.doesNotMatch(triggerSql, /secret-hook|NEW\.title|SELECT NEW/i)
+  assert.doesNotMatch(JSON.stringify(result), /secret-hook|NEW\.title|CREATE TRIGGER|[a-f0-9]{64}/i)
+})
+
+test('fails closed and redacts malformed persistent trigger metadata without native SQLite', () => {
+  const sensitiveName = 'sensitive-trigger-name'
+  const sensitiveSql = 'CREATE TRIGGER sensitive-trigger-name AFTER INSERT ON items BEGIN SELECT secret_business_value; END;'
+  const secretTableSql = "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');"
+  const legacyShape = tableShape()
+  const expectedTableHash = createHash('sha256').update(Buffer.from(secretTableSql, 'utf8')).digest('hex')
+  const malformedRows = [
+    { label: 'non-array rows', rows: { name: sensitiveName, sql: sensitiveSql } },
+    { label: 'empty name', rows: [{ name: '', sql: sensitiveSql }] },
+    { label: 'blank name', rows: [{ name: '   ', sql: sensitiveSql }] },
+    {
+      label: 'duplicate name',
+      rows: [
+        { name: sensitiveName, sql: sensitiveSql },
+        { name: sensitiveName, sql: sensitiveSql }
+      ]
+    },
+    { label: 'non-string sql', rows: [{ name: sensitiveName, sql: { secret: sensitiveSql } }] },
+    { label: 'blank sql', rows: [{ name: sensitiveName, sql: ' \t ' }] }
+  ]
+
+  for (const { label, rows } of malformedRows) {
+    const database = {
+      prepare(sql) {
+        if (sql.includes('SELECT 1 AS present')) return { get: () => ({ present: 1 }) }
+        if (sql.includes("type = 'trigger'")) return { all: () => rows }
+        if (sql.includes('SELECT sql FROM main.sqlite_schema')) return { get: () => ({ sql: secretTableSql }) }
+        if (sql.includes('pragma_table_list')) return { get: () => ({ wr: 0, strict: 0 }) }
+        if (sql.includes('pragma_table_xinfo')) return { all: () => tableMetadataColumns(legacyShape) }
+        if (sql.includes('pragma_foreign_key_list')) return { all: () => [] }
+        if (sql.includes('pragma_index_list')) return { all: () => [] }
+        throw new Error(`unexpected query for ${label}`)
+      }
+    }
+
+    const result = checkMigrationCompatibility(database, tableTransition({
+      target: tableShape({ strict: true }),
+      legacy: [legacyProof(legacyShape, expectedTableHash)]
+    }))
+    assert.deepEqual(result, {
+      status: 'incompatible',
+      kind: 'table-transition',
+      table: 'items',
+      reason: 'table-shape-incompatible'
+    })
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(sensitiveName))
+    assert.doesNotMatch(JSON.stringify(result), /secret_business_value/)
+  }
 })
 
 test('does not read explicit index SQL when target semantics match', () => {
@@ -1228,6 +1425,7 @@ test('does not read explicit index SQL when target semantics match', () => {
         return { all: () => [{ seq: 0, name: 'unknown-explicit', is_unique: 0, origin: 'c', partial: 0 }] }
       }
       if (sql.includes("type = 'index'")) throw new Error('explicit index SQL must not be queried')
+      if (sql.includes("type = 'trigger'")) throw new Error('trigger SQL must not be queried')
       throw new Error('unexpected query')
     }
   }

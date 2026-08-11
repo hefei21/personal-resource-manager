@@ -28,8 +28,8 @@ function tableShape(overrides = {}) {
 
 const DUMMY_DDL_HASH = 'a'.repeat(64)
 
-function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = []) {
-  return { shape, createTableSqlSha256, indexes }
+function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = [], triggers = []) {
+  return { shape, createTableSqlSha256, indexes, triggers }
 }
 
 function tableTransition(overrides = {}) {
@@ -227,6 +227,8 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
   assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape.uniqueConstraints))
   assert.ok(Object.isFrozen(migration.compatibility.legacy[0].indexes))
   assert.ok(migration.compatibility.legacy[0].indexes.every(Object.isFrozen))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].triggers))
+  assert.ok(migration.compatibility.legacy[0].triggers.every(Object.isFrozen))
 
   const changes = [
     {
@@ -263,6 +265,12 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
       ...base,
       legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [
         { name: 'items_idx', createIndexSqlSha256: 'b'.repeat(64) }
+      ])]
+    },
+    {
+      ...base,
+      legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [], [
+        { name: 'items_hook', createTriggerSqlSha256: 'b'.repeat(64) }
       ])]
     }
   ]
@@ -317,6 +325,26 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
       compatibility: {
         ...base,
         legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [...indexReordered].reverse())]
+      }
+    }).checksum
+  )
+
+  const triggerReordered = [
+    { name: 'z_hook', createTriggerSqlSha256: 'd'.repeat(64) },
+    { name: 'a_hook', createTriggerSqlSha256: 'c'.repeat(64) }
+  ]
+  assert.equal(
+    defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: { ...base, legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [], triggerReordered)] }
+    }).checksum,
+    defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: {
+        ...base,
+        legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [], [...triggerReordered].reverse())]
       }
     }).checksum
   )
