@@ -9,6 +9,10 @@ import {
   startMigrationAttempt,
   MigrationControlStoreError
 } from './migrationControlStore.js'
+import {
+  checkMigrationCompatibility,
+  COMPATIBILITY_STATUSES
+} from './migrationCompatibility.js'
 import { MIGRATION_LOCK_ACTIVE } from './migrationLock.js'
 
 const CHECKSUM_PATTERN = /^[a-f0-9]{64}$/
@@ -383,6 +387,14 @@ function sqliteMachineCode(error) {
 }
 
 function classifyFailure(error) {
+  if (error instanceof MigrationExecutorError && error.machineCode) {
+    if (
+      error.machineCode === 'MIGRATION_COMPATIBILITY_PRECONDITION_FAILED' ||
+      error.machineCode === 'MIGRATION_COMPATIBILITY_CHECK_FAILED'
+    ) {
+      return { category: 'migration', machineCode: error.machineCode }
+    }
+  }
   const sqliteCode = sqliteMachineCode(error)
   if (sqliteCode) return { category: 'database', machineCode: sqliteCode }
   if (error instanceof MigrationControlStoreError) {
@@ -422,6 +434,28 @@ function finishFailed(database, attempt, now, failure) {
   } catch (error) {
     throw coordinationError(new AggregateError([failure.cause, error], 'Migration failure finalization failed.'))
   }
+}
+
+function compatibilityPreconditionError() {
+  return new MigrationExecutorError(
+    'MIGRATION_COMPATIBILITY_PRECONDITION_FAILED',
+    'Migration compatibility precondition was not satisfied.',
+    {
+      category: 'migration',
+      machineCode: 'MIGRATION_COMPATIBILITY_PRECONDITION_FAILED'
+    }
+  )
+}
+
+function compatibilityCheckError() {
+  return new MigrationExecutorError(
+    'MIGRATION_COMPATIBILITY_CHECK_FAILED',
+    'Migration compatibility check failed.',
+    {
+      category: 'migration',
+      machineCode: 'MIGRATION_COMPATIBILITY_CHECK_FAILED'
+    }
+  )
 }
 
 /**
@@ -476,7 +510,20 @@ export function executeMigrationBatch({ database, registry, plan, lock, now } = 
 
     try {
       database.transaction(() => {
-        const source = migrationsById.get(migration.id).source
+        const definition = migrationsById.get(migration.id)
+        if (Object.hasOwn(definition, 'compatibility')) {
+          assertActiveLock(lock)
+          let compatibilityResult
+          try {
+            compatibilityResult = checkMigrationCompatibility(database, definition.compatibility)
+          } catch {
+            throw compatibilityCheckError()
+          }
+          if (compatibilityResult?.status !== COMPATIBILITY_STATUSES.MISSING) {
+            throw compatibilityPreconditionError()
+          }
+        }
+        const source = definition.source
         database.exec(source)
         recordSuccessfulMigration(database, {
           migrationId: migration.id,

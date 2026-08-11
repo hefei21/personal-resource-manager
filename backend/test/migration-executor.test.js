@@ -48,6 +48,42 @@ function openDatabase() {
   return database
 }
 
+function tracedDatabase(database, events, { failOnMetadata = false } = {}) {
+  let inTransaction = false
+  const lock = {
+    get state() {
+      events.push(inTransaction ? 'transaction-lock-check' : 'lock-check')
+      return 'active'
+    }
+  }
+  return {
+    lock,
+    exec(source) {
+      events.push(['exec', source])
+      return database.exec(source)
+    },
+    prepare(sql) {
+      events.push(['prepare', sql])
+      if (failOnMetadata && String(sql).includes('pragma_table_xinfo')) {
+        throw new Error('metadata query exposed private_resources/private_title')
+      }
+      return database.prepare(sql)
+    },
+    transaction(run) {
+      const transaction = database.transaction(() => {
+        events.push('transaction-callback')
+        inTransaction = true
+        try {
+          return run()
+        } finally {
+          inTransaction = false
+        }
+      })
+      return (...args) => transaction(...args)
+    }
+  }
+}
+
 function definition(id, source) {
   return { id, source }
 }
@@ -411,6 +447,125 @@ test('executes a pending compatibility migration without exposing its condition'
     const serialized = JSON.stringify(summary)
     assert.doesNotMatch(serialized, /private_resources|private_title|ALTER TABLE|synthetic\/private\.db/)
     assert.equal(serialized.includes(migration.checksum), false)
+  } finally {
+    database.close()
+  }
+})
+
+test('checks compatibility inside the transaction before executing its source', nativeTestOptions, () => {
+  const database = openDatabase()
+  const events = []
+  try {
+    database.exec('CREATE TABLE resources (id INTEGER);')
+    const request = batch([
+      compatibilityDefinition(
+        '0001_expand',
+        "ALTER TABLE resources ADD COLUMN title TEXT NOT NULL DEFAULT 'ready';"
+      )
+    ])
+    const traced = tracedDatabase(database, events)
+    const summary = executeMigrationBatch({
+      database: traced,
+      ...request,
+      lock: traced.lock
+    })
+
+    assert.equal(summary.executedCount, 1)
+    const callbackIndex = events.indexOf('transaction-callback')
+    const lockIndex = events.indexOf('transaction-lock-check')
+    const sourceIndex = events.findIndex((event) => Array.isArray(event) && event[0] === 'exec' && event[1].includes('ADD COLUMN title'))
+    assert.ok(callbackIndex >= 0)
+    assert.equal(lockIndex, callbackIndex + 1)
+    assert.ok(sourceIndex > lockIndex)
+    assert.ok(events.slice(lockIndex + 1, sourceIndex).some((event) => Array.isArray(event) && event[0] === 'prepare'))
+  } finally {
+    database.close()
+  }
+})
+
+for (const [label, tableSql, expectedCode] of [
+  ['satisfied', "CREATE TABLE resources (id INTEGER, title TEXT NOT NULL DEFAULT 'ready');", 'MIGRATION_COMPATIBILITY_PRECONDITION_FAILED'],
+  ['incompatible', 'CREATE TABLE resources (id INTEGER, title INTEGER);', 'MIGRATION_COMPATIBILITY_PRECONDITION_FAILED']
+]) {
+  test(`blocks a ${label} compatibility migration before source execution`, nativeTestOptions, () => {
+    const database = openDatabase()
+    const events = []
+    const source = "ALTER TABLE resources ADD COLUMN title TEXT NOT NULL DEFAULT 'ready';"
+    try {
+      database.exec(tableSql)
+      const request = batch([compatibilityDefinition('0001_expand', source)])
+      const traced = tracedDatabase(database, events)
+      const error = thrown(() => executeMigrationBatch({
+        database: traced,
+        ...request,
+        lock: traced.lock
+      }))
+
+      assert.equal(error.code, 'MIGRATION_EXECUTION_FAILED')
+      assert.equal(error.machineCode, expectedCode)
+      assert.doesNotMatch(error.message, /resources|title|ALTER TABLE|ready/)
+      assert.equal(getAppliedMigration(database, '0001_expand'), null)
+      assert.deepEqual(listMigrationAttempts(database).map(({ migrationId, status, errorCategory, errorSummary }) => ({
+        migrationId,
+        status,
+        errorCategory,
+        errorSummary
+      })), [{
+        migrationId: '0001_expand',
+        status: 'failed',
+        errorCategory: 'migration',
+        errorSummary: expectedCode
+      }])
+      assert.equal(events.some((event) => Array.isArray(event) && event[0] === 'exec' && event[1] === source), false)
+    } finally {
+      database.close()
+    }
+  })
+}
+
+test('fails closed and redacts compatibility checker failures', nativeTestOptions, () => {
+  const database = openDatabase()
+  const events = []
+  try {
+    database.exec('CREATE TABLE private_resources (id INTEGER);')
+    const request = batch([{
+      id: '0001_expand',
+      source: "ALTER TABLE private_resources ADD COLUMN private_title TEXT NOT NULL DEFAULT '/synthetic/private.db';",
+      compatibility: {
+        kind: 'column',
+        table: 'private_resources',
+        column: {
+          name: 'private_title',
+          type: 'TEXT',
+          notNull: true,
+          defaultValue: "'/synthetic/private.db'"
+        }
+      }
+    }])
+    const traced = tracedDatabase(database, events, { failOnMetadata: true })
+    const error = thrown(() => executeMigrationBatch({
+      database: traced,
+      ...request,
+      lock: traced.lock
+    }))
+
+    assert.equal(error.code, 'MIGRATION_EXECUTION_FAILED')
+    assert.equal(error.machineCode, 'MIGRATION_COMPATIBILITY_CHECK_FAILED')
+    assert.doesNotMatch(error.message, /private_resources|private_title|synthetic|metadata query/)
+    assert.doesNotMatch(String(error.cause?.message ?? ''), /private_resources|private_title|synthetic|metadata query/)
+    assert.equal(events.some((event) => Array.isArray(event) && event[0] === 'exec' && event[1] === request.registry.migrations[0].source), false)
+    assert.equal(getAppliedMigration(database, '0001_expand'), null)
+    assert.deepEqual(listMigrationAttempts(database).map(({ migrationId, status, errorCategory, errorSummary }) => ({
+      migrationId,
+      status,
+      errorCategory,
+      errorSummary
+    })), [{
+      migrationId: '0001_expand',
+      status: 'failed',
+      errorCategory: 'migration',
+      errorSummary: 'MIGRATION_COMPATIBILITY_CHECK_FAILED'
+    }])
   } finally {
     database.close()
   }
