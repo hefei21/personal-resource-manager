@@ -21,6 +21,7 @@ function tableShape(overrides = {}) {
       { name: 'title', type: 'TEXT', notNull: true, defaultValue: "'ready'", primaryKeyPosition: 0 }
     ],
     foreignKeys: [],
+    uniqueConstraints: [],
     ...overrides
   }
 }
@@ -42,6 +43,13 @@ function foreignKey(overrides = {}) {
     referencedColumns: [null],
     onUpdate: 'NO ACTION',
     onDelete: 'CASCADE',
+    ...overrides
+  }
+}
+
+function uniqueConstraint(overrides = {}) {
+  return {
+    columns: [{ name: 'title', collation: 'BINARY', descending: false }],
     ...overrides
   }
 }
@@ -195,6 +203,12 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
   assert.ok(Object.isFrozen(migration.compatibility.target))
   assert.ok(Object.isFrozen(migration.compatibility.target.columns))
   assert.ok(Object.isFrozen(migration.compatibility.target.foreignKeys))
+  assert.ok(Object.isFrozen(migration.compatibility.target.uniqueConstraints))
+  assert.ok(migration.compatibility.target.uniqueConstraints.every((constraint) => (
+    Object.isFrozen(constraint) &&
+    Object.isFrozen(constraint.columns) &&
+    constraint.columns.every(Object.isFrozen)
+  )))
   assert.ok(migration.compatibility.target.foreignKeys.every((foreignKey) => {
     return Object.isFrozen(foreignKey) &&
       Object.isFrozen(foreignKey.columns) &&
@@ -202,6 +216,7 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
   }))
   assert.ok(Object.isFrozen(migration.compatibility.legacy))
   assert.ok(Object.isFrozen(migration.compatibility.legacy[0].columns))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].uniqueConstraints))
 
   const changes = [
     {
@@ -226,6 +241,12 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
       ...base,
       target: tableShape({
         foreignKeys: [foreignKey()]
+      })
+    },
+    {
+      ...base,
+      target: tableShape({
+        uniqueConstraints: [uniqueConstraint()]
       })
     }
   ]

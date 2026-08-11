@@ -52,6 +52,7 @@ function tableShape(overrides = {}) {
       { name: 'title', type: 'TEXT', notNull: true, defaultValue: "'ready'", primaryKeyPosition: 0 }
     ],
     foreignKeys: [],
+    uniqueConstraints: [],
     ...overrides
   }
 }
@@ -73,6 +74,13 @@ function foreignKey(overrides = {}) {
     referencedColumns: ['id'],
     onUpdate: 'CASCADE',
     onDelete: 'SET NULL',
+    ...overrides
+  }
+}
+
+function uniqueConstraint(overrides = {}) {
+  return {
+    columns: [{ name: 'title', collation: 'BINARY', descending: false }],
     ...overrides
   }
 }
@@ -138,11 +146,13 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
   assert.ok(Object.isFrozen(normalized.target))
   assert.ok(Object.isFrozen(normalized.target.columns))
   assert.ok(Object.isFrozen(normalized.target.foreignKeys))
+  assert.ok(Object.isFrozen(normalized.target.uniqueConstraints))
   assert.ok(normalized.target.columns.every(Object.isFrozen))
   assert.ok(Object.isFrozen(normalized.legacy))
   assert.ok(normalized.legacy.every(Object.isFrozen))
   assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.columns)))
   assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.foreignKeys)))
+  assert.ok(normalized.legacy.every((shape) => Object.isFrozen(shape.uniqueConstraints)))
 
   input.table = 'changed'
   input.target.columns[0].name = 'changed'
@@ -152,6 +162,37 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
   assert.equal(normalized.table, 'items')
   assert.equal(normalized.target.columns[0].name, 'id')
   assert.equal(normalized.legacy[0].columns.length, 2)
+})
+
+test('normalizes unique constraint collations, canonical order, and nested freezes', () => {
+  const input = tableTransition({
+    target: tableShape({
+      uniqueConstraints: [
+        uniqueConstraint({
+          columns: [{ name: 'title', collation: ' no  case ', descending: true }]
+        }),
+        uniqueConstraint({
+          columns: [{ name: 'id', collation: ' binary ', descending: false }]
+        })
+      ]
+    })
+  })
+  const normalized = normalizeMigrationCompatibility(input)
+
+  assert.deepEqual(normalized.target.uniqueConstraints, [
+    { columns: [{ name: 'id', collation: 'BINARY', descending: false }] },
+    { columns: [{ name: 'title', collation: 'NO CASE', descending: true }] }
+  ])
+  assert.ok(Object.isFrozen(normalized.target.uniqueConstraints))
+  assert.ok(normalized.target.uniqueConstraints.every((constraint) => (
+    Object.isFrozen(constraint) && Object.isFrozen(constraint.columns) &&
+    constraint.columns.every(Object.isFrozen)
+  )))
+
+  input.target.uniqueConstraints[0].columns[0].name = 'changed'
+  input.target.uniqueConstraints.push(uniqueConstraint())
+  assert.equal(normalized.target.uniqueConstraints[1].columns[0].name, 'title')
+  assert.equal(normalized.target.uniqueConstraints.length, 2)
 })
 
 test('rejects malformed table-transition shapes and unsupported keys', () => {
@@ -164,6 +205,7 @@ test('rejects malformed table-transition shapes and unsupported keys', () => {
     { ...valid, target: { ...valid.target, columns: [] } },
     { ...valid, target: { ...valid.target, strict: 'false' } },
     { ...valid, target: { ...valid.target, withoutRowid: 0 } },
+    { ...valid, target: { ...valid.target, uniqueConstraints: 'none' } },
     { ...valid, target: { ...valid.target, columns: [valid.target.columns[0], valid.target.columns[0]] } },
     {
       ...valid,
@@ -186,6 +228,25 @@ test('rejects malformed table-transition shapes and unsupported keys', () => {
     columns: tableShape().columns.map((column) => ({ ...column, primaryKeyPosition: -1 }))
   })
   invalidInputs.push({ ...valid, target: invalidPrimaryKey })
+
+  const invalidUniqueConstraints = [
+    uniqueConstraint({ columns: [] }),
+    uniqueConstraint({ columns: [{ name: 'unknown', collation: 'BINARY', descending: false }] }),
+    uniqueConstraint({ columns: [
+      { name: 'title', collation: 'BINARY', descending: false },
+      { name: 'title', collation: 'BINARY', descending: false }
+    ] }),
+    uniqueConstraint({ columns: [{ name: 'title', collation: 'BINARY', descending: 'false' }] }),
+    uniqueConstraint({ columns: [{ name: 'title', collation: '   ', descending: false }] })
+  ]
+  invalidInputs.push(...invalidUniqueConstraints.map((invalid) => ({
+    ...valid,
+    target: tableShape({ uniqueConstraints: [invalid] })
+  })))
+  invalidInputs.push({
+    ...valid,
+    target: tableShape({ uniqueConstraints: [uniqueConstraint(), uniqueConstraint()] })
+  })
 
   for (const input of invalidInputs) {
     assert.throws(
@@ -280,6 +341,17 @@ test('includes foreign keys in target and legacy duplicate detection', () => {
   const shape = tableShape({ foreignKeys: [foreignKey({ columns: ['title'] })] })
   assert.throws(
     () => normalizeMigrationCompatibility(tableTransition({ target: shape, legacy: [tableShape({ foreignKeys: [foreignKey({ columns: ['title'] })] })] })),
+    (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+  )
+})
+
+test('includes unique constraints in target and legacy duplicate detection', () => {
+  const shape = tableShape({ uniqueConstraints: [uniqueConstraint()] })
+  assert.throws(
+    () => normalizeMigrationCompatibility(tableTransition({
+      target: shape,
+      legacy: [tableShape({ uniqueConstraints: [uniqueConstraint()] })]
+    })),
     (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
   )
 })
@@ -556,10 +628,160 @@ test('treats an otherwise matching missing foreign key as incompatible', nativeT
   }
 })
 
+test('reports a table with no UNIQUE constraint as the empty UNIQUE baseline', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready');"
+  )
+  try {
+    assert.equal(checkMigrationCompatibility(database, tableTransition()).status, 'satisfied')
+  } finally {
+    database.close()
+  }
+})
+
+test('reports a matching single-column UNIQUE constraint as satisfied', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready' UNIQUE);"
+  )
+  try {
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShape({ uniqueConstraints: [uniqueConstraint()] }),
+        legacy: [tableShape()]
+      })).status,
+      'satisfied'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('reports a known legacy table without UNIQUE as missing', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready');"
+  )
+  try {
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShape({ uniqueConstraints: [uniqueConstraint()] }),
+        legacy: [tableShape()]
+      })).status,
+      'missing'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('preserves composite UNIQUE column order and compares every UNIQUE detail', nativeTestOptions, () => {
+  const composite = [
+    { name: 'title', collation: 'BINARY', descending: false },
+    { name: 'id', collation: 'BINARY', descending: false }
+  ]
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', UNIQUE (title, id));"
+  )
+  try {
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShape({ uniqueConstraints: [{ columns: composite }] }),
+        legacy: [tableShape({ strict: true })]
+      })).status,
+      'satisfied'
+    )
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShape({ uniqueConstraints: [{ columns: [...composite].reverse() }] }),
+        legacy: [tableShape({ strict: true })]
+      })).status,
+      'incompatible'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('treats extra, missing, direction, and collation UNIQUE differences as incompatible', nativeTestOptions, () => {
+  const cases = [
+    {
+      schema: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', UNIQUE (title));",
+      target: tableShape({ uniqueConstraints: [uniqueConstraint({ columns: [{ name: 'id', collation: 'BINARY', descending: false }] })] })
+    },
+    {
+      schema: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready');",
+      target: tableShape({ uniqueConstraints: [uniqueConstraint()] })
+    },
+    {
+      schema: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', UNIQUE (title DESC));",
+      target: tableShape({ uniqueConstraints: [uniqueConstraint()] })
+    },
+    {
+      schema: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', UNIQUE (title COLLATE NOCASE));",
+      target: tableShape({ uniqueConstraints: [uniqueConstraint()] })
+    }
+  ]
+  for (const { schema, target } of cases) {
+    const database = openDatabase(schema)
+    try {
+      assert.equal(
+        checkMigrationCompatibility(database, tableTransition({
+          target,
+          legacy: [tableShape({ strict: true })]
+        })).status,
+        'incompatible'
+      )
+    } finally {
+      database.close()
+    }
+  }
+})
+
+test('proves NOCASE and DESC metadata for a table UNIQUE constraint', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready', UNIQUE (title COLLATE NOCASE DESC, id DESC));"
+  )
+  try {
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShape({
+          uniqueConstraints: [{
+            columns: [
+              { name: 'title', collation: 'nocase', descending: true },
+              { name: 'id', collation: 'binary', descending: true }
+            ]
+          }]
+        }),
+        legacy: [tableShape({ strict: true })]
+      })).status,
+      'satisfied'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('ignores CREATE UNIQUE INDEX origin c in this node and defers it to C2d-2b3', nativeTestOptions, () => {
+  const database = openDatabase(
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready'); CREATE UNIQUE INDEX explicit_items_title ON items(title);"
+  )
+  try {
+    assert.equal(checkMigrationCompatibility(database, tableTransition()).status, 'satisfied')
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        target: tableShape({ uniqueConstraints: [uniqueConstraint()] }),
+        legacy: [tableShape({ strict: true })]
+      })).status,
+      'incompatible'
+    )
+  } finally {
+    database.close()
+  }
+})
+
 test('keeps table-transition summaries redacted and uses bound read-only metadata queries', () => {
   const prepared = []
   const boundValues = []
-  const shape = tableShape()
+  const shape = tableShape({ uniqueConstraints: [uniqueConstraint()] })
   const database = {
     prepare(sql) {
       prepared.push(sql)
@@ -601,10 +823,29 @@ test('keeps table-transition summaries redacted and uses bound read-only metadat
           }
         }
       }
+      if (sql.includes('pragma_index_list')) {
+        return {
+          all: (...values) => {
+            boundValues.push(values)
+            return [{ seq: 0, name: 'secret-index', is_unique: 1, origin: 'u', partial: 0 }]
+          }
+        }
+      }
+      if (sql.includes('pragma_index_xinfo')) {
+        return {
+          all: (...values) => {
+            boundValues.push(values)
+            return [
+              { seqno: 0, cid: 1, name: 'title', descending: 0, coll: 'BINARY', key: 1 },
+              { seqno: 1, cid: -1, name: null, descending: 0, coll: 'BINARY', key: 0 }
+            ]
+          }
+        }
+      }
       throw new Error('unexpected query')
     }
   }
-  const result = checkMigrationCompatibility(database, tableTransition())
+  const result = checkMigrationCompatibility(database, tableTransition({ target: shape }))
   assert.deepEqual(result, {
     status: 'incompatible',
     kind: 'table-transition',
@@ -618,8 +859,57 @@ test('keeps table-transition summaries redacted and uses bound read-only metadat
   const foreignKeySql = prepared.find((sql) => sql.includes('pragma_foreign_key_list'))
   assert.match(foreignKeySql, /FROM pragma_foreign_key_list\(\?\)/i)
   assert.doesNotMatch(foreignKeySql, /(?:^|\s)(?:INSERT|UPDATE|DELETE)(?:\s|$)|writable_schema/i)
-  assert.deepEqual(boundValues, [['items'], ['items'], ['items'], ['items']])
+  const indexListSql = prepared.find((sql) => sql.includes('pragma_index_list'))
+  const indexXinfoSql = prepared.find((sql) => sql.includes('pragma_index_xinfo'))
+  assert.match(indexListSql, /FROM pragma_index_list\(\?\)/i)
+  assert.match(indexXinfoSql, /FROM pragma_index_xinfo\(\?\)/i)
+  assert.doesNotMatch(indexListSql, /(?:^|\s)(?:INSERT|UPDATE|DELETE)(?:\s|$)|writable_schema/i)
+  assert.doesNotMatch(indexXinfoSql, /(?:^|\s)(?:INSERT|UPDATE|DELETE)(?:\s|$)|writable_schema/i)
+  assert.deepEqual(boundValues, [
+    ['items'],
+    ['items'],
+    ['items'],
+    ['items'],
+    ['items'],
+    ['secret-index']
+  ])
   assert.doesNotMatch(JSON.stringify(result), /private|secret|id|title/)
+})
+
+test('rejects UNIQUE xinfo cid/name mismatches without exposing metadata', () => {
+  const shape = tableShape({ uniqueConstraints: [uniqueConstraint()] })
+  const database = {
+    prepare(sql) {
+      if (sql.includes('sqlite_schema')) return { get: () => ({ present: 1 }) }
+      if (sql.includes('pragma_table_list')) return { get: () => ({ wr: 0, strict: 0 }) }
+      if (sql.includes('pragma_table_xinfo')) return { all: () => tableMetadataColumns(shape) }
+      if (sql.includes('pragma_foreign_key_list')) return { all: () => [] }
+      if (sql.includes('pragma_index_list')) {
+        return { all: () => [{ seq: 0, name: 'secret-index', is_unique: 1, origin: 'u', partial: 0 }] }
+      }
+      if (sql.includes('pragma_index_xinfo')) {
+        return {
+          all: () => [
+            { seqno: 0, cid: 0, name: 'title', descending: 0, coll: 'BINARY', key: 1 },
+            { seqno: 1, cid: -1, name: null, descending: 0, coll: 'BINARY', key: 0 }
+          ]
+        }
+      }
+      throw new Error('unexpected query')
+    }
+  }
+
+  const result = checkMigrationCompatibility(database, tableTransition({
+    target: shape,
+    legacy: [tableShape({ strict: true })]
+  }))
+  assert.deepEqual(result, {
+    status: 'incompatible',
+    kind: 'table-transition',
+    table: 'items',
+    reason: 'table-shape-incompatible'
+  })
+  assert.doesNotMatch(JSON.stringify(result), /secret|index|id|title/)
 })
 
 test('treats malformed foreign key pragma metadata as incompatible without exposing metadata', () => {
@@ -632,6 +922,7 @@ test('treats malformed foreign key pragma metadata as incompatible without expos
       if (sql.includes('pragma_foreign_key_list')) {
         return { all: () => [{ id: 0, seq: 1, referenced_table: 'parents', local_column: 'title', referenced_column: 'id', on_update: 'NO ACTION', on_delete: 'NO ACTION' }] }
       }
+      if (sql.includes('pragma_index_list')) return { all: () => [{ seq: 0, name: 'items_idx', is_unique: 1, origin: 'x', partial: 0 }] }
       throw new Error('unexpected query')
     }
   }

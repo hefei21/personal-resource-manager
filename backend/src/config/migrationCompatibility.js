@@ -3,8 +3,10 @@ const TABLE_TRANSITION_COMPATIBILITY_KIND = 'table-transition'
 const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
 const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
-const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns', 'foreignKeys']
+const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns', 'foreignKeys', 'uniqueConstraints']
 const TABLE_COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue', 'primaryKeyPosition']
+const TABLE_UNIQUE_CONSTRAINT_KEYS = ['columns']
+const TABLE_UNIQUE_CONSTRAINT_COLUMN_KEYS = ['name', 'collation', 'descending']
 const TABLE_FOREIGN_KEY_KEYS = [
   'columns',
   'referencedTable',
@@ -95,6 +97,76 @@ function normalizeSQLiteForeignKeyAction(value, fieldName) {
     fail(`${fieldName} must be a supported SQLite foreign key action.`)
   }
   return normalized
+}
+
+function normalizeSQLiteCollation(value, fieldName) {
+  return normalizeRequiredText(value, fieldName)
+    .replace(/\s+/g, ' ')
+    .toUpperCase()
+}
+
+function normalizeUniqueConstraintColumn(column, fieldName, localColumnNames) {
+  assertPlainObject(column, fieldName)
+  assertExactKeys(column, TABLE_UNIQUE_CONSTRAINT_COLUMN_KEYS, fieldName)
+
+  const name = normalizeRequiredText(column.name, `${fieldName}.name`)
+  if (localColumnNames && !localColumnNames.has(name)) {
+    fail(`${fieldName}.name must name a declared table column.`)
+  }
+  const collation = normalizeSQLiteCollation(column.collation, `${fieldName}.collation`)
+  if (typeof column.descending !== 'boolean') {
+    fail(`${fieldName}.descending must be boolean.`)
+  }
+  return Object.freeze({ name, collation, descending: column.descending })
+}
+
+function normalizeUniqueConstraint(constraint, fieldName, localColumnNames) {
+  assertPlainObject(constraint, fieldName)
+  assertExactKeys(constraint, TABLE_UNIQUE_CONSTRAINT_KEYS, fieldName)
+  if (!Array.isArray(constraint.columns) || constraint.columns.length === 0) {
+    fail(`${fieldName}.columns must be a non-empty array.`)
+  }
+
+  const names = new Set()
+  const columns = constraint.columns.map((column, index) => {
+    const normalized = normalizeUniqueConstraintColumn(
+      column,
+      `${fieldName}.columns[${index}]`,
+      localColumnNames
+    )
+    if (names.has(normalized.name)) {
+      fail(`${fieldName}.columns must not contain duplicates.`)
+    }
+    names.add(normalized.name)
+    return normalized
+  })
+  return Object.freeze({ columns: Object.freeze(columns) })
+}
+
+function uniqueConstraintCanonicalKey(constraint) {
+  return JSON.stringify(constraint)
+}
+
+function normalizeUniqueConstraints(uniqueConstraints, fieldName, localColumnNames) {
+  if (!Array.isArray(uniqueConstraints)) {
+    fail(`${fieldName} must be an array.`)
+  }
+  const normalized = uniqueConstraints.map((constraint, index) =>
+    normalizeUniqueConstraint(constraint, `${fieldName}[${index}]`, localColumnNames)
+  )
+  normalized.sort((left, right) => {
+    const leftKey = uniqueConstraintCanonicalKey(left)
+    const rightKey = uniqueConstraintCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  for (let index = 1; index < normalized.length; index += 1) {
+    if (uniqueConstraintCanonicalKey(normalized[index - 1]) === uniqueConstraintCanonicalKey(normalized[index])) {
+      fail(`${fieldName} contains a duplicate unique constraint.`)
+    }
+  }
+  return Object.freeze(normalized)
 }
 
 function normalizeForeignKey(foreignKey, fieldName, localColumnNames) {
@@ -204,12 +276,18 @@ function normalizeTableShape(shape, fieldName) {
     `${fieldName}.foreignKeys`,
     names
   )
+  const uniqueConstraints = normalizeUniqueConstraints(
+    shape.uniqueConstraints,
+    `${fieldName}.uniqueConstraints`,
+    names
+  )
 
   return Object.freeze({
     strict: shape.strict,
     withoutRowid: shape.withoutRowid,
     columns: Object.freeze(columns),
-    foreignKeys
+    foreignKeys,
+    uniqueConstraints
   })
 }
 
@@ -358,14 +436,16 @@ function tableColumnMatches(actual, expected, index) {
   return Number(actual.pk) === expected.primaryKeyPosition
 }
 
-function tableShapeMatches(tableInfo, columns, foreignKeys, expected) {
+function tableShapeMatches(tableInfo, columns, foreignKeys, uniqueConstraints, expected) {
   if (!tableFlagsMatch(tableInfo, expected)) return false
   if (!Array.isArray(columns) || columns.length !== expected.columns.length) return false
   if (!Array.isArray(foreignKeys)) return false
+  if (!Array.isArray(uniqueConstraints)) return false
   if (!expected.columns.every((column, index) =>
     tableColumnMatches(columns[index], column, index)
   )) return false
-  return JSON.stringify(foreignKeys) === JSON.stringify(expected.foreignKeys)
+  return JSON.stringify(foreignKeys) === JSON.stringify(expected.foreignKeys) &&
+    JSON.stringify(uniqueConstraints) === JSON.stringify(expected.uniqueConstraints)
 }
 
 function readTableForeignKeys(database, table) {
@@ -433,6 +513,90 @@ function readTableForeignKeys(database, table) {
   return foreignKeys
 }
 
+function readTableUniqueConstraints(database, table, tableColumnNamesByCid) {
+  if (!(tableColumnNamesByCid instanceof Map)) return null
+  const rows = database
+    .prepare(
+      'SELECT seq, name, "unique" AS is_unique, origin, partial FROM pragma_index_list(?) ORDER BY seq'
+    )
+    .all(table)
+  if (!Array.isArray(rows)) return null
+
+  const constraints = []
+  const indexNames = new Set()
+  for (const [index, row] of rows.entries()) {
+    if (
+      !row ||
+      !Number.isSafeInteger(row.seq) ||
+      row.seq !== index ||
+      typeof row.name !== 'string' ||
+      row.name.trim().length === 0 ||
+      indexNames.has(row.name) ||
+      (row.is_unique !== 0 && row.is_unique !== 1) ||
+      (row.partial !== 0 && row.partial !== 1) ||
+      !['u', 'pk', 'c'].includes(row.origin)
+    ) {
+      return null
+    }
+    indexNames.add(row.name)
+
+    if (row.origin === 'c') continue
+    if (row.is_unique !== 1 || row.partial !== 0) return null
+    if (row.origin === 'pk') continue
+
+    const indexRows = database
+      .prepare(
+        'SELECT seqno, cid, name, "desc" AS descending, coll, key FROM pragma_index_xinfo(?) ORDER BY seqno, key DESC'
+      )
+      .all(row.name)
+    if (!Array.isArray(indexRows)) return null
+
+    const keyRows = []
+    for (const indexRow of indexRows) {
+      if (!indexRow || (indexRow.key !== 0 && indexRow.key !== 1)) return null
+      if (indexRow.key === 1) keyRows.push(indexRow)
+    }
+    keyRows.sort((left, right) => left.seqno - right.seqno)
+    if (keyRows.length === 0) return null
+    const columns = []
+    for (const [columnIndex, indexRow] of keyRows.entries()) {
+      if (
+        !Number.isSafeInteger(indexRow.seqno) ||
+        indexRow.seqno !== columnIndex ||
+        !Number.isSafeInteger(indexRow.cid) ||
+        indexRow.cid < 0 ||
+        typeof indexRow.name !== 'string' ||
+        tableColumnNamesByCid.get(indexRow.cid) !== indexRow.name ||
+        (indexRow.descending !== 0 && indexRow.descending !== 1) ||
+        typeof indexRow.coll !== 'string' ||
+        indexRow.coll.trim().length === 0
+      ) {
+        return null
+      }
+      columns.push({
+        name: indexRow.name,
+        collation: normalizeSQLiteCollation(indexRow.coll, 'SQLite unique index collation'),
+        descending: indexRow.descending === 1
+      })
+    }
+    constraints.push(Object.freeze({ columns: Object.freeze(columns) }))
+  }
+
+  constraints.sort((left, right) => {
+    const leftKey = uniqueConstraintCanonicalKey(left)
+    const rightKey = uniqueConstraintCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  for (let index = 1; index < constraints.length; index += 1) {
+    if (uniqueConstraintCanonicalKey(constraints[index - 1]) === uniqueConstraintCanonicalKey(constraints[index])) {
+      return null
+    }
+  }
+  return Object.freeze(constraints)
+}
+
 /**
  * Read-only proof of one migration's schema postcondition.
  *
@@ -465,11 +629,47 @@ export function checkMigrationCompatibility(database, compatibility) {
         )
         .all(normalized.table)
       const foreignKeys = readTableForeignKeys(database, normalized.table)
+      const tableColumnNamesByCid = new Map()
+      if (!Array.isArray(columns)) {
+        return tableTransitionSummary(
+          COMPATIBILITY_STATUSES.INCOMPATIBLE,
+          normalized,
+          'table-shape-incompatible'
+        )
+      }
+      for (const column of columns) {
+        if (
+          !column ||
+          !Number.isSafeInteger(column.cid) ||
+          column.cid < 0 ||
+          typeof column.name !== 'string' ||
+          column.name.trim().length === 0 ||
+          tableColumnNamesByCid.has(column.cid)
+        ) {
+          return tableTransitionSummary(
+            COMPATIBILITY_STATUSES.INCOMPATIBLE,
+            normalized,
+            'table-shape-incompatible'
+          )
+        }
+        tableColumnNamesByCid.set(column.cid, column.name)
+      }
+      const uniqueConstraints = readTableUniqueConstraints(
+        database,
+        normalized.table,
+        tableColumnNamesByCid
+      )
 
-      if (tableShapeMatches(tableInfo, columns, foreignKeys, normalized.target)) {
+      if (tableShapeMatches(tableInfo, columns, foreignKeys, uniqueConstraints, normalized.target)) {
         return tableTransitionSummary(COMPATIBILITY_STATUSES.SATISFIED, normalized, 'matched')
       }
-      if (normalized.legacy.some((shape) => tableShapeMatches(tableInfo, columns, foreignKeys, shape))) {
+      if (normalized.legacy.some((shape) => tableShapeMatches(
+        tableInfo,
+        columns,
+        foreignKeys,
+        uniqueConstraints,
+        shape
+      ))) {
         return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
       }
       return tableTransitionSummary(
