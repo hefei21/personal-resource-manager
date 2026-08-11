@@ -5,7 +5,8 @@ const TABLE_TRANSITION_COMPATIBILITY_KIND = 'table-transition'
 const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
 const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
-const TABLE_TRANSITION_LEGACY_PROOF_KEYS = ['shape', 'createTableSqlSha256']
+const TABLE_TRANSITION_LEGACY_PROOF_KEYS = ['shape', 'createTableSqlSha256', 'indexes']
+const TABLE_TRANSITION_LEGACY_INDEX_KEYS = ['name', 'createIndexSqlSha256']
 const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns', 'foreignKeys', 'uniqueConstraints']
 const TABLE_COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue', 'primaryKeyPosition']
 const TABLE_UNIQUE_CONSTRAINT_KEYS = ['columns']
@@ -305,6 +306,43 @@ function normalizeCreateTableSqlSha256(value, fieldName) {
   return normalized.toLowerCase()
 }
 
+function normalizeTableTransitionLegacyIndex(index, fieldName) {
+  assertPlainObject(index, fieldName)
+  assertExactKeys(index, TABLE_TRANSITION_LEGACY_INDEX_KEYS, fieldName)
+  return Object.freeze({
+    name: normalizeRequiredText(index.name, `${fieldName}.name`),
+    createIndexSqlSha256: normalizeCreateTableSqlSha256(
+      index.createIndexSqlSha256,
+      `${fieldName}.createIndexSqlSha256`
+    )
+  })
+}
+
+function tableTransitionLegacyIndexCanonicalKey(index) {
+  return JSON.stringify(index)
+}
+
+function normalizeTableTransitionLegacyIndexes(indexes, fieldName) {
+  if (!Array.isArray(indexes)) fail(`${fieldName} must be an array.`)
+
+  const normalized = indexes.map((index, position) =>
+    normalizeTableTransitionLegacyIndex(index, `${fieldName}[${position}]`)
+  )
+  const names = new Set()
+  for (const index of normalized) {
+    if (names.has(index.name)) fail(`${fieldName} contains a duplicate index name.`)
+    names.add(index.name)
+  }
+  normalized.sort((left, right) => {
+    const leftKey = tableTransitionLegacyIndexCanonicalKey(left)
+    const rightKey = tableTransitionLegacyIndexCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  return Object.freeze(normalized)
+}
+
 function normalizeTableTransitionLegacyProof(proof, fieldName) {
   assertPlainObject(proof, fieldName)
   assertExactKeys(proof, TABLE_TRANSITION_LEGACY_PROOF_KEYS, fieldName)
@@ -313,12 +351,13 @@ function normalizeTableTransitionLegacyProof(proof, fieldName) {
     createTableSqlSha256: normalizeCreateTableSqlSha256(
       proof.createTableSqlSha256,
       `${fieldName}.createTableSqlSha256`
-    )
+    ),
+    indexes: normalizeTableTransitionLegacyIndexes(proof.indexes, `${fieldName}.indexes`)
   })
 }
 
 function tableTransitionLegacyProofCanonicalKey(proof) {
-  return `${JSON.stringify(proof.shape)}\u0000${proof.createTableSqlSha256}`
+  return `${JSON.stringify(proof.shape)}\u0000${proof.createTableSqlSha256}\u0000${JSON.stringify(proof.indexes)}`
 }
 
 function normalizeTableTransitionCompatibility(compatibility) {
@@ -571,7 +610,7 @@ function readTableForeignKeys(database, table) {
   return foreignKeys
 }
 
-function readTableUniqueConstraints(database, table, tableColumnNamesByCid) {
+function readTableIndexMetadata(database, table, tableColumnNamesByCid) {
   if (!(tableColumnNamesByCid instanceof Map)) return null
   const rows = database
     .prepare(
@@ -581,24 +620,28 @@ function readTableUniqueConstraints(database, table, tableColumnNamesByCid) {
   if (!Array.isArray(rows)) return null
 
   const constraints = []
+  const explicitIndexes = []
   const indexNames = new Set()
   for (const [index, row] of rows.entries()) {
+    const indexName = typeof row?.name === 'string' ? row.name.trim() : ''
     if (
       !row ||
       !Number.isSafeInteger(row.seq) ||
       row.seq !== index ||
-      typeof row.name !== 'string' ||
-      row.name.trim().length === 0 ||
-      indexNames.has(row.name) ||
+      indexName.length === 0 ||
+      indexNames.has(indexName) ||
       (row.is_unique !== 0 && row.is_unique !== 1) ||
       (row.partial !== 0 && row.partial !== 1) ||
       !['u', 'pk', 'c'].includes(row.origin)
     ) {
       return null
     }
-    indexNames.add(row.name)
+    indexNames.add(indexName)
 
-    if (row.origin === 'c') continue
+    if (row.origin === 'c') {
+      explicitIndexes.push(indexName)
+      continue
+    }
     if (row.is_unique !== 1 || row.partial !== 0) return null
     if (row.origin === 'pk') continue
 
@@ -606,7 +649,7 @@ function readTableUniqueConstraints(database, table, tableColumnNamesByCid) {
       .prepare(
         'SELECT seqno, cid, name, "desc" AS descending, coll, key FROM pragma_index_xinfo(?) ORDER BY seqno, key DESC'
       )
-      .all(row.name)
+      .all(indexName)
     if (!Array.isArray(indexRows)) return null
 
     const keyRows = []
@@ -652,7 +695,37 @@ function readTableUniqueConstraints(database, table, tableColumnNamesByCid) {
       return null
     }
   }
-  return Object.freeze(constraints)
+  return Object.freeze({
+    uniqueConstraints: Object.freeze(constraints),
+    explicitIndexes: Object.freeze(explicitIndexes)
+  })
+}
+
+function readTableExplicitIndexProof(database, table, indexNames) {
+  if (!Array.isArray(indexNames)) return null
+
+  const indexes = []
+  for (const indexName of indexNames) {
+    const row = database
+      .prepare(
+        "SELECT sql FROM main.sqlite_schema WHERE type = 'index' AND tbl_name = ? AND name = ?"
+      )
+      .get(table, indexName)
+    if (!row || typeof row.sql !== 'string' || row.sql.trim().length === 0) return null
+    indexes.push({
+      name: indexName,
+      createIndexSqlSha256: createTableSqlSha256(row.sql)
+    })
+  }
+
+  indexes.sort((left, right) => {
+    const leftKey = tableTransitionLegacyIndexCanonicalKey(left)
+    const rightKey = tableTransitionLegacyIndexCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  return Object.freeze(indexes)
 }
 
 /**
@@ -714,11 +787,19 @@ export function checkMigrationCompatibility(database, compatibility) {
         }
         tableColumnNamesByCid.set(column.cid, column.name)
       }
-      const uniqueConstraints = readTableUniqueConstraints(
+      const indexMetadata = readTableIndexMetadata(
         database,
         normalized.table,
         tableColumnNamesByCid
       )
+      if (!indexMetadata) {
+        return tableTransitionSummary(
+          COMPATIBILITY_STATUSES.INCOMPATIBLE,
+          normalized,
+          'table-shape-incompatible'
+        )
+      }
+      const { uniqueConstraints } = indexMetadata
 
       if (tableShapeMatches(tableInfo, columns, foreignKeys, uniqueConstraints, normalized.target)) {
         return tableTransitionSummary(COMPATIBILITY_STATUSES.SATISFIED, normalized, 'matched')
@@ -732,13 +813,26 @@ export function checkMigrationCompatibility(database, compatibility) {
       ))
       if (matchingLegacyProofs.length > 0) {
         const createTableSql = readTableCreateTableSql(database, normalized.table)
-        if (
-          createTableSql !== null &&
-          matchingLegacyProofs.some((proof) => (
-            createTableSqlSha256(createTableSql) === proof.createTableSqlSha256
+        if (createTableSql !== null) {
+          const tableHash = createTableSqlSha256(createTableSql)
+          const matchingLegacyFingerprints = matchingLegacyProofs.filter((proof) => (
+            tableHash === proof.createTableSqlSha256
           ))
-        ) {
-          return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
+          if (matchingLegacyFingerprints.length > 0) {
+            const explicitIndexes = readTableExplicitIndexProof(
+              database,
+              normalized.table,
+              indexMetadata.explicitIndexes
+            )
+            if (
+              explicitIndexes !== null &&
+              matchingLegacyFingerprints.some((proof) => (
+                JSON.stringify(explicitIndexes) === JSON.stringify(proof.indexes)
+              ))
+            ) {
+              return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
+            }
+          }
         }
       }
       return tableTransitionSummary(

@@ -60,8 +60,8 @@ function tableShape(overrides = {}) {
 
 const DUMMY_DDL_HASH = 'a'.repeat(64)
 
-function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH) {
-  return { shape, createTableSqlSha256 }
+function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = []) {
+  return { shape, createTableSqlSha256, indexes }
 }
 
 function tableTransition(overrides = {}) {
@@ -119,6 +119,15 @@ function tableSqlSha256(database, table = 'items') {
   return createHash('sha256').update(Buffer.from(row.sql, 'utf8')).digest('hex')
 }
 
+function indexSqlSha256(database, name, table = 'items') {
+  const row = database
+    .prepare("SELECT sql FROM main.sqlite_schema WHERE type = 'index' AND tbl_name = ? AND name = ?")
+    .get(table, name)
+  assert.equal(typeof row?.sql, 'string')
+  assert.ok(row.sql.length > 0)
+  return createHash('sha256').update(Buffer.from(row.sql, 'utf8')).digest('hex')
+}
+
 function metadataDatabase(column) {
   let query = 0
   return {
@@ -171,9 +180,12 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
     Object.isFrozen(proof.shape.columns) &&
     Object.isFrozen(proof.shape.foreignKeys) &&
     Object.isFrozen(proof.shape.uniqueConstraints) &&
+    Object.isFrozen(proof.indexes) &&
+    proof.indexes.every(Object.isFrozen) &&
     typeof proof.createTableSqlSha256 === 'string'
   )))
   assert.equal(normalized.legacy[0].createTableSqlSha256, DUMMY_DDL_HASH)
+  assert.deepEqual(normalized.legacy[0].indexes, [])
 
   input.table = 'changed'
   input.target.columns[0].name = 'changed'
@@ -240,6 +252,20 @@ test('rejects malformed table-transition shapes and unsupported keys', () => {
     { ...valid, legacy: [{ ...valid.legacy[0], unsupported: true }] },
     { ...valid, legacy: [{ ...valid.legacy[0], createTableSqlSha256: 'not-a-hash' }] },
     { ...valid, legacy: [{ ...valid.legacy[0], createTableSqlSha256: 'A'.repeat(63) }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], indexes: 'none' }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], indexes: [{ name: 'idx', createIndexSqlSha256: 'not-a-hash' }] }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], indexes: [{ name: ' ', createIndexSqlSha256: DUMMY_DDL_HASH }] }] },
+    { ...valid, legacy: [{ ...valid.legacy[0], indexes: [{ name: 'idx', createIndexSqlSha256: DUMMY_DDL_HASH, extra: true }] }] },
+    {
+      ...valid,
+      legacy: [{
+        ...valid.legacy[0],
+        indexes: [
+          { name: 'idx', createIndexSqlSha256: DUMMY_DDL_HASH },
+          { name: 'idx', createIndexSqlSha256: 'b'.repeat(64) }
+        ]
+      }]
+    },
     {
       ...valid,
       target: {
@@ -287,14 +313,17 @@ test('rejects a table-transition target duplicated in legacy', () => {
   )
 })
 
-test('normalizes legacy DDL fingerprints, sorts proofs canonically, and allows hash variants per shape', () => {
+test('normalizes legacy fingerprints and explicit indexes canonically', () => {
   const strictShape = tableShape({ strict: true })
   const withoutRowidShape = tableShape({ withoutRowid: true })
   const input = tableTransition({
     legacy: [
       legacyProof(withoutRowidShape, `  ${'B'.repeat(64)}  `),
-      legacyProof(strictShape, 'a'.repeat(64)),
-      legacyProof(strictShape, 'c'.repeat(64))
+      legacyProof(strictShape, 'a'.repeat(64), [
+        { name: 'z_idx', createIndexSqlSha256: 'B'.repeat(64) },
+        { name: 'a_idx', createIndexSqlSha256: `  ${'A'.repeat(64)}  ` }
+      ]),
+      legacyProof(strictShape, 'c'.repeat(64), [])
     ]
   })
   const normalized = normalizeMigrationCompatibility(input)
@@ -305,9 +334,15 @@ test('normalizes legacy DDL fingerprints, sorts proofs canonically, and allows h
     'c'.repeat(64)
   ])
   assert.deepEqual(normalized.legacy.map((proof) => proof.shape.strict), [false, true, true])
+  assert.deepEqual(normalized.legacy[1].indexes, [
+    { name: 'a_idx', createIndexSqlSha256: 'a'.repeat(64) },
+    { name: 'z_idx', createIndexSqlSha256: 'b'.repeat(64) }
+  ])
   assert.ok(normalized.legacy.every((proof) => Object.isFrozen(proof)))
   assert.ok(normalized.legacy.every((proof) => Object.isFrozen(proof.shape)))
   assert.ok(normalized.legacy.every((proof) => Object.isFrozen(proof.shape.columns)))
+  assert.ok(Object.isFrozen(normalized.legacy[1].indexes))
+  assert.ok(normalized.legacy[1].indexes.every(Object.isFrozen))
 
   assert.throws(
     () => normalizeMigrationCompatibility(tableTransition({
@@ -315,6 +350,13 @@ test('normalizes legacy DDL fingerprints, sorts proofs canonically, and allows h
     })),
     (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
   )
+
+  assert.doesNotThrow(() => normalizeMigrationCompatibility(tableTransition({
+    legacy: [
+      legacyProof(strictShape, 'a'.repeat(64), []),
+      legacyProof(strictShape, 'a'.repeat(64), [{ name: 'idx', createIndexSqlSha256: 'b'.repeat(64) }])
+    ]
+  })))
 })
 
 test('normalizes foreign key actions, null references, canonical order, and nested freezes', () => {
@@ -450,6 +492,121 @@ test('reports a matching legacy table-transition shape as missing', nativeTestOp
     })
   } finally {
     database.close()
+  }
+})
+
+test('ignores arbitrary explicit indexes when the target semantic shape matches', nativeTestOptions, () => {
+  const database = openDatabase([
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready');",
+    'CREATE INDEX arbitrary_idx ON items(title);'
+  ].join('\n'))
+  try {
+    assert.deepEqual(checkMigrationCompatibility(database, tableTransition()), {
+      status: 'satisfied',
+      kind: 'table-transition',
+      table: 'items',
+      reason: 'matched'
+    })
+  } finally {
+    database.close()
+  }
+})
+
+test('requires an exact explicit-index proof for a legacy table', nativeTestOptions, () => {
+  const database = openDatabase([
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');",
+    'CREATE INDEX items_title_idx ON items(title);'
+  ].join('\n'))
+  try {
+    const legacyShape = tableShape({
+      columns: tableShape().columns.map((column) =>
+        column.name === 'title' ? { ...column, notNull: false } : column
+      )
+    })
+    const base = {
+      target: tableShape(),
+      legacy: [legacyProof(legacyShape, tableSqlSha256(database))]
+    }
+    assert.equal(checkMigrationCompatibility(database, tableTransition(base)).status, 'incompatible')
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        ...base,
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database), [
+          { name: 'items_title_idx', createIndexSqlSha256: indexSqlSha256(database, 'items_title_idx') }
+        ])]
+      })).status,
+      'missing'
+    )
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        ...base,
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database), [
+          { name: 'extra_idx', createIndexSqlSha256: 'b'.repeat(64) }
+        ])]
+      })).status,
+      'incompatible'
+    )
+    assert.equal(
+      checkMigrationCompatibility(database, tableTransition({
+        ...base,
+        legacy: [legacyProof(legacyShape, tableSqlSha256(database), [
+          { name: 'items_title_idx', createIndexSqlSha256: 'b'.repeat(64) }
+        ])]
+      })).status,
+      'incompatible'
+    )
+
+    const missingIndexDatabase = openDatabase(
+      "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');"
+    )
+    try {
+      assert.equal(
+        checkMigrationCompatibility(missingIndexDatabase, tableTransition({
+          target: tableShape(),
+          legacy: [legacyProof(legacyShape, tableSqlSha256(missingIndexDatabase), [
+            { name: 'items_title_idx', createIndexSqlSha256: 'b'.repeat(64) }
+          ])]
+        })).status,
+        'incompatible'
+      )
+    } finally {
+      missingIndexDatabase.close()
+    }
+  } finally {
+    database.close()
+  }
+})
+
+test('proves ordinary, UNIQUE, partial, and expression explicit indexes by exact SQL hash', nativeTestOptions, () => {
+  const cases = [
+    ['items_idx', 'CREATE INDEX items_idx ON items(title);'],
+    ['items_unique_idx', 'CREATE UNIQUE INDEX items_unique_idx ON items(title COLLATE NOCASE DESC);'],
+    ['items_partial_idx', 'CREATE INDEX items_partial_idx ON items(title) WHERE title IS NOT NULL;'],
+    ['items_expression_idx', 'CREATE INDEX items_expression_idx ON items(lower(title));']
+  ]
+  for (const [indexName, indexSql] of cases) {
+    const database = openDatabase([
+      "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');",
+      indexSql
+    ].join('\n'))
+    try {
+      const legacyShape = tableShape({
+        columns: tableShape().columns.map((column) =>
+          column.name === 'title' ? { ...column, notNull: false } : column
+        )
+      })
+      assert.equal(
+        checkMigrationCompatibility(database, tableTransition({
+          target: tableShape(),
+          legacy: [legacyProof(legacyShape, tableSqlSha256(database), [
+            { name: indexName, createIndexSqlSha256: indexSqlSha256(database, indexName) }
+          ])]
+        })).status,
+        'missing'
+      )
+    } finally {
+      database.close()
+    }
   }
 })
 
@@ -1013,26 +1170,31 @@ test('keeps table-transition summaries redacted and uses bound read-only metadat
 
 test('reads exact CREATE TABLE SQL with a bound mock query and never exposes it', () => {
   const secretSql = "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'secret-default');"
+  const secretIndexSql = 'CREATE INDEX secret-index ON items(lower(title)) WHERE title IS NOT NULL;'
   const legacyShape = tableShape()
   const expectedHash = createHash('sha256').update(Buffer.from(secretSql, 'utf8')).digest('hex')
+  const expectedIndexHash = createHash('sha256').update(Buffer.from(secretIndexSql, 'utf8')).digest('hex')
   const prepared = []
   const boundValues = []
   const database = {
     prepare(sql) {
       prepared.push(sql)
       if (sql.includes('SELECT 1 AS present')) return { get: (...values) => { boundValues.push(values); return { present: 1 } } }
+      if (sql.includes("type = 'index'")) return { get: (...values) => { boundValues.push(values); return { sql: secretIndexSql } } }
       if (sql.includes('SELECT sql FROM main.sqlite_schema')) return { get: (...values) => { boundValues.push(values); return { sql: secretSql } } }
       if (sql.includes('pragma_table_list')) return { get: (...values) => { boundValues.push(values); return { wr: 0, strict: 0 } } }
       if (sql.includes('pragma_table_xinfo')) return { all: (...values) => { boundValues.push(values); return tableMetadataColumns(legacyShape) } }
       if (sql.includes('pragma_foreign_key_list')) return { all: (...values) => { boundValues.push(values); return [] } }
-      if (sql.includes('pragma_index_list')) return { all: (...values) => { boundValues.push(values); return [] } }
+      if (sql.includes('pragma_index_list')) return { all: (...values) => { boundValues.push(values); return [{ seq: 0, name: 'secret-index', is_unique: 0, origin: 'c', partial: 1 }] } }
       throw new Error('unexpected query')
     }
   }
 
   const result = checkMigrationCompatibility(database, tableTransition({
     target: tableShape({ strict: true }),
-    legacy: [legacyProof(legacyShape, expectedHash)]
+    legacy: [legacyProof(legacyShape, expectedHash, [
+      { name: 'secret-index', createIndexSqlSha256: expectedIndexHash }
+    ])]
   }))
   assert.deepEqual(result, {
     status: 'missing',
@@ -1040,13 +1202,38 @@ test('reads exact CREATE TABLE SQL with a bound mock query and never exposes it'
     table: 'items',
     reason: 'legacy-matched'
   })
-  assert.deepEqual(boundValues, [['items'], ['items'], ['items'], ['items'], ['items'], ['items']])
-  const schemaSql = prepared.find((sql) => sql.includes('SELECT sql FROM main.sqlite_schema'))
+  assert.deepEqual(boundValues, [['items'], ['items'], ['items'], ['items'], ['items'], ['items'], ['items', 'secret-index']])
+  const schemaSql = prepared.find((sql) => sql.includes("type = 'table'"))
   assert.match(schemaSql, /FROM main\.sqlite_schema/i)
   assert.match(schemaSql, /type = 'table'/i)
   assert.match(schemaSql, /name = \?/i)
+  const indexSchemaSql = prepared.find((sql) => sql.includes("type = 'index'"))
+  assert.match(indexSchemaSql, /tbl_name = \?/i)
+  assert.match(indexSchemaSql, /name = \?/i)
   assert.doesNotMatch(schemaSql, /secret-default|items/)
+  assert.doesNotMatch(indexSchemaSql, /secret-index|lower|title|IS NOT NULL/)
   assert.doesNotMatch(JSON.stringify(result), /secret-default/)
+})
+
+test('does not read explicit index SQL when target semantics match', () => {
+  const prepared = []
+  const database = {
+    prepare(sql) {
+      prepared.push(sql)
+      if (sql.includes('SELECT 1 AS present')) return { get: () => ({ present: 1 }) }
+      if (sql.includes('pragma_table_list')) return { get: () => ({ wr: 0, strict: 0 }) }
+      if (sql.includes('pragma_table_xinfo')) return { all: () => tableMetadataColumns(tableShape()) }
+      if (sql.includes('pragma_foreign_key_list')) return { all: () => [] }
+      if (sql.includes('pragma_index_list')) {
+        return { all: () => [{ seq: 0, name: 'unknown-explicit', is_unique: 0, origin: 'c', partial: 0 }] }
+      }
+      if (sql.includes("type = 'index'")) throw new Error('explicit index SQL must not be queried')
+      throw new Error('unexpected query')
+    }
+  }
+
+  assert.equal(checkMigrationCompatibility(database, tableTransition()).status, 'satisfied')
+  assert.equal(prepared.some((sql) => sql.includes("type = 'index'")), false)
 })
 
 test('treats malformed CREATE TABLE SQL metadata as incompatible without disclosure', () => {

@@ -28,8 +28,8 @@ function tableShape(overrides = {}) {
 
 const DUMMY_DDL_HASH = 'a'.repeat(64)
 
-function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH) {
-  return { shape, createTableSqlSha256 }
+function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = []) {
+  return { shape, createTableSqlSha256, indexes }
 }
 
 function tableTransition(overrides = {}) {
@@ -225,6 +225,8 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
   assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape))
   assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape.columns))
   assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape.uniqueConstraints))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].indexes))
+  assert.ok(migration.compatibility.legacy[0].indexes.every(Object.isFrozen))
 
   const changes = [
     {
@@ -256,6 +258,12 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
       target: tableShape({
         uniqueConstraints: [uniqueConstraint()]
       })
+    },
+    {
+      ...base,
+      legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [
+        { name: 'items_idx', createIndexSqlSha256: 'b'.repeat(64) }
+      ])]
     }
   ]
 
@@ -292,6 +300,26 @@ test('includes normalized table-transition shape, flags, and legacy alternatives
     compatibility: { ...base, legacy: [...alternatives].reverse() }
   }).checksum
   assert.equal(forward, reverse)
+
+  const indexReordered = [
+    { name: 'z_idx', createIndexSqlSha256: 'd'.repeat(64) },
+    { name: 'a_idx', createIndexSqlSha256: 'c'.repeat(64) }
+  ]
+  assert.equal(
+    defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: { ...base, legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, indexReordered)] }
+    }).checksum,
+    defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: {
+        ...base,
+        legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [...indexReordered].reverse())]
+      }
+    }).checksum
+  )
 })
 
 test('registerMigration returns a new immutable registry', () => {
