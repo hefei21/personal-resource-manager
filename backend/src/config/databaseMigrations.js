@@ -48,7 +48,7 @@ const knownDocumentIndexes = [
   }
 ]
 
-const knownIntegerDocumentDdls = [
+const knownDocumentLegacyDdls = [
   {
     shape: documentShape('INTEGER'),
     sql: `CREATE TABLE documents (
@@ -102,10 +102,62 @@ const knownIntegerDocumentDdls = [
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 , subcategory TEXT)`
+  },
+  {
+    shape: documentShape('INTEGER', 'appended'),
+    sql: `CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        category TEXT,
+        tags TEXT,
+        file_path TEXT NOT NULL,
+        version INTEGER DEFAULT 1.0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      , subcategory TEXT)`
+  },
+  {
+    shape: documentShape('INTEGER', 'appended', '1'),
+    sql: `CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        category TEXT,
+        tags TEXT,
+        file_path TEXT NOT NULL,
+        version INTEGER DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      , subcategory TEXT)`
+  },
+  {
+    shape: documentShape('REAL', 'appended'),
+    sql: `CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        category TEXT,
+        tags TEXT,
+        file_path TEXT NOT NULL,
+        version REAL DEFAULT 1.0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      , subcategory TEXT)`
+  },
+  {
+    shape: documentShape('REAL', 'appended', '1'),
+    sql: `CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        category TEXT,
+        tags TEXT,
+        file_path TEXT NOT NULL,
+        version REAL DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      , subcategory TEXT)`
   }
 ]
 
-const documentLegacyProofs = knownIntegerDocumentDdls.flatMap(({ shape, sql }) => (
+const documentLegacyProofs = knownDocumentLegacyDdls.flatMap(({ shape, sql }) => (
   [[], knownDocumentIndexes].map((indexes) => ({
     shape,
     createTableSqlSha256: sha256(sql),

@@ -493,7 +493,7 @@ test('application registry freezes 35 C2c columns and the documents version tran
   assert.equal(documentMigration.compatibility.kind, 'table-transition')
   assert.equal(documentMigration.compatibility.table, 'documents')
   assert.equal(documentMigration.compatibility.target.columns.find(({ name }) => name === 'version').type, 'REAL')
-  assert.equal(documentMigration.compatibility.legacy.length, 8)
+  assert.equal(documentMigration.compatibility.legacy.length, 16)
   assert.match(documentMigration.source, /prm_documents_v0036_guard/u)
   assert.match(documentMigration.source, /CAST\(version AS REAL\)/u)
 })
