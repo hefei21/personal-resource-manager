@@ -534,35 +534,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
 
   // 为现有数据库添加新字段（在表创建之后）
   try {
-    // 检查 version 字段类型，如果不是 REAL 则修改
-    const documentColumns = database.prepare("PRAGMA table_info(documents)").all()
-    const versionCol = documentColumns.find(col => col.name === 'version')
-    if (versionCol && versionCol.type !== 'REAL') {
-      console.log('修改 version 字段类型为 REAL...')
-      // SQLite 不支持直接修改列类型，需要重建表
-      database.exec(`
-        CREATE TABLE documents_new (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          title TEXT NOT NULL,
-          category TEXT,
-          subcategory TEXT,
-          tags TEXT,
-          file_path TEXT NOT NULL,
-          version REAL DEFAULT 1.0,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `)
-      database.exec(`
-        INSERT INTO documents_new (id, title, category, subcategory, tags, file_path, version, created_at, updated_at)
-        SELECT id, title, category, subcategory, tags, file_path, CAST(version AS REAL), created_at, updated_at
-        FROM documents
-      `)
-      database.exec('DROP TABLE documents')
-      database.exec('ALTER TABLE documents_new RENAME TO documents')
-      console.log('✓ version 字段类型修改成功')
-    }
-
     // 检查并迁移代码仓库表结构
     const codeColumns = database.prepare("PRAGMA table_info(code_repositories)").all()
     console.log('code_repositories 表当前字段:', codeColumns.map(c => c.name).join(', '))

@@ -399,11 +399,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes exactly the 35 C2c single-column migrations', () => {
+test('application registry freezes 35 C2c columns and the documents version transition', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 35)
+  assert.equal(applicationMigrationRegistry.migrations.length, 36)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -415,7 +415,8 @@ test('application registry freezes exactly the 35 C2c single-column migrations',
       '0006_bookmarks_icon_data',
       ...expectedAnimeMigrations.map(({ id }) => id),
       ...expectedGamesMigrations.map(({ id }) => id),
-      ...expectedMusicMigrations.map(({ id }) => id)
+      ...expectedMusicMigrations.map(({ id }) => id),
+      '0036_documents_version_real'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -487,7 +488,14 @@ test('application registry freezes exactly the 35 C2c single-column migrations',
   ])
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(6, 21), expectedAnimeMigrations)
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(21, 25), expectedGamesMigrations)
-  assert.deepEqual(applicationMigrationRegistry.migrations.slice(25), expectedMusicMigrations)
+  assert.deepEqual(applicationMigrationRegistry.migrations.slice(25, 35), expectedMusicMigrations)
+  const documentMigration = applicationMigrationRegistry.migrations[35]
+  assert.equal(documentMigration.compatibility.kind, 'table-transition')
+  assert.equal(documentMigration.compatibility.table, 'documents')
+  assert.equal(documentMigration.compatibility.target.columns.find(({ name }) => name === 'version').type, 'REAL')
+  assert.equal(documentMigration.compatibility.legacy.length, 8)
+  assert.match(documentMigration.source, /prm_documents_v0036_guard/u)
+  assert.match(documentMigration.source, /CAST\(version AS REAL\)/u)
 })
 
 test('static contract runs the startup gate once after base tables and before all later initialization', () => {
@@ -506,7 +514,8 @@ test('static contract runs the startup gate once after base tables and before al
   assert.doesNotMatch(databaseSource, /PRAGMA table_info\(todos\)/u)
   assert.match(databaseSource, /CREATE TABLE IF NOT EXISTS bookmarks \([\s\S]*icon TEXT,[\s\S]*icon_data TEXT/u)
   assert.doesNotMatch(databaseSource, /bookmarkColumns|hasIcon|hasIconData|ALTER TABLE bookmarks ADD COLUMN icon/u)
-  assert.match(databaseSource, /const versionCol = documentColumns\.find\(col => col\.name === 'version'\)/u)
+  assert.doesNotMatch(databaseSource, /versionCol|documents_new|CAST\(version AS REAL\)/u)
+  assert.match(databaseMigrationsSource, /id: '0036_documents_version_real'/u)
   assert.match(databaseSource, /last_read_at DATETIME,\s+content_cache TEXT/u)
   assert.doesNotMatch(databaseSource, /hasContentCache|ALTER TABLE books ADD COLUMN content_cache TEXT/u)
   assert.doesNotMatch(databaseSource, /DROP TABLE IF EXISTS code_versions/u)
@@ -581,14 +590,14 @@ test('static contract runs the startup gate once after base tables and before al
   const baseTableLoop = databaseSource.indexOf('tables.forEach(sql => {', instanceDefinition)
   const schemaGateHook = databaseSource.indexOf('runBaseSchemaGate()', baseTableLoop)
   const firstIndexes = databaseSource.indexOf('const indexes = [', schemaGateHook)
-  const firstPragma = databaseSource.indexOf('PRAGMA table_info(documents)', schemaGateHook)
+  const firstInlineUpgrade = databaseSource.indexOf('const codeColumns =', schemaGateHook)
   const ownerInitialization = databaseSource.indexOf('initializeOwner(database, process.env)', schemaGateHook)
   assert.ok(instanceDefinition >= 0)
   assert.ok(baseTableLoop > instanceDefinition)
   assert.ok(schemaGateHook > baseTableLoop)
   assert.equal(databaseSource.match(/runBaseSchemaGate\(\)/gu)?.length, 1)
   assert.ok(firstIndexes > schemaGateHook)
-  assert.ok(firstPragma > schemaGateHook)
+  assert.ok(firstInlineUpgrade > schemaGateHook)
   assert.ok(ownerInitialization > schemaGateHook)
 
   const initializeStart = indexSource.indexOf('async function initialize()')
@@ -605,7 +614,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.ok(initializeCatch > listenCall)
 })
 
-test('empty database adopts all 35 registered columns without executing ALTER and records applied attempts', nativeTestOptions, () => {
+test('empty database adopts all 36 registered migrations without executing schema changes', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   try {
@@ -620,7 +629,7 @@ test('empty database adopts all 35 registered columns without executing ALTER an
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 35)
+      assertApplicationMigrationLedger(verification, 36)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
@@ -669,7 +678,7 @@ test('restarting the current database does not add registered migration attempts
         ledger: verification.prepare('SELECT COUNT(*) AS count FROM prm_schema_migrations').get().count,
         attempts: verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count
       }, firstCounts)
-      assertApplicationMigrationLedger(verification, 35)
+      assertApplicationMigrationLedger(verification, 36)
     } finally {
       verification.close()
     }
@@ -762,7 +771,7 @@ test('preserves unowned historical code_versions table and rows', nativeTestOpti
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 35)
+      assertApplicationMigrationLedger(verification, 36)
       assert.equal(verification.prepare(
         "SELECT COUNT(*) AS count FROM prm_schema_migrations WHERE migration_id LIKE '%code_versions%'"
       ).get().count, 0)
@@ -1247,7 +1256,7 @@ test('incompatible music columns execute the prefix and stop at the explicit con
   }
 })
 
-test('old anime, games, and music schemas execute all 35 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
+test('old anime, games, and music schemas execute all 36 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -1345,7 +1354,7 @@ test('old anime, games, and music schemas execute all 35 registered migrations b
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 35)
+      assertApplicationMigrationLedger(verification, 36)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')

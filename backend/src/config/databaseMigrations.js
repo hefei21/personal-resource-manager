@@ -1,4 +1,188 @@
+import { createHash } from 'node:crypto'
 import { createMigrationRegistry } from './migrationPlan.js'
+
+const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
+
+const documentColumns = (versionType, subcategoryPosition = 'canonical', versionDefault = '1.0') => {
+  const columns = [
+    { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
+    { name: 'title', type: 'TEXT', notNull: true, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'category', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 }
+  ]
+  if (subcategoryPosition === 'canonical') {
+    columns.push({ name: 'subcategory', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 })
+  }
+  columns.push(
+    { name: 'tags', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'file_path', type: 'TEXT', notNull: true, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'version', type: versionType, notNull: false, defaultValue: versionDefault, primaryKeyPosition: 0 },
+    { name: 'created_at', type: 'DATETIME', notNull: false, defaultValue: 'CURRENT_TIMESTAMP', primaryKeyPosition: 0 },
+    { name: 'updated_at', type: 'DATETIME', notNull: false, defaultValue: 'CURRENT_TIMESTAMP', primaryKeyPosition: 0 }
+  )
+  if (subcategoryPosition === 'appended') {
+    columns.push({ name: 'subcategory', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 })
+  }
+  return columns
+}
+
+const documentShape = (versionType, subcategoryPosition = 'canonical', versionDefault = '1.0') => ({
+  strict: false,
+  withoutRowid: false,
+  columns: documentColumns(versionType, subcategoryPosition, versionDefault),
+  foreignKeys: [],
+  uniqueConstraints: []
+})
+
+const knownDocumentIndexes = [
+  {
+    name: 'idx_documents_category',
+    createIndexSqlSha256: sha256('CREATE INDEX idx_documents_category ON documents(category)')
+  },
+  {
+    name: 'idx_documents_created_at',
+    createIndexSqlSha256: sha256('CREATE INDEX idx_documents_created_at ON documents(created_at)')
+  },
+  {
+    name: 'idx_documents_title',
+    createIndexSqlSha256: sha256('CREATE INDEX idx_documents_title ON documents(title)')
+  }
+]
+
+const knownIntegerDocumentDdls = [
+  {
+    shape: documentShape('INTEGER'),
+    sql: `CREATE TABLE documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  category TEXT,
+  subcategory TEXT,
+  tags TEXT,
+  file_path TEXT NOT NULL,
+  version INTEGER DEFAULT 1.0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`
+  },
+  {
+    shape: documentShape('INTEGER', 'canonical', '1'),
+    sql: `CREATE TABLE documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  category TEXT,
+  subcategory TEXT,
+  tags TEXT,
+  file_path TEXT NOT NULL,
+  version INTEGER DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`
+  },
+  {
+    shape: documentShape('INTEGER', 'appended'),
+    sql: `CREATE TABLE documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  category TEXT,
+  tags TEXT,
+  file_path TEXT NOT NULL,
+  version INTEGER DEFAULT 1.0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+, subcategory TEXT)`
+  },
+  {
+    shape: documentShape('INTEGER', 'appended', '1'),
+    sql: `CREATE TABLE documents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  category TEXT,
+  tags TEXT,
+  file_path TEXT NOT NULL,
+  version INTEGER DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+, subcategory TEXT)`
+  }
+]
+
+const documentLegacyProofs = knownIntegerDocumentDdls.flatMap(({ shape, sql }) => (
+  [[], knownDocumentIndexes].map((indexes) => ({
+    shape,
+    createTableSqlSha256: sha256(sql),
+    indexes,
+    triggers: []
+  }))
+))
+
+const documentVersionMigrationSource = `
+CREATE TABLE prm_documents_v0036_guard (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_documents_v0036_guard (valid)
+SELECT CASE WHEN
+  NOT EXISTS (
+    SELECT 1 FROM documents
+    WHERE version IS NOT NULL AND (
+      typeof(version) NOT IN ('integer', 'real') OR
+      CAST(version AS REAL) != version OR
+      abs(CAST(version AS REAL)) > 1.7976931348623157e308
+    )
+  )
+  AND (
+    SELECT group_concat(name || ':' || type || ':' || "notnull" || ':' || COALESCE(dflt_value, '<null>') || ':' || pk || ':' || hidden, '|')
+    FROM (SELECT * FROM pragma_table_xinfo('document_versions') ORDER BY cid)
+  ) = 'id:INTEGER:0:<null>:1:0|document_id:INTEGER:1:<null>:0:0|version:INTEGER:1:<null>:0:0|file_path:TEXT:1:<null>:0:0|note:TEXT:0:<null>:0:0|created_at:DATETIME:0:CURRENT_TIMESTAMP:0:0'
+  AND (
+    SELECT COUNT(*)
+    FROM main.sqlite_schema AS tables, pragma_foreign_key_list(tables.name) AS fk
+    WHERE tables.type = 'table' AND fk."table" = 'documents'
+  ) = 1
+  AND EXISTS (
+    SELECT 1 FROM pragma_foreign_key_list('document_versions')
+    WHERE "table" = 'documents' AND "from" = 'document_id' AND "to" = 'id'
+      AND on_update = 'NO ACTION' AND on_delete = 'CASCADE'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema
+    WHERE type = 'trigger' AND tbl_name IN ('documents', 'document_versions')
+  )
+THEN 1 ELSE 0 END;
+CREATE TABLE prm_documents_v0036_sequence (seq INTEGER);
+INSERT INTO prm_documents_v0036_sequence (seq)
+SELECT seq FROM sqlite_sequence WHERE name = 'documents';
+CREATE TABLE prm_documents_v0036_versions AS
+SELECT id, document_id, version, file_path, note, created_at FROM document_versions;
+CREATE TABLE documents_migration_0036 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  category TEXT,
+  subcategory TEXT,
+  tags TEXT,
+  file_path TEXT NOT NULL,
+  version REAL DEFAULT 1.0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO documents_migration_0036
+  (id, title, category, subcategory, tags, file_path, version, created_at, updated_at)
+SELECT id, title, category, subcategory, tags, file_path, CAST(version AS REAL), created_at, updated_at
+FROM documents;
+DROP TABLE documents;
+ALTER TABLE documents_migration_0036 RENAME TO documents;
+INSERT INTO document_versions (id, document_id, version, file_path, note, created_at)
+SELECT id, document_id, version, file_path, note, created_at FROM prm_documents_v0036_versions;
+INSERT INTO sqlite_sequence (name, seq)
+SELECT 'documents', seq FROM prm_documents_v0036_sequence
+WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'documents');
+UPDATE sqlite_sequence
+SET seq = CASE
+  WHEN seq < (SELECT seq FROM prm_documents_v0036_sequence)
+    THEN (SELECT seq FROM prm_documents_v0036_sequence)
+  ELSE seq
+END
+WHERE name = 'documents' AND EXISTS (SELECT 1 FROM prm_documents_v0036_sequence);
+DROP TABLE prm_documents_v0036_versions;
+DROP TABLE prm_documents_v0036_sequence;
+DROP TABLE prm_documents_v0036_guard;
+`.trim()
 
 export const applicationMigrationRegistry = createMigrationRegistry([
   {
@@ -489,6 +673,16 @@ export const applicationMigrationRegistry = createMigrationRegistry([
         notNull: false,
         defaultValue: null
       }
+    }
+  },
+  {
+    id: '0036_documents_version_real',
+    source: documentVersionMigrationSource,
+    compatibility: {
+      kind: 'table-transition',
+      table: 'documents',
+      target: documentShape('REAL'),
+      legacy: documentLegacyProofs
     }
   }
 ])
