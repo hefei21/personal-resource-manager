@@ -390,7 +390,9 @@ function classifyFailure(error) {
   if (error instanceof MigrationExecutorError && error.machineCode) {
     if (
       error.machineCode === 'MIGRATION_COMPATIBILITY_PRECONDITION_FAILED' ||
-      error.machineCode === 'MIGRATION_COMPATIBILITY_CHECK_FAILED'
+      error.machineCode === 'MIGRATION_COMPATIBILITY_CHECK_FAILED' ||
+      error.machineCode === 'MIGRATION_COMPATIBILITY_POSTCONDITION_FAILED' ||
+      error.machineCode === 'MIGRATION_COMPATIBILITY_POSTCONDITION_CHECK_FAILED'
     ) {
       return { category: 'migration', machineCode: error.machineCode }
     }
@@ -454,6 +456,28 @@ function compatibilityCheckError() {
     {
       category: 'migration',
       machineCode: 'MIGRATION_COMPATIBILITY_CHECK_FAILED'
+    }
+  )
+}
+
+function compatibilityPostconditionError() {
+  return new MigrationExecutorError(
+    'MIGRATION_COMPATIBILITY_POSTCONDITION_FAILED',
+    'Migration compatibility postcondition was not satisfied.',
+    {
+      category: 'migration',
+      machineCode: 'MIGRATION_COMPATIBILITY_POSTCONDITION_FAILED'
+    }
+  )
+}
+
+function compatibilityPostconditionCheckError() {
+  return new MigrationExecutorError(
+    'MIGRATION_COMPATIBILITY_POSTCONDITION_CHECK_FAILED',
+    'Migration compatibility postcondition check failed.',
+    {
+      category: 'migration',
+      machineCode: 'MIGRATION_COMPATIBILITY_POSTCONDITION_CHECK_FAILED'
     }
   )
 }
@@ -525,6 +549,18 @@ export function executeMigrationBatch({ database, registry, plan, lock, now } = 
         }
         const source = definition.source
         database.exec(source)
+        if (Object.hasOwn(definition, 'compatibility')) {
+          assertActiveLock(lock)
+          let compatibilityResult
+          try {
+            compatibilityResult = checkMigrationCompatibility(database, definition.compatibility)
+          } catch {
+            throw compatibilityPostconditionCheckError()
+          }
+          if (compatibilityResult?.status !== COMPATIBILITY_STATUSES.SATISFIED) {
+            throw compatibilityPostconditionError()
+          }
+        }
         recordSuccessfulMigration(database, {
           migrationId: migration.id,
           checksum: migration.checksum,

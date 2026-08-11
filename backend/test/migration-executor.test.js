@@ -48,8 +48,9 @@ function openDatabase() {
   return database
 }
 
-function tracedDatabase(database, events, { failOnMetadata = false } = {}) {
+function tracedDatabase(database, events, { failOnMetadata = false, failOnMetadataCall } = {}) {
   let inTransaction = false
+  let metadataCalls = 0
   const lock = {
     get state() {
       events.push(inTransaction ? 'transaction-lock-check' : 'lock-check')
@@ -64,8 +65,11 @@ function tracedDatabase(database, events, { failOnMetadata = false } = {}) {
     },
     prepare(sql) {
       events.push(['prepare', sql])
-      if (failOnMetadata && String(sql).includes('pragma_table_xinfo')) {
-        throw new Error('metadata query exposed private_resources/private_title')
+      if (String(sql).includes('pragma_table_xinfo')) {
+        metadataCalls += 1
+        if (failOnMetadata || metadataCalls === failOnMetadataCall) {
+          throw new Error('metadata query exposed private_resources/private_title')
+        }
       }
       return database.prepare(sql)
     },
@@ -452,7 +456,7 @@ test('executes a pending compatibility migration without exposing its condition'
   }
 })
 
-test('checks compatibility inside the transaction before executing its source', nativeTestOptions, () => {
+test('checks compatibility inside the transaction before and after source execution', nativeTestOptions, () => {
   const database = openDatabase()
   const events = []
   try {
@@ -472,12 +476,28 @@ test('checks compatibility inside the transaction before executing its source', 
 
     assert.equal(summary.executedCount, 1)
     const callbackIndex = events.indexOf('transaction-callback')
-    const lockIndex = events.indexOf('transaction-lock-check')
+    const lockIndexes = events.reduce((indexes, event, index) => {
+      if (event === 'transaction-lock-check') indexes.push(index)
+      return indexes
+    }, [])
     const sourceIndex = events.findIndex((event) => Array.isArray(event) && event[0] === 'exec' && event[1].includes('ADD COLUMN title'))
+    const metadataIndexes = events.reduce((indexes, event, index) => {
+      if (Array.isArray(event) && event[0] === 'prepare' && event[1].includes('pragma_table_xinfo')) indexes.push(index)
+      return indexes
+    }, [])
+    const ledgerIndex = events.findIndex((event) => (
+      Array.isArray(event) &&
+      event[0] === 'prepare' &&
+      event[1].includes('INSERT INTO prm_schema_migrations')
+    ))
     assert.ok(callbackIndex >= 0)
-    assert.equal(lockIndex, callbackIndex + 1)
-    assert.ok(sourceIndex > lockIndex)
-    assert.ok(events.slice(lockIndex + 1, sourceIndex).some((event) => Array.isArray(event) && event[0] === 'prepare'))
+    assert.equal(lockIndexes.length, 2)
+    assert.equal(lockIndexes[0], callbackIndex + 1)
+    assert.ok(metadataIndexes[0] > lockIndexes[0])
+    assert.ok(sourceIndex > metadataIndexes[0])
+    assert.ok(lockIndexes[1] > sourceIndex)
+    assert.ok(metadataIndexes[1] > lockIndexes[1])
+    assert.ok(ledgerIndex > metadataIndexes[1])
   } finally {
     database.close()
   }
@@ -565,6 +585,88 @@ test('fails closed and redacts compatibility checker failures', nativeTestOption
       status: 'failed',
       errorCategory: 'migration',
       errorSummary: 'MIGRATION_COMPATIBILITY_CHECK_FAILED'
+    }])
+  } finally {
+    database.close()
+  }
+})
+
+test('rolls back source and blocks the success ledger when the compatibility postcondition is not satisfied', nativeTestOptions, () => {
+  const database = openDatabase()
+  const events = []
+  const source = 'ALTER TABLE resources ADD COLUMN title INTEGER;'
+  try {
+    database.exec('CREATE TABLE resources (id INTEGER);')
+    const request = batch([compatibilityDefinition('0001_expand', source)])
+    const traced = tracedDatabase(database, events)
+    const error = thrown(() => executeMigrationBatch({
+      database: traced,
+      ...request,
+      lock: traced.lock
+    }))
+
+    assert.equal(error.code, 'MIGRATION_EXECUTION_FAILED')
+    assert.equal(error.machineCode, 'MIGRATION_COMPATIBILITY_POSTCONDITION_FAILED')
+    assert.doesNotMatch(error.message, /resources|title|ALTER TABLE|INTEGER/)
+    assert.equal(events.some((event) => Array.isArray(event) && event[0] === 'exec' && event[1] === source), true)
+    assert.deepEqual(database.pragma('table_xinfo(resources)').map(({ name }) => name), ['id'])
+    assert.equal(getAppliedMigration(database, '0001_expand'), null)
+    assert.deepEqual(listMigrationAttempts(database).map(({ status, errorCategory, errorSummary }) => ({
+      status,
+      errorCategory,
+      errorSummary
+    })), [{
+      status: 'failed',
+      errorCategory: 'migration',
+      errorSummary: 'MIGRATION_COMPATIBILITY_POSTCONDITION_FAILED'
+    }])
+  } finally {
+    database.close()
+  }
+})
+
+test('rolls back source and redacts compatibility postcondition checker failures', nativeTestOptions, () => {
+  const database = openDatabase()
+  const events = []
+  const source = "ALTER TABLE private_resources ADD COLUMN private_title TEXT NOT NULL DEFAULT '/synthetic/private.db';"
+  try {
+    database.exec('CREATE TABLE private_resources (id INTEGER);')
+    const request = batch([{
+      id: '0001_expand',
+      source,
+      compatibility: {
+        kind: 'column',
+        table: 'private_resources',
+        column: {
+          name: 'private_title',
+          type: 'TEXT',
+          notNull: true,
+          defaultValue: "'/synthetic/private.db'"
+        }
+      }
+    }])
+    const traced = tracedDatabase(database, events, { failOnMetadataCall: 2 })
+    const error = thrown(() => executeMigrationBatch({
+      database: traced,
+      ...request,
+      lock: traced.lock
+    }))
+
+    assert.equal(error.code, 'MIGRATION_EXECUTION_FAILED')
+    assert.equal(error.machineCode, 'MIGRATION_COMPATIBILITY_POSTCONDITION_CHECK_FAILED')
+    assert.doesNotMatch(error.message, /private_resources|private_title|synthetic|metadata query/)
+    assert.doesNotMatch(String(error.cause?.message ?? ''), /private_resources|private_title|synthetic|metadata query/)
+    assert.equal(events.some((event) => Array.isArray(event) && event[0] === 'exec' && event[1] === source), true)
+    assert.deepEqual(database.pragma('table_xinfo(private_resources)').map(({ name }) => name), ['id'])
+    assert.equal(getAppliedMigration(database, '0001_expand'), null)
+    assert.deepEqual(listMigrationAttempts(database).map(({ status, errorCategory, errorSummary }) => ({
+      status,
+      errorCategory,
+      errorSummary
+    })), [{
+      status: 'failed',
+      errorCategory: 'migration',
+      errorSummary: 'MIGRATION_COMPATIBILITY_POSTCONDITION_CHECK_FAILED'
     }])
   } finally {
     database.close()
