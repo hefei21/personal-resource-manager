@@ -247,6 +247,102 @@ test('executes pending migrations and reports only safe records', nativeTestOpti
   }
 })
 
+test('runs the preparation hook exactly once before the first migration source', nativeTestOptions, () => {
+  const directory = tempDirectory()
+  const database = openDatabase(directory)
+  try {
+    const observations = []
+    const registry = createMigrationRegistry([
+      definition('0001_initial', 'CREATE TABLE prepared_items (id INTEGER PRIMARY KEY);'),
+      definition('0002_second', 'ALTER TABLE prepared_items ADD COLUMN note TEXT;')
+    ])
+    const summary = runMigrationStartupGate({
+      database,
+      mainDbPath: database.name,
+      registry,
+      now: () => FIXED_NOW,
+      beforeFirstExecution: ({ database: hookDatabase, mainDbPath, pendingMigrationId }) => {
+        observations.push({
+          sameDatabase: hookDatabase === database,
+          samePath: mainDbPath === path.resolve(database.name),
+          pendingMigrationId,
+          sourceNotRun: database.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prepared_items'"
+          ).get() === undefined
+        })
+      }
+    })
+    assert.equal(summary.execution.executedCount, 2)
+    assert.deepEqual(observations, [{
+      sameDatabase: true,
+      samePath: true,
+      pendingMigrationId: '0001_initial',
+      sourceNotRun: true
+    }])
+  } finally {
+    database.close()
+    cleanup(directory)
+  }
+})
+
+test('does not run the preparation hook when all migrations can be adopted', nativeTestOptions, () => {
+  const directory = tempDirectory()
+  const database = openDatabase(directory)
+  try {
+    database.exec("CREATE TABLE adopted_items (title TEXT NOT NULL DEFAULT 'ready');")
+    let hookCalls = 0
+    const summary = runMigrationStartupGate({
+      database,
+      mainDbPath: database.name,
+      registry: createMigrationRegistry([
+        compatibilityDefinition(
+          '0001_adopt',
+          'DROP TABLE adopted_items;',
+          'adopted_items',
+          'title'
+        )
+      ]),
+      now: () => FIXED_NOW,
+      beforeFirstExecution: () => { hookCalls += 1 }
+    })
+    assert.equal(summary.adoption.adoptedCount, 1)
+    assert.equal(summary.execution.executedCount, 0)
+    assert.equal(hookCalls, 0)
+  } finally {
+    database.close()
+    cleanup(directory)
+  }
+})
+
+test('preparation failure blocks migration source execution', nativeTestOptions, () => {
+  const directory = tempDirectory()
+  const database = openDatabase(directory)
+  try {
+    const error = thrown(() => runMigrationStartupGate({
+      database,
+      mainDbPath: database.name,
+      registry: createMigrationRegistry([
+        definition('0001_blocked', 'CREATE TABLE must_not_exist (id INTEGER PRIMARY KEY);')
+      ]),
+      now: () => FIXED_NOW,
+      beforeFirstExecution: () => {
+        const failure = new Error('sensitive backup path must not escape')
+        failure.code = 'DATABASE_BACKUP_CREATE_FAILED'
+        throw failure
+      }
+    }))
+    assert.equal(error.code, MIGRATION_STARTUP_GATE_ERROR_CODES.FAILED)
+    assert.equal(error.message, 'Migration startup gate failed.')
+    assert.equal(error.message.includes('sensitive'), false)
+    assert.equal(database.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'must_not_exist'"
+    ).get(), undefined)
+  } finally {
+    database.close()
+    cleanup(directory)
+  }
+})
+
 test('adopts satisfied schema without executing dangerous source', nativeTestOptions, () => {
   const directory = tempDirectory()
   const database = openDatabase(directory)

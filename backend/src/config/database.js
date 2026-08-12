@@ -3,6 +3,7 @@ import path from 'path'
 import { openDatabaseConnection } from './sqliteConnection.js'
 import { runMigrationStartupGate } from './migrationStartupGate.js'
 import { applicationMigrationRegistry } from './databaseMigrations.js'
+import { createDatabaseBackupSync } from './databaseBackup.js'
 import { getContext } from '../utils/dbContext.js'
 import {
   initializeOwner,
@@ -11,6 +12,7 @@ import {
 
 const baseDbPath = process.env.DB_PATH || path.join(process.env.DATA_PATH, 'database', 'app.db')
 const dbDir = path.dirname(baseDbPath)
+const databaseBackupPath = process.env.DATABASE_BACKUP_PATH || path.join(dbDir, 'backups')
 
 // 确保数据库目录存在
 if (!fs.existsSync(dbDir)) {
@@ -109,7 +111,14 @@ function initDatabase() {
     runMigrationStartupGate({
       database: mainDb,
       mainDbPath: baseDbPath,
-      registry: applicationMigrationRegistry
+      registry: applicationMigrationRegistry,
+      beforeFirstExecution: ({ database, mainDbPath }) => {
+        createDatabaseBackupSync({
+          database,
+          sourceDbPath: mainDbPath,
+          backupRoot: databaseBackupPath
+        })
+      }
     })
   })
   return mainDb

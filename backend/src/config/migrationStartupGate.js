@@ -433,7 +433,15 @@ function combinedFailure(operationFailure, releaseFailure) {
   )
 }
 
-function runLockedGate({ database, mainDbPath, registry, targetVersion, now, lockOptions }, resolvedMainDbPath, lock) {
+function runLockedGate({
+  database,
+  mainDbPath,
+  registry,
+  targetVersion,
+  now,
+  lockOptions,
+  beforeFirstExecution
+}, resolvedMainDbPath, lock) {
   const legacyBefore = readLegacyFingerprint(database)
   if (legacyBefore.present) installLegacyReadOnlyGuards(database)
   ensureMigrationControlTables(database)
@@ -444,6 +452,7 @@ function runLockedGate({ database, mainDbPath, registry, targetVersion, now, loc
   const scopeIds = new Set(scopeMigrations.map(({ id }) => id))
   const iterationLimit = scopeMigrations.length + 1
   let iterationCount = 0
+  let executionPrepared = false
   let plan
 
   while (true) {
@@ -461,6 +470,14 @@ function runLockedGate({ database, mainDbPath, registry, targetVersion, now, loc
     if (plan.pending.length === 0) break
 
     const appliedBefore = countAppliedInScope(authoritativeLedger, scopeIds)
+    if (!executionPrepared) {
+      beforeFirstExecution?.({
+        database,
+        mainDbPath: resolvedMainDbPath,
+        pendingMigrationId: plan.pending[0].id
+      })
+      executionPrepared = true
+    }
     const singleStepPlan = createMigrationPlan(registry, appliedRecords, {
       targetVersion: plan.pending[0].id
     })
@@ -516,7 +533,18 @@ export function runMigrationStartupGate(options = {}) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
     fail(MIGRATION_STARTUP_GATE_ERROR_CODES.INPUT_INVALID)
   }
-  const { database, mainDbPath, registry, targetVersion, now, lockOptions } = options
+  const {
+    database,
+    mainDbPath,
+    registry,
+    targetVersion,
+    now,
+    lockOptions,
+    beforeFirstExecution
+  } = options
+  if (beforeFirstExecution !== undefined && typeof beforeFirstExecution !== 'function') {
+    fail(MIGRATION_STARTUP_GATE_ERROR_CODES.INPUT_INVALID)
+  }
   let resolvedMainDbPath
   let lock = null
   let result
@@ -527,7 +555,15 @@ export function runMigrationStartupGate(options = {}) {
     resolvedMainDbPath = validateDatabasePath(database, mainDbPath)
     assertRegistrySources(registry)
     lock = acquireMigrationLock(resolvedMainDbPath, lockOptions)
-    result = runLockedGate({ database, mainDbPath, registry, targetVersion, now, lockOptions }, resolvedMainDbPath, lock)
+    result = runLockedGate({
+      database,
+      mainDbPath,
+      registry,
+      targetVersion,
+      now,
+      lockOptions,
+      beforeFirstExecution
+    }, resolvedMainDbPath, lock)
   } catch (error) {
     operationFailure = safeOperationError(error)
   } finally {

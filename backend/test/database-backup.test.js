@@ -9,6 +9,7 @@ import {
   DATABASE_BACKUP_MANIFEST_FILE,
   RESTORE_MARKER_FILE,
   createDatabaseBackup,
+  createDatabaseBackupSync,
   prepareIsolatedRestoreDirectory,
   restoreDatabaseBackup
 } from '../src/config/databaseBackup.js'
@@ -143,6 +144,39 @@ test('creates and restores a consistent WAL database with a verified manifest', 
     assert.equal(restored.pragma('integrity_check', { simple: true }), 'ok')
   } finally {
     restored?.close()
+    database?.close()
+    cleanup(root)
+  }
+})
+
+test('creates a synchronous portable snapshot for the startup gate', nativeTestOptions, () => {
+  const root = makeRoot()
+  let database
+  let snapshot
+  try {
+    const source = createSourceDatabase(root)
+    database = source.database
+    database.prepare('INSERT INTO notes (body) VALUES (?)').run('wal-committed')
+    const result = createDatabaseBackupSync({
+      database,
+      sourceDbPath: source.sourceDbPath,
+      backupRoot: path.join(root, 'backups'),
+      randomBytes: deterministicRandomBytes,
+      now: new Date('2026-08-12T02:03:04.005Z')
+    })
+    assert.deepEqual(
+      fs.readdirSync(result.backupDirectory).sort(),
+      [DATABASE_BACKUP_FILE, DATABASE_BACKUP_MANIFEST_FILE].sort()
+    )
+    snapshot = new Database(path.join(result.backupDirectory, DATABASE_BACKUP_FILE), { readonly: true })
+    assert.deepEqual(snapshot.prepare('SELECT body FROM notes ORDER BY id').all(), [
+      { body: 'alpha' },
+      { body: 'beta' },
+      { body: 'wal-committed' }
+    ])
+    assert.equal(snapshot.pragma('journal_mode', { simple: true }), 'delete')
+  } finally {
+    snapshot?.close()
     database?.close()
     cleanup(root)
   }

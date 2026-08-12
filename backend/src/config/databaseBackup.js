@@ -249,6 +249,66 @@ export async function createDatabaseBackup(options = {}) {
   }
 }
 
+export function createDatabaseBackupSync(options = {}) {
+  const { database } = options
+  if (!database || typeof database.prepare !== 'function' || typeof database.exec !== 'function') {
+    fail('DATABASE_BACKUP_CONNECTION_INVALID', 'An open SQLite connection is required.')
+  }
+  const requestedSourceDbPath = resolvePath(options.sourceDbPath, 'DATABASE_BACKUP_SOURCE_INVALID')
+  const sourceDbPath = assertDatabasePath(database, requestedSourceDbPath)
+  const requestedBackupRoot = resolvePath(options.backupRoot, 'DATABASE_BACKUP_ROOT_INVALID')
+  try {
+    fs.mkdirSync(requestedBackupRoot, { recursive: true })
+  } catch (error) {
+    fail('DATABASE_BACKUP_ROOT_INVALID', 'Backup root could not be prepared.', error)
+  }
+  const backupRoot = realDirectoryPath(requestedBackupRoot, 'DATABASE_BACKUP_ROOT_INVALID')
+  assertSeparatePaths(sourceDbPath, backupRoot)
+
+  const now = normalizeNow(options.now)
+  const suffix = createToken(options.randomBytes).slice(0, 12)
+  const directoryName = `${timestampName(now)}-${suffix}`
+  const finalDirectory = path.join(backupRoot, directoryName)
+  const temporaryDirectory = path.join(backupRoot, `.${directoryName}.tmp`)
+  if (fs.existsSync(finalDirectory) || fs.existsSync(temporaryDirectory)) {
+    fail('DATABASE_BACKUP_TARGET_EXISTS', 'Backup target already exists.')
+  }
+
+  try {
+    fs.mkdirSync(temporaryDirectory)
+    const databaseFile = path.join(temporaryDirectory, DATABASE_BACKUP_FILE)
+    const quotedTarget = database.prepare('SELECT quote(?) AS value').get(databaseFile)?.value
+    if (typeof quotedTarget !== 'string' || quotedTarget.length < 2) {
+      fail('DATABASE_BACKUP_CREATE_FAILED', 'SQLite could not quote the backup target.')
+    }
+    database.exec(`VACUUM INTO ${quotedTarget}`)
+    finalizePortableBackup(databaseFile)
+    const stat = fs.statSync(databaseFile)
+    const manifest = {
+      formatVersion: DATABASE_BACKUP_FORMAT_VERSION,
+      kind: 'sqlite',
+      createdAt: now.toISOString(),
+      database: {
+        file: DATABASE_BACKUP_FILE,
+        bytes: stat.size,
+        sha256: sha256File(databaseFile),
+        integrityCheck: 'ok'
+      }
+    }
+    fs.writeFileSync(
+      path.join(temporaryDirectory, DATABASE_BACKUP_MANIFEST_FILE),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      { encoding: 'utf8', flag: 'wx' }
+    )
+    fs.renameSync(temporaryDirectory, finalDirectory)
+    return Object.freeze({ backupDirectory: finalDirectory, manifest })
+  } catch (error) {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true })
+    if (error instanceof DatabaseBackupError) throw error
+    fail('DATABASE_BACKUP_CREATE_FAILED', 'Database backup could not be created.', error)
+  }
+}
+
 function verifyRestoreMarker(targetDirectory, token) {
   if (!TOKEN_PATTERN.test(token ?? '')) {
     fail('DATABASE_RESTORE_TOKEN_INVALID', 'Restore token is invalid.')
