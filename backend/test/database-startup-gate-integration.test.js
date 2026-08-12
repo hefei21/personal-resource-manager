@@ -1057,11 +1057,13 @@ test('code_repositories rows that violate the proven legacy NOT NULL contract fa
       );
       INSERT INTO code_repositories (id, name, url) VALUES (5, NULL, 'https://example.invalid/corrupt');
     `)
+    database.unsafeMode(true)
     database.pragma('writable_schema = ON')
     database.prepare(
       "UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = 'code_repositories'"
     ).run(legacyCodeRepositories6Ddl)
     database.pragma('writable_schema = OFF')
+    database.unsafeMode(false)
   } finally {
     database.close()
   }
