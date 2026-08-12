@@ -124,8 +124,7 @@ test('rejects tampered objects, invalid ranges, symlinks, and staging token reus
     }
     const hash = sha256('link-target')
     const key = createStorageKey('documents', hash)
-    const objectPath = service.objectFile(key)
-    fs.mkdirSync(path.dirname(objectPath), { recursive: true })
+    const objectPath = service.objectFile(key, { createParents: true })
     const target = path.join(directory, 'outside.txt')
     fs.writeFileSync(target, 'link-target')
     fs.rmSync(objectPath, { force: true })
