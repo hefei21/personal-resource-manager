@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
 import {
   computeMigrationChecksum,
   createMigrationPlan,
@@ -42,6 +43,19 @@ function tableTransition(overrides = {}) {
     table: 'items',
     target: tableShape(),
     legacy: [legacyProof(tableShape({ strict: true }))],
+    ...overrides
+  }
+}
+
+function targetProof(overrides = {}) {
+  return {
+    createTableSqlSha256: DUMMY_DDL_HASH,
+    indexes: [],
+    triggers: [],
+    externalDependencies: {
+      inboundForeignKeys: 'none',
+      schemaSqlReferences: 'none'
+    },
     ...overrides
   }
 }
@@ -130,6 +144,39 @@ test('keeps the checksum of a migration without compatibility unchanged', () => 
   )
 })
 
+test('keeps the fixed checksum of the existing 0036 migration unchanged', () => {
+  assert.equal(
+    applicationMigrationRegistry.migrations.find(({ id }) => id === '0036_documents_version_real').checksum,
+    '975dc324631964f044d22df18e3ec49e71be3e65fe6fc2d49c1089244460c5f8'
+  )
+})
+
+test('includes normalized target proof in the checksum and keeps it immutable', () => {
+  const base = tableTransition()
+  const withoutProof = defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: base })
+  const withProof = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: { ...base, targetProof: targetProof({ createTableSqlSha256: 'b'.repeat(64) }) }
+  })
+  const reordered = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: {
+      targetProof: targetProof({ createTableSqlSha256: ` ${'B'.repeat(64)} ` }),
+      legacy: [...base.legacy].reverse(),
+      target: base.target,
+      table: base.table,
+      kind: base.kind
+    }
+  })
+
+  assert.notEqual(withProof.checksum, withoutProof.checksum)
+  assert.equal(withProof.checksum, reordered.checksum)
+  assert.ok(Object.isFrozen(withProof.compatibility.targetProof))
+  assert.ok(Object.isFrozen(withProof.compatibility.targetProof.externalDependencies))
+})
+
 test('normalizes, freezes, and hashes keyed source variants deterministically', () => {
   const compatibility = tableTransition({
     legacy: [
@@ -174,6 +221,37 @@ test('normalizes, freezes, and hashes keyed source variants deterministically', 
   const serialized = JSON.stringify(plan)
   assert.doesNotMatch(serialized, /SELECT [12]|legacy-[ab]/u)
   assert.ok(plan.pending[0].compatibility.legacy.every((proof) => !('proofKey' in proof)))
+})
+
+test('redacts target proof and all legacy proof fingerprints from the public plan', () => {
+  const secretHash = 'f'.repeat(64)
+  const migration = defineMigration({
+    id: '0001_initial',
+    sourceVariants: [{ proofKey: 'secret-proof-key', source: 'SELECT 1;' }],
+    compatibility: tableTransition({
+      targetProof: targetProof({
+        createTableSqlSha256: secretHash,
+        indexes: [{ name: 'secret_target_index', createIndexSqlSha256: secretHash }],
+        triggers: [{ name: 'secret_target_trigger', createTriggerSqlSha256: secretHash }]
+      }),
+      legacy: [keyedLegacyProof('secret-proof-key', tableShape({ strict: true }), secretHash, [
+        { name: 'secret_legacy_index', createIndexSqlSha256: secretHash }
+      ], [
+        { name: 'secret_legacy_trigger', createTriggerSqlSha256: secretHash }
+      ])]
+    })
+  })
+  const plan = createMigrationPlan(createMigrationRegistry([migration]))
+  const serialized = JSON.stringify(plan)
+
+  assert.doesNotMatch(serialized, /targetProof|secret-proof-key|secret_target|secret_legacy/i)
+  assert.doesNotMatch(serialized, new RegExp(secretHash, 'i'))
+  assert.deepEqual(plan.pending[0].compatibility, {
+    kind: 'table-transition',
+    table: 'items',
+    target: migration.compatibility.target,
+    legacy: [{ shape: migration.compatibility.legacy[0].shape }]
+  })
 })
 
 test('rejects malformed, ambiguous, or incomplete source variant definitions', () => {

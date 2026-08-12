@@ -5,6 +5,16 @@ const TABLE_TRANSITION_COMPATIBILITY_KIND = 'table-transition'
 const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
 const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
+const TABLE_TRANSITION_TARGET_PROOF_KEYS = [
+  'createTableSqlSha256',
+  'indexes',
+  'triggers',
+  'externalDependencies'
+]
+const TABLE_TRANSITION_EXTERNAL_DEPENDENCY_KEYS = [
+  'inboundForeignKeys',
+  'schemaSqlReferences'
+]
 const TABLE_TRANSITION_LEGACY_PROOF_KEYS = ['shape', 'createTableSqlSha256', 'indexes', 'triggers']
 const TABLE_TRANSITION_KEYED_LEGACY_PROOF_KEYS = [...TABLE_TRANSITION_LEGACY_PROOF_KEYS, 'proofKey']
 const PROOF_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
@@ -28,6 +38,7 @@ const SQLITE_FOREIGN_KEY_ACTIONS = new Set([
   'SET DEFAULT',
   'CASCADE'
 ])
+const NO_EXTERNAL_DEPENDENCY = 'none'
 
 const COMPATIBILITY_STATUSES = Object.freeze({
   SATISFIED: 'satisfied',
@@ -383,6 +394,37 @@ function normalizeTableTransitionLegacyTriggers(triggers, fieldName) {
   return Object.freeze(normalized)
 }
 
+function normalizeTableTransitionExternalDependencies(dependencies, fieldName) {
+  assertPlainObject(dependencies, fieldName)
+  assertExactKeys(dependencies, TABLE_TRANSITION_EXTERNAL_DEPENDENCY_KEYS, fieldName)
+  for (const key of TABLE_TRANSITION_EXTERNAL_DEPENDENCY_KEYS) {
+    if (dependencies[key] !== NO_EXTERNAL_DEPENDENCY) {
+      fail(`${fieldName}.${key} must be '${NO_EXTERNAL_DEPENDENCY}'.`)
+    }
+  }
+  return Object.freeze({
+    inboundForeignKeys: NO_EXTERNAL_DEPENDENCY,
+    schemaSqlReferences: NO_EXTERNAL_DEPENDENCY
+  })
+}
+
+function normalizeTableTransitionTargetProof(proof, fieldName) {
+  assertPlainObject(proof, fieldName)
+  assertExactKeys(proof, TABLE_TRANSITION_TARGET_PROOF_KEYS, fieldName)
+  return Object.freeze({
+    createTableSqlSha256: normalizeCreateTableSqlSha256(
+      proof.createTableSqlSha256,
+      `${fieldName}.createTableSqlSha256`
+    ),
+    indexes: normalizeTableTransitionLegacyIndexes(proof.indexes, `${fieldName}.indexes`),
+    triggers: normalizeTableTransitionLegacyTriggers(proof.triggers, `${fieldName}.triggers`),
+    externalDependencies: normalizeTableTransitionExternalDependencies(
+      proof.externalDependencies,
+      `${fieldName}.externalDependencies`
+    )
+  })
+}
+
 function normalizeProofKey(value, fieldName) {
   if (typeof value !== 'string' || !PROOF_KEY_PATTERN.test(value)) {
     fail(`${fieldName} must be a safe proof identifier.`)
@@ -416,12 +458,18 @@ function tableTransitionLegacyProofCanonicalKey(proof) {
 }
 
 function normalizeTableTransitionCompatibility(compatibility) {
-  assertExactKeys(compatibility, TABLE_TRANSITION_KEYS, 'compatibility')
+  const expectedKeys = Object.hasOwn(compatibility, 'targetProof')
+    ? [...TABLE_TRANSITION_KEYS, 'targetProof']
+    : TABLE_TRANSITION_KEYS
+  assertExactKeys(compatibility, expectedKeys, 'compatibility')
   if (compatibility.kind !== TABLE_TRANSITION_COMPATIBILITY_KIND) {
     fail(`compatibility kind must be ${TABLE_TRANSITION_COMPATIBILITY_KIND}.`)
   }
   const table = normalizeRequiredText(compatibility.table, 'compatibility.table')
   const target = normalizeTableShape(compatibility.target, 'compatibility.target')
+  const targetProof = Object.hasOwn(compatibility, 'targetProof')
+    ? normalizeTableTransitionTargetProof(compatibility.targetProof, 'compatibility.targetProof')
+    : undefined
   if (!Array.isArray(compatibility.legacy) || compatibility.legacy.length === 0) {
     fail('compatibility.legacy must be a non-empty array.')
   }
@@ -465,12 +513,14 @@ function normalizeTableTransitionCompatibility(compatibility) {
     return 0
   })
 
-  return Object.freeze({
+  const normalized = {
     kind: TABLE_TRANSITION_COMPATIBILITY_KIND,
     table,
     target,
     legacy: Object.freeze(legacy)
-  })
+  }
+  if (targetProof !== undefined) normalized.targetProof = targetProof
+  return Object.freeze(normalized)
 }
 
 /**
@@ -832,6 +882,229 @@ function readTablePersistentTriggerProof(database, table) {
   return Object.freeze(triggers)
 }
 
+function identifierEquals(left, right) {
+  return typeof left === 'string' &&
+    typeof right === 'string' &&
+    left.toLowerCase() === right.toLowerCase()
+}
+
+const SQLITE_IDENTIFIER_START = /^[\p{L}\p{Nl}_]$/u
+const SQLITE_IDENTIFIER_CONTINUE = /^[\p{L}\p{Nl}\p{N}\p{Mn}\p{Mc}_$]$/u
+
+function isSchemaSqlIdentifierStart(character) {
+  return SQLITE_IDENTIFIER_START.test(character)
+}
+
+function isSchemaSqlIdentifierContinue(character) {
+  return SQLITE_IDENTIFIER_CONTINUE.test(character)
+}
+
+function readQuotedSchemaSqlIdentifier(sql, start, delimiter, closingDelimiter = delimiter) {
+  let index = start + delimiter.length
+  let value = ''
+  while (index < sql.length) {
+    const character = sql[index]
+    if (character === '\0') return null
+    if (character === closingDelimiter) {
+      if (sql[index + 1] === closingDelimiter && delimiter !== '[') {
+        value += closingDelimiter
+        index += 2
+        continue
+      }
+      return { value, nextIndex: index + 1 }
+    }
+    value += character
+    index += 1
+  }
+  return null
+}
+
+function skipSchemaSqlString(sql, start) {
+  let index = start + 1
+  while (index < sql.length) {
+    const character = sql[index]
+    if (character === '\0') return null
+    if (character === "'") {
+      if (sql[index + 1] === "'") {
+        index += 2
+        continue
+      }
+      return index + 1
+    }
+    index += 1
+  }
+  return null
+}
+
+function skipSchemaSqlLineComment(sql, start) {
+  const newline = sql.indexOf('\n', start + 2)
+  return newline === -1 ? sql.length : newline + 1
+}
+
+function skipSchemaSqlBlockComment(sql, start) {
+  const end = sql.indexOf('*/', start + 2)
+  return end === -1 ? null : end + 2
+}
+
+/**
+ * Tokenize only SQLite identifier tokens from persistent schema SQL. String
+ * literals, comments, punctuation, and numeric/operator tokens are ignored;
+ * malformed quoted constructs or control characters fail closed.
+ */
+function readSchemaSqlIdentifierTokens(sql) {
+  if (typeof sql !== 'string' || sql.trim().length === 0) return null
+
+  const tokens = []
+  let index = 0
+  while (index < sql.length) {
+    const character = sql[index]
+    if (character === '\0') return null
+    if (/\s/u.test(character)) {
+      index += 1
+      continue
+    }
+    if (character === '-' && sql[index + 1] === '-') {
+      index = skipSchemaSqlLineComment(sql, index)
+      continue
+    }
+    if (character === '/' && sql[index + 1] === '*') {
+      index = skipSchemaSqlBlockComment(sql, index)
+      if (index === null) return null
+      continue
+    }
+    if (character === "'") {
+      index = skipSchemaSqlString(sql, index)
+      if (index === null) return null
+      continue
+    }
+    if (character === '"' || character === '`') {
+      const quoted = readQuotedSchemaSqlIdentifier(sql, index, character)
+      if (!quoted) return null
+      tokens.push(quoted.value)
+      index = quoted.nextIndex
+      continue
+    }
+    if (character === '[') {
+      const quoted = readQuotedSchemaSqlIdentifier(sql, index, '[', ']')
+      if (!quoted) return null
+      tokens.push(quoted.value)
+      index = quoted.nextIndex
+      continue
+    }
+    if (isSchemaSqlIdentifierStart(character)) {
+      let end = index + 1
+      while (end < sql.length && isSchemaSqlIdentifierContinue(sql[end])) end += 1
+      tokens.push(sql.slice(index, end))
+      index = end
+      continue
+    }
+    if (character === ':' || character === '@' || character === '$') {
+      let end = index + 1
+      while (end < sql.length && isSchemaSqlIdentifierContinue(sql[end])) end += 1
+      index = end
+      continue
+    }
+    if (character.charCodeAt(0) < 0x20 && !/[\t\n\r\f]/u.test(character)) return null
+    index += 1
+  }
+  return tokens
+}
+
+function readTableInboundForeignKeyProof(database, table) {
+  const tableRows = database
+    .prepare(
+      "SELECT name FROM main.sqlite_schema WHERE type = 'table' AND lower(name) <> lower(?) ORDER BY name"
+    )
+    .all(table)
+  if (!Array.isArray(tableRows)) return null
+
+  const names = new Set()
+  for (const tableRow of tableRows) {
+    if (!tableRow || typeof tableRow.name !== 'string' || tableRow.name.trim().length === 0) return null
+    const tableNameKey = tableRow.name.toLowerCase()
+    if (identifierEquals(tableRow.name, table) || names.has(tableNameKey)) return null
+    names.add(tableNameKey)
+
+    const foreignKeyRows = database
+      .prepare(
+        'SELECT id, seq, "table" AS referenced_table FROM pragma_foreign_key_list(?) ORDER BY id, seq'
+      )
+      .all(tableRow.name)
+    if (!Array.isArray(foreignKeyRows)) return null
+    for (const foreignKeyRow of foreignKeyRows) {
+      if (
+        !foreignKeyRow ||
+        !Number.isSafeInteger(foreignKeyRow.id) ||
+        foreignKeyRow.id < 0 ||
+        !Number.isSafeInteger(foreignKeyRow.seq) ||
+        foreignKeyRow.seq < 0 ||
+        typeof foreignKeyRow.referenced_table !== 'string' ||
+        foreignKeyRow.referenced_table.trim().length === 0
+      ) return null
+      if (identifierEquals(foreignKeyRow.referenced_table, table)) return false
+    }
+  }
+  return true
+}
+
+function readExternalSchemaSqlReferenceProof(database, table) {
+  const rows = database
+    .prepare(
+      "SELECT type, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('view', 'trigger') AND (type = 'view' OR lower(COALESCE(tbl_name, '')) <> lower(?)) ORDER BY type, name"
+    )
+    .all(table)
+  if (!Array.isArray(rows)) return null
+
+  for (const row of rows) {
+    if (
+      !row ||
+      (row.type !== 'view' && row.type !== 'trigger') ||
+      typeof row.tbl_name !== 'string' ||
+      row.tbl_name.trim().length === 0 ||
+      typeof row.sql !== 'string' ||
+      row.sql.trim().length === 0
+    ) return null
+    const tokens = readSchemaSqlIdentifierTokens(row.sql)
+    if (!tokens) return null
+    if (tokens.some((token) => identifierEquals(token, table))) return false
+  }
+  return true
+}
+
+function targetTableProofMatches(database, compatibility, indexMetadata) {
+  const targetProof = compatibility.targetProof
+  const createTableSql = readTableCreateTableSql(database, compatibility.table)
+  if (createTableSql === null || createTableSqlSha256(createTableSql) !== targetProof.createTableSqlSha256) {
+    return false
+  }
+
+  const explicitIndexes = readTableExplicitIndexProof(
+    database,
+    compatibility.table,
+    indexMetadata.explicitIndexes
+  )
+  if (
+    explicitIndexes === null ||
+    JSON.stringify(explicitIndexes) !== JSON.stringify(targetProof.indexes)
+  ) return false
+
+  const persistentTriggers = readTablePersistentTriggerProof(database, compatibility.table)
+  if (
+    persistentTriggers === null ||
+    JSON.stringify(persistentTriggers) !== JSON.stringify(targetProof.triggers)
+  ) return false
+
+  if (targetProof.externalDependencies.inboundForeignKeys === NO_EXTERNAL_DEPENDENCY) {
+    const inboundForeignKeys = readTableInboundForeignKeyProof(database, compatibility.table)
+    if (inboundForeignKeys !== true) return false
+  }
+  if (targetProof.externalDependencies.schemaSqlReferences === NO_EXTERNAL_DEPENDENCY) {
+    const schemaSqlReferences = readExternalSchemaSqlReferenceProof(database, compatibility.table)
+    if (schemaSqlReferences !== true) return false
+  }
+  return true
+}
+
 /**
  * Read-only proof of one migration's schema postcondition.
  *
@@ -906,6 +1179,16 @@ export function checkMigrationCompatibility(database, compatibility) {
       const { uniqueConstraints } = indexMetadata
 
       if (tableShapeMatches(tableInfo, columns, foreignKeys, uniqueConstraints, normalized.target)) {
+        if (
+          normalized.targetProof !== undefined &&
+          !targetTableProofMatches(database, normalized, indexMetadata)
+        ) {
+          return tableTransitionSummary(
+            COMPATIBILITY_STATUSES.INCOMPATIBLE,
+            normalized,
+            'target-proof-incompatible'
+          )
+        }
         return tableTransitionSummary(COMPATIBILITY_STATUSES.SATISFIED, normalized, 'matched')
       }
       const matchingLegacyProofs = normalized.legacy.filter((proof) => tableShapeMatches(

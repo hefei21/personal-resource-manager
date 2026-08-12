@@ -78,6 +78,19 @@ function tableTransition(overrides = {}) {
   }
 }
 
+function targetProof(overrides = {}) {
+  return {
+    createTableSqlSha256: DUMMY_DDL_HASH,
+    indexes: [],
+    triggers: [],
+    externalDependencies: {
+      inboundForeignKeys: 'none',
+      schemaSqlReferences: 'none'
+    },
+    ...overrides
+  }
+}
+
 function foreignKey(overrides = {}) {
   return {
     columns: ['parent_id'],
@@ -437,6 +450,58 @@ test('normalizes legacy persistent trigger fingerprints canonically and rejects 
   )
 })
 
+test('normalizes, freezes, and validates an optional target proof', () => {
+  const input = tableTransition({
+    targetProof: targetProof({
+      createTableSqlSha256: `  ${'B'.repeat(64)}  `,
+      indexes: [{ name: 'items_idx', createIndexSqlSha256: ` ${'C'.repeat(64)} ` }],
+      triggers: [{ name: 'items_hook', createTriggerSqlSha256: ` ${'D'.repeat(64)} ` }]
+    })
+  })
+  const normalized = normalizeMigrationCompatibility(input)
+
+  assert.deepEqual(normalized.targetProof, {
+    createTableSqlSha256: 'b'.repeat(64),
+    indexes: [{ name: 'items_idx', createIndexSqlSha256: 'c'.repeat(64) }],
+    triggers: [{ name: 'items_hook', createTriggerSqlSha256: 'd'.repeat(64) }],
+    externalDependencies: {
+      inboundForeignKeys: 'none',
+      schemaSqlReferences: 'none'
+    }
+  })
+  assert.ok(Object.isFrozen(normalized.targetProof))
+  assert.ok(Object.isFrozen(normalized.targetProof.indexes))
+  assert.ok(Object.isFrozen(normalized.targetProof.indexes[0]))
+  assert.ok(Object.isFrozen(normalized.targetProof.triggers))
+  assert.ok(Object.isFrozen(normalized.targetProof.triggers[0]))
+  assert.ok(Object.isFrozen(normalized.targetProof.externalDependencies))
+
+  input.targetProof.indexes[0].name = 'changed'
+  input.targetProof.externalDependencies.inboundForeignKeys = 'changed'
+  assert.equal(normalized.targetProof.indexes[0].name, 'items_idx')
+  assert.equal(normalized.targetProof.externalDependencies.inboundForeignKeys, 'none')
+
+  const invalid = [
+    { ...targetProof(), extra: true },
+    { ...targetProof(), createTableSqlSha256: 'not-a-hash' },
+    { ...targetProof(), indexes: [{ name: 'x', createIndexSqlSha256: DUMMY_DDL_HASH, extra: true }] },
+    { ...targetProof(), triggers: [{ name: 'x', createTriggerSqlSha256: DUMMY_DDL_HASH, extra: true }] },
+    { ...targetProof(), externalDependencies: { inboundForeignKeys: 'none' } },
+    { ...targetProof(), externalDependencies: { inboundForeignKeys: 'all', schemaSqlReferences: 'none' } },
+    { ...targetProof(), externalDependencies: { inboundForeignKeys: false, schemaSqlReferences: 'none' } }
+  ]
+  for (const proof of invalid) {
+    assert.throws(
+      () => normalizeMigrationCompatibility(tableTransition({ targetProof: proof })),
+      (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+    )
+  }
+  assert.throws(
+    () => normalizeMigrationCompatibility({ ...tableTransition(), targetProof: undefined }),
+    MigrationCompatibilityError
+  )
+})
+
 test('normalizes foreign key actions, null references, canonical order, and nested freezes', () => {
   const first = foreignKey({
     columns: [' title '],
@@ -548,6 +613,28 @@ test('reports a matching table-transition target as satisfied', nativeTestOption
   }
 })
 
+test('keeps an undeclared target proof on the legacy target path', () => {
+  const prepared = []
+  const database = {
+    prepare(sql) {
+      prepared.push(sql)
+      if (sql.includes('SELECT 1 AS present')) return { get: () => ({ present: 1 }) }
+      if (sql.includes('pragma_table_list')) return { get: () => ({ wr: 0, strict: 0 }) }
+      if (sql.includes('pragma_table_xinfo')) return { all: () => tableMetadataColumns(tableShape()) }
+      if (sql.includes('pragma_foreign_key_list')) return { all: () => [] }
+      if (sql.includes('pragma_index_list')) return { all: () => [{ seq: 0, name: 'unknown', is_unique: 0, origin: 'c', partial: 0 }] }
+      if (sql.includes("type = 'index'")) throw new Error('legacy target path must not read index SQL')
+      if (sql.includes("type = 'trigger'")) throw new Error('legacy target path must not read trigger SQL')
+      throw new Error('unexpected query')
+    }
+  }
+  assert.deepEqual(checkMigrationCompatibility(database, tableTransition()), {
+    status: 'satisfied', kind: 'table-transition', table: 'items', reason: 'matched'
+  })
+  assert.equal(prepared.some((sql) => sql.includes("type = 'index'")), false)
+  assert.equal(prepared.some((sql) => sql.includes("type = 'trigger'")), false)
+})
+
 test('reports a matching legacy table-transition shape as missing', nativeTestOptions, () => {
   const database = openDatabase(
     "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'ready');"
@@ -585,6 +672,139 @@ test('ignores arbitrary explicit indexes when the target semantic shape matches'
       table: 'items',
       reason: 'matched'
     })
+  } finally {
+    database.close()
+  }
+})
+
+test('requires exact target DDL, index, trigger, and external dependency proof', () => {
+  const targetDdl = 'CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT \'ready\');'
+  const targetIndex = 'CREATE INDEX items_idx ON items(title);'
+  const targetTrigger = 'CREATE TRIGGER items_hook AFTER INSERT ON items BEGIN SELECT 1; END;'
+  const ddlHash = createHash('sha256').update(Buffer.from(targetDdl, 'utf8')).digest('hex')
+  const indexHash = createHash('sha256').update(Buffer.from(targetIndex, 'utf8')).digest('hex')
+  const triggerHash = createHash('sha256').update(Buffer.from(targetTrigger, 'utf8')).digest('hex')
+
+  function databaseWith({ indexRows = [], triggerRows = [], otherTables = {}, externalRows = [] } = {}) {
+    const prepared = []
+    const boundValues = []
+    return {
+      prepared,
+      boundValues,
+      database: {
+        prepare(sql) {
+          prepared.push(sql)
+          if (sql.includes('SELECT 1 AS present')) return { get: (...values) => { boundValues.push(values); return { present: 1 } } }
+          if (sql.includes('pragma_table_list')) return { get: (...values) => { boundValues.push(values); return { wr: 0, strict: 0 } } }
+          if (sql.includes('pragma_table_xinfo')) return { all: (...values) => { boundValues.push(values); return tableMetadataColumns(tableShape()) } }
+          if (sql.includes('FROM pragma_foreign_key_list')) {
+            return { all: (...values) => { boundValues.push(values); return otherTables[values[0]] ?? [] } }
+          }
+          if (sql.includes('pragma_index_list')) return { all: (...values) => { boundValues.push(values); return indexRows } }
+          if (sql.includes("type = 'table' AND name = ?")) return { get: (...values) => { boundValues.push(values); return { sql: targetDdl } } }
+          if (sql.includes("type = 'index'")) return { get: (...values) => { boundValues.push(values); return { sql: targetIndex } } }
+          if (sql.includes("type = 'trigger' AND tbl_name = ?")) return { all: (...values) => { boundValues.push(values); return triggerRows } }
+          if (sql.includes("type IN ('view', 'trigger')")) return { all: (...values) => { boundValues.push(values); return externalRows } }
+          if (sql.includes("type = 'table' AND lower(name)")) return { all: (...values) => { boundValues.push(values); return Object.keys(otherTables).map((name) => ({ name })) } }
+          throw new Error(`unexpected query: ${sql}`)
+        }
+      }
+    }
+  }
+
+  const base = tableTransition({
+    targetProof: targetProof({
+      createTableSqlSha256: ddlHash,
+      indexes: [{ name: 'items_idx', createIndexSqlSha256: indexHash }],
+      triggers: [{ name: 'items_hook', createTriggerSqlSha256: triggerHash }]
+    })
+  })
+  const exact = databaseWith({
+    indexRows: [{ seq: 0, name: 'items_idx', is_unique: 0, origin: 'c', partial: 0 }],
+    triggerRows: [{ name: 'items_hook', sql: targetTrigger }]
+  })
+  assert.deepEqual(checkMigrationCompatibility(exact.database, base), {
+    status: 'satisfied', kind: 'table-transition', table: 'items', reason: 'matched'
+  })
+  assert.ok(exact.prepared.every((sql) => !sql.includes('items')))
+  assert.deepEqual(exact.boundValues, [
+    ['items'], ['items'], ['items'], ['items'], ['items'], ['items'],
+    ['items', 'items_idx'], ['items'], ['items'], ['items']
+  ])
+
+  const mismatchCases = [
+    {
+      name: 'DDL',
+      compatibility: tableTransition({ targetProof: targetProof({ createTableSqlSha256: '0'.repeat(64) }) }),
+      options: {}
+    },
+    {
+      name: 'index',
+      compatibility: base,
+      options: { indexRows: [{ seq: 0, name: 'other_idx', is_unique: 0, origin: 'c', partial: 0 }] }
+    },
+    {
+      name: 'trigger',
+      compatibility: base,
+      options: { indexRows: [{ seq: 0, name: 'items_idx', is_unique: 0, origin: 'c', partial: 0 }] }
+    },
+    {
+      name: 'inbound FK',
+      compatibility: base,
+      options: {
+        indexRows: [{ seq: 0, name: 'items_idx', is_unique: 0, origin: 'c', partial: 0 }],
+        triggerRows: [{ name: 'items_hook', sql: targetTrigger }],
+        otherTables: { child: [{ id: 0, seq: 0, referenced_table: 'items' }] }
+      }
+    },
+    {
+      name: 'external schema SQL',
+      compatibility: base,
+      options: {
+        indexRows: [{ seq: 0, name: 'items_idx', is_unique: 0, origin: 'c', partial: 0 }],
+        triggerRows: [{ name: 'items_hook', sql: targetTrigger }],
+        externalRows: [{ type: 'view', tbl_name: 'external_view', sql: 'CREATE VIEW external_view AS SELECT * FROM items;' }]
+      }
+    },
+    {
+      name: 'external trigger SQL',
+      compatibility: base,
+      options: {
+        indexRows: [{ seq: 0, name: 'items_idx', is_unique: 0, origin: 'c', partial: 0 }],
+        triggerRows: [{ name: 'items_hook', sql: targetTrigger }],
+        externalRows: [{ type: 'trigger', tbl_name: 'child', sql: 'CREATE TRIGGER child_hook AFTER INSERT ON child BEGIN SELECT * FROM items; END;' }]
+      }
+    }
+  ]
+  for (const { name, compatibility, options } of mismatchCases) {
+    const result = checkMigrationCompatibility(databaseWith(options).database, compatibility)
+    assert.deepEqual(result, {
+      status: 'incompatible', kind: 'table-transition', table: 'items', reason: 'target-proof-incompatible'
+    }, name)
+    assert.doesNotMatch(JSON.stringify(result), /items_idx|items_hook|CREATE|external_view|child_hook|[a-f0-9]{64}/i)
+  }
+})
+
+test('proves strict target metadata and external dependencies with real SQLite', nativeTestOptions, () => {
+  const database = openDatabase([
+    "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT 'ready');",
+    'CREATE INDEX items_idx ON items(title);',
+    'CREATE TRIGGER items_hook AFTER INSERT ON items BEGIN SELECT 1; END;'
+  ].join('\n'))
+  try {
+    const strict = tableTransition({
+      targetProof: targetProof({
+        createTableSqlSha256: tableSqlSha256(database),
+        indexes: [{ name: 'items_idx', createIndexSqlSha256: indexSqlSha256(database, 'items_idx') }],
+        triggers: [{ name: 'items_hook', createTriggerSqlSha256: triggerSqlSha256(database, 'items_hook') }]
+      })
+    })
+    assert.equal(checkMigrationCompatibility(database, strict).status, 'satisfied')
+
+    database.exec('CREATE VIEW items_view AS SELECT id FROM items;')
+    assert.equal(checkMigrationCompatibility(database, strict).status, 'incompatible')
+    database.exec('DROP VIEW items_view; CREATE TABLE children (id INTEGER, item_id INTEGER REFERENCES items(id));')
+    assert.equal(checkMigrationCompatibility(database, strict).status, 'incompatible')
   } finally {
     database.close()
   }

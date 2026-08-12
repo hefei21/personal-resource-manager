@@ -50,20 +50,18 @@ function assertChecksum(checksum, fieldName = 'checksum') {
 function publicMigration(migration) {
   const publicValue = { id: migration.id, checksum: migration.checksum }
   if (migration.compatibility !== undefined) {
-    publicValue.compatibility = migration.sourceVariants === undefined
-      ? migration.compatibility
-      : redactCompatibilityProofKeys(migration.compatibility)
+    publicValue.compatibility = redactCompatibilityProofs(migration.compatibility)
   }
   return Object.freeze(publicValue)
 }
 
-function redactCompatibilityProofKeys(compatibility) {
+function redactCompatibilityProofs(compatibility) {
   if (compatibility.kind !== 'table-transition') return compatibility
   return Object.freeze({
     kind: compatibility.kind,
     table: compatibility.table,
     target: compatibility.target,
-    legacy: Object.freeze(compatibility.legacy.map(({ proofKey, ...proof }) => Object.freeze(proof)))
+    legacy: Object.freeze(compatibility.legacy.map(({ shape }) => Object.freeze({ shape })))
   })
 }
 
