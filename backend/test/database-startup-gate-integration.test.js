@@ -795,10 +795,10 @@ test('application registry freezes 43 column migrations and six registered table
     onUpdate: 'NO ACTION', onDelete: 'SET NULL'
   }])
   const documentStorageProofKeys = [
-    'expanded-appended-no-indexes',
     'expanded-appended-known-indexes',
-    'v0036-expanded-appended-no-indexes',
-    'v0036-expanded-appended-known-indexes'
+    'expanded-appended-no-indexes',
+    'v0036-expanded-appended-known-indexes',
+    'v0036-expanded-appended-no-indexes'
   ]
   assert.deepEqual(
     documentsStorageMigration.compatibility.legacy.map(({ proofKey }) => proofKey),
