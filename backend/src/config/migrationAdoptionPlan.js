@@ -42,9 +42,10 @@ function normalizeRegistry(registry) {
     normalized = createMigrationRegistry(registry.migrations.map((migration) => {
       const definition = {
         id: migration.id,
-        source: migration.source,
         checksum: migration.checksum
       }
+      if (Object.hasOwn(migration, 'source')) definition.source = migration.source
+      if (Object.hasOwn(migration, 'sourceVariants')) definition.sourceVariants = migration.sourceVariants
       if (Object.hasOwn(migration, 'compatibility')) {
         definition.compatibility = migration.compatibility
       }
@@ -61,13 +62,7 @@ function normalizeRegistry(registry) {
   for (let index = 0; index < normalized.migrations.length; index += 1) {
     const source = registry.migrations[index]
     const migration = normalized.migrations[index]
-    if (
-      source.id !== migration.id ||
-      source.source !== migration.source ||
-      source.checksum !== migration.checksum ||
-      Object.hasOwn(source, 'compatibility') !== Object.hasOwn(migration, 'compatibility') ||
-      !isDeepStrictEqual(source.compatibility, migration.compatibility)
-    ) {
+    if (!isDeepStrictEqual(source, migration)) {
       fail('MIGRATION_ADOPTION_REGISTRY_INVALID', 'Migration adoption registry is invalid.')
     }
   }

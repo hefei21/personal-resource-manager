@@ -100,9 +100,10 @@ function normalizeRegistry(registry) {
     normalized = createMigrationRegistry(registry.migrations.map((migration) => {
       const definition = {
         id: migration.id,
-        source: migration.source,
         checksum: migration.checksum
       }
+      if (Object.hasOwn(migration, 'source')) definition.source = migration.source
+      if (Object.hasOwn(migration, 'sourceVariants')) definition.sourceVariants = migration.sourceVariants
       if (Object.hasOwn(migration, 'compatibility')) {
         definition.compatibility = migration.compatibility
       }
@@ -121,13 +122,7 @@ function normalizeRegistry(registry) {
   for (let index = 0; index < normalized.migrations.length; index += 1) {
     const source = registry.migrations[index]
     const migration = normalized.migrations[index]
-    if (
-      source.id !== migration.id ||
-      source.checksum !== migration.checksum ||
-      source.source !== migration.source ||
-      Object.hasOwn(source, 'compatibility') !== Object.hasOwn(migration, 'compatibility') ||
-      !isDeepStrictEqual(source.compatibility, migration.compatibility)
-    ) {
+    if (!isDeepStrictEqual(source, migration)) {
       fail('MIGRATION_EXECUTOR_REGISTRY_INVALID', 'Migration registry is invalid.')
     }
   }
@@ -313,7 +308,22 @@ function assertSafeMigrationSql(source) {
 
 function validatePendingSql(migrations, pending) {
   const migrationsById = new Map(migrations.map((migration) => [migration.id, migration]))
-  for (const entry of pending) assertSafeMigrationSql(migrationsById.get(entry.id).source)
+  for (const entry of pending) {
+    const migration = migrationsById.get(entry.id)
+    if (Object.hasOwn(migration, 'source')) {
+      assertSafeMigrationSql(migration.source)
+      continue
+    }
+    for (const variant of migration.sourceVariants) assertSafeMigrationSql(variant.source)
+  }
+}
+
+function selectMigrationSource(definition, compatibilityResult) {
+  if (Object.hasOwn(definition, 'source')) return definition.source
+  const proofKey = compatibilityResult?.proofKey
+  const matches = definition.sourceVariants.filter((variant) => variant.proofKey === proofKey)
+  if (typeof proofKey !== 'string' || matches.length !== 1) throw compatibilityPreconditionError()
+  return matches[0].source
 }
 
 function validateAppliedLedger(database, applied) {
@@ -535,9 +545,9 @@ export function executeMigrationBatch({ database, registry, plan, lock, now } = 
     try {
       database.transaction(() => {
         const definition = migrationsById.get(migration.id)
+        let compatibilityResult
         if (Object.hasOwn(definition, 'compatibility')) {
           assertActiveLock(lock)
-          let compatibilityResult
           try {
             compatibilityResult = checkMigrationCompatibility(database, definition.compatibility)
           } catch {
@@ -547,7 +557,7 @@ export function executeMigrationBatch({ database, registry, plan, lock, now } = 
             throw compatibilityPreconditionError()
           }
         }
-        const source = definition.source
+        const source = selectMigrationSource(definition, compatibilityResult)
         database.exec(source)
         if (Object.hasOwn(definition, 'compatibility')) {
           assertActiveLock(lock)

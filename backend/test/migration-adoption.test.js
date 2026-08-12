@@ -345,6 +345,45 @@ test('adopts an all-satisfied prefix with applied attempts and no source executi
   assert.doesNotMatch(serialized, /synthetic|DROP TABLE|[a-f0-9]{64}/)
 })
 
+test('adopts a satisfied source-variant migration without executing any variant', nativeTestOptions, () => {
+  const database = openDatabase()
+  try {
+    database.exec('CREATE TABLE items (id INTEGER PRIMARY KEY);')
+    const column = { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 }
+    const shape = (overrides = {}) => ({
+      strict: false,
+      withoutRowid: false,
+      columns: [column],
+      foreignKeys: [],
+      uniqueConstraints: [],
+      ...overrides
+    })
+    const registry = createMigrationRegistry([{
+      id: '0001_variant',
+      sourceVariants: [
+        { proofKey: 'legacy-a', source: 'DROP TABLE items;' },
+        { proofKey: 'legacy-b', source: 'DROP TABLE items; CREATE TABLE leaked (id INTEGER);' }
+      ],
+      compatibility: {
+        kind: 'table-transition',
+        table: 'items',
+        target: shape(),
+        legacy: [
+          { proofKey: 'legacy-a', shape: shape({ strict: true }), createTableSqlSha256: 'a'.repeat(64), indexes: [], triggers: [] },
+          { proofKey: 'legacy-b', shape: shape({ withoutRowid: true }), createTableSqlSha256: 'b'.repeat(64), indexes: [], triggers: [] }
+        ]
+      }
+    }])
+    const summary = adoptMigrationPrefix(request(registry, database))
+    assert.equal(summary.adoptedCount, 1)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'items'").get().count, 1)
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'leaked'").get().count, 0)
+    assert.equal(getAppliedMigration(database, '0001_variant').checksum, registry.migrations[0].checksum)
+  } finally {
+    database.close()
+  }
+})
+
 test('returns a first-missing stop with zero control writes', () => {
   const registry = createMigrationRegistry([
     definition('0001_first', 'first_table', 'first_column'),

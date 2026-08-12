@@ -429,6 +429,50 @@ test('rejects a non-canonical registry before schema access', () => {
   }
 })
 
+test('rejects reordered source variants before schema access', () => {
+  const columns = [{
+    name: 'id',
+    type: 'INTEGER',
+    notNull: false,
+    defaultValue: null,
+    primaryKeyPosition: 1
+  }]
+  const shape = (overrides = {}) => ({
+    strict: false,
+    withoutRowid: false,
+    columns,
+    foreignKeys: [],
+    uniqueConstraints: [],
+    ...overrides
+  })
+  const compatibility = {
+    kind: 'table-transition',
+    table: 'items',
+    target: shape(),
+    legacy: [
+      { proofKey: 'legacy-a', shape: shape({ strict: true }), createTableSqlSha256: 'a'.repeat(64), indexes: [], triggers: [] },
+      { proofKey: 'legacy-b', shape: shape({ withoutRowid: true }), createTableSqlSha256: 'b'.repeat(64), indexes: [], triggers: [] }
+    ]
+  }
+  const registry = createMigrationRegistry([{
+    id: '0001_variant',
+    sourceVariants: [
+      { proofKey: 'legacy-a', source: 'SELECT 1;' },
+      { proofKey: 'legacy-b', source: 'SELECT 2;' }
+    ],
+    compatibility
+  }])
+  const migration = registry.migrations[0]
+  const probe = schemaProbe()
+  const error = thrown(() => createMigrationAdoptionPlan({
+    database: probe.database,
+    registry: { migrations: [{ ...migration, sourceVariants: [...migration.sourceVariants].reverse() }] },
+    lock: ACTIVE_LOCK
+  }))
+  assert.equal(error.code, 'MIGRATION_ADOPTION_REGISTRY_INVALID')
+  assert.equal(probe.counts.prepare, 0)
+})
+
 test('rejects missing or released locks before schema access', () => {
   const registry = createMigrationRegistry([
     definition('0001_first', 'first_table', 'first_column')

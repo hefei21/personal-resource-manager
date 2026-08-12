@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import {
@@ -106,6 +107,39 @@ function compatibilityDefinition(id, source, overrides = {}) {
         defaultValue: "'ready'"
       },
       ...overrides
+    }
+  }
+}
+
+function variantDefinition(id, sources = ['SELECT 1;', 'SELECT 2;']) {
+  const column = (name) => ({
+    name,
+    type: 'INTEGER',
+    notNull: false,
+    defaultValue: null,
+    primaryKeyPosition: name === 'id' ? 1 : 0
+  })
+  const shape = (extra = []) => ({
+    strict: false,
+    withoutRowid: false,
+    columns: [column('id'), ...extra.map(column)],
+    foreignKeys: [],
+    uniqueConstraints: []
+  })
+  return {
+    id,
+    sourceVariants: [
+      { proofKey: 'legacy-a', source: sources[0] },
+      { proofKey: 'legacy-b', source: sources[1] }
+    ],
+    compatibility: {
+      kind: 'table-transition',
+      table: 'items',
+      target: shape([ 'title', 'note' ]),
+      legacy: [
+        { proofKey: 'legacy-a', shape: shape(), createTableSqlSha256: 'a'.repeat(64), indexes: [], triggers: [] },
+        { proofKey: 'legacy-b', shape: shape(['title']), createTableSqlSha256: 'b'.repeat(64), indexes: [], triggers: [] }
+      ]
     }
   }
 }
@@ -276,6 +310,33 @@ test('rejects stripped, altered, or non-normalized compatibility before any data
   }
 })
 
+test('validates every source variant before any database access', () => {
+  const request = batch([variantDefinition(
+    '0001_variant',
+    ['CREATE TABLE safe_probe (id INTEGER);', 'BEGIN TRANSACTION;']
+  )])
+  const probe = probeDatabase()
+  const error = thrown(() => executeMigrationBatch({ ...request, database: probe.database }))
+  assert.equal(error.code, 'MIGRATION_SQL_UNSAFE')
+  assert.deepEqual(probe.counts, { prepareCalls: 0, execCalls: 0, transactionCalls: 0 })
+})
+
+test('rejects non-canonical source variants before any database access', () => {
+  const request = batch([variantDefinition('0001_variant')])
+  const migration = request.registry.migrations[0]
+  const invalidRegistries = [
+    { migrations: [{ ...migration, sourceVariants: [...migration.sourceVariants].reverse() }] },
+    { migrations: [{ ...migration, sourceVariants: migration.sourceVariants.map((variant, index) => index ? variant : { ...variant, source: 'SELECT 9;\n' }) }] },
+    { migrations: [{ ...migration, sourceVariants: undefined }] }
+  ]
+  for (const registry of invalidRegistries) {
+    const probe = probeDatabase()
+    const error = thrown(() => executeMigrationBatch({ ...request, registry, database: probe.database }))
+    assert.equal(error.code, 'MIGRATION_EXECUTOR_REGISTRY_INVALID')
+    assert.deepEqual(probe.counts, { prepareCalls: 0, execCalls: 0, transactionCalls: 0 })
+  }
+})
+
 test('requires applied, pending, and deferred segments to be complete and ordered', () => {
   const request = batch([
     definition('0001_initial', 'CREATE TABLE initial (id INTEGER);'),
@@ -410,6 +471,44 @@ test('executes pending migrations in order and records applied attempts', native
     assert.equal('source' in summary, false)
   } finally {
     database.close()
+  }
+})
+
+test('selects exactly one source variant from the matched legacy proof', nativeTestOptions, () => {
+  const cases = [
+    {
+      key: 'legacy-a',
+      schema: 'CREATE TABLE items (id INTEGER PRIMARY KEY);'
+    },
+    {
+      key: 'legacy-b',
+      schema: 'CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT);'
+    }
+  ]
+  for (const entry of cases) {
+    const database = openDatabase()
+    try {
+      database.exec(entry.schema)
+      const actualSql = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'items'").get().sql
+      const actualHash = createHash('sha256').update(Buffer.from(actualSql, 'utf8')).digest('hex')
+      const base = variantDefinition('0001_variant', [
+        'ALTER TABLE items ADD COLUMN title INTEGER; ALTER TABLE items ADD COLUMN note INTEGER; CREATE TABLE marker_a (id INTEGER);',
+        'ALTER TABLE items ADD COLUMN note INTEGER; CREATE TABLE marker_b (id INTEGER);'
+      ])
+      base.compatibility.legacy = base.compatibility.legacy.map((proof) => (
+        proof.proofKey === entry.key ? { ...proof, createTableSqlSha256: actualHash } : proof
+      ))
+      const request = batch([base])
+      const summary = executeMigrationBatch({ database, ...request })
+      assert.equal(summary.executedCount, 1)
+      assert.equal(
+        database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = ?").get(`marker_${entry.key.at(-1)}`).count,
+        1
+      )
+      assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = ?").get(`marker_${entry.key.endsWith('a') ? 'b' : 'a'}`).count, 0)
+    } finally {
+      database.close()
+    }
   }
 })
 

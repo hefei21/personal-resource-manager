@@ -349,7 +349,14 @@ function assertRegistrySources(registry) {
     fail(MIGRATION_STARTUP_GATE_ERROR_CODES.INPUT_INVALID)
   }
   for (const migration of registry.migrations) {
-    if (typeof migration?.source !== 'string' || legacyMutationDetected(migration.source)) {
+    const sources = Object.hasOwn(migration ?? {}, 'source')
+      ? [migration.source]
+      : migration?.sourceVariants?.map((variant) => variant?.source)
+    if (
+      !Array.isArray(sources) ||
+      sources.length === 0 ||
+      sources.some((source) => typeof source !== 'string' || legacyMutationDetected(source))
+    ) {
       fail(MIGRATION_STARTUP_GATE_ERROR_CODES.LEGACY_MUTATION_BLOCKED)
     }
   }
