@@ -474,6 +474,42 @@ test('executes pending migrations in order and records applied attempts', native
   }
 })
 
+test('creates an explicitly declared missing table and records the migration', nativeTestOptions, () => {
+  const database = openDatabase()
+  try {
+    const request = batch([{
+      id: '0001_create_new_table',
+      source: 'CREATE TABLE new_items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)',
+      compatibility: {
+        kind: 'table-transition',
+        table: 'new_items',
+        target: {
+          strict: false,
+          withoutRowid: false,
+          columns: [
+            { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
+            { name: 'title', type: 'TEXT', notNull: true, defaultValue: null, primaryKeyPosition: 0 }
+          ],
+          foreignKeys: [],
+          uniqueConstraints: []
+        },
+        missingTable: 'create',
+        legacy: []
+      }
+    }])
+
+    const summary = executeMigrationBatch({ database, ...request })
+
+    assert.equal(summary.executedCount, 1)
+    assert.equal(database.prepare(
+      "SELECT COUNT(*) AS count FROM sqlite_schema WHERE type = 'table' AND name = 'new_items'"
+    ).get().count, 1)
+    assert.ok(getAppliedMigration(database, '0001_create_new_table'))
+  } finally {
+    database.close()
+  }
+})
+
 test('selects exactly one source variant from the matched legacy proof', nativeTestOptions, () => {
   const cases = [
     {

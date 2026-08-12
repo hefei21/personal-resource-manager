@@ -226,6 +226,18 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
   assert.equal(normalized.legacy[0].shape.columns.length, 2)
 })
 
+test('normalizes an explicit create policy for a missing table', () => {
+  const normalized = normalizeMigrationCompatibility(tableTransition({
+    missingTable: 'create',
+    legacy: []
+  }))
+
+  assert.equal(normalized.missingTable, 'create')
+  assert.deepEqual(normalized.legacy, [])
+  assert.ok(Object.isFrozen(normalized))
+  assert.ok(Object.isFrozen(normalized.legacy))
+})
+
 test('normalizes keyed legacy proofs and rejects mixed, duplicate, or unsafe proof keys', () => {
   const first = keyedLegacyProof('legacy-a', tableShape({ strict: true }), 'a'.repeat(64))
   const second = keyedLegacyProof('legacy-b', tableShape({ withoutRowid: true }), 'b'.repeat(64))
@@ -302,6 +314,7 @@ test('rejects malformed table-transition shapes and unsupported keys', () => {
       }
     },
     { ...valid, legacy: [] },
+    { ...valid, missingTable: 'replace' },
     { ...valid, legacy: [valid.legacy[0], { ...valid.legacy[0] }] },
     { ...valid, legacy: [{ ...valid.legacy[0], unsupported: true }] },
     { ...valid, legacy: [{ ...valid.legacy[0], createTableSqlSha256: 'not-a-hash' }] },
@@ -1045,6 +1058,23 @@ test('reports a missing table-transition table as incompatible', nativeTestOptio
   try {
     assert.deepEqual(checkMigrationCompatibility(database, tableTransition()), {
       status: 'incompatible',
+      kind: 'table-transition',
+      table: 'items',
+      reason: 'table-missing'
+    })
+  } finally {
+    database.close()
+  }
+})
+
+test('reports an explicitly creatable missing table as missing', nativeTestOptions, () => {
+  const database = openDatabase('CREATE TABLE other (id INTEGER);')
+  try {
+    assert.deepEqual(checkMigrationCompatibility(database, tableTransition({
+      missingTable: 'create',
+      legacy: []
+    })), {
+      status: 'missing',
       kind: 'table-transition',
       table: 'items',
       reason: 'table-missing'

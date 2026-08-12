@@ -4,6 +4,7 @@ import { openDatabaseConnection } from './sqliteConnection.js'
 import { runMigrationStartupGate } from './migrationStartupGate.js'
 import { applicationMigrationRegistry } from './databaseMigrations.js'
 import { createDatabaseBackupSync } from './databaseBackup.js'
+import { ENSURE_STORAGE_COMMIT_OPERATIONS_SQL } from './storageCommitSchema.js'
 import { getContext } from '../utils/dbContext.js'
 import {
   initializeOwner,
@@ -487,7 +488,9 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       duration INTEGER,
       details TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`
+    )`,
+
+    ENSURE_STORAGE_COMMIT_OPERATIONS_SQL
   ]
 
   tables.forEach(sql => {

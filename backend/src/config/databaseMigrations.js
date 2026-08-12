@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto'
 import { createMigrationRegistry } from './migrationPlan.js'
+import {
+  CREATE_STORAGE_COMMIT_OPERATIONS_SQL,
+  STORAGE_COMMIT_OPERATION_SHAPE
+} from './storageCommitSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -1452,6 +1456,26 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           triggers: []
         }
       ]
+    }
+  },
+  {
+    id: '0039_storage_commit_operations',
+    source: CREATE_STORAGE_COMMIT_OPERATIONS_SQL,
+    compatibility: {
+      kind: 'table-transition',
+      table: 'storage_commit_operations',
+      target: STORAGE_COMMIT_OPERATION_SHAPE,
+      targetProof: {
+        createTableSqlSha256: sha256(CREATE_STORAGE_COMMIT_OPERATIONS_SQL),
+        indexes: [],
+        triggers: [],
+        externalDependencies: {
+          inboundForeignKeys: 'none',
+          schemaSqlReferences: 'none'
+        }
+      },
+      missingTable: 'create',
+      legacy: []
     }
   }
 ])

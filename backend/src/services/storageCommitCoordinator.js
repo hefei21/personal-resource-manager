@@ -1,28 +1,12 @@
-const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/
-const STORAGE_OPERATION_TABLE = 'storage_commit_operations'
+import {
+  CREATE_STORAGE_COMMIT_OPERATIONS_SQL,
+  STORAGE_COMMIT_OPERATION_TABLE
+} from '../config/storageCommitSchema.js'
 
-export const CREATE_STORAGE_COMMIT_OPERATIONS_SQL = `
-CREATE TABLE storage_commit_operations (
-  idempotency_key TEXT PRIMARY KEY NOT NULL,
-  state TEXT NOT NULL CHECK (state IN ('staged', 'object_committed', 'database_committed', 'orphaned')),
-  staging_token TEXT NOT NULL,
-  storage_key TEXT,
-  sha256 TEXT,
-  bytes INTEGER,
-  error_code TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  CHECK (
-    (state = 'staged' AND storage_key IS NULL AND sha256 IS NULL AND bytes IS NULL AND error_code IS NULL)
-    OR
-    (state IN ('object_committed', 'database_committed') AND storage_key IS NOT NULL
-      AND sha256 IS NOT NULL AND bytes IS NOT NULL AND error_code IS NULL)
-    OR
-    (state = 'orphaned' AND storage_key IS NOT NULL AND sha256 IS NOT NULL
-      AND bytes IS NOT NULL AND error_code IS NOT NULL)
-  )
-);
-`.trim()
+export { CREATE_STORAGE_COMMIT_OPERATIONS_SQL }
+
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/
+const STORAGE_OPERATION_TABLE = STORAGE_COMMIT_OPERATION_TABLE
 
 export const STORAGE_COMMIT_STAGED = 'staged'
 export const STORAGE_COMMIT_OBJECT_COMMITTED = 'object_committed'

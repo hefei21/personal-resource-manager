@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 
 const COMPATIBILITY_KIND = 'column'
 const TABLE_TRANSITION_COMPATIBILITY_KIND = 'table-transition'
+const TABLE_TRANSITION_MISSING_TABLE_CREATE = 'create'
 const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
 const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
@@ -458,9 +459,9 @@ function tableTransitionLegacyProofCanonicalKey(proof) {
 }
 
 function normalizeTableTransitionCompatibility(compatibility) {
-  const expectedKeys = Object.hasOwn(compatibility, 'targetProof')
-    ? [...TABLE_TRANSITION_KEYS, 'targetProof']
-    : TABLE_TRANSITION_KEYS
+  const expectedKeys = [...TABLE_TRANSITION_KEYS]
+  if (Object.hasOwn(compatibility, 'targetProof')) expectedKeys.push('targetProof')
+  if (Object.hasOwn(compatibility, 'missingTable')) expectedKeys.push('missingTable')
   assertExactKeys(compatibility, expectedKeys, 'compatibility')
   if (compatibility.kind !== TABLE_TRANSITION_COMPATIBILITY_KIND) {
     fail(`compatibility kind must be ${TABLE_TRANSITION_COMPATIBILITY_KIND}.`)
@@ -470,7 +471,15 @@ function normalizeTableTransitionCompatibility(compatibility) {
   const targetProof = Object.hasOwn(compatibility, 'targetProof')
     ? normalizeTableTransitionTargetProof(compatibility.targetProof, 'compatibility.targetProof')
     : undefined
-  if (!Array.isArray(compatibility.legacy) || compatibility.legacy.length === 0) {
+  const missingTable = Object.hasOwn(compatibility, 'missingTable')
+    ? compatibility.missingTable
+    : undefined
+  if (missingTable !== undefined && missingTable !== TABLE_TRANSITION_MISSING_TABLE_CREATE) {
+    fail(`compatibility.missingTable must be ${TABLE_TRANSITION_MISSING_TABLE_CREATE}.`)
+  }
+  if (!Array.isArray(compatibility.legacy) || (
+    compatibility.legacy.length === 0 && missingTable !== TABLE_TRANSITION_MISSING_TABLE_CREATE
+  )) {
     fail('compatibility.legacy must be a non-empty array.')
   }
 
@@ -520,6 +529,7 @@ function normalizeTableTransitionCompatibility(compatibility) {
     legacy: Object.freeze(legacy)
   }
   if (targetProof !== undefined) normalized.targetProof = targetProof
+  if (missingTable !== undefined) normalized.missingTable = missingTable
   return Object.freeze(normalized)
 }
 
@@ -1123,7 +1133,13 @@ export function checkMigrationCompatibility(database, compatibility) {
       .get(normalized.table)
     if (!table) {
       return normalized.kind === TABLE_TRANSITION_COMPATIBILITY_KIND
-        ? tableTransitionSummary(COMPATIBILITY_STATUSES.INCOMPATIBLE, normalized, 'table-missing')
+        ? tableTransitionSummary(
+            normalized.missingTable === TABLE_TRANSITION_MISSING_TABLE_CREATE
+              ? COMPATIBILITY_STATUSES.MISSING
+              : COMPATIBILITY_STATUSES.INCOMPATIBLE,
+            normalized,
+            'table-missing'
+          )
         : summary(COMPATIBILITY_STATUSES.INCOMPATIBLE, normalized, 'table-missing')
     }
 
