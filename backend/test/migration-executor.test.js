@@ -482,7 +482,7 @@ test('selects exactly one source variant from the matched legacy proof', nativeT
     },
     {
       key: 'legacy-b',
-      schema: 'CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT);'
+      schema: 'CREATE TABLE items (id INTEGER PRIMARY KEY, title INTEGER);'
     }
   ]
   for (const entry of cases) {
