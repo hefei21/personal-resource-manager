@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -564,7 +565,7 @@ test('application registry freezes 35 C2c columns and both registered table tran
     ['id', 'name', 'url', 'description', 'local_path', 'type', 'last_sync', 'created_at', 'updated_at', 'languages']
   )
   assert.deepEqual(codeRepositoryMigration.compatibility.targetProof, {
-    createTableSqlSha256: '197c9846ca9f7978ca66eebc6547b09918c995014fcd61f1e9949c028d564606',
+    createTableSqlSha256: '96507297d6cf66cb199e7db6f70804a1d3ff459763793ebf31f68960538a229a',
     indexes: [],
     triggers: [],
     externalDependencies: { inboundForeignKeys: 'none', schemaSqlReferences: 'none' }
@@ -619,6 +620,17 @@ test('static contract runs the startup gate once after base tables and before al
   assert.match(databaseSource, /CREATE TABLE IF NOT EXISTS code_repositories \([\s\S]*local_path TEXT NOT NULL DEFAULT ''[\s\S]*languages TEXT DEFAULT '\{\}'/u)
   assert.doesNotMatch(databaseSource, /codeColumns|hasLocalPath|code_repositories_new|hasLanguages/u)
   assert.doesNotMatch(databaseSource, /ALTER TABLE code_repositories ADD COLUMN languages/u)
+  const baseCodeRepositoryStart = databaseSource.indexOf('CREATE TABLE IF NOT EXISTS code_repositories (')
+  const baseCodeRepositoryEnd = databaseSource.indexOf('    )`,', baseCodeRepositoryStart)
+  assert.ok(baseCodeRepositoryStart >= 0)
+  assert.ok(baseCodeRepositoryEnd > baseCodeRepositoryStart)
+  const persistedBaseCodeRepositoryDdl = databaseSource
+    .slice(baseCodeRepositoryStart, baseCodeRepositoryEnd + '    )'.length)
+    .replace('CREATE TABLE IF NOT EXISTS', 'CREATE TABLE')
+  assert.equal(
+    createHash('sha256').update(Buffer.from(persistedBaseCodeRepositoryDdl, 'utf8')).digest('hex'),
+    applicationMigrationRegistry.migrations[36].compatibility.targetProof.createTableSqlSha256
+  )
   assert.doesNotMatch(databaseSource, /animeColumns|animeNewFields|ALTER TABLE anime ADD COLUMN/u)
   const animeTableStart = databaseSource.indexOf('CREATE TABLE IF NOT EXISTS anime (')
   const animeTableEnd = databaseSource.indexOf('    )`,', animeTableStart)

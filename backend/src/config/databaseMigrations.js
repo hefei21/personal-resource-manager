@@ -315,17 +315,17 @@ const codeRepositoryLegacy9Ddl = `CREATE TABLE "code_repositories" (
 const codeRepositoryLegacy10Ddl = `${codeRepositoryLegacy9Ddl.slice(0, -1)}, languages TEXT DEFAULT "{}")`
 
 const codeRepositoryTargetDdl = `CREATE TABLE code_repositories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  url TEXT NOT NULL,
-  description TEXT,
-  local_path TEXT NOT NULL DEFAULT '',
-  type TEXT DEFAULT 'git',
-  last_sync TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  languages TEXT DEFAULT '{}'
-)`
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      description TEXT,
+      local_path TEXT NOT NULL DEFAULT '',
+      type TEXT DEFAULT 'git',
+      last_sync TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      languages TEXT DEFAULT '{}'
+    )`
 
 const codeRepositoryMigrationLegacy6Source = `
 CREATE TABLE prm_code_repositories_v0037_guard (valid INTEGER NOT NULL CHECK (valid = 1));
@@ -380,17 +380,17 @@ SELECT CASE WHEN
 THEN 1 ELSE 0 END;
 DROP TABLE code_repositories;
 CREATE TABLE code_repositories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  url TEXT NOT NULL,
-  description TEXT,
-  local_path TEXT NOT NULL DEFAULT '',
-  type TEXT DEFAULT 'git',
-  last_sync TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  languages TEXT DEFAULT '{}'
-);
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      description TEXT,
+      local_path TEXT NOT NULL DEFAULT '',
+      type TEXT DEFAULT 'git',
+      last_sync TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      languages TEXT DEFAULT '{}'
+    );
 INSERT INTO code_repositories
   (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
 SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages
@@ -476,17 +476,17 @@ SELECT CASE WHEN
 THEN 1 ELSE 0 END;
 DROP TABLE code_repositories;
 CREATE TABLE code_repositories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  url TEXT NOT NULL,
-  description TEXT,
-  local_path TEXT NOT NULL DEFAULT '',
-  type TEXT DEFAULT 'git',
-  last_sync TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  languages TEXT DEFAULT '{}'
-);
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      description TEXT,
+      local_path TEXT NOT NULL DEFAULT '',
+      type TEXT DEFAULT 'git',
+      last_sync TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      languages TEXT DEFAULT '{}'
+    );
 INSERT INTO code_repositories
   (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
 SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages
@@ -572,17 +572,17 @@ SELECT CASE WHEN
 THEN 1 ELSE 0 END;
 DROP TABLE code_repositories;
 CREATE TABLE code_repositories (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  url TEXT NOT NULL,
-  description TEXT,
-  local_path TEXT NOT NULL DEFAULT '',
-  type TEXT DEFAULT 'git',
-  last_sync TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  languages TEXT DEFAULT '{}'
-);
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      url TEXT NOT NULL,
+      description TEXT,
+      local_path TEXT NOT NULL DEFAULT '',
+      type TEXT DEFAULT 'git',
+      last_sync TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      languages TEXT DEFAULT '{}'
+    );
 INSERT INTO code_repositories
   (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
 SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages
