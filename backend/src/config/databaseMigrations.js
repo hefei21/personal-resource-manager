@@ -1477,5 +1477,77 @@ export const applicationMigrationRegistry = createMigrationRegistry([
       missingTable: 'create',
       legacy: []
     }
+  },
+  {
+    id: '0040_documents_category_id',
+    source: 'ALTER TABLE documents ADD COLUMN category_id INTEGER;',
+    compatibility: {
+      kind: 'column',
+      table: 'documents',
+      column: { name: 'category_id', type: 'INTEGER', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0041_documents_storage_key',
+    source: 'ALTER TABLE documents ADD COLUMN storage_key TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'documents',
+      column: { name: 'storage_key', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0042_documents_content_sha256',
+    source: 'ALTER TABLE documents ADD COLUMN content_sha256 TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'documents',
+      column: { name: 'content_sha256', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0043_documents_content_bytes',
+    source: 'ALTER TABLE documents ADD COLUMN content_bytes INTEGER;',
+    compatibility: {
+      kind: 'column',
+      table: 'documents',
+      column: { name: 'content_bytes', type: 'INTEGER', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0044_documents_original_name',
+    source: 'ALTER TABLE documents ADD COLUMN original_name TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'documents',
+      column: { name: 'original_name', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0045_document_versions_storage_key',
+    source: 'ALTER TABLE document_versions ADD COLUMN storage_key TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'document_versions',
+      column: { name: 'storage_key', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0046_document_versions_content_sha256',
+    source: 'ALTER TABLE document_versions ADD COLUMN content_sha256 TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'document_versions',
+      column: { name: 'content_sha256', type: 'TEXT', notNull: false, defaultValue: null }
+    }
+  },
+  {
+    id: '0047_document_versions_content_bytes',
+    source: 'ALTER TABLE document_versions ADD COLUMN content_bytes INTEGER;',
+    compatibility: {
+      kind: 'column',
+      table: 'document_versions',
+      column: { name: 'content_bytes', type: 'INTEGER', notNull: false, defaultValue: null }
+    }
   }
 ])

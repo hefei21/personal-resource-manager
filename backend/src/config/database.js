@@ -153,8 +153,13 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       title TEXT NOT NULL,
       category TEXT,
       subcategory TEXT,
+      category_id INTEGER,
       tags TEXT,
       file_path TEXT NOT NULL,
+      storage_key TEXT,
+      content_sha256 TEXT,
+      content_bytes INTEGER,
+      original_name TEXT,
       version REAL DEFAULT 1.0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -178,6 +183,9 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       document_id INTEGER NOT NULL,
       version INTEGER NOT NULL,
       file_path TEXT NOT NULL,
+      storage_key TEXT,
+      content_sha256 TEXT,
+      content_bytes INTEGER,
       note TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
