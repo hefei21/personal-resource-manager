@@ -21,6 +21,12 @@ import { documentOriginalName, getDocumentStorageRuntime } from '../services/doc
 import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
 import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
 import { restoreDocumentVersion, updateDocumentContent } from '../services/documentVersionService.js'
+import {
+  listDeletedDocuments,
+  permanentlyDeleteDocument,
+  restoreDocumentFromTrash,
+  softDeleteDocument
+} from '../services/documentTrashService.js'
 
 const router = express.Router()
 const DOCUMENT_EXTENSIONS = new Set([
@@ -99,6 +105,10 @@ function sendDocumentError(res, error, fallbackMessage) {
     DOCUMENT_VERSION_NOTE_INVALID: 400,
     DOCUMENT_VERSION_NOT_FOUND: 404,
     DOCUMENT_NOT_FOUND: 404
+    , DOCUMENT_ALREADY_TRASHED: 409
+    , DOCUMENT_TRASH_NOT_FOUND: 404
+    , DOCUMENT_TRASH_PURGE_IN_PROGRESS: 409
+    , DOCUMENT_TRASH_LEGACY_MIGRATION_REQUIRED: 409
   }
   const status = statusByCode[error?.code] ?? 500
   return res.status(status).json({ message: status === 500 ? fallbackMessage : error.message, code: error?.code })
@@ -662,7 +672,9 @@ router.get('/', authenticateToken, async (req, res) => {
     const { keyword, category, subcategory, tags, startDate, endDate, sortBy, sortOrder, includeSubcategories, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
     const db = getDatabase()
 
-    let sql = 'SELECT * FROM documents WHERE 1=1'
+    let sql = `SELECT * FROM documents d WHERE NOT EXISTS (
+      SELECT 1 FROM resource_trash_entries t WHERE t.resource_type = 'document' AND t.resource_id = d.id
+    )`
     const params = []
 
     if (keyword) {
@@ -1150,38 +1162,44 @@ router.get('/download/version/:id', authenticateToken, async (req, res) => {
   }
 })
 
-// 删除文档
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.get('/trash', authenticateToken, async (req, res) => {
+  try { res.json({ data: listDeletedDocuments(getDatabase()) }) } catch (error) {
+    console.error('获取文档回收站失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
+  }
+})
+
+router.post('/trash/:id/restore', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    console.log('删除文档，ID:', req.params.id)
-    console.log('数据库中的文档记录:', document)
-    console.log('文件路径:', document?.file_path)
-
-    if (document && document.file_path && fs.existsSync(document.file_path)) {
-      console.log('删除文件:', document.file_path)
-      fs.unlinkSync(document.file_path)
-    } else if (document && document.file_path) {
-      console.error('文件不存在，无法删除:', document.file_path)
-    }
-
-    const deleteStmt = db.prepare('DELETE FROM documents WHERE id = ?')
-    deleteStmt.run(req.params.id)
-
-    const deleteVersionsStmt = db.prepare('DELETE FROM document_versions WHERE document_id = ?')
-    deleteVersionsStmt.run(req.params.id)
-
-    // 清除标签缓存（可能删除了带标签的文档）
-    await cache.del(CacheKeys.DOC_TAGS)
-
-    res.json({ message: '删除成功' })
+    const result = restoreDocumentFromTrash({ database: getDatabase(), id: req.params.id })
+    res.json({ message: '恢复成功', categoryId: result.categoryId })
   } catch (error) {
-    console.error('删除失败:', error)
-    console.error('错误堆栈:', error.stack)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('恢复文档失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
+  }
+})
+
+router.delete('/trash/:id', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = await permanentlyDeleteDocument({
+      database: getDatabase(), storageService: getDocumentStorageRuntime().storageService, id: req.params.id
+    })
+    res.json({ message: '永久删除成功', purgedObjects: result.purgedObjects })
+  } catch (error) {
+    console.error('永久删除文档失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
+  }
+})
+
+// 删除文档
+router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = softDeleteDocument({ database: getDatabase(), id: req.params.id })
+    try { await cache.del(CacheKeys.DOC_TAGS) } catch {}
+    res.json({ message: '已移入回收站', purgeAfter: result.purgeAfter })
+  } catch (error) {
+    console.error('删除失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 

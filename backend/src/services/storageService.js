@@ -357,4 +357,43 @@ export class StorageService {
     fs.rmSync(realTrashDirectory, { recursive: true })
     return Object.freeze({ storageKey: manifest.storageKey, sha256: manifest.sha256, bytes: manifest.bytes })
   }
+
+  async purgeTrashed(trashToken) {
+    if (!STAGING_TOKEN_PATTERN.test(trashToken ?? '')) {
+      fail('STORAGE_TRASH_TOKEN_INVALID', 'Trash token is invalid.')
+    }
+    const trashDirectory = path.join(this.trashPath, trashToken)
+    let stat
+    try { stat = fs.lstatSync(trashDirectory) } catch (error) {
+      fail('STORAGE_TRASH_MISSING', 'Trash entry does not exist.', error)
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      fail('STORAGE_TRASH_INVALID', 'Trash entry must be a real directory.')
+    }
+    const real = fs.realpathSync.native(trashDirectory)
+    if (!isWithin(this.trashPath, real)) fail('STORAGE_TRASH_INVALID', 'Trash entry escaped the trash root.')
+    let manifest
+    try { manifest = JSON.parse(fs.readFileSync(path.join(real, 'manifest.json'), 'utf8')) } catch (error) {
+      fail('STORAGE_TRASH_INVALID', 'Trash manifest is invalid.', error)
+    }
+    if (manifest?.formatVersion !== 1 || manifest.trashToken !== trashToken ||
+      !HASH_PATTERN.test(manifest.sha256 ?? '') || !Number.isSafeInteger(manifest.bytes) || manifest.bytes < 0 ||
+      createStorageKey(parseStorageKey(manifest.storageKey).kind, manifest.sha256) !== manifest.storageKey) {
+      fail('STORAGE_TRASH_INVALID', 'Trash manifest is invalid.')
+    }
+    const objectPath = path.join(real, 'object')
+    let objectStat
+    try { objectStat = fs.lstatSync(objectPath) } catch (error) {
+      fail('STORAGE_TRASH_INVALID', 'Trashed object is missing.', error)
+    }
+    if (!objectStat.isFile() || objectStat.isSymbolicLink()) {
+      fail('STORAGE_TRASH_INVALID', 'Trashed object must be a regular file.')
+    }
+    const actual = await hashFile(objectPath)
+    if (actual.sha256 !== manifest.sha256 || actual.bytes !== manifest.bytes) {
+      fail('STORAGE_TRASH_HASH_MISMATCH', 'Trashed object does not match its manifest.')
+    }
+    fs.rmSync(real, { recursive: true })
+    return Object.freeze({ storageKey: manifest.storageKey, sha256: manifest.sha256, bytes: manifest.bytes })
+  }
 }

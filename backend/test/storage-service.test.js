@@ -199,6 +199,21 @@ test('trashes unreferenced objects and restores them without changing content id
   } finally { cleanup(directory) }
 })
 
+test('permanently purges a verified trash entry without restoring its object', async () => {
+  const directory = root()
+  try {
+    const service = new StorageService({ rootPath: directory, randomBytes: () => Buffer.alloc(16, 0xcc) })
+    const staged = await service.stageFromStream(Readable.from(['purge me']))
+    const committed = await service.commitStaged({ token: staged.token, kind: 'documents' })
+    const trashed = await service.trashObject({ storageKey: committed.storageKey, activeReferenceCount: 0 })
+    assert.equal(fs.existsSync(service.objectFile(committed.storageKey)), false)
+    const purged = await service.purgeTrashed(trashed.trashToken)
+    assert.equal(purged.storageKey, committed.storageKey)
+    assert.equal(fs.existsSync(path.join(service.trashPath, trashed.trashToken)), false)
+    await assert.rejects(service.purgeTrashed(trashed.trashToken), { code: 'STORAGE_TRASH_MISSING' })
+  } finally { cleanup(directory) }
+})
+
 test('refuses to trash referenced objects and detects tampered trash content', async () => {
   const directory = root()
   try {

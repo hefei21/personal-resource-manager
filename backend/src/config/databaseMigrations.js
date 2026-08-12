@@ -10,6 +10,7 @@ import {
   DOCUMENT_VERSIONS_STORAGE_MIGRATION_SOURCE,
   DOCUMENT_VERSIONS_STORAGE_TARGET_SHAPE
 } from './documentStorageSchema.js'
+import { CREATE_RESOURCE_TRASH_SQL, RESOURCE_TRASH_SHAPE } from './resourceTrashSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -1670,6 +1671,23 @@ export const applicationMigrationRegistry = createMigrationRegistry([
             triggers: []
           })))
       ]
+    }
+  },
+  {
+    id: '0050_resource_trash_entries',
+    source: CREATE_RESOURCE_TRASH_SQL,
+    compatibility: {
+      kind: 'table-transition',
+      table: 'resource_trash_entries',
+      target: RESOURCE_TRASH_SHAPE,
+      targetProof: {
+        createTableSqlSha256: sha256(CREATE_RESOURCE_TRASH_SQL),
+        indexes: [],
+        triggers: [],
+        externalDependencies: { inboundForeignKeys: 'none', schemaSqlReferences: 'none' }
+      },
+      missingTable: 'create',
+      legacy: []
     }
   }
 ])

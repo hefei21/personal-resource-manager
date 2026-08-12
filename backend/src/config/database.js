@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { openDatabaseConnection } from './sqliteConnection.js'
 import { runMigrationStartupGate } from './migrationStartupGate.js'
+import { CREATE_RESOURCE_TRASH_SQL } from './resourceTrashSchema.js'
 import { applicationMigrationRegistry } from './databaseMigrations.js'
 import { createDatabaseBackupSync } from './databaseBackup.js'
 import { ENSURE_STORAGE_COMMIT_OPERATIONS_SQL } from './storageCommitSchema.js'
@@ -139,6 +140,7 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
 
   // 先创建所有表
   const tables = [
+    CREATE_RESOURCE_TRASH_SQL.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS '),
     // 用户表
     `CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
