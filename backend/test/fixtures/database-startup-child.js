@@ -37,19 +37,14 @@ try {
     code: error?.code ?? null
   }
   if (process.env.PR_DATABASE_STARTUP_DIAGNOSTICS === '1') {
-    try {
-      const { createRequire } = await import('node:module')
-      const require = createRequire(import.meta.url)
-      const Database = require('better-sqlite3')
-      const diagnosticDatabase = new Database(process.env.DB_PATH, { readonly: true })
-      result.attempts = diagnosticDatabase.prepare(`
-        SELECT migration_id, status, error_category, safe_error_summary
-        FROM prm_migration_attempts
-        ORDER BY attempt_id
-      `).all()
-      diagnosticDatabase.close()
-    } catch (diagnosticError) {
-      result.diagnosticCode = diagnosticError?.code ?? diagnosticError?.name ?? 'DIAGNOSTIC_FAILED'
+    result.causes = []
+    let cause = error
+    for (let depth = 0; cause && depth < 6; depth += 1) {
+      result.causes.push({
+        code: cause?.code ?? null,
+        machineCode: cause?.machineCode ?? null
+      })
+      cause = cause?.cause
     }
   }
   process.stdout.write(JSON.stringify(result))
