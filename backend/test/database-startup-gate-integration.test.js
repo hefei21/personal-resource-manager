@@ -48,7 +48,7 @@ function removeTemporaryDirectory(directory) {
   fs.rmSync(directory, { recursive: true, force: true })
 }
 
-function runChild(directory, password = PLACEHOLDER_PASSWORD) {
+function runChild(directory, password = PLACEHOLDER_PASSWORD, { diagnostics = false } = {}) {
   const databasePath = path.join(directory, 'app.db')
   const result = spawnSync(process.execPath, [childPath], {
     cwd: backendDirectory,
@@ -59,6 +59,7 @@ function runChild(directory, password = PLACEHOLDER_PASSWORD) {
       DB_PATH: databasePath,
       DEFAULT_USERNAME: 'ci-owner',
       DEFAULT_PASSWORD: password,
+      PR_DATABASE_STARTUP_DIAGNOSTICS: diagnostics ? '1' : '0',
       NODE_ENV: 'test'
     },
     encoding: 'utf8',
@@ -933,7 +934,7 @@ test('empty database adopts all 49 registered migrations without executing schem
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   try {
-    const { output, result } = runChild(directory)
+    const { output, result } = runChild(directory, PLACEHOLDER_PASSWORD, { diagnostics: true })
     assert.equal(result.status, 0, output)
     assert.deepEqual(readChildResult(output), {
       ready: true,
