@@ -346,8 +346,9 @@ test('adopts an all-satisfied prefix with applied attempts and no source executi
 })
 
 test('adopts a satisfied source-variant migration without executing any variant', nativeTestOptions, () => {
-  const database = openDatabase()
+  const database = new Database(':memory:')
   try {
+    ensureMigrationControlTables(database)
     database.exec('CREATE TABLE items (id INTEGER PRIMARY KEY);')
     const column = { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 }
     const shape = (overrides = {}) => ({
