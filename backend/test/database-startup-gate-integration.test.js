@@ -14,6 +14,7 @@ const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 const backendDirectory = path.resolve(testDirectory, '..')
 const databaseSourcePath = path.join(backendDirectory, 'src', 'config', 'database.js')
 const databaseMigrationsSourcePath = path.join(backendDirectory, 'src', 'config', 'databaseMigrations.js')
+const retiredReadingProgressScriptPath = path.join(backendDirectory, 'migrations', 'remove_old_progress_fields.js')
 const indexSourcePath = path.join(backendDirectory, 'src', 'index.js')
 const childPath = path.join(testDirectory, 'fixtures', 'database-startup-child.js')
 
@@ -730,6 +731,7 @@ test('static contract runs the startup gate once after base tables and before al
   const databaseMigrationsSource = fs.readFileSync(databaseMigrationsSourcePath, 'utf8')
   const indexSource = fs.readFileSync(indexSourcePath, 'utf8').replace(/\r\n?/gu, '\n')
 
+  assert.equal(fs.existsSync(retiredReadingProgressScriptPath), false)
   assert.doesNotMatch(databaseSource, /schema_migrations/u)
   assert.doesNotMatch(databaseSource, /reading_progress_add_user_id/u)
   assert.doesNotMatch(databaseSource, /anime_status_v1/u)
@@ -1290,6 +1292,45 @@ test('migrates the exact legacy reading_progress shape with user 41, row values,
       assert.deepEqual(verification.pragma('foreign_key_check'), [])
       assertNoReadingProgressMigrationHelpers(verification)
       assertApplicationMigrationLedger(verification, 38)
+    } finally {
+      verification.close()
+    }
+  } finally {
+    removeTemporaryDirectory(directory)
+  }
+})
+
+test('reading_progress unknown character_offset schema fails closed before DROP and fully rolls back', nativeTestOptions, () => {
+  const directory = temporaryDirectory()
+  const databasePath = path.join(directory, 'app.db')
+  const database = new Database(databasePath)
+  let before
+  try {
+    createLegacyReadingProgressSchema(database)
+    database.exec(`
+      ALTER TABLE reading_progress ADD COLUMN character_offset INTEGER;
+      INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
+      INSERT INTO books (id) VALUES (7);
+      INSERT INTO reading_progress
+        (id, book_id, current_page, current_chapter, character_offset, progress, font_size, created_at, updated_at)
+      VALUES
+        (3, 7, 123, NULL, 456, 0.375, 18, '2024-01-02 03:04:05', '2024-01-03 04:05:06');
+    `)
+    database.prepare("UPDATE sqlite_sequence SET seq = 17 WHERE name = 'reading_progress'").run()
+    before = readingProgressSnapshot(database)
+  } finally {
+    database.close()
+  }
+
+  try {
+    const { output, result } = runChild(directory)
+    assert.notEqual(result.status, 0, output)
+    assert.equal(readChildResult(output).ready, false)
+    const verification = new Database(databasePath)
+    try {
+      assert.deepEqual(readingProgressSnapshot(verification), before)
+      assertNoReadingProgressSuccessLedger(verification)
+      assertNoReadingProgressMigrationHelpers(verification)
     } finally {
       verification.close()
     }
