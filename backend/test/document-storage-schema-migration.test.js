@@ -43,14 +43,14 @@ function createLegacyDatabase(layout) {
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
       CREATE TABLE document_versions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        document_id INTEGER NOT NULL,
-        version INTEGER NOT NULL,
-        file_path TEXT NOT NULL,
-        note TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
-      );
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_id INTEGER NOT NULL,
+      version INTEGER NOT NULL,
+      file_path TEXT NOT NULL,
+      note TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
       ALTER TABLE documents ADD COLUMN category_id INTEGER;
       ALTER TABLE documents ADD COLUMN storage_key TEXT;
       ALTER TABLE documents ADD COLUMN content_sha256 TEXT;
