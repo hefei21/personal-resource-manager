@@ -26,7 +26,8 @@ function setup(directory) {
   database.exec(`
     CREATE TABLE documents (
       id INTEGER PRIMARY KEY, title TEXT NOT NULL, file_path TEXT, storage_key TEXT,
-      content_sha256 TEXT, content_bytes INTEGER, original_name TEXT, version REAL
+      content_sha256 TEXT, content_bytes INTEGER, original_name TEXT, version REAL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE document_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT, document_id INTEGER NOT NULL, version INTEGER NOT NULL,
