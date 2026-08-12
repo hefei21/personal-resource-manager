@@ -6,8 +6,11 @@ import test from 'node:test'
 import { StorageService } from '../../src/services/storageService.js'
 
 const mountRoot = process.env.STORAGE_NAS_TEST_ROOT
+const nasProbeOptions = mountRoot
+  ? undefined
+  : { skip: 'STORAGE_NAS_TEST_ROOT is only supplied by the isolated NAS probe' }
 
-test('verifies storage commit, deduplication, range read, trash, and restore on a NAS mount', async () => {
+test('verifies storage commit, deduplication, range read, trash, and restore on a NAS mount', nasProbeOptions, async () => {
   assert.ok(path.isAbsolute(mountRoot ?? ''), 'STORAGE_NAS_TEST_ROOT must be an absolute mounted path')
   const runRoot = fs.mkdtempSync(path.join(mountRoot, 'storage-probe-'))
   try {
