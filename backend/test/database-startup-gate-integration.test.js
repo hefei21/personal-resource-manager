@@ -782,7 +782,7 @@ test('application registry freezes 43 column migrations and six registered table
   ).notNull, false)
   assert.deepEqual(
     documentVersionsStorageMigration.compatibility.legacy.map(({ proofKey }) => proofKey),
-    ['expanded-appended', 'expanded-canonical']
+    ['expanded-appended']
   )
   const documentsStorageMigration = applicationMigrationRegistry.migrations[48]
   assert.equal(documentsStorageMigration.compatibility.table, 'documents')

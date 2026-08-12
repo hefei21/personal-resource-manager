@@ -29,39 +29,7 @@ function createLegacyDatabase(layout) {
     CREATE TABLE categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
     INSERT INTO categories (id, name) VALUES (7, '资料');
   `)
-  if (layout === 'canonical') {
-    database.exec(`
-      CREATE TABLE documents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        category TEXT,
-        subcategory TEXT,
-        category_id INTEGER,
-        tags TEXT,
-        file_path TEXT NOT NULL,
-        storage_key TEXT,
-        content_sha256 TEXT,
-        content_bytes INTEGER,
-        original_name TEXT,
-        version REAL DEFAULT 1.0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE TABLE document_versions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        document_id INTEGER NOT NULL,
-        version INTEGER NOT NULL,
-        file_path TEXT NOT NULL,
-        storage_key TEXT,
-        content_sha256 TEXT,
-        content_bytes INTEGER,
-        note TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
-      );
-    `)
-  } else {
-    database.exec(`
+  database.exec(`
       CREATE TABLE documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
@@ -91,7 +59,6 @@ function createLegacyDatabase(layout) {
       ALTER TABLE document_versions ADD COLUMN content_sha256 TEXT;
       ALTER TABLE document_versions ADD COLUMN content_bytes INTEGER;
     `)
-  }
   database.prepare(`INSERT INTO documents
     (id, title, category, subcategory, category_id, tags, file_path, version, created_at, updated_at)
     VALUES (11, '旧文档', '资料', '', 7, 'a,b', '/legacy/doc.txt', 2.5, '2026-01-01', '2026-02-01')`).run()
@@ -102,7 +69,7 @@ function createLegacyDatabase(layout) {
   return database
 }
 
-for (const layout of ['canonical', 'appended']) {
+for (const layout of ['appended']) {
   test(`migrates ${layout} document storage tables without losing rows or identities`, nativeTestOptions, () => {
     const database = createLegacyDatabase(layout)
     try {

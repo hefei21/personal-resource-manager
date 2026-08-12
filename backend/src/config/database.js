@@ -153,17 +153,11 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       title TEXT NOT NULL,
       category TEXT,
       subcategory TEXT,
-      category_id INTEGER,
       tags TEXT,
-      file_path TEXT,
-      storage_key TEXT,
-      content_sha256 TEXT,
-      content_bytes INTEGER,
-      original_name TEXT,
+      file_path TEXT NOT NULL,
       version REAL DEFAULT 1.0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
 
     // 分类表（支持多层嵌套）
@@ -183,10 +177,7 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       document_id INTEGER NOT NULL,
       version INTEGER NOT NULL,
-      file_path TEXT,
-      storage_key TEXT,
-      content_sha256 TEXT,
-      content_bytes INTEGER,
+      file_path TEXT NOT NULL,
       note TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE

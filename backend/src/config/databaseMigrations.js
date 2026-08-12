@@ -262,21 +262,6 @@ const documentsExpandedAppendedLegacyShape = {
   ]
 }
 
-const documentsExpandedCanonicalLegacyShape = {
-  ...documentShape('REAL'),
-  columns: [
-    ...documentShape('REAL').columns.slice(0, 4),
-    expandedDocumentColumn('category_id', 'INTEGER'),
-    documentShape('REAL').columns[4],
-    documentShape('REAL').columns[5],
-    expandedDocumentColumn('storage_key', 'TEXT'),
-    expandedDocumentColumn('content_sha256', 'TEXT'),
-    expandedDocumentColumn('content_bytes', 'INTEGER'),
-    expandedDocumentColumn('original_name', 'TEXT'),
-    ...documentShape('REAL').columns.slice(6)
-  ]
-}
-
 const documentsExpandedAppendedLegacyDdl = `CREATE TABLE documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
@@ -289,23 +274,6 @@ const documentsExpandedAppendedLegacyDdl = `CREATE TABLE documents (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 , category_id INTEGER, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER, original_name TEXT)`
 
-const documentsExpandedCanonicalLegacyDdl = `CREATE TABLE documents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      category TEXT,
-      subcategory TEXT,
-      category_id INTEGER,
-      tags TEXT,
-      file_path TEXT NOT NULL,
-      storage_key TEXT,
-      content_sha256 TEXT,
-      content_bytes INTEGER,
-      original_name TEXT,
-      version REAL DEFAULT 1.0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`
-
 const documentVersionsExpandedAppendedLegacyDdl = `CREATE TABLE document_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       document_id INTEGER NOT NULL,
@@ -313,19 +281,6 @@ const documentVersionsExpandedAppendedLegacyDdl = `CREATE TABLE document_version
       file_path TEXT NOT NULL,
       note TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER,
-      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
-    )`
-
-const documentVersionsExpandedCanonicalLegacyDdl = `CREATE TABLE document_versions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      document_id INTEGER NOT NULL,
-      version INTEGER NOT NULL,
-      file_path TEXT NOT NULL,
-      storage_key TEXT,
-      content_sha256 TEXT,
-      content_bytes INTEGER,
-      note TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
     )`
 
@@ -350,14 +305,6 @@ const documentVersionsExpandedAppendedLegacyShape = {
   uniqueConstraints: []
 }
 
-const documentVersionsExpandedCanonicalLegacyShape = {
-  ...documentVersionsExpandedAppendedLegacyShape,
-  columns: [
-    ...documentVersionsExpandedAppendedLegacyShape.columns.slice(0, 4),
-    ...documentVersionsExpandedAppendedLegacyShape.columns.slice(6),
-    ...documentVersionsExpandedAppendedLegacyShape.columns.slice(4, 6)
-  ]
-}
 
 const codeRepositoryColumn = (name, type, notNull = false, defaultValue = null, primaryKeyPosition = 0) => ({
   name,
@@ -1671,10 +1618,7 @@ export const applicationMigrationRegistry = createMigrationRegistry([
   },
   {
     id: '0048_document_versions_storage_shape',
-    sourceVariants: [
-      { proofKey: 'expanded-appended', source: DOCUMENT_VERSIONS_STORAGE_MIGRATION_SOURCE },
-      { proofKey: 'expanded-canonical', source: DOCUMENT_VERSIONS_STORAGE_MIGRATION_SOURCE }
-    ],
+    sourceVariants: [{ proofKey: 'expanded-appended', source: DOCUMENT_VERSIONS_STORAGE_MIGRATION_SOURCE }],
     compatibility: {
       kind: 'table-transition',
       table: 'document_versions',
@@ -1686,13 +1630,6 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           createTableSqlSha256: sha256(documentVersionsExpandedAppendedLegacyDdl),
           indexes: [],
           triggers: []
-        },
-        {
-          proofKey: 'expanded-canonical',
-          shape: documentVersionsExpandedCanonicalLegacyShape,
-          createTableSqlSha256: sha256(documentVersionsExpandedCanonicalLegacyDdl),
-          indexes: [],
-          triggers: []
         }
       ]
     }
@@ -1701,9 +1638,7 @@ export const applicationMigrationRegistry = createMigrationRegistry([
     id: '0049_documents_storage_shape',
     sourceVariants: [
       { proofKey: 'expanded-appended-no-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE },
-      { proofKey: 'expanded-appended-known-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE },
-      { proofKey: 'expanded-canonical-no-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE },
-      { proofKey: 'expanded-canonical-known-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE }
+      { proofKey: 'expanded-appended-known-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE }
     ],
     compatibility: {
       kind: 'table-transition',
@@ -1714,13 +1649,6 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           proofKey: indexes.length === 0 ? 'expanded-appended-no-indexes' : 'expanded-appended-known-indexes',
           shape: documentsExpandedAppendedLegacyShape,
           createTableSqlSha256: sha256(documentsExpandedAppendedLegacyDdl),
-          indexes,
-          triggers: []
-        })),
-        ...[[], knownDocumentIndexes].map((indexes) => ({
-          proofKey: indexes.length === 0 ? 'expanded-canonical-no-indexes' : 'expanded-canonical-known-indexes',
-          shape: documentsExpandedCanonicalLegacyShape,
-          createTableSqlSha256: sha256(documentsExpandedCanonicalLegacyDdl),
           indexes,
           triggers: []
         }))
