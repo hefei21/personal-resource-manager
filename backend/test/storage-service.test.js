@@ -182,3 +182,64 @@ test('discard is idempotent and never accepts a non-file staging entry', async (
     assert.throws(() => service.discardStaged(staged.token), { code: 'STORAGE_STAGING_INVALID' })
   } finally { cleanup(directory) }
 })
+
+test('trashes unreferenced objects and restores them without changing content identity', async () => {
+  const directory = root()
+  try {
+    let counter = 0
+    const service = new StorageService({ rootPath: directory, randomBytes: () => Buffer.alloc(16, ++counter) })
+    const staged = await service.stageFromStream(Readable.from(['recoverable']))
+    const committed = await service.commitStaged({ token: staged.token, kind: 'documents' })
+    const trashed = await service.trashObject({ storageKey: committed.storageKey, activeReferenceCount: 0 })
+    await assert.rejects(service.stat(committed.storageKey), { code: 'STORAGE_OBJECT_MISSING' })
+    const restored = await service.restoreTrashed(trashed.trashToken)
+    assert.equal(restored.storageKey, committed.storageKey)
+    assert.equal(await streamText(await service.createReadStream(restored.storageKey)), 'recoverable')
+    await assert.rejects(service.restoreTrashed(trashed.trashToken), { code: 'STORAGE_TRASH_MISSING' })
+  } finally { cleanup(directory) }
+})
+
+test('refuses to trash referenced objects and detects tampered trash content', async () => {
+  const directory = root()
+  try {
+    let counter = 0
+    const service = new StorageService({ rootPath: directory, randomBytes: () => Buffer.alloc(16, ++counter) })
+    const staged = await service.stageFromStream(Readable.from(['protected']))
+    const committed = await service.commitStaged({ token: staged.token, kind: 'documents' })
+    await assert.rejects(service.trashObject({ storageKey: committed.storageKey, activeReferenceCount: 1 }), {
+      code: 'STORAGE_OBJECT_REFERENCED'
+    })
+    assert.equal((await service.stat(committed.storageKey)).bytes, 9)
+    const trashed = await service.trashObject({ storageKey: committed.storageKey, activeReferenceCount: 0 })
+    fs.writeFileSync(path.join(service.trashPath, trashed.trashToken, 'object'), 'tampered')
+    await assert.rejects(service.restoreTrashed(trashed.trashToken), { code: 'STORAGE_TRASH_HASH_MISMATCH' })
+  } finally { cleanup(directory) }
+})
+
+test('rejects symlinked trash entries and manifests', async (context) => {
+  if (process.platform === 'win32') {
+    context.skip('trash symlink branches are covered by Linux CI')
+    return
+  }
+  const directory = root()
+  try {
+    let counter = 0
+    const service = new StorageService({ rootPath: directory, randomBytes: () => Buffer.alloc(16, ++counter) })
+    const outside = path.join(directory, 'outside')
+    fs.mkdirSync(outside)
+    const token = 'a'.repeat(32)
+    fs.symlinkSync(outside, path.join(service.trashPath, token), 'dir')
+    await assert.rejects(service.restoreTrashed(token), { code: 'STORAGE_TRASH_INVALID' })
+    fs.rmSync(path.join(service.trashPath, token))
+
+    const staged = await service.stageFromStream(Readable.from(['manifest-link']))
+    const committed = await service.commitStaged({ token: staged.token, kind: 'documents' })
+    const trashed = await service.trashObject({ storageKey: committed.storageKey, activeReferenceCount: 0 })
+    const manifest = path.join(service.trashPath, trashed.trashToken, 'manifest.json')
+    const externalManifest = path.join(outside, 'manifest.json')
+    fs.copyFileSync(manifest, externalManifest)
+    fs.rmSync(manifest)
+    fs.symlinkSync(externalManifest, manifest)
+    await assert.rejects(service.restoreTrashed(trashed.trashToken), { code: 'STORAGE_TRASH_INVALID' })
+  } finally { cleanup(directory) }
+})

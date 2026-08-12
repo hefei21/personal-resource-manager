@@ -136,6 +136,7 @@ export class StorageService {
     this.rootPath = ensureRoot(options.rootPath)
     this.objectsPath = ensureManagedDirectory(this.rootPath, 'objects')
     this.stagingPath = ensureManagedDirectory(this.rootPath, 'staging')
+    this.trashPath = ensureManagedDirectory(this.rootPath, 'trash')
     this.randomBytes = options.randomBytes ?? randomBytes
   }
 
@@ -263,5 +264,97 @@ export class StorageService {
     if (!stat.isFile() || stat.isSymbolicLink()) fail('STORAGE_STAGING_INVALID', 'Staged object must be a regular file.')
     fs.rmSync(stagedPath)
     return true
+  }
+
+  async trashObject({ storageKey, activeReferenceCount } = {}) {
+    if (!Number.isSafeInteger(activeReferenceCount) || activeReferenceCount < 0) {
+      fail('STORAGE_REFERENCE_PROOF_INVALID', 'Active reference count must be a non-negative integer.')
+    }
+    if (activeReferenceCount !== 0) {
+      fail('STORAGE_OBJECT_REFERENCED', 'Referenced storage objects cannot be moved to trash.')
+    }
+    const metadata = await this.stat(storageKey)
+    const objectPath = this.objectFile(storageKey)
+    const trashToken = randomToken(this.randomBytes)
+    const temporaryPath = path.join(this.trashPath, `.${trashToken}.tmp`)
+    const finalPath = path.join(this.trashPath, trashToken)
+    try {
+      fs.mkdirSync(temporaryPath)
+      fs.linkSync(objectPath, path.join(temporaryPath, 'object'))
+      fs.writeFileSync(path.join(temporaryPath, 'manifest.json'), `${JSON.stringify({
+        formatVersion: 1,
+        trashToken,
+        storageKey,
+        sha256: metadata.sha256,
+        bytes: metadata.bytes,
+        deletedAt: new Date().toISOString()
+      }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
+      fs.renameSync(temporaryPath, finalPath)
+      fs.rmSync(objectPath)
+      return Object.freeze({ trashToken, storageKey, sha256: metadata.sha256, bytes: metadata.bytes })
+    } catch (error) {
+      fs.rmSync(temporaryPath, { recursive: true, force: true })
+      if (error instanceof StorageServiceError) throw error
+      fail('STORAGE_TRASH_FAILED', 'Storage object could not be moved to trash.', error)
+    }
+  }
+
+  async restoreTrashed(trashToken) {
+    if (!STAGING_TOKEN_PATTERN.test(trashToken ?? '')) {
+      fail('STORAGE_TRASH_TOKEN_INVALID', 'Trash token is invalid.')
+    }
+    const trashDirectory = path.join(this.trashPath, trashToken)
+    let directoryStat
+    try { directoryStat = fs.lstatSync(trashDirectory) } catch (error) {
+      fail('STORAGE_TRASH_MISSING', 'Trash entry does not exist.', error)
+    }
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+      fail('STORAGE_TRASH_INVALID', 'Trash entry must be a real directory.')
+    }
+    const realTrashDirectory = fs.realpathSync.native(trashDirectory)
+    if (!isWithin(this.trashPath, realTrashDirectory)) {
+      fail('STORAGE_TRASH_INVALID', 'Trash entry escaped the trash root.')
+    }
+    const manifestPath = path.join(realTrashDirectory, 'manifest.json')
+    let manifestStat
+    try { manifestStat = fs.lstatSync(manifestPath) } catch (error) {
+      fail('STORAGE_TRASH_INVALID', 'Trash manifest is missing.', error)
+    }
+    if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) {
+      fail('STORAGE_TRASH_INVALID', 'Trash manifest must be a regular file.')
+    }
+    let manifest
+    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) } catch (error) {
+      fail('STORAGE_TRASH_INVALID', 'Trash manifest is invalid.', error)
+    }
+    if (manifest?.formatVersion !== 1 || manifest.trashToken !== trashToken ||
+      !HASH_PATTERN.test(manifest.sha256 ?? '') || !Number.isSafeInteger(manifest.bytes) || manifest.bytes < 0 ||
+      createStorageKey(parseStorageKey(manifest.storageKey).kind, manifest.sha256) !== manifest.storageKey) {
+      fail('STORAGE_TRASH_INVALID', 'Trash manifest is invalid.')
+    }
+    const trashedObject = path.join(realTrashDirectory, 'object')
+    let trashedStat
+    try { trashedStat = fs.lstatSync(trashedObject) } catch (error) {
+      fail('STORAGE_TRASH_INVALID', 'Trashed object is missing.', error)
+    }
+    if (!trashedStat.isFile() || trashedStat.isSymbolicLink()) {
+      fail('STORAGE_TRASH_INVALID', 'Trashed object must be a regular file.')
+    }
+    const actual = await hashFile(trashedObject)
+    if (actual.sha256 !== manifest.sha256 || actual.bytes !== manifest.bytes) {
+      fail('STORAGE_TRASH_HASH_MISMATCH', 'Trashed object does not match its manifest.')
+    }
+    const objectPath = this.objectFile(manifest.storageKey, { createParents: true })
+    try {
+      fs.linkSync(trashedObject, objectPath)
+    } catch (error) {
+      if (error?.code !== 'EEXIST') fail('STORAGE_RESTORE_FAILED', 'Trashed object could not be restored.', error)
+      const existing = await hashFile(objectPath)
+      if (existing.sha256 !== manifest.sha256 || existing.bytes !== manifest.bytes) {
+        fail('STORAGE_OBJECT_COLLISION', 'Existing storage object does not match the trash entry.')
+      }
+    }
+    fs.rmSync(realTrashDirectory, { recursive: true })
+    return Object.freeze({ storageKey: manifest.storageKey, sha256: manifest.sha256, bytes: manifest.bytes })
   }
 }
