@@ -5,6 +5,7 @@ import { applicationMigrationRegistry } from '../src/config/databaseMigrations.j
 import { ensureMigrationControlTables, listMigrationAttempts } from '../src/config/migrationControlStore.js'
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
+import { checkMigrationCompatibility } from '../src/config/migrationCompatibility.js'
 
 const require = createRequire(import.meta.url)
 let Database
@@ -74,6 +75,14 @@ for (const layout of ['appended']) {
     const database = createLegacyDatabase(layout)
     try {
       const registry = createMigrationRegistry(migrations)
+      const precondition = checkMigrationCompatibility(database, migrations[0].compatibility)
+      assert.deepEqual(precondition, {
+        status: 'missing',
+        kind: 'table-transition',
+        table: 'document_versions',
+        reason: 'legacy-matched',
+        proofKey: 'expanded-appended'
+      })
       let summary
       try {
         summary = executeMigrationBatch({
