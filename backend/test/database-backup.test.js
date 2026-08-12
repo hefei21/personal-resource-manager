@@ -135,6 +135,7 @@ test('creates and restores a consistent WAL database with a verified manifest', 
       token: prepared.token
     })
     restored = new Database(restoreResult.restoredFile, { readonly: true })
+    assert.equal(restored.pragma('journal_mode', { simple: true }), 'delete')
     assert.deepEqual(restored.prepare('SELECT id, body FROM notes ORDER BY id').all(), [
       { id: 1, body: 'alpha' },
       { id: 2, body: 'beta' }

@@ -103,6 +103,26 @@ function verifySqliteFile(filePath) {
   }
 }
 
+function finalizePortableBackup(filePath) {
+  let database
+  try {
+    database = new Database(filePath, { fileMustExist: true })
+    const journalMode = database.pragma('journal_mode = DELETE', { simple: true })
+    if (String(journalMode).toLowerCase() !== 'delete') {
+      fail('DATABASE_BACKUP_INTEGRITY_FAILED', 'Backup journal mode could not be normalized.')
+    }
+    const rows = database.pragma('integrity_check')
+    if (!Array.isArray(rows) || rows.length !== 1 || rows[0]?.integrity_check !== 'ok') {
+      fail('DATABASE_BACKUP_INTEGRITY_FAILED', 'SQLite integrity verification failed.')
+    }
+  } catch (error) {
+    if (error instanceof DatabaseBackupError) throw error
+    fail('DATABASE_BACKUP_INTEGRITY_FAILED', 'SQLite backup could not be finalized.', error)
+  } finally {
+    database?.close()
+  }
+}
+
 function createToken(bytes = randomBytes) {
   let value
   try {
@@ -202,7 +222,7 @@ export async function createDatabaseBackup(options = {}) {
     fs.mkdirSync(temporaryDirectory)
     const databaseFile = path.join(temporaryDirectory, DATABASE_BACKUP_FILE)
     await database.backup(databaseFile)
-    verifySqliteFile(databaseFile)
+    finalizePortableBackup(databaseFile)
     const stat = fs.statSync(databaseFile)
     const manifest = {
       formatVersion: DATABASE_BACKUP_FORMAT_VERSION,
@@ -275,8 +295,6 @@ export function restoreDatabaseBackup(options = {}) {
   if (sourceStat.size !== manifest.database.bytes || sha256File(sourceFile) !== manifest.database.sha256) {
     fail('DATABASE_BACKUP_HASH_MISMATCH', 'Backup database does not match its manifest.')
   }
-  verifySqliteFile(sourceFile)
-
   const temporaryFile = path.join(targetDirectory, '.database.sqlite.restore.tmp')
   const restoredFile = path.join(targetDirectory, DATABASE_BACKUP_FILE)
   try {
