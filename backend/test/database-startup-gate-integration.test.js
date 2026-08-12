@@ -160,6 +160,100 @@ function assertCodeRepositoryMigrationNotApplied(database) {
   `).get().count, 0)
 }
 
+const legacyReadingProgressDdl = `CREATE TABLE reading_progress (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL UNIQUE,
+        current_page INTEGER DEFAULT 0,
+        current_chapter TEXT,
+        progress REAL DEFAULT 0,
+        font_size INTEGER DEFAULT 16,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+      )`
+
+const targetReadingProgressDdl = `CREATE TABLE reading_progress (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL,
+        user_id INTEGER,
+        current_page INTEGER DEFAULT 0,
+        cfi TEXT,
+        progress REAL DEFAULT 0,
+        font_size INTEGER DEFAULT 16,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(book_id, user_id)
+      )`
+
+function createLegacyReadingProgressSchema(database) {
+  database.exec(`
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE books (id INTEGER PRIMARY KEY AUTOINCREMENT);
+  `)
+  database.exec(legacyReadingProgressDdl)
+}
+
+function createTargetReadingProgressSchema(database) {
+  database.exec(`
+    CREATE TABLE users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE books (id INTEGER PRIMARY KEY AUTOINCREMENT);
+  `)
+  database.exec(targetReadingProgressDdl)
+}
+
+function readingProgressSnapshot(database) {
+  return {
+    sql: database.prepare(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'reading_progress'"
+    ).get().sql,
+    columns: database.prepare('PRAGMA table_info(reading_progress)').all(),
+    rows: database.prepare('SELECT * FROM reading_progress ORDER BY id').all(),
+    sequence: database.prepare(
+      "SELECT rowid, name, seq, typeof(seq) AS storage_type FROM sqlite_sequence WHERE name = 'reading_progress' ORDER BY rowid"
+    ).all()
+  }
+}
+
+function assertNoReadingProgressMigrationHelpers(database) {
+  const helperQuery = `
+    SELECT COUNT(*) AS count FROM sqlite_schema
+    WHERE name LIKE 'prm_reading_progress_v0038_%' OR name = 'reading_progress_migration_0038'
+  `
+  const tempHelperQuery = `
+    SELECT COUNT(*) AS count FROM sqlite_temp_schema
+    WHERE name LIKE 'prm_reading_progress_v0038_%' OR name = 'reading_progress_migration_0038'
+  `
+  assert.equal(database.prepare(helperQuery).get().count, 0)
+  assert.equal(database.prepare(tempHelperQuery).get().count, 0)
+}
+
+function assertReadingProgressMigrationNotApplied(database) {
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS count FROM prm_schema_migrations
+    WHERE migration_id = '0038_reading_progress_shape'
+  `).get().count, 0)
+}
+
+function assertNoReadingProgressSuccessLedger(database) {
+  assertReadingProgressMigrationNotApplied(database)
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS count FROM prm_migration_attempts
+    WHERE migration_id = '0038_reading_progress_shape' AND status = 'applied'
+  `).get().count, 0)
+}
+
 const expectedAnimeMigrations = [
   {
     id: '0007_anime_name_cn',
@@ -459,11 +553,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 35 C2c columns and both registered table transitions', () => {
+test('application registry freezes 35 C2c columns and three registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 37)
+  assert.equal(applicationMigrationRegistry.migrations.length, 38)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -477,7 +571,8 @@ test('application registry freezes 35 C2c columns and both registered table tran
       ...expectedGamesMigrations.map(({ id }) => id),
       ...expectedMusicMigrations.map(({ id }) => id),
       '0036_documents_version_real',
-      '0037_code_repositories_shape'
+      '0037_code_repositories_shape',
+      '0038_reading_progress_shape'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -584,6 +679,50 @@ test('application registry freezes 35 C2c columns and both registered table tran
     /pragma_foreign_key_check/u.test(source) &&
     !/foreign_keys\s*=|writable_schema|\bPRAGMA\b/iu.test(source)
   )))
+  const readingProgressMigration = applicationMigrationRegistry.migrations[37]
+  assert.equal(readingProgressMigration.checksum, 'a84594741f0490ba79cdb726a1a81608d15c9067ad437004fd416f709381e25f')
+  assert.equal(readingProgressMigration.compatibility.kind, 'table-transition')
+  assert.equal(readingProgressMigration.compatibility.table, 'reading_progress')
+  assert.deepEqual(
+    readingProgressMigration.compatibility.target.columns.map(({ name }) => name),
+    ['id', 'book_id', 'user_id', 'current_page', 'cfi', 'progress', 'font_size', 'created_at', 'updated_at']
+  )
+  assert.deepEqual(
+    readingProgressMigration.compatibility.legacy.map(({ proofKey }) => proofKey),
+    ['legacy-8-columns']
+  )
+  assert.deepEqual(
+    readingProgressMigration.sourceVariants.map(({ proofKey }) => proofKey),
+    ['legacy-8-columns']
+  )
+  assert.deepEqual(readingProgressMigration.compatibility.targetProof, {
+    createTableSqlSha256: 'db2701e4f38382eed59af1b43a8749a0f94d8bb1a8bfad01b83e2e5c06ba6330',
+    indexes: [],
+    triggers: [],
+    externalDependencies: { inboundForeignKeys: 'none', schemaSqlReferences: 'none' }
+  })
+  assert.deepEqual(
+    readingProgressMigration.compatibility.legacy.map(({ proofKey, createTableSqlSha256, indexes, triggers }) => ({
+      proofKey,
+      createTableSqlSha256,
+      indexes,
+      triggers
+    })),
+    [{
+      proofKey: 'legacy-8-columns',
+      createTableSqlSha256: 'c8ff9d212f2a85d07b7bc44ea8de3bea2563aa4da7ce97f9db512f2e39137c99',
+      indexes: [],
+      triggers: []
+    }]
+  )
+  assert.ok(readingProgressMigration.sourceVariants.every(({ source }) => (
+    /prm_reading_progress_v0038_guard/u.test(source) &&
+    /prm_reading_progress_v0038_sequence/u.test(source) &&
+    /prm_reading_progress_v0038_equality/u.test(source) &&
+    /pragma_foreign_key_check/u.test(source) &&
+    /CREATE TABLE reading_progress_migration_0038/u.test(source) &&
+    !/foreign_keys\s*=|writable_schema|\bPRAGMA\b/iu.test(source)
+  )))
 })
 
 test('static contract runs the startup gate once after base tables and before all later initialization', () => {
@@ -617,6 +756,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.doesNotMatch(databaseMigrationsSource, /DROP TABLE(?: IF EXISTS)? code_versions/u)
   assert.ok(applicationMigrationRegistry.migrations.every(({ source }) => !/DROP TABLE(?: IF EXISTS)? code_versions/u.test(source)))
   assert.match(databaseMigrationsSource, /id: '0037_code_repositories_shape'/u)
+  assert.match(databaseMigrationsSource, /id: '0038_reading_progress_shape'/u)
   assert.match(databaseSource, /CREATE TABLE IF NOT EXISTS code_repositories \([\s\S]*local_path TEXT NOT NULL DEFAULT ''[\s\S]*languages TEXT DEFAULT '\{\}'/u)
   assert.doesNotMatch(databaseSource, /codeColumns|hasLocalPath|code_repositories_new|hasLanguages/u)
   assert.doesNotMatch(databaseSource, /ALTER TABLE code_repositories ADD COLUMN languages/u)
@@ -716,7 +856,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.ok(initializeCatch > listenCall)
 })
 
-test('empty database adopts all 37 registered migrations without executing schema changes', nativeTestOptions, () => {
+test('empty database adopts all 38 registered migrations without executing schema changes', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   try {
@@ -731,7 +871,7 @@ test('empty database adopts all 37 registered migrations without executing schem
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 37)
+      assertApplicationMigrationLedger(verification, 38)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
@@ -780,7 +920,7 @@ test('restarting the current database does not add registered migration attempts
         ledger: verification.prepare('SELECT COUNT(*) AS count FROM prm_schema_migrations').get().count,
         attempts: verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count
       }, firstCounts)
-      assertApplicationMigrationLedger(verification, 37)
+      assertApplicationMigrationLedger(verification, 38)
     } finally {
       verification.close()
     }
@@ -855,7 +995,7 @@ test('migrates each exact code_repositories legacy shape with values, defaults, 
         assert.equal(inserted.lastInsertRowid, 20)
         assert.deepEqual(verification.pragma('foreign_key_check'), [])
         assertNoCodeRepositoryMigrationHelpers(verification)
-        assertApplicationMigrationLedger(verification, 37)
+        assertApplicationMigrationLedger(verification, 38)
       } finally {
         verification.close()
       }
@@ -901,7 +1041,7 @@ test('preserves deleted code_repositories ID history when each exact legacy tabl
         ).run()
         assert.equal(inserted.lastInsertRowid, 20)
         assertNoCodeRepositoryMigrationHelpers(verification)
-        assertApplicationMigrationLedger(verification, 37)
+        assertApplicationMigrationLedger(verification, 38)
       } finally {
         verification.close()
       }
@@ -1106,6 +1246,181 @@ test('code_repositories rows that violate the proven legacy NOT NULL contract fa
   }
 })
 
+test('migrates the exact legacy reading_progress shape with user 41, row values, and sequence preserved', nativeTestOptions, () => {
+  const directory = temporaryDirectory()
+  const databasePath = path.join(directory, 'app.db')
+  const database = new Database(databasePath)
+  try {
+    createLegacyReadingProgressSchema(database)
+    database.exec(`
+      INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
+      INSERT INTO books (id) VALUES (7), (11);
+      INSERT INTO reading_progress
+        (id, book_id, current_page, current_chapter, progress, font_size, created_at, updated_at)
+      VALUES
+        (3, 7, 123, NULL, 0.375, 18, '2024-01-02 03:04:05', '2024-01-03 04:05:06'),
+        (8, 11, 456, NULL, 0.875, 22, NULL, '2024-02-03 04:05:06');
+    `)
+    database.prepare("UPDATE sqlite_sequence SET seq = 17 WHERE name = 'reading_progress'").run()
+  } finally {
+    database.close()
+  }
+
+  try {
+    const { output, result } = runChild(directory)
+    assert.equal(result.status, 0, output)
+    const verification = new Database(databasePath)
+    try {
+      assert.equal(verification.prepare(`
+        SELECT COUNT(*) AS count FROM prm_schema_migrations
+        WHERE migration_id = '0038_reading_progress_shape'
+      `).get().count, 1)
+      assert.deepEqual(
+        verification.prepare('SELECT * FROM reading_progress ORDER BY id').all(),
+        [
+          { id: 3, book_id: 7, user_id: 41, current_page: 123, cfi: null, progress: 0.375, font_size: 18, created_at: '2024-01-02 03:04:05', updated_at: '2024-01-03 04:05:06' },
+          { id: 8, book_id: 11, user_id: 41, current_page: 456, cfi: null, progress: 0.875, font_size: 22, created_at: null, updated_at: '2024-02-03 04:05:06' }
+        ]
+      )
+      assert.equal(verification.prepare(
+        "SELECT seq FROM sqlite_sequence WHERE name = 'reading_progress'"
+      ).get().seq, 17)
+      assert.deepEqual(verification.pragma('foreign_key_check'), [])
+      assertNoReadingProgressMigrationHelpers(verification)
+      assertApplicationMigrationLedger(verification, 38)
+    } finally {
+      verification.close()
+    }
+  } finally {
+    removeTemporaryDirectory(directory)
+  }
+})
+
+test('reading_progress legacy guard rejects invalid owner, row, and sequence cases with full rollback', nativeTestOptions, () => {
+  const cases = [
+    {
+      name: 'current_chapter is not NULL',
+      setup: (database) => database.prepare(
+        "UPDATE reading_progress SET current_chapter = 'Chapter 1' WHERE id = 3"
+      ).run()
+    },
+    {
+      name: 'users table has zero rows',
+      setup: (database) => database.prepare('DELETE FROM users').run()
+    },
+    {
+      name: 'users table has two rows',
+      setup: (database) => database.prepare(
+        "INSERT INTO users (id, username, password) VALUES (42, 'second-owner', 'second-hash')"
+      ).run()
+    },
+    {
+      name: 'reading_progress sequence is missing',
+      setup: (database) => database.prepare(
+        "DELETE FROM sqlite_sequence WHERE name = 'reading_progress'"
+      ).run()
+    },
+    {
+      name: 'reading_progress sequence is text',
+      setup: (database) => database.prepare(
+        "UPDATE sqlite_sequence SET seq = 'legacy-text' WHERE name = 'reading_progress'"
+      ).run()
+    },
+    {
+      name: 'reading_progress sequence is below the maximum ID',
+      setup: (database) => database.prepare(
+        "UPDATE sqlite_sequence SET seq = 1 WHERE name = 'reading_progress'"
+      ).run()
+    }
+  ]
+
+  for (const entry of cases) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    let before
+    try {
+      createLegacyReadingProgressSchema(database)
+      database.exec(`
+        INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
+        INSERT INTO books (id) VALUES (7), (11);
+        INSERT INTO reading_progress
+          (id, book_id, current_page, current_chapter, progress, font_size, created_at, updated_at)
+        VALUES
+          (3, 7, 123, NULL, 0.375, 18, '2024-01-02 03:04:05', '2024-01-03 04:05:06'),
+          (8, 11, 456, NULL, 0.875, 22, NULL, '2024-02-03 04:05:06');
+      `)
+      database.prepare("UPDATE sqlite_sequence SET seq = 17 WHERE name = 'reading_progress'").run()
+      entry.setup(database)
+      before = readingProgressSnapshot(database)
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.notEqual(result.status, 0, `${entry.name}: ${output}`)
+      assert.equal(readChildResult(output).ready, false, entry.name)
+      const verification = new Database(databasePath)
+      try {
+        assert.deepEqual(readingProgressSnapshot(verification), before, entry.name)
+        assertNoReadingProgressSuccessLedger(verification)
+        assertNoReadingProgressMigrationHelpers(verification)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('reading_progress unknown explicit index fails before DROP and fully rolls back', nativeTestOptions, () => {
+  const directory = temporaryDirectory()
+  const databasePath = path.join(directory, 'app.db')
+  const unexpectedIndexName = 'reading_progress_unexpected_idx'
+  const database = new Database(databasePath)
+  let before
+  try {
+    createLegacyReadingProgressSchema(database)
+    database.exec(`
+      INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
+      INSERT INTO books (id) VALUES (7), (11);
+      INSERT INTO reading_progress
+        (id, book_id, current_page, current_chapter, progress, font_size, created_at, updated_at)
+      VALUES
+        (3, 7, 123, NULL, 0.375, 18, '2024-01-02 03:04:05', '2024-01-03 04:05:06'),
+        (8, 11, 456, NULL, 0.875, 22, NULL, '2024-02-03 04:05:06');
+      CREATE INDEX ${unexpectedIndexName} ON reading_progress(current_page);
+    `)
+    database.prepare("UPDATE sqlite_sequence SET seq = 17 WHERE name = 'reading_progress'").run()
+    before = readingProgressSnapshot(database)
+  } finally {
+    database.close()
+  }
+
+  try {
+    const { output, result } = runChild(directory)
+    assert.notEqual(result.status, 0, output)
+    assert.equal(readChildResult(output).ready, false)
+    const verification = new Database(databasePath)
+    try {
+      assert.deepEqual(readingProgressSnapshot(verification), before)
+      assert.equal(verification.prepare(`
+        SELECT COUNT(*) AS count FROM sqlite_schema
+        WHERE type = 'index' AND name = ? AND tbl_name = 'reading_progress'
+      `).get(unexpectedIndexName).count, 1)
+      assertNoReadingProgressSuccessLedger(verification)
+      assertNoReadingProgressMigrationHelpers(verification)
+      assert.deepEqual(verification.pragma('foreign_key_check'), [])
+    } finally {
+      verification.close()
+    }
+  } finally {
+    removeTemporaryDirectory(directory)
+  }
+})
+
 test('preserves a version-only legacy table and installs three connection-local guards', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
@@ -1190,7 +1505,7 @@ test('preserves unowned historical code_versions table and rows', nativeTestOpti
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 37)
+      assertApplicationMigrationLedger(verification, 38)
       assert.equal(verification.prepare(
         "SELECT COUNT(*) AS count FROM prm_schema_migrations WHERE migration_id LIKE '%code_versions%'"
       ).get().count, 0)
@@ -1667,7 +1982,7 @@ test('incompatible music columns execute the prefix and stop at the explicit con
   }
 })
 
-test('old anime, games, and music schemas execute all 37 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
+test('old anime, games, and music schemas execute all 38 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -1765,7 +2080,7 @@ test('old anime, games, and music schemas execute all 37 registered migrations b
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 37)
+      assertApplicationMigrationLedger(verification, 38)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')

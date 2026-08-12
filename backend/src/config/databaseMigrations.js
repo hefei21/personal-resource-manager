@@ -615,6 +615,270 @@ DROP TABLE prm_code_repositories_v0037_sequence;
 DROP TABLE prm_code_repositories_v0037_guard;
 `.trim()
 
+const readingProgressColumn = (name, type, notNull = false, defaultValue = null, primaryKeyPosition = 0) => ({
+  name,
+  type,
+  notNull,
+  defaultValue,
+  primaryKeyPosition
+})
+
+const readingProgressShape = (columns, foreignKeys, uniqueConstraints) => ({
+  strict: false,
+  withoutRowid: false,
+  columns,
+  foreignKeys,
+  uniqueConstraints
+})
+
+const readingProgressTargetShape = readingProgressShape([
+  readingProgressColumn('id', 'INTEGER', false, null, 1),
+  readingProgressColumn('book_id', 'INTEGER', true),
+  readingProgressColumn('user_id', 'INTEGER'),
+  readingProgressColumn('current_page', 'INTEGER', false, '0'),
+  readingProgressColumn('cfi', 'TEXT'),
+  readingProgressColumn('progress', 'REAL', false, '0'),
+  readingProgressColumn('font_size', 'INTEGER', false, '16'),
+  readingProgressColumn('created_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  readingProgressColumn('updated_at', 'DATETIME', false, 'CURRENT_TIMESTAMP')
+], [
+  {
+    columns: ['book_id'],
+    referencedTable: 'books',
+    referencedColumns: ['id'],
+    onUpdate: 'NO ACTION',
+    onDelete: 'CASCADE'
+  },
+  {
+    columns: ['user_id'],
+    referencedTable: 'users',
+    referencedColumns: ['id'],
+    onUpdate: 'NO ACTION',
+    onDelete: 'CASCADE'
+  }
+], [
+  {
+    columns: [
+      { name: 'book_id', collation: 'BINARY', descending: false },
+      { name: 'user_id', collation: 'BINARY', descending: false }
+    ]
+  }
+])
+
+const readingProgressLegacyShape = readingProgressShape([
+  readingProgressColumn('id', 'INTEGER', false, null, 1),
+  readingProgressColumn('book_id', 'INTEGER', true),
+  readingProgressColumn('current_page', 'INTEGER', false, '0'),
+  readingProgressColumn('current_chapter', 'TEXT'),
+  readingProgressColumn('progress', 'REAL', false, '0'),
+  readingProgressColumn('font_size', 'INTEGER', false, '16'),
+  readingProgressColumn('created_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  readingProgressColumn('updated_at', 'DATETIME', false, 'CURRENT_TIMESTAMP')
+], [{
+  columns: ['book_id'],
+  referencedTable: 'books',
+  referencedColumns: ['id'],
+  onUpdate: 'NO ACTION',
+  onDelete: 'CASCADE'
+}], [{
+  columns: [{ name: 'book_id', collation: 'BINARY', descending: false }]
+}])
+
+const readingProgressTargetDdl = `CREATE TABLE reading_progress (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL,
+        user_id INTEGER,
+        current_page INTEGER DEFAULT 0,
+        cfi TEXT,
+        progress REAL DEFAULT 0,
+        font_size INTEGER DEFAULT 16,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(book_id, user_id)
+      )`
+
+const readingProgressLegacyDdl = `CREATE TABLE reading_progress (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL UNIQUE,
+        current_page INTEGER DEFAULT 0,
+        current_chapter TEXT,
+        progress REAL DEFAULT 0,
+        font_size INTEGER DEFAULT 16,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
+      )`
+
+const readingProgressMigrationLegacySource = `
+CREATE TABLE prm_reading_progress_v0038_guard (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_reading_progress_v0038_guard (valid)
+SELECT CASE WHEN
+  (SELECT COUNT(*) FROM users) = 1
+  AND (SELECT COUNT(*) FROM users WHERE typeof(id) = 'integer') = 1
+  AND NOT EXISTS (
+    SELECT 1 FROM reading_progress
+    WHERE current_chapter IS NOT NULL
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM reading_progress
+    WHERE id IS NULL OR typeof(id) <> 'integer'
+      OR book_id IS NULL OR typeof(book_id) <> 'integer'
+  )
+  AND NOT EXISTS (
+    SELECT id FROM reading_progress GROUP BY id HAVING COUNT(*) <> 1
+  )
+  AND NOT EXISTS (
+    SELECT book_id FROM reading_progress GROUP BY book_id HAVING COUNT(*) <> 1
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM reading_progress AS progress
+    LEFT JOIN books AS book ON book.id = progress.book_id
+    WHERE book.id IS NULL
+  )
+  AND (SELECT COUNT(*) FROM pragma_foreign_key_list('reading_progress')) = 1
+  AND EXISTS (
+    SELECT 1 FROM pragma_foreign_key_list('reading_progress')
+    WHERE "table" = 'books' AND "from" = 'book_id' AND "to" = 'id'
+      AND on_update = 'NO ACTION' AND on_delete = 'CASCADE'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM pragma_foreign_key_check
+    WHERE "table" = 'reading_progress'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema
+    WHERE type = 'index' AND tbl_name = 'reading_progress' AND sql IS NOT NULL
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema
+    WHERE type = 'trigger' AND tbl_name = 'reading_progress'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema AS tables, pragma_foreign_key_list(tables.name) AS fk
+    WHERE tables.type = 'table' AND tables.name != 'reading_progress'
+      AND fk."table" = 'reading_progress'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema
+    WHERE type IN ('trigger', 'view')
+      AND (type = 'view' OR tbl_name != 'reading_progress')
+      AND instr(lower(sql), 'reading_progress') > 0
+  )
+  AND (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'reading_progress') = 1
+  AND (SELECT typeof(seq) FROM sqlite_sequence WHERE name = 'reading_progress') = 'integer'
+  AND (SELECT seq FROM sqlite_sequence WHERE name = 'reading_progress') >= 0
+  AND (
+    (SELECT COUNT(*) FROM reading_progress) = 0
+    OR (SELECT seq FROM sqlite_sequence WHERE name = 'reading_progress') >= (SELECT MAX(id) FROM reading_progress)
+  )
+THEN 1 ELSE 0 END;
+CREATE TABLE prm_reading_progress_v0038_owner (
+  user_id INTEGER NOT NULL PRIMARY KEY
+);
+INSERT INTO prm_reading_progress_v0038_owner (user_id)
+SELECT id FROM users;
+CREATE TABLE prm_reading_progress_v0038_sequence (
+  seq INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq >= 0)
+);
+INSERT INTO prm_reading_progress_v0038_sequence (seq)
+SELECT seq FROM sqlite_sequence WHERE name = 'reading_progress';
+CREATE TABLE reading_progress_migration_0038 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  user_id INTEGER,
+  current_page INTEGER DEFAULT 0,
+  cfi TEXT,
+  progress REAL DEFAULT 0,
+  font_size INTEGER DEFAULT 16,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE(book_id, user_id)
+);
+INSERT INTO reading_progress_migration_0038
+  (id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at)
+SELECT progress.id, progress.book_id, owner.user_id, progress.current_page, NULL,
+  progress.progress, progress.font_size, progress.created_at, progress.updated_at
+FROM reading_progress AS progress
+CROSS JOIN prm_reading_progress_v0038_owner AS owner;
+CREATE TABLE prm_reading_progress_v0038_equality (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_reading_progress_v0038_equality (valid)
+SELECT CASE WHEN
+  NOT EXISTS (
+    SELECT id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at
+    FROM reading_progress_migration_0038
+    EXCEPT
+    SELECT progress.id, progress.book_id, owner.user_id, progress.current_page, NULL,
+      progress.progress, progress.font_size, progress.created_at, progress.updated_at
+    FROM reading_progress AS progress
+    CROSS JOIN prm_reading_progress_v0038_owner AS owner
+  )
+  AND NOT EXISTS (
+    SELECT progress.id, progress.book_id, owner.user_id, progress.current_page, NULL,
+      progress.progress, progress.font_size, progress.created_at, progress.updated_at
+    FROM reading_progress AS progress
+    CROSS JOIN prm_reading_progress_v0038_owner AS owner
+    EXCEPT
+    SELECT id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at
+    FROM reading_progress_migration_0038
+  )
+THEN 1 ELSE 0 END;
+DROP TABLE reading_progress;
+CREATE TABLE reading_progress (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  user_id INTEGER,
+  current_page INTEGER DEFAULT 0,
+  cfi TEXT,
+  progress REAL DEFAULT 0,
+  font_size INTEGER DEFAULT 16,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE(book_id, user_id)
+);
+INSERT INTO reading_progress
+  (id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at)
+SELECT id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at
+FROM reading_progress_migration_0038;
+DELETE FROM sqlite_sequence WHERE name = 'reading_progress';
+INSERT INTO sqlite_sequence (name, seq)
+SELECT 'reading_progress', seq FROM prm_reading_progress_v0038_sequence;
+CREATE TABLE prm_reading_progress_v0038_post (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_reading_progress_v0038_post (valid)
+SELECT CASE WHEN
+  (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'reading_progress') = 1
+  AND (SELECT typeof(seq) FROM sqlite_sequence WHERE name = 'reading_progress') = 'integer'
+  AND (SELECT seq FROM sqlite_sequence WHERE name = 'reading_progress') = (SELECT seq FROM prm_reading_progress_v0038_sequence)
+  AND NOT EXISTS (
+    SELECT id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at
+    FROM reading_progress
+    EXCEPT
+    SELECT id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at
+    FROM reading_progress_migration_0038
+  )
+  AND NOT EXISTS (
+    SELECT id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at
+    FROM reading_progress_migration_0038
+    EXCEPT
+    SELECT id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at
+    FROM reading_progress
+  )
+  AND NOT EXISTS (SELECT 1 FROM pragma_foreign_key_check)
+THEN 1 ELSE 0 END;
+DROP TABLE prm_reading_progress_v0038_post;
+DROP TABLE reading_progress_migration_0038;
+DROP TABLE prm_reading_progress_v0038_equality;
+DROP TABLE prm_reading_progress_v0038_sequence;
+DROP TABLE prm_reading_progress_v0038_owner;
+DROP TABLE prm_reading_progress_v0038_guard;
+`.trim()
+
 export const applicationMigrationRegistry = createMigrationRegistry([
   {
     id: '0001_documents_subcategory',
@@ -1155,6 +1419,35 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           proofKey: 'legacy-10-double-quoted-languages',
           shape: codeRepositoryLegacy10Shape,
           createTableSqlSha256: sha256(codeRepositoryLegacy10Ddl),
+          indexes: [],
+          triggers: []
+        }
+      ]
+    }
+  },
+  {
+    id: '0038_reading_progress_shape',
+    sourceVariants: [
+      { proofKey: 'legacy-8-columns', source: readingProgressMigrationLegacySource }
+    ],
+    compatibility: {
+      kind: 'table-transition',
+      table: 'reading_progress',
+      target: readingProgressTargetShape,
+      targetProof: {
+        createTableSqlSha256: sha256(readingProgressTargetDdl),
+        indexes: [],
+        triggers: [],
+        externalDependencies: {
+          inboundForeignKeys: 'none',
+          schemaSqlReferences: 'none'
+        }
+      },
+      legacy: [
+        {
+          proofKey: 'legacy-8-columns',
+          shape: readingProgressLegacyShape,
+          createTableSqlSha256: sha256(readingProgressLegacyDdl),
           indexes: [],
           triggers: []
         }
