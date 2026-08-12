@@ -35,8 +35,31 @@ export function deleteDocumentCategoryTree(database, rawId) {
       UPDATE documents SET category_id = ?, category = ?, subcategory = ?, updated_at = CURRENT_TIMESTAMP
       WHERE category_id IN (${placeholders})
     `).run(parent?.id ?? null, compatibility.category, compatibility.subcategory, ...ids).changes
+    const pathParts = category.path.split('/')
+    const rootName = pathParts[0]
+    const legacyPath = pathParts.slice(1).join('/')
+    const legacyMoved = legacyPath === ''
+      ? database.prepare(`
+          UPDATE documents SET category_id = ?, category = ?, subcategory = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE category_id IS NULL AND category = ?
+        `).run(parent?.id ?? null, compatibility.category, compatibility.subcategory, rootName).changes
+      : database.prepare(`
+          UPDATE documents SET category_id = ?, category = ?, subcategory = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE category_id IS NULL AND category = ? AND (subcategory = ? OR subcategory LIKE ?)
+        `).run(
+          parent?.id ?? null,
+          compatibility.category,
+          compatibility.subcategory,
+          rootName,
+          legacyPath,
+          `${legacyPath}/%`
+        ).changes
     database.prepare('DELETE FROM categories WHERE id = ?').run(id)
-    return Object.freeze({ deletedCategories: ids.length, movedDocuments: moved, categoryId: parent?.id ?? null })
+    return Object.freeze({
+      deletedCategories: ids.length,
+      movedDocuments: moved + legacyMoved,
+      categoryId: parent?.id ?? null
+    })
   })()
 }
 
