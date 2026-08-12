@@ -116,7 +116,8 @@ function initDatabase() {
         createDatabaseBackupSync({
           database,
           sourceDbPath: mainDbPath,
-          backupRoot: databaseBackupPath
+          backupRoot: databaseBackupPath,
+          migrations: applicationMigrationRegistry.migrations
         })
       }
     })

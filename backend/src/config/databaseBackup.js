@@ -10,6 +10,7 @@ export const RESTORE_MARKER_FILE = '.prm-isolated-restore.json'
 
 const TOKEN_PATTERN = /^[a-f0-9]{32}$/
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
+const MIGRATION_ID_PATTERN = /^\d{4}_[a-z0-9][a-z0-9._-]*$/
 
 export class DatabaseBackupError extends Error {
   constructor(code, message, options = {}) {
@@ -87,6 +88,23 @@ function sha256File(filePath) {
   return hash.digest('hex')
 }
 
+function assertBackupSpace(database, backupRoot, statfs = fs.statfsSync) {
+  let availableBytes
+  let requiredBytes
+  try {
+    const stats = statfs(backupRoot)
+    availableBytes = BigInt(stats.bavail) * BigInt(stats.bsize)
+    const pageCount = database.pragma('page_count', { simple: true })
+    const pageSize = database.pragma('page_size', { simple: true })
+    requiredBytes = BigInt(pageCount) * BigInt(pageSize)
+  } catch (error) {
+    fail('DATABASE_BACKUP_SPACE_CHECK_FAILED', 'Backup free space could not be verified.', error)
+  }
+  if (availableBytes < requiredBytes) {
+    fail('DATABASE_BACKUP_SPACE_INSUFFICIENT', 'Backup destination does not have enough free space.')
+  }
+}
+
 function verifySqliteFile(filePath) {
   let database
   try {
@@ -148,6 +166,24 @@ function normalizeNow(value) {
   return now
 }
 
+function normalizeMigrationSnapshot(value = []) {
+  if (!Array.isArray(value)) {
+    fail('DATABASE_BACKUP_MIGRATIONS_INVALID', 'Migration snapshot must be an array.')
+  }
+  const seen = new Set()
+  const migrations = value.map((migration) => {
+    if (!migration || typeof migration !== 'object' || Array.isArray(migration) ||
+      !MIGRATION_ID_PATTERN.test(migration.id ?? '') || !SHA256_PATTERN.test(migration.checksum ?? '') ||
+      seen.has(migration.id)) {
+      fail('DATABASE_BACKUP_MIGRATIONS_INVALID', 'Migration snapshot entry is invalid.')
+    }
+    seen.add(migration.id)
+    return { id: migration.id, checksum: migration.checksum }
+  })
+  migrations.sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+  return migrations
+}
+
 function readManifest(backupDirectory) {
   const manifestPath = path.join(backupDirectory, DATABASE_BACKUP_MANIFEST_FILE)
   let manifest
@@ -162,11 +198,35 @@ function readManifest(backupDirectory) {
     !Number.isSafeInteger(manifest.database?.bytes) || manifest.database.bytes < 1 ||
     !SHA256_PATTERN.test(manifest.database?.sha256 ?? '') ||
     manifest.database.integrityCheck !== 'ok' || typeof manifest.createdAt !== 'string' ||
-    Number.isNaN(Date.parse(manifest.createdAt))
+    Number.isNaN(Date.parse(manifest.createdAt)) || !Array.isArray(manifest.migrations)
   ) {
     fail('DATABASE_BACKUP_MANIFEST_INVALID', 'Backup manifest does not match the supported format.')
   }
+  normalizeMigrationSnapshot(manifest.migrations)
   return manifest
+}
+
+export function verifyDatabaseBackup(options = {}) {
+  const backupDirectory = realDirectoryPath(
+    resolvePath(options.backupDirectory, 'DATABASE_BACKUP_SOURCE_INVALID'),
+    'DATABASE_BACKUP_SOURCE_INVALID'
+  )
+  const manifest = readManifest(backupDirectory)
+  const sourceFile = path.join(backupDirectory, DATABASE_BACKUP_FILE)
+  let sourceStat
+  try {
+    sourceStat = fs.lstatSync(sourceFile)
+  } catch (error) {
+    fail('DATABASE_BACKUP_FILE_MISSING', 'Backup database file is missing.', error)
+  }
+  if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+    fail('DATABASE_BACKUP_FILE_INVALID', 'Backup database must be a regular file.')
+  }
+  if (sourceStat.size !== manifest.database.bytes || sha256File(sourceFile) !== manifest.database.sha256) {
+    fail('DATABASE_BACKUP_HASH_MISMATCH', 'Backup database does not match its manifest.')
+  }
+  verifySqliteFile(sourceFile)
+  return Object.freeze({ backupDirectory, databaseFile: sourceFile, manifest })
 }
 
 export function prepareIsolatedRestoreDirectory(options = {}) {
@@ -208,6 +268,7 @@ export async function createDatabaseBackup(options = {}) {
   }
   const backupRoot = realDirectoryPath(requestedBackupRoot, 'DATABASE_BACKUP_ROOT_INVALID')
   assertSeparatePaths(sourceDbPath, backupRoot)
+  assertBackupSpace(database, backupRoot, options.statfs)
 
   const now = normalizeNow(options.now)
   const suffix = createToken(options.randomBytes).slice(0, 12)
@@ -228,6 +289,7 @@ export async function createDatabaseBackup(options = {}) {
       formatVersion: DATABASE_BACKUP_FORMAT_VERSION,
       kind: 'sqlite',
       createdAt: now.toISOString(),
+      migrations: normalizeMigrationSnapshot(options.migrations),
       database: {
         file: DATABASE_BACKUP_FILE,
         bytes: stat.size,
@@ -264,6 +326,7 @@ export function createDatabaseBackupSync(options = {}) {
   }
   const backupRoot = realDirectoryPath(requestedBackupRoot, 'DATABASE_BACKUP_ROOT_INVALID')
   assertSeparatePaths(sourceDbPath, backupRoot)
+  assertBackupSpace(database, backupRoot, options.statfs)
 
   const now = normalizeNow(options.now)
   const suffix = createToken(options.randomBytes).slice(0, 12)
@@ -288,6 +351,7 @@ export function createDatabaseBackupSync(options = {}) {
       formatVersion: DATABASE_BACKUP_FORMAT_VERSION,
       kind: 'sqlite',
       createdAt: now.toISOString(),
+      migrations: normalizeMigrationSnapshot(options.migrations),
       database: {
         file: DATABASE_BACKUP_FILE,
         bytes: stat.size,
@@ -341,19 +405,16 @@ export function restoreDatabaseBackup(options = {}) {
   )
   assertSeparatePaths(backupDirectory, targetDirectory)
 
-  const manifest = readManifest(backupDirectory)
-  const sourceFile = path.join(backupDirectory, DATABASE_BACKUP_FILE)
-  let sourceStat
+  const verified = verifyDatabaseBackup({ backupDirectory })
+  const { manifest, databaseFile: sourceFile } = verified
   try {
-    sourceStat = fs.lstatSync(sourceFile)
+    const stats = (options.statfs ?? fs.statfsSync)(targetDirectory)
+    if (BigInt(stats.bavail) * BigInt(stats.bsize) < BigInt(manifest.database.bytes)) {
+      fail('DATABASE_RESTORE_SPACE_INSUFFICIENT', 'Restore destination does not have enough free space.')
+    }
   } catch (error) {
-    fail('DATABASE_BACKUP_FILE_MISSING', 'Backup database file is missing.', error)
-  }
-  if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
-    fail('DATABASE_BACKUP_FILE_INVALID', 'Backup database must be a regular file.')
-  }
-  if (sourceStat.size !== manifest.database.bytes || sha256File(sourceFile) !== manifest.database.sha256) {
-    fail('DATABASE_BACKUP_HASH_MISMATCH', 'Backup database does not match its manifest.')
+    if (error instanceof DatabaseBackupError) throw error
+    fail('DATABASE_RESTORE_SPACE_CHECK_FAILED', 'Restore free space could not be verified.', error)
   }
   const temporaryFile = path.join(targetDirectory, '.database.sqlite.restore.tmp')
   const restoredFile = path.join(targetDirectory, DATABASE_BACKUP_FILE)

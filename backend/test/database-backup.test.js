@@ -49,6 +49,11 @@ function deterministicRandomBytes() {
   return Buffer.alloc(16, 0xab)
 }
 
+const migrationSnapshot = [
+  { id: '0002_second', checksum: 'b'.repeat(64), source: 'must not leak' },
+  { id: '0001_first', checksum: 'a'.repeat(64), compatibility: { secret: true } }
+]
+
 function createSourceDatabase(root) {
   const sourceDbPath = path.join(root, 'source', 'app.db')
   fs.mkdirSync(path.dirname(sourceDbPath))
@@ -110,6 +115,7 @@ test('creates and restores a consistent WAL database with a verified manifest', 
       database,
       sourceDbPath: source.sourceDbPath,
       backupRoot,
+      migrations: migrationSnapshot,
       randomBytes: deterministicRandomBytes,
       now: new Date('2026-08-12T01:02:03.004Z')
     })
@@ -120,6 +126,11 @@ test('creates and restores a consistent WAL database with a verified manifest', 
       [DATABASE_BACKUP_FILE, DATABASE_BACKUP_MANIFEST_FILE].sort()
     )
     assert.equal(result.manifest.database.integrityCheck, 'ok')
+    assert.deepEqual(result.manifest.migrations, [
+      { id: '0001_first', checksum: 'a'.repeat(64) },
+      { id: '0002_second', checksum: 'b'.repeat(64) }
+    ])
+    assert.equal(JSON.stringify(result.manifest).includes('must not leak'), false)
     assert.match(result.manifest.database.sha256, /^[a-f0-9]{64}$/)
     assert.equal(
       result.manifest.database.bytes,
@@ -161,6 +172,7 @@ test('creates a synchronous portable snapshot for the startup gate', nativeTestO
       database,
       sourceDbPath: source.sourceDbPath,
       backupRoot: path.join(root, 'backups'),
+      migrations: migrationSnapshot,
       randomBytes: deterministicRandomBytes,
       now: new Date('2026-08-12T02:03:04.005Z')
     })
@@ -367,6 +379,55 @@ test('rejects invalid time and random providers without leaving a directory', ()
     )
     assert.equal(fs.existsSync(invalidRandomTarget), false)
   } finally {
+    cleanup(root)
+  }
+})
+
+test('rejects insufficient backup space before creating snapshot files', nativeTestOptions, () => {
+  const root = makeRoot()
+  let database
+  try {
+    const source = createSourceDatabase(root)
+    database = source.database
+    const backupRoot = path.join(root, 'backups')
+    assert.throws(() => createDatabaseBackupSync({
+      database,
+      sourceDbPath: source.sourceDbPath,
+      backupRoot,
+      statfs: () => ({ bavail: 0, bsize: 4096 })
+    }), { code: 'DATABASE_BACKUP_SPACE_INSUFFICIENT' })
+    assert.deepEqual(fs.readdirSync(backupRoot), [])
+  } finally {
+    database?.close()
+    cleanup(root)
+  }
+})
+
+test('rejects insufficient restore space before copying the database', nativeTestOptions, async () => {
+  const root = makeRoot()
+  let database
+  try {
+    const source = createSourceDatabase(root)
+    database = source.database
+    const backup = await createDatabaseBackup({
+      database,
+      sourceDbPath: source.sourceDbPath,
+      backupRoot: path.join(root, 'backups'),
+      randomBytes: deterministicRandomBytes
+    })
+    const prepared = prepareIsolatedRestoreDirectory({
+      targetDirectory: path.join(root, 'restore'),
+      randomBytes: deterministicRandomBytes
+    })
+    assert.throws(() => restoreDatabaseBackup({
+      backupDirectory: backup.backupDirectory,
+      targetDirectory: prepared.targetDirectory,
+      token: prepared.token,
+      statfs: () => ({ bavail: 0, bsize: 4096 })
+    }), { code: 'DATABASE_RESTORE_SPACE_INSUFFICIENT' })
+    assert.deepEqual(fs.readdirSync(prepared.targetDirectory), [RESTORE_MARKER_FILE])
+  } finally {
+    database?.close()
     cleanup(root)
   }
 })
