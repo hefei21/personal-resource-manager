@@ -1,0 +1,28 @@
+services:
+  lock-holder:
+    image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG:?IMAGE_TAG is required}
+    container_name: pr-lock-test-holder
+    restart: "no"
+    command:
+      - node
+      - test/fixtures/migration-lock-nas-probe.js
+      - holder
+      - /probe
+      - ${LOCK_PROBE_RUN_ID:?LOCK_PROBE_RUN_ID is required}
+    volumes:
+      - ${LOCK_TEST_ROOT:?LOCK_TEST_ROOT is required}:/probe
+
+  lock-contender:
+    image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG:?IMAGE_TAG is required}
+    container_name: pr-lock-test-contender
+    restart: "no"
+    command:
+      - node
+      - test/fixtures/migration-lock-nas-probe.js
+      - contender
+      - /probe
+      - ${LOCK_PROBE_RUN_ID:?LOCK_PROBE_RUN_ID is required}
+    volumes:
+      - ${LOCK_TEST_ROOT:?LOCK_TEST_ROOT is required}:/probe
+    depends_on:
+      - lock-holder

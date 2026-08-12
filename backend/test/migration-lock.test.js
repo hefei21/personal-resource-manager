@@ -29,6 +29,11 @@ const childFixture = path.join(
   'fixtures',
   'migration-lock-child.js'
 )
+const nasProbeFixture = path.join(
+  testDirectory,
+  'fixtures',
+  'migration-lock-nas-probe.js'
+)
 
 function isKnownNativeBindingMissingError(error) {
   const message = String(error?.message ?? '')
@@ -134,6 +139,32 @@ function spawnLockChild(mainDbPath, timeoutMs) {
       }
     }
   }
+}
+
+function runNasProbe(role, sharedRoot, runId) {
+  const child = spawn(process.execPath, [nasProbeFixture, role, sharedRoot, runId], {
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => { stdout += chunk })
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      reject(new Error(`NAS lock probe timed out for ${role}`))
+    }, 30000)
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.once('close', (code, signal) => {
+      clearTimeout(timer)
+      resolve({ code, signal, stdout, stderr })
+    })
+  })
 }
 
 test('derives the side-car path from a normalized main database path', () => {
@@ -288,6 +319,31 @@ test('one of two processes acquires the lock and the other receives MIGRATION_LO
     first.kill()
     second?.kill()
     await Promise.all([first.close(), second?.close()])
+    cleanupDirectory(directory)
+  }
+})
+
+test('the NAS probe verifies busy contention and reacquisition through one shared directory', realLockTestOptions, async () => {
+  const directory = makeTempDirectory()
+  const runId = 'local-two-process-probe'
+  try {
+    const [holder, contender] = await Promise.all([
+      runNasProbe('holder', directory, runId),
+      runNasProbe('contender', directory, runId)
+    ])
+    assert.deepEqual(
+      [holder.code, holder.signal, contender.code, contender.signal],
+      [0, null, 0, null],
+      `${holder.stderr}\n${contender.stderr}`
+    )
+    assert.match(holder.stdout, /"role":"holder","status":"passed"/u)
+    assert.match(contender.stdout, /"role":"contender","status":"passed"/u)
+    const runDirectory = path.join(directory, runId)
+    assert.equal(fs.existsSync(path.join(runDirectory, 'holder-ready.json')), true)
+    assert.equal(fs.existsSync(path.join(runDirectory, 'contender-busy.json')), true)
+    assert.equal(fs.existsSync(path.join(runDirectory, 'holder-released.json')), true)
+    assert.equal(fs.existsSync(path.join(runDirectory, 'contender-reacquired.json')), true)
+  } finally {
     cleanupDirectory(directory)
   }
 })
