@@ -220,11 +220,12 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
       name TEXT NOT NULL,
       url TEXT NOT NULL,
       description TEXT,
-      local_path TEXT NOT NULL,
+      local_path TEXT NOT NULL DEFAULT '',
       type TEXT DEFAULT 'git',
       last_sync TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      languages TEXT DEFAULT '{}'
     )`,
 
     // 书签表
@@ -534,45 +535,6 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
 
   // 为现有数据库添加新字段（在表创建之后）
   try {
-    // 检查并迁移代码仓库表结构
-    const codeColumns = database.prepare("PRAGMA table_info(code_repositories)").all()
-    console.log('code_repositories 表当前字段:', codeColumns.map(c => c.name).join(', '))
-
-    const hasLocalPath = codeColumns.some(col => col.name === 'local_path')
-    if (!hasLocalPath) {
-      console.log('迁移代码仓库表结构...')
-      // 删除旧表，创建新表
-      database.exec(`
-        CREATE TABLE code_repositories_new (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          name TEXT NOT NULL,
-          url TEXT NOT NULL,
-          description TEXT,
-          local_path TEXT NOT NULL DEFAULT '',
-          type TEXT DEFAULT 'git',
-          last_sync TEXT,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `)
-      // 迁移数据
-      database.exec(`
-        INSERT INTO code_repositories_new (id, name, url, description, created_at, updated_at)
-        SELECT id, name, url, description, created_at, updated_at FROM code_repositories
-      `)
-      database.exec('DROP TABLE code_repositories')
-      database.exec('ALTER TABLE code_repositories_new RENAME TO code_repositories')
-      console.log('✓ 代码仓库表结构迁移完成')
-    }
-
-    // 添加代码统计字段
-    const hasLanguages = codeColumns.some(col => col.name === 'languages')
-    if (!hasLanguages) {
-      console.log('添加 languages 字段到 code_repositories 表...')
-      database.exec('ALTER TABLE code_repositories ADD COLUMN languages TEXT DEFAULT "{}"')
-      console.log('✓ 语言统计字段添加成功')
-    }
-
     // 检查 reading_progress 表字段
     const readingProgressColumns = database.prepare("PRAGMA table_info(reading_progress)").all()
     console.log('reading_progress 表当前字段:', readingProgressColumns.map(c => c.name).join(', '))

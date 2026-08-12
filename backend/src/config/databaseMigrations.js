@@ -236,6 +236,385 @@ DROP TABLE prm_documents_v0036_sequence;
 DROP TABLE prm_documents_v0036_guard;
 `.trim()
 
+const codeRepositoryColumn = (name, type, notNull = false, defaultValue = null, primaryKeyPosition = 0) => ({
+  name,
+  type,
+  notNull,
+  defaultValue,
+  primaryKeyPosition
+})
+
+const codeRepositoryShape = (columns) => ({
+  strict: false,
+  withoutRowid: false,
+  columns,
+  foreignKeys: [],
+  uniqueConstraints: []
+})
+
+const codeRepositoryLegacy6Shape = codeRepositoryShape([
+  codeRepositoryColumn('id', 'INTEGER', false, null, 1),
+  codeRepositoryColumn('name', 'TEXT', true),
+  codeRepositoryColumn('url', 'TEXT', true),
+  codeRepositoryColumn('description', 'TEXT'),
+  codeRepositoryColumn('created_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  codeRepositoryColumn('updated_at', 'DATETIME', false, 'CURRENT_TIMESTAMP')
+])
+
+const codeRepositoryLegacy9Shape = codeRepositoryShape([
+  codeRepositoryColumn('id', 'INTEGER', false, null, 1),
+  codeRepositoryColumn('name', 'TEXT', true),
+  codeRepositoryColumn('url', 'TEXT', true),
+  codeRepositoryColumn('description', 'TEXT'),
+  codeRepositoryColumn('local_path', 'TEXT', true, "''"),
+  codeRepositoryColumn('type', 'TEXT', false, "'git'"),
+  codeRepositoryColumn('last_sync', 'TEXT'),
+  codeRepositoryColumn('created_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  codeRepositoryColumn('updated_at', 'DATETIME', false, 'CURRENT_TIMESTAMP')
+])
+
+const codeRepositoryLegacy10Shape = codeRepositoryShape([
+  ...codeRepositoryLegacy9Shape.columns,
+  codeRepositoryColumn('languages', 'TEXT', false, '"{}"')
+])
+
+const codeRepositoryTargetShape = codeRepositoryShape([
+  codeRepositoryColumn('id', 'INTEGER', false, null, 1),
+  codeRepositoryColumn('name', 'TEXT', true),
+  codeRepositoryColumn('url', 'TEXT', true),
+  codeRepositoryColumn('description', 'TEXT'),
+  codeRepositoryColumn('local_path', 'TEXT', true, "''"),
+  codeRepositoryColumn('type', 'TEXT', false, "'git'"),
+  codeRepositoryColumn('last_sync', 'TEXT'),
+  codeRepositoryColumn('created_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  codeRepositoryColumn('updated_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  codeRepositoryColumn('languages', 'TEXT', false, "'{}'")
+])
+
+const codeRepositoryLegacy6Ddl = `CREATE TABLE code_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`
+
+const codeRepositoryLegacy9Ddl = `CREATE TABLE "code_repositories" (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          url TEXT NOT NULL,
+          description TEXT,
+          local_path TEXT NOT NULL DEFAULT '',
+          type TEXT DEFAULT 'git',
+          last_sync TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`
+
+const codeRepositoryLegacy10Ddl = `${codeRepositoryLegacy9Ddl.slice(0, -1)}, languages TEXT DEFAULT "{}")`
+
+const codeRepositoryTargetDdl = `CREATE TABLE code_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  local_path TEXT NOT NULL DEFAULT '',
+  type TEXT DEFAULT 'git',
+  last_sync TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  languages TEXT DEFAULT '{}'
+)`
+
+const codeRepositoryMigrationLegacy6Source = `
+CREATE TABLE prm_code_repositories_v0037_guard (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_guard (valid)
+SELECT CASE WHEN
+  NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema AS tables, pragma_foreign_key_list(tables.name) AS fk
+    WHERE tables.type = 'table' AND tables.name != 'code_repositories'
+      AND fk."table" = 'code_repositories'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema
+    WHERE type IN ('trigger', 'view') AND tbl_name != 'code_repositories'
+      AND instr(lower(sql), 'code_repositories') > 0
+  )
+  AND (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'code_repositories') = 1
+  AND (SELECT typeof(seq) FROM sqlite_sequence WHERE name = 'code_repositories') = 'integer'
+  AND (SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories') >= COALESCE((SELECT MAX(id) FROM code_repositories), 0)
+THEN 1 ELSE 0 END;
+CREATE TABLE prm_code_repositories_v0037_sequence (seq INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq >= 0));
+INSERT INTO prm_code_repositories_v0037_sequence (seq)
+SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories';
+CREATE TABLE code_repositories_migration_0037 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  local_path TEXT NOT NULL DEFAULT '',
+  type TEXT DEFAULT 'git',
+  last_sync TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  languages TEXT DEFAULT '{}'
+);
+INSERT INTO code_repositories_migration_0037
+  (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
+SELECT id, name, url, description, '', 'git', NULL, created_at, updated_at, '{}'
+FROM code_repositories;
+CREATE TABLE prm_code_repositories_v0037_equality (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_equality (valid)
+SELECT CASE WHEN
+  NOT EXISTS (
+    SELECT id, name, url, description, '', 'git', NULL, created_at, updated_at, '{}' FROM code_repositories
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+  )
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+    EXCEPT
+    SELECT id, name, url, description, '', 'git', NULL, created_at, updated_at, '{}' FROM code_repositories
+  )
+THEN 1 ELSE 0 END;
+DROP TABLE code_repositories;
+CREATE TABLE code_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  local_path TEXT NOT NULL DEFAULT '',
+  type TEXT DEFAULT 'git',
+  last_sync TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  languages TEXT DEFAULT '{}'
+);
+INSERT INTO code_repositories
+  (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
+SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages
+FROM code_repositories_migration_0037;
+DELETE FROM sqlite_sequence WHERE name = 'code_repositories';
+INSERT INTO sqlite_sequence (name, seq)
+SELECT 'code_repositories', seq FROM prm_code_repositories_v0037_sequence;
+CREATE TABLE prm_code_repositories_v0037_post (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_post (valid)
+SELECT CASE WHEN
+  (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'code_repositories') = 1
+  AND (SELECT typeof(seq) FROM sqlite_sequence WHERE name = 'code_repositories') = 'integer'
+  AND (SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories') = (SELECT seq FROM prm_code_repositories_v0037_sequence)
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+  )
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories
+  )
+  AND NOT EXISTS (SELECT 1 FROM pragma_foreign_key_check)
+THEN 1 ELSE 0 END;
+DROP TABLE prm_code_repositories_v0037_post;
+DROP TABLE code_repositories_migration_0037;
+DROP TABLE prm_code_repositories_v0037_equality;
+DROP TABLE prm_code_repositories_v0037_sequence;
+DROP TABLE prm_code_repositories_v0037_guard;
+`.trim()
+
+const codeRepositoryMigrationLegacy9Source = `
+CREATE TABLE prm_code_repositories_v0037_guard (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_guard (valid)
+SELECT CASE WHEN
+  NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema AS tables, pragma_foreign_key_list(tables.name) AS fk
+    WHERE tables.type = 'table' AND tables.name != 'code_repositories'
+      AND fk."table" = 'code_repositories'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema
+    WHERE type IN ('trigger', 'view') AND tbl_name != 'code_repositories'
+      AND instr(lower(sql), 'code_repositories') > 0
+  )
+  AND (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'code_repositories') = 1
+  AND (SELECT typeof(seq) FROM sqlite_sequence WHERE name = 'code_repositories') = 'integer'
+  AND (SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories') >= COALESCE((SELECT MAX(id) FROM code_repositories), 0)
+THEN 1 ELSE 0 END;
+CREATE TABLE prm_code_repositories_v0037_sequence (seq INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq >= 0));
+INSERT INTO prm_code_repositories_v0037_sequence (seq)
+SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories';
+CREATE TABLE code_repositories_migration_0037 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  local_path TEXT NOT NULL DEFAULT '',
+  type TEXT DEFAULT 'git',
+  last_sync TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  languages TEXT DEFAULT '{}'
+);
+INSERT INTO code_repositories_migration_0037
+  (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
+SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, '{}'
+FROM code_repositories;
+CREATE TABLE prm_code_repositories_v0037_equality (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_equality (valid)
+SELECT CASE WHEN
+  NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, '{}' FROM code_repositories
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+  )
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, '{}' FROM code_repositories
+  )
+THEN 1 ELSE 0 END;
+DROP TABLE code_repositories;
+CREATE TABLE code_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  local_path TEXT NOT NULL DEFAULT '',
+  type TEXT DEFAULT 'git',
+  last_sync TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  languages TEXT DEFAULT '{}'
+);
+INSERT INTO code_repositories
+  (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
+SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages
+FROM code_repositories_migration_0037;
+DELETE FROM sqlite_sequence WHERE name = 'code_repositories';
+INSERT INTO sqlite_sequence (name, seq)
+SELECT 'code_repositories', seq FROM prm_code_repositories_v0037_sequence;
+CREATE TABLE prm_code_repositories_v0037_post (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_post (valid)
+SELECT CASE WHEN
+  (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'code_repositories') = 1
+  AND (SELECT typeof(seq) FROM sqlite_sequence WHERE name = 'code_repositories') = 'integer'
+  AND (SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories') = (SELECT seq FROM prm_code_repositories_v0037_sequence)
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+  )
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories
+  )
+  AND NOT EXISTS (SELECT 1 FROM pragma_foreign_key_check)
+THEN 1 ELSE 0 END;
+DROP TABLE prm_code_repositories_v0037_post;
+DROP TABLE code_repositories_migration_0037;
+DROP TABLE prm_code_repositories_v0037_equality;
+DROP TABLE prm_code_repositories_v0037_sequence;
+DROP TABLE prm_code_repositories_v0037_guard;
+`.trim()
+
+const codeRepositoryMigrationLegacy10Source = `
+CREATE TABLE prm_code_repositories_v0037_guard (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_guard (valid)
+SELECT CASE WHEN
+  NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema AS tables, pragma_foreign_key_list(tables.name) AS fk
+    WHERE tables.type = 'table' AND tables.name != 'code_repositories'
+      AND fk."table" = 'code_repositories'
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM main.sqlite_schema
+    WHERE type IN ('trigger', 'view') AND tbl_name != 'code_repositories'
+      AND instr(lower(sql), 'code_repositories') > 0
+  )
+  AND (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'code_repositories') = 1
+  AND (SELECT typeof(seq) FROM sqlite_sequence WHERE name = 'code_repositories') = 'integer'
+  AND (SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories') >= COALESCE((SELECT MAX(id) FROM code_repositories), 0)
+THEN 1 ELSE 0 END;
+CREATE TABLE prm_code_repositories_v0037_sequence (seq INTEGER NOT NULL CHECK (typeof(seq) = 'integer' AND seq >= 0));
+INSERT INTO prm_code_repositories_v0037_sequence (seq)
+SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories';
+CREATE TABLE code_repositories_migration_0037 (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  local_path TEXT NOT NULL DEFAULT '',
+  type TEXT DEFAULT 'git',
+  last_sync TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  languages TEXT DEFAULT '{}'
+);
+INSERT INTO code_repositories_migration_0037
+  (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
+SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages
+FROM code_repositories;
+CREATE TABLE prm_code_repositories_v0037_equality (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_equality (valid)
+SELECT CASE WHEN
+  NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+  )
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories
+  )
+THEN 1 ELSE 0 END;
+DROP TABLE code_repositories;
+CREATE TABLE code_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  local_path TEXT NOT NULL DEFAULT '',
+  type TEXT DEFAULT 'git',
+  last_sync TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  languages TEXT DEFAULT '{}'
+);
+INSERT INTO code_repositories
+  (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
+SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages
+FROM code_repositories_migration_0037;
+DELETE FROM sqlite_sequence WHERE name = 'code_repositories';
+INSERT INTO sqlite_sequence (name, seq)
+SELECT 'code_repositories', seq FROM prm_code_repositories_v0037_sequence;
+CREATE TABLE prm_code_repositories_v0037_post (valid INTEGER NOT NULL CHECK (valid = 1));
+INSERT INTO prm_code_repositories_v0037_post (valid)
+SELECT CASE WHEN
+  (SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'code_repositories') = 1
+  AND (SELECT typeof(seq) FROM sqlite_sequence WHERE name = 'code_repositories') = 'integer'
+  AND (SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories') = (SELECT seq FROM prm_code_repositories_v0037_sequence)
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+  )
+  AND NOT EXISTS (
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories_migration_0037
+    EXCEPT
+    SELECT id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages FROM code_repositories
+  )
+  AND NOT EXISTS (SELECT 1 FROM pragma_foreign_key_check)
+THEN 1 ELSE 0 END;
+DROP TABLE prm_code_repositories_v0037_post;
+DROP TABLE code_repositories_migration_0037;
+DROP TABLE prm_code_repositories_v0037_equality;
+DROP TABLE prm_code_repositories_v0037_sequence;
+DROP TABLE prm_code_repositories_v0037_guard;
+`.trim()
+
 export const applicationMigrationRegistry = createMigrationRegistry([
   {
     id: '0001_documents_subcategory',
@@ -735,6 +1114,51 @@ export const applicationMigrationRegistry = createMigrationRegistry([
       table: 'documents',
       target: documentShape('REAL'),
       legacy: documentLegacyProofs
+    }
+  },
+  {
+    id: '0037_code_repositories_shape',
+    sourceVariants: [
+      { proofKey: 'legacy-6-columns', source: codeRepositoryMigrationLegacy6Source },
+      { proofKey: 'legacy-9-columns', source: codeRepositoryMigrationLegacy9Source },
+      { proofKey: 'legacy-10-double-quoted-languages', source: codeRepositoryMigrationLegacy10Source }
+    ],
+    compatibility: {
+      kind: 'table-transition',
+      table: 'code_repositories',
+      target: codeRepositoryTargetShape,
+      targetProof: {
+        createTableSqlSha256: sha256(codeRepositoryTargetDdl),
+        indexes: [],
+        triggers: [],
+        externalDependencies: {
+          inboundForeignKeys: 'none',
+          schemaSqlReferences: 'none'
+        }
+      },
+      legacy: [
+        {
+          proofKey: 'legacy-6-columns',
+          shape: codeRepositoryLegacy6Shape,
+          createTableSqlSha256: sha256(codeRepositoryLegacy6Ddl),
+          indexes: [],
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-9-columns',
+          shape: codeRepositoryLegacy9Shape,
+          createTableSqlSha256: sha256(codeRepositoryLegacy9Ddl),
+          indexes: [],
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-10-double-quoted-languages',
+          shape: codeRepositoryLegacy10Shape,
+          createTableSqlSha256: sha256(codeRepositoryLegacy10Ddl),
+          indexes: [],
+          triggers: []
+        }
+      ]
     }
   }
 ])

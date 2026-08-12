@@ -100,6 +100,65 @@ function assertApplicationMigrationLedger(database, expectedAttemptCount) {
   assert.equal(database.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count, expectedAttemptCount)
 }
 
+const legacyCodeRepositories6Ddl = `CREATE TABLE code_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`
+
+const legacyCodeRepositories9Ddl = `CREATE TABLE "code_repositories" (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          url TEXT NOT NULL,
+          description TEXT,
+          local_path TEXT NOT NULL DEFAULT '',
+          type TEXT DEFAULT 'git',
+          last_sync TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`
+
+function createLegacyCodeRepositories(database, variant) {
+  if (variant === 'legacy-6-columns') {
+    database.exec(legacyCodeRepositories6Ddl)
+    return
+  }
+  database.exec(legacyCodeRepositories9Ddl.replace('"code_repositories"', 'code_repositories_new'))
+  database.exec('ALTER TABLE code_repositories_new RENAME TO code_repositories')
+  if (variant === 'legacy-10-double-quoted-languages') {
+    database.exec('ALTER TABLE code_repositories ADD COLUMN languages TEXT DEFAULT "{}"')
+  }
+}
+
+function codeRepositorySnapshot(database) {
+  return {
+    sql: database.prepare(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'code_repositories'"
+    ).get().sql,
+    rows: database.prepare('SELECT * FROM code_repositories ORDER BY id').all(),
+    sequence: database.prepare(
+      "SELECT rowid, name, seq, typeof(seq) AS storage_type FROM sqlite_sequence WHERE name = 'code_repositories' ORDER BY rowid"
+    ).all()
+  }
+}
+
+function assertNoCodeRepositoryMigrationHelpers(database) {
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS count FROM sqlite_schema
+    WHERE name LIKE 'prm_code_repositories_v0037_%' OR name = 'code_repositories_migration_0037'
+  `).get().count, 0)
+}
+
+function assertCodeRepositoryMigrationNotApplied(database) {
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS count FROM prm_schema_migrations
+    WHERE migration_id = '0037_code_repositories_shape'
+  `).get().count, 0)
+}
+
 const expectedAnimeMigrations = [
   {
     id: '0007_anime_name_cn',
@@ -399,11 +458,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 35 C2c columns and the documents version transition', () => {
+test('application registry freezes 35 C2c columns and both registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 36)
+  assert.equal(applicationMigrationRegistry.migrations.length, 37)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -416,7 +475,8 @@ test('application registry freezes 35 C2c columns and the documents version tran
       ...expectedAnimeMigrations.map(({ id }) => id),
       ...expectedGamesMigrations.map(({ id }) => id),
       ...expectedMusicMigrations.map(({ id }) => id),
-      '0036_documents_version_real'
+      '0036_documents_version_real',
+      '0037_code_repositories_shape'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -496,6 +556,33 @@ test('application registry freezes 35 C2c columns and the documents version tran
   assert.equal(documentMigration.compatibility.legacy.length, 16)
   assert.match(documentMigration.source, /prm_documents_v0036_guard/u)
   assert.match(documentMigration.source, /CAST\(version AS REAL\)/u)
+  const codeRepositoryMigration = applicationMigrationRegistry.migrations[36]
+  assert.equal(codeRepositoryMigration.compatibility.kind, 'table-transition')
+  assert.equal(codeRepositoryMigration.compatibility.table, 'code_repositories')
+  assert.deepEqual(
+    codeRepositoryMigration.compatibility.target.columns.map(({ name }) => name),
+    ['id', 'name', 'url', 'description', 'local_path', 'type', 'last_sync', 'created_at', 'updated_at', 'languages']
+  )
+  assert.deepEqual(codeRepositoryMigration.compatibility.targetProof, {
+    createTableSqlSha256: '197c9846ca9f7978ca66eebc6547b09918c995014fcd61f1e9949c028d564606',
+    indexes: [],
+    triggers: [],
+    externalDependencies: { inboundForeignKeys: 'none', schemaSqlReferences: 'none' }
+  })
+  assert.deepEqual(
+    codeRepositoryMigration.compatibility.legacy.map(({ proofKey }) => proofKey),
+    ['legacy-10-double-quoted-languages', 'legacy-6-columns', 'legacy-9-columns']
+  )
+  assert.deepEqual(
+    codeRepositoryMigration.sourceVariants.map(({ proofKey }) => proofKey),
+    ['legacy-10-double-quoted-languages', 'legacy-6-columns', 'legacy-9-columns']
+  )
+  assert.ok(codeRepositoryMigration.sourceVariants.every(({ source }) => (
+    /prm_code_repositories_v0037_guard/u.test(source) &&
+    /EXCEPT/u.test(source) &&
+    /pragma_foreign_key_check/u.test(source) &&
+    !/foreign_keys\s*=|writable_schema|\bPRAGMA\b/iu.test(source)
+  )))
 })
 
 test('static contract runs the startup gate once after base tables and before all later initialization', () => {
@@ -528,6 +615,10 @@ test('static contract runs the startup gate once after base tables and before al
   assert.match(databaseMigrationsSource, /source: 'ALTER TABLE bookmarks ADD COLUMN icon_data TEXT;'/u)
   assert.doesNotMatch(databaseMigrationsSource, /DROP TABLE(?: IF EXISTS)? code_versions/u)
   assert.ok(applicationMigrationRegistry.migrations.every(({ source }) => !/DROP TABLE(?: IF EXISTS)? code_versions/u.test(source)))
+  assert.match(databaseMigrationsSource, /id: '0037_code_repositories_shape'/u)
+  assert.match(databaseSource, /CREATE TABLE IF NOT EXISTS code_repositories \([\s\S]*local_path TEXT NOT NULL DEFAULT ''[\s\S]*languages TEXT DEFAULT '\{\}'/u)
+  assert.doesNotMatch(databaseSource, /codeColumns|hasLocalPath|code_repositories_new|hasLanguages/u)
+  assert.doesNotMatch(databaseSource, /ALTER TABLE code_repositories ADD COLUMN languages/u)
   assert.doesNotMatch(databaseSource, /animeColumns|animeNewFields|ALTER TABLE anime ADD COLUMN/u)
   const animeTableStart = databaseSource.indexOf('CREATE TABLE IF NOT EXISTS anime (')
   const animeTableEnd = databaseSource.indexOf('    )`,', animeTableStart)
@@ -575,7 +666,6 @@ test('static contract runs the startup gate once after base tables and before al
   const lyricsIndex = databaseSource.indexOf('idx_music_has_lyrics')
   assert.ok(lyricsIndex > indexesStart)
   assert.ok(lyricsIndex < indexesEnd)
-  assert.match(databaseSource, /codeColumns[\s\S]*languages/u)
   assert.match(databaseSource, /readingProgressColumns[\s\S]*hasCfi/u)
 
   const instanceCall = databaseSource.indexOf("initDatabaseInstance(mainDb, 'main', () => {")
@@ -590,7 +680,7 @@ test('static contract runs the startup gate once after base tables and before al
   const baseTableLoop = databaseSource.indexOf('tables.forEach(sql => {', instanceDefinition)
   const schemaGateHook = databaseSource.indexOf('runBaseSchemaGate()', baseTableLoop)
   const firstIndexes = databaseSource.indexOf('const indexes = [', schemaGateHook)
-  const firstInlineUpgrade = databaseSource.indexOf('const codeColumns =', schemaGateHook)
+  const firstInlineUpgrade = databaseSource.indexOf('const readingProgressColumns =', schemaGateHook)
   const ownerInitialization = databaseSource.indexOf('initializeOwner(database, process.env)', schemaGateHook)
   assert.ok(instanceDefinition >= 0)
   assert.ok(baseTableLoop > instanceDefinition)
@@ -614,7 +704,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.ok(initializeCatch > listenCall)
 })
 
-test('empty database adopts all 36 registered migrations without executing schema changes', nativeTestOptions, () => {
+test('empty database adopts all 37 registered migrations without executing schema changes', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   try {
@@ -629,7 +719,7 @@ test('empty database adopts all 36 registered migrations without executing schem
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 36)
+      assertApplicationMigrationLedger(verification, 37)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
@@ -678,7 +768,322 @@ test('restarting the current database does not add registered migration attempts
         ledger: verification.prepare('SELECT COUNT(*) AS count FROM prm_schema_migrations').get().count,
         attempts: verification.prepare('SELECT COUNT(*) AS count FROM prm_migration_attempts').get().count
       }, firstCounts)
-      assertApplicationMigrationLedger(verification, 36)
+      assertApplicationMigrationLedger(verification, 37)
+    } finally {
+      verification.close()
+    }
+  } finally {
+    removeTemporaryDirectory(directory)
+  }
+})
+
+test('migrates each exact code_repositories legacy shape with values, defaults, IDs, timestamps, and sequence preserved', nativeTestOptions, () => {
+  const cases = [
+    {
+      variant: 'legacy-6-columns',
+      insert: `INSERT INTO code_repositories
+        (id, name, url, description, created_at, updated_at)
+        VALUES (7, 'six-a', 'https://example.invalid/six-a', NULL, '2024-01-01 01:02:03', '2024-01-02 04:05:06'),
+               (11, 'six-b', 'https://example.invalid/six-b', '', NULL, '')`,
+      expected: [
+        { id: 7, name: 'six-a', url: 'https://example.invalid/six-a', description: null, local_path: '', type: 'git', last_sync: null, created_at: '2024-01-01 01:02:03', updated_at: '2024-01-02 04:05:06', languages: '{}' },
+        { id: 11, name: 'six-b', url: 'https://example.invalid/six-b', description: '', local_path: '', type: 'git', last_sync: null, created_at: null, updated_at: '', languages: '{}' }
+      ]
+    },
+    {
+      variant: 'legacy-9-columns',
+      insert: `INSERT INTO code_repositories
+        (id, name, url, description, local_path, type, last_sync, created_at, updated_at)
+        VALUES (7, 'nine-a', 'https://example.invalid/nine-a', NULL, '', NULL, '', '2024-02-01 01:02:03', '2024-02-02 04:05:06'),
+               (11, 'nine-b', 'https://example.invalid/nine-b', '', '/synthetic/repo', 'svn-history', NULL, NULL, '')`,
+      expected: [
+        { id: 7, name: 'nine-a', url: 'https://example.invalid/nine-a', description: null, local_path: '', type: null, last_sync: '', created_at: '2024-02-01 01:02:03', updated_at: '2024-02-02 04:05:06', languages: '{}' },
+        { id: 11, name: 'nine-b', url: 'https://example.invalid/nine-b', description: '', local_path: '/synthetic/repo', type: 'svn-history', last_sync: null, created_at: null, updated_at: '', languages: '{}' }
+      ]
+    },
+    {
+      variant: 'legacy-10-double-quoted-languages',
+      insert: `INSERT INTO code_repositories
+        (id, name, url, description, local_path, type, last_sync, created_at, updated_at, languages)
+        VALUES (7, 'ten-a', 'https://example.invalid/ten-a', NULL, '', NULL, '', '2024-03-01 01:02:03', '2024-03-02 04:05:06', NULL),
+               (11, 'ten-b', 'https://example.invalid/ten-b', '', '/synthetic/repo', '', NULL, NULL, '', 'not-json')`,
+      expected: [
+        { id: 7, name: 'ten-a', url: 'https://example.invalid/ten-a', description: null, local_path: '', type: null, last_sync: '', created_at: '2024-03-01 01:02:03', updated_at: '2024-03-02 04:05:06', languages: null },
+        { id: 11, name: 'ten-b', url: 'https://example.invalid/ten-b', description: '', local_path: '/synthetic/repo', type: '', last_sync: null, created_at: null, updated_at: '', languages: 'not-json' }
+      ]
+    }
+  ]
+
+  for (const entry of cases) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    try {
+      createLegacyCodeRepositories(database, entry.variant)
+      database.exec(entry.insert)
+      database.prepare("UPDATE sqlite_sequence SET seq = 19 WHERE name = 'code_repositories'").run()
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.equal(result.status, 0, `${entry.variant}: ${output}`)
+      const verification = new Database(databasePath)
+      try {
+        assert.deepEqual(
+          verification.prepare('SELECT * FROM code_repositories ORDER BY id').all(),
+          entry.expected,
+          entry.variant
+        )
+        assert.equal(verification.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories'").get().seq, 19)
+        const inserted = verification.prepare(
+          "INSERT INTO code_repositories (name, url) VALUES ('after', 'https://example.invalid/after')"
+        ).run()
+        assert.equal(inserted.lastInsertRowid, 20)
+        assert.deepEqual(verification.pragma('foreign_key_check'), [])
+        assertNoCodeRepositoryMigrationHelpers(verification)
+        assertApplicationMigrationLedger(verification, 37)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('preserves deleted code_repositories ID history when each exact legacy table is empty', nativeTestOptions, () => {
+  for (const variant of [
+    'legacy-6-columns',
+    'legacy-9-columns',
+    'legacy-10-double-quoted-languages'
+  ]) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    try {
+      createLegacyCodeRepositories(database, variant)
+      const columns = variant === 'legacy-6-columns'
+        ? '(id, name, url)'
+        : '(id, name, url, local_path)'
+      const values = variant === 'legacy-6-columns'
+        ? "(19, 'deleted', 'https://example.invalid/deleted')"
+        : "(19, 'deleted', 'https://example.invalid/deleted', '')"
+      database.exec(`INSERT INTO code_repositories ${columns} VALUES ${values}; DELETE FROM code_repositories;`)
+      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM code_repositories').get().count, 0)
+      assert.equal(database.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories'").get().seq, 19)
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.equal(result.status, 0, `${variant}: ${output}`)
+      const verification = new Database(databasePath)
+      try {
+        assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM code_repositories').get().count, 0)
+        assert.equal(verification.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'code_repositories'").get().seq, 19)
+        const inserted = verification.prepare(
+          "INSERT INTO code_repositories (name, url) VALUES ('after-delete', 'https://example.invalid/after-delete')"
+        ).run()
+        assert.equal(inserted.lastInsertRowid, 20)
+        assertNoCodeRepositoryMigrationHelpers(verification)
+        assertApplicationMigrationLedger(verification, 37)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('code_repositories unknown target schema objects and dependencies fail closed before later initialization', nativeTestOptions, () => {
+  const cases = [
+    { name: 'unknown column', setup: (database) => database.exec('ALTER TABLE code_repositories ADD COLUMN unexpected TEXT') },
+    { name: 'unknown constraint', setup: (database) => {
+      database.exec('DROP TABLE code_repositories')
+      database.exec(legacyCodeRepositories9Ddl.replace('updated_at DATETIME DEFAULT CURRENT_TIMESTAMP', 'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(name)'))
+    } },
+    { name: 'unknown index', setup: (database) => database.exec('CREATE INDEX code_repositories_name_idx ON code_repositories(name)') },
+    { name: 'table trigger', setup: (database) => database.exec('CREATE TRIGGER code_repositories_hook AFTER INSERT ON code_repositories BEGIN SELECT 1; END') },
+    { name: 'inbound foreign key', setup: (database) => database.exec('CREATE TABLE repo_links (repository_id INTEGER REFERENCES code_repositories(id))') },
+    { name: 'referencing view', setup: (database) => database.exec('CREATE VIEW repo_view AS SELECT id FROM code_repositories') },
+    { name: 'external trigger reference', setup: (database) => database.exec('CREATE TABLE audit_probe (id INTEGER); CREATE TRIGGER audit_probe_hook AFTER INSERT ON audit_probe BEGIN SELECT id FROM code_repositories; END') }
+  ]
+
+  for (const entry of cases) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    let before
+    try {
+      createLegacyCodeRepositories(database, 'legacy-9-columns')
+      database.prepare("INSERT INTO code_repositories (id, name, url, local_path) VALUES (5, 'keep', 'https://example.invalid/keep', '')").run()
+      database.prepare("UPDATE sqlite_sequence SET seq = 9 WHERE name = 'code_repositories'").run()
+      entry.setup(database)
+      before = codeRepositorySnapshot(database)
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.notEqual(result.status, 0, `${entry.name}: ${output}`)
+      const verification = new Database(databasePath)
+      try {
+        assert.deepEqual(codeRepositorySnapshot(verification), before, entry.name)
+        assertCodeRepositoryMigrationNotApplied(verification)
+        assertNoCodeRepositoryMigrationHelpers(verification)
+        assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('strict code_repositories target proof rejects unknown indexes, triggers, inbound FKs, and schema references', nativeTestOptions, () => {
+  const targetDdl = `CREATE TABLE code_repositories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  local_path TEXT NOT NULL DEFAULT '',
+  type TEXT DEFAULT 'git',
+  last_sync TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  languages TEXT DEFAULT '{}'
+)`
+  const cases = [
+    { name: 'target index', setup: (database) => database.exec('CREATE INDEX code_repositories_name_idx ON code_repositories(name)') },
+    { name: 'target trigger', setup: (database) => database.exec('CREATE TRIGGER code_repositories_hook AFTER INSERT ON code_repositories BEGIN SELECT 1; END') },
+    { name: 'target inbound FK', setup: (database) => database.exec('CREATE TABLE repo_links (repository_id INTEGER REFERENCES code_repositories(id))') },
+    { name: 'target view reference', setup: (database) => database.exec('CREATE VIEW repo_view AS SELECT id FROM code_repositories') },
+    { name: 'target external trigger reference', setup: (database) => database.exec('CREATE TABLE audit_probe (id INTEGER); CREATE TRIGGER audit_probe_hook AFTER INSERT ON audit_probe BEGIN SELECT id FROM code_repositories; END') }
+  ]
+
+  for (const entry of cases) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    let before
+    try {
+      database.exec(targetDdl)
+      database.prepare("INSERT INTO code_repositories (id, name, url) VALUES (5, 'keep', 'https://example.invalid/keep')").run()
+      database.prepare("UPDATE sqlite_sequence SET seq = 9 WHERE name = 'code_repositories'").run()
+      entry.setup(database)
+      before = codeRepositorySnapshot(database)
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.notEqual(result.status, 0, `${entry.name}: ${output}`)
+      const verification = new Database(databasePath)
+      try {
+        assert.deepEqual(codeRepositorySnapshot(verification), before, entry.name)
+        assertCodeRepositoryMigrationNotApplied(verification)
+        assertNoCodeRepositoryMigrationHelpers(verification)
+        assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('code_repositories invalid sequence and target-constraint data roll back table, rows, sequence, and ledger', nativeTestOptions, () => {
+  const cases = [
+    { name: 'missing sequence', setup: (database) => database.prepare("DELETE FROM sqlite_sequence WHERE name = 'code_repositories'").run() },
+    { name: 'duplicate sequence', setup: (database) => database.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('code_repositories', 9)").run() },
+    { name: 'text sequence', setup: (database) => database.prepare("UPDATE sqlite_sequence SET seq = 'invalid' WHERE name = 'code_repositories'").run() },
+    { name: 'sequence below max id', setup: (database) => database.prepare("UPDATE sqlite_sequence SET seq = 4 WHERE name = 'code_repositories'").run() }
+  ]
+
+  for (const entry of cases) {
+    const directory = temporaryDirectory()
+    const databasePath = path.join(directory, 'app.db')
+    const database = new Database(databasePath)
+    let before
+    try {
+      createLegacyCodeRepositories(database, 'legacy-9-columns')
+      database.prepare("INSERT INTO code_repositories (id, name, url, local_path) VALUES (5, 'keep', 'https://example.invalid/keep', '')").run()
+      database.prepare("UPDATE sqlite_sequence SET seq = 9 WHERE name = 'code_repositories'").run()
+      entry.setup(database)
+      before = codeRepositorySnapshot(database)
+    } finally {
+      database.close()
+    }
+
+    try {
+      const { output, result } = runChild(directory)
+      assert.notEqual(result.status, 0, `${entry.name}: ${output}`)
+      const verification = new Database(databasePath)
+      try {
+        assert.deepEqual(codeRepositorySnapshot(verification), before, entry.name)
+        assertCodeRepositoryMigrationNotApplied(verification)
+        assertNoCodeRepositoryMigrationHelpers(verification)
+        assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
+      } finally {
+        verification.close()
+      }
+    } finally {
+      removeTemporaryDirectory(directory)
+    }
+  }
+})
+
+test('code_repositories rows that violate the proven legacy NOT NULL contract fail before DROP and fully roll back', nativeTestOptions, () => {
+  const directory = temporaryDirectory()
+  const databasePath = path.join(directory, 'app.db')
+  let database = new Database(databasePath)
+  try {
+    database.exec(`
+      CREATE TABLE code_repositories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        url TEXT NOT NULL,
+        description TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO code_repositories (id, name, url) VALUES (5, NULL, 'https://example.invalid/corrupt');
+    `)
+    database.pragma('writable_schema = ON')
+    database.prepare(
+      "UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = 'code_repositories'"
+    ).run(legacyCodeRepositories6Ddl)
+    database.pragma('writable_schema = OFF')
+  } finally {
+    database.close()
+  }
+
+  database = new Database(databasePath)
+  let before
+  try {
+    assert.equal(readColumn(database, 'code_repositories', 'name').not_null, 1)
+    before = codeRepositorySnapshot(database)
+  } finally {
+    database.close()
+  }
+
+  try {
+    const { output, result } = runChild(directory)
+    assert.notEqual(result.status, 0, output)
+    const verification = new Database(databasePath)
+    try {
+      assert.deepEqual(codeRepositorySnapshot(verification), before)
+      assertCodeRepositoryMigrationNotApplied(verification)
+      assertNoCodeRepositoryMigrationHelpers(verification)
+      assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
     } finally {
       verification.close()
     }
@@ -771,7 +1176,7 @@ test('preserves unowned historical code_versions table and rows', nativeTestOpti
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 36)
+      assertApplicationMigrationLedger(verification, 37)
       assert.equal(verification.prepare(
         "SELECT COUNT(*) AS count FROM prm_schema_migrations WHERE migration_id LIKE '%code_versions%'"
       ).get().count, 0)
@@ -1256,7 +1661,7 @@ test('incompatible music columns execute the prefix and stop at the explicit con
   }
 })
 
-test('old anime, games, and music schemas execute all 36 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
+test('old anime, games, and music schemas execute all 37 registered migrations before remaining inline upgrades', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -1354,7 +1759,7 @@ test('old anime, games, and music schemas execute all 36 registered migrations b
 
     const verification = new Database(databasePath)
     try {
-      assertApplicationMigrationLedger(verification, 36)
+      assertApplicationMigrationLedger(verification, 37)
       assertRegisteredColumn(verification, 'documents', 'subcategory', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
