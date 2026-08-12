@@ -208,6 +208,26 @@ export function resolveDocumentCategory(database, categoryId) {
   })
 }
 
+export function resolveDocumentCategoryInput(database, { categoryId, category, subcategory } = {}) {
+  const explicitId = normalizeCategoryId(categoryId)
+  if (explicitId !== null) return resolveDocumentCategory(database, explicitId)
+  const root = typeof category === 'string' ? category.normalize('NFKC').trim() : ''
+  const child = typeof subcategory === 'string' ? subcategory.normalize('NFKC').trim() : ''
+  if (root === '' && child === '') return null
+  if (root === '' || (child !== '' && child.split('/').some((part) => part.trim() === ''))) {
+    fail('DOCUMENT_CATEGORY_PATH_INVALID', 'Document category path is invalid.')
+  }
+  const categoryPath = child === '' ? root : `${root}/${child}`
+  let row
+  try {
+    row = database.prepare('SELECT id FROM categories WHERE path = ?').get(categoryPath)
+  } catch (error) {
+    fail('DOCUMENT_CATEGORY_LOOKUP_FAILED', 'Document category could not be resolved.', error)
+  }
+  if (!row) fail('DOCUMENT_CATEGORY_NOT_FOUND', 'Document category does not exist.')
+  return resolveDocumentCategory(database, row.id)
+}
+
 export function categoryCompatibilityFields(category) {
   if (category === null) return Object.freeze({ category: null, subcategory: null })
   if (!category || typeof category.path !== 'string' || category.path.trim() === '') {

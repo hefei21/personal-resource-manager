@@ -6,6 +6,7 @@ import {
   categoryCompatibilityFields,
   normalizeDocumentTags,
   resolveDocumentCategory,
+  resolveDocumentCategoryInput,
   resolveDocumentContentReference
 } from '../src/services/documentDomainService.js'
 
@@ -20,6 +21,19 @@ test('normalizes, deduplicates and deterministically sorts document tags', () =>
   assert.deepEqual(normalizeDocumentTags(null), { values: [], serialized: null })
   assert.throws(() => normalizeDocumentTags(['valid', 3]), { code: 'DOCUMENT_TAGS_INVALID' })
   assert.throws(() => normalizeDocumentTags(['valid,ambiguous']), { code: 'DOCUMENT_TAGS_INVALID' })
+})
+
+test('resolves legacy category path input to one authoritative category ID', () => {
+  const database = {
+    prepare(sql) {
+      if (sql.includes('WHERE path = ?')) return { get: (value) => value === '技术/前端/Vue' ? { id: 7 } : undefined }
+      return { get: (id) => id === 7 ? { id: 7, name: 'Vue', parent_id: 3, path: '技术/前端/Vue', level: 2 } : undefined }
+    }
+  }
+  assert.equal(resolveDocumentCategoryInput(database, { category: '技术', subcategory: '前端/Vue' }).id, 7)
+  assert.equal(resolveDocumentCategoryInput(database, {}), null)
+  assert.throws(() => resolveDocumentCategoryInput(database, { category: '不存在' }), { code: 'DOCUMENT_CATEGORY_NOT_FOUND' })
+  assert.throws(() => resolveDocumentCategoryInput(database, { category: '', subcategory: 'Vue' }), { code: 'DOCUMENT_CATEGORY_PATH_INVALID' })
 })
 
 test('prefers complete storage metadata and only falls back when storage_key is absent', () => {

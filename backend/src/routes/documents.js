@@ -3,6 +3,7 @@ import multer from 'multer'
 import path from 'path'
 import fs from 'fs'
 import bcrypt from 'bcryptjs'
+import { randomUUID } from 'node:crypto'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
@@ -11,6 +12,14 @@ import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
 import { collectPrivateSpaceInventory } from '../services/privateSpaceInventory.js'
+import {
+  categoryCompatibilityFields,
+  normalizeDocumentTags,
+  resolveDocumentCategoryInput
+} from '../services/documentDomainService.js'
+import { documentOriginalName, getDocumentStorageRuntime } from '../services/documentStorageRuntime.js'
+import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
+import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
 
 const router = express.Router()
 const DOCUMENT_EXTENSIONS = new Set([
@@ -19,25 +28,73 @@ const DOCUMENT_EXTENSIONS = new Set([
   '.png', '.gif', '.webp'
 ])
 
-// 配置文件上传
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, getStoragePath('uploads'))
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
-    cb(null, uniqueSuffix + path.extname(file.originalname))
-  }
-})
-
 const upload = multer({
-  storage,
+  storage: new DocumentUploadStorage(),
   limits: { fileSize: 50 * 1024 * 1024, files: 1 }, // 50MB
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase()
     cb(DOCUMENT_EXTENSIONS.has(ext) ? null : new Error('不支持的文件格式'), DOCUMENT_EXTENSIONS.has(ext))
   }
 })
+
+const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+
+function documentFileName(document) {
+  return documentOriginalName(document.original_name || document.file_path || document.title)
+}
+
+function documentExtension(document) {
+  return path.extname(documentFileName(document)).toLowerCase()
+}
+
+function contentDispositionFileName(fileName) {
+  return encodeURIComponent(fileName).replace(/['()*]/gu, (character) => (
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  ))
+}
+
+async function readDocumentBuffer(contentService, document, maximumBytes = MAX_DOCUMENT_BYTES) {
+  const metadata = await contentService.stat(document)
+  if (metadata.bytes > maximumBytes) {
+    const error = new Error('Document preview exceeds the allowed size.')
+    error.code = 'DOCUMENT_PREVIEW_TOO_LARGE'
+    throw error
+  }
+  const { stream } = await contentService.createReadStream(document)
+  const chunks = []
+  let bytes = 0
+  for await (const chunk of stream) {
+    bytes += chunk.length
+    if (bytes > maximumBytes) {
+      stream.destroy()
+      const error = new Error('Document preview exceeds the allowed size.')
+      error.code = 'DOCUMENT_PREVIEW_TOO_LARGE'
+      throw error
+    }
+    chunks.push(chunk)
+  }
+  return { metadata, content: Buffer.concat(chunks) }
+}
+
+function sendDocumentError(res, error, fallbackMessage) {
+  const statusByCode = {
+    DOCUMENT_CATEGORY_ID_INVALID: 400,
+    DOCUMENT_CATEGORY_PATH_INVALID: 400,
+    DOCUMENT_CATEGORY_NOT_FOUND: 400,
+    DOCUMENT_TAGS_INVALID: 400,
+    DOCUMENT_CONTENT_REFERENCE_MISSING: 404,
+    DOCUMENT_CONTENT_MISSING: 404,
+    DOCUMENT_CONTENT_RANGE_INVALID: 416,
+    DOCUMENT_PREVIEW_TOO_LARGE: 413,
+    DOCUMENT_STORAGE_METADATA_INVALID: 409,
+    DOCUMENT_STORAGE_METADATA_INCOMPLETE: 409,
+    DOCUMENT_STORAGE_METADATA_MISMATCH: 409,
+    DOCUMENT_STORAGE_KIND_INVALID: 409,
+    DOCUMENT_CONTENT_INTEGRITY_FAILED: 409
+  }
+  const status = statusByCode[error?.code] ?? 500
+  return res.status(status).json({ message: status === 500 ? fallbackMessage : error.message, code: error?.code })
+}
 
 // 创建分类
 router.post('/categories', authenticateToken, requireWritePermission, async (req, res) => {
@@ -666,9 +723,9 @@ router.get('/', authenticateToken, async (req, res) => {
     const rows = stmt.all(...params)
 
     // 辅助函数：获取文件扩展名
-    const getFileExtension = (filePath) => {
-      if (!filePath) return ''
-      const parts = filePath.split('.')
+    const getFileExtension = (fileName) => {
+      if (!fileName) return ''
+      const parts = fileName.split('.')
       return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : ''
     }
 
@@ -689,9 +746,8 @@ router.get('/', authenticateToken, async (req, res) => {
 
     // 转换为驼峰命名
     let result = rows.map(row => {
-      const filePath = row.file_path
-      const size = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0
-      const fileExtension = getFileExtension(filePath)
+      const displayName = documentFileName(row)
+      const fileExtension = getFileExtension(displayName)
 
       return {
         id: row.id,
@@ -699,10 +755,10 @@ router.get('/', authenticateToken, async (req, res) => {
         category: row.category,
         subcategory: row.subcategory,
         tags: row.tags,
-        filePath: row.file_path,
+        filePath: displayName,
         fileType: fileExtension,
         version: row.version,
-        size: size,
+        size: Number.isSafeInteger(row.content_bytes) ? row.content_bytes : 0,
         createdAt: convertToUTC8(row.created_at),
         updatedAt: convertToUTC8(row.updated_at)
       }
@@ -748,22 +804,25 @@ router.get('/', authenticateToken, async (req, res) => {
 
 // 上传文档
 router.post('/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
+  let stagedToken = req.file?.stagingToken
   try {
-    console.log('文档上传请求:', {
-      body: req.body,
-      file: req.file,
-      headers: req.headers
-    })
-
-    let { title, category, subcategory, tags, versionNote } = req.body
-    const filePath = req.file.path
-
-    console.log('上传的文件路径:', filePath)
-    console.log('文件名:', req.file.filename)
-    console.log('存储目录:', getStoragePath('uploads'))
-    console.log('文档信息:', { title, category, subcategory, tags, versionNote })
+    if (!req.file?.stagingToken) return res.status(400).json({ message: '请选择文件' })
+    const title = typeof req.body.title === 'string' ? req.body.title.trim() : ''
+    if (title === '') {
+      getDocumentStorageRuntime().storageService.discardStaged(stagedToken)
+      stagedToken = null
+      return res.status(400).json({ message: '标题不能为空' })
+    }
 
     const db = getDatabase()
+    const category = resolveDocumentCategoryInput(db, {
+      categoryId: req.body.categoryId,
+      category: req.body.category,
+      subcategory: req.body.subcategory
+    })
+    const compatibility = categoryCompatibilityFields(category)
+    const normalizedTags = normalizeDocumentTags(req.body.tags)
+    const originalName = documentOriginalName(req.file.originalName)
 
     // 检查重名并自动添加后缀
     let finalTitle = title
@@ -772,9 +831,9 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
 
     while (!unique) {
       const checkStmt = db.prepare(
-        'SELECT * FROM documents WHERE title = ? AND category = ? AND subcategory = ?'
+        'SELECT id FROM documents WHERE title = ? AND category IS ? AND subcategory IS ?'
       )
-      const existing = checkStmt.get(finalTitle, category || null, subcategory || null)
+      const existing = checkStmt.get(finalTitle, compatibility.category, compatibility.subcategory)
       if (!existing) {
         unique = true
       } else {
@@ -783,29 +842,55 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
       }
     }
 
-    const stmt = db.prepare(
-      `INSERT INTO documents (title, category, subcategory, tags, file_path) VALUES (?, ?, ?, ?, ?)`
-    )
-    const result = stmt.run(finalTitle, category, subcategory || '', tags, filePath)
-
-    // 创建版本记录
-    const versionStmt = db.prepare(
-      `INSERT INTO document_versions (document_id, version, file_path, note) VALUES (?, ?, ?, ?)`
-    )
-    versionStmt.run(result.lastInsertRowid, 1.0, filePath, versionNote || '初始版本')
-
-    console.log('文档上传成功，ID:', result.lastInsertRowid)
-    console.log('保存到数据库的路径:', filePath)
-    console.log('最终标题:', finalTitle)
+    let documentId
+    const runtime = getDocumentStorageRuntime()
+    await coordinateStorageCommit({
+      database: db,
+      storageService: runtime.storageService,
+      idempotencyKey: `document-upload:${randomUUID()}`,
+      stagingToken: stagedToken,
+      kind: 'documents',
+      expectedSha256: req.file.contentSha256,
+      expectedBytes: req.file.contentBytes,
+      writeDatabase: ({ storageKey, sha256, bytes }) => {
+        const result = db.prepare(`
+          INSERT INTO documents
+            (title, category, subcategory, category_id, tags, file_path, storage_key,
+             content_sha256, content_bytes, original_name, version)
+          VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 1.0)
+        `).run(
+          finalTitle,
+          compatibility.category,
+          compatibility.subcategory,
+          category?.id ?? null,
+          normalizedTags.serialized,
+          storageKey,
+          sha256,
+          bytes,
+          originalName
+        )
+        documentId = Number(result.lastInsertRowid)
+        db.prepare(`
+          INSERT INTO document_versions
+            (document_id, version, file_path, storage_key, content_sha256, content_bytes, note)
+          VALUES (?, 1, NULL, ?, ?, ?, ?)
+        `).run(documentId, storageKey, sha256, bytes, req.body.versionNote?.trim() || '初始版本')
+      }
+    })
+    stagedToken = null
 
     // 清除标签缓存（可能添加了新标签）
-    await cache.del(CacheKeys.DOC_TAGS)
+    try { await cache.del(CacheKeys.DOC_TAGS) } catch (error) {
+      console.warn('文档标签缓存清理失败:', error?.code ?? error?.name)
+    }
 
-    res.json({ id: result.lastInsertRowid, title: finalTitle, message: '上传成功' })
+    res.json({ id: documentId, title: finalTitle, message: '上传成功' })
   } catch (error) {
-    console.error('文档上传错误:', error)
-    console.error('错误堆栈:', error.stack)
-    res.status(500).json({ message: '上传失败', error: error.message })
+    if (stagedToken) {
+      try { getDocumentStorageRuntime().storageService.discardStaged(stagedToken) } catch {}
+    }
+    console.error('文档上传错误:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '上传失败')
   }
 })
 
@@ -821,20 +906,11 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '文档不存在' })
     }
 
-    const filePath = document.file_path
-    console.log('尝试读取文件:', filePath)
-    console.log('文件是否存在:', fs.existsSync(filePath))
-
-    // 获取文件大小
-    const fileSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0
-
-    if (!fs.existsSync(filePath)) {
-      console.error('文件不存在:', filePath)
-      return res.status(404).json({ message: '文件不存在' })
-    }
+    const fileName = documentFileName(document)
+    const { metadata, content } = await readDocumentBuffer(getDocumentStorageRuntime().contentService, document)
 
     // 检查文件扩展名
-    const ext = path.extname(filePath).toLowerCase()
+    const ext = documentExtension(document)
     const textFormats = ['.txt', '.md', '.json', '.xml', '.html', '.css', '.js', '.ts', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.go', '.rs', '.sql', '.sh', '.bat', '.yml', '.yaml', '.csv', '.log']
     const binaryFormats = ['.pdf', '.zip', '.rar', '.7z', '.tar', '.gz']
     const officeFormats = ['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']
@@ -848,41 +924,37 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
 
     if (officeFormats.includes(ext)) {
       // Office文件：返回base64编码
-      const content = fs.readFileSync(filePath)
       const base64 = content.toString('base64')
       res.json({
         content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
+        fileName,
+        fileSize: metadata.bytes,
         isBase64: true
       })
     } else if (binaryFormats.includes(ext)) {
       // 二进制文件：返回 base64 编码的数据用于前端预览
-      const content = fs.readFileSync(filePath)
       const base64 = content.toString('base64')
       res.json({
         content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
+        fileName,
+        fileSize: metadata.bytes,
         isBase64: true
       })
     } else if (textFormats.includes(ext)) {
       // 文本文件：直接返回内容
-      const content = fs.readFileSync(filePath, 'utf-8')
       res.json({
-        content,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
+        content: content.toString('utf8'),
+        fileName,
+        fileSize: metadata.bytes,
         isBase64: false
       })
     } else if (imageFormats.includes(ext)) {
       // 图片文件：返回 base64 编码
-      const content = fs.readFileSync(filePath)
       const base64 = content.toString('base64')
       res.json({
         content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
+        fileName,
+        fileSize: metadata.bytes,
         isBase64: true
       })
     } else {
@@ -896,8 +968,8 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: '认证失败' })
     }
-    console.error('获取文档内容失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('获取文档内容失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 
@@ -1083,27 +1155,22 @@ router.get('/download/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '文档不存在' })
     }
 
-    const filePath = document.file_path
-    console.log('尝试下载文件:', filePath)
-    console.log('文件是否存在:', fs.existsSync(filePath))
-    console.log('当前工作目录:', process.cwd())
-    console.log('上传目录配置:', getStoragePath('uploads'))
-
-    if (!fs.existsSync(filePath)) {
-      console.error('文件不存在:', filePath)
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const fileName = path.basename(filePath)
+    const fileName = documentFileName(document)
+    const { stream } = await getDocumentStorageRuntime().contentService.createReadStream(document)
     res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
-    res.sendFile(filePath)
+    res.setHeader('Content-Disposition', `attachment; filename="download"; filename*=UTF-8''${contentDispositionFileName(fileName)}`)
+    stream.on('error', (error) => {
+      console.error('下载流失败:', error?.code ?? error?.name)
+      if (!res.headersSent) sendDocumentError(res, error, '服务器错误')
+      else res.destroy(error)
+    })
+    stream.pipe(res)
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: '认证失败' })
     }
-    console.error('下载失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('下载失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 
@@ -1111,25 +1178,31 @@ router.get('/download/:id', authenticateToken, async (req, res) => {
 router.get('/download/version/:id', authenticateToken, async (req, res) => {
   try {
     const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM document_versions WHERE id = ?')
+    const stmt = db.prepare(`
+      SELECT v.*, d.original_name, d.title
+      FROM document_versions v
+      JOIN documents d ON d.id = v.document_id
+      WHERE v.id = ?
+    `)
     const version = stmt.get(req.params.id)
 
     if (!version) {
       return res.status(404).json({ message: '版本不存在' })
     }
 
-    const filePath = version.file_path
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const fileName = path.basename(filePath)
+    const fileName = documentFileName(version)
+    const { stream } = await getDocumentStorageRuntime().contentService.createReadStream(version)
     res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
-    res.sendFile(filePath)
+    res.setHeader('Content-Disposition', `attachment; filename="download"; filename*=UTF-8''${contentDispositionFileName(fileName)}`)
+    stream.on('error', (error) => {
+      console.error('版本下载流失败:', error?.code ?? error?.name)
+      if (!res.headersSent) sendDocumentError(res, error, '服务器错误')
+      else res.destroy(error)
+    })
+    stream.pipe(res)
   } catch (error) {
-    console.error('下载版本失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('下载版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 
