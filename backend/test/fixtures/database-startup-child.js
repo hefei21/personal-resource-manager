@@ -32,21 +32,9 @@ try {
   database.close()
   process.stdout.write(JSON.stringify(result))
 } catch (error) {
-  const result = {
+  process.stdout.write(JSON.stringify({
     ready: false,
     code: error?.code ?? null
-  }
-  if (process.env.PR_DATABASE_STARTUP_DIAGNOSTICS === '1') {
-    result.causes = []
-    let cause = error
-    for (let depth = 0; cause && depth < 6; depth += 1) {
-      result.causes.push({
-        code: cause?.code ?? null,
-        machineCode: cause?.machineCode ?? null
-      })
-      cause = cause?.cause
-    }
-  }
-  process.stdout.write(JSON.stringify(result))
+  }))
   process.exitCode = 1
 }
