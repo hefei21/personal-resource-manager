@@ -32,16 +32,16 @@ function createLegacyDatabase(layout) {
   `)
   database.exec(`
       CREATE TABLE documents (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  category TEXT,
-  subcategory TEXT,
-  tags TEXT,
-  file_path TEXT NOT NULL,
-  version REAL DEFAULT 1.0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      category TEXT,
+      subcategory TEXT,
+      tags TEXT,
+      file_path TEXT NOT NULL,
+      version REAL DEFAULT 1.0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
       CREATE TABLE document_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       document_id INTEGER NOT NULL,

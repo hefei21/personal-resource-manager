@@ -263,16 +263,16 @@ const documentsExpandedAppendedLegacyShape = {
 }
 
 const documentsExpandedAppendedLegacyDdl = `CREATE TABLE documents (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  category TEXT,
-  subcategory TEXT,
-  tags TEXT,
-  file_path TEXT NOT NULL,
-  version REAL DEFAULT 1.0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-, category_id INTEGER, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER, original_name TEXT)`
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      category TEXT,
+      subcategory TEXT,
+      tags TEXT,
+      file_path TEXT NOT NULL,
+      version REAL DEFAULT 1.0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    , category_id INTEGER, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER, original_name TEXT)`
 
 const documentVersionsExpandedAppendedLegacyDdl = `CREATE TABLE document_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
