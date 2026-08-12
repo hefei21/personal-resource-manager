@@ -794,6 +794,20 @@ test('application registry freezes 43 column migrations and six registered table
     columns: ['category_id'], referencedTable: 'categories', referencedColumns: ['id'],
     onUpdate: 'NO ACTION', onDelete: 'SET NULL'
   }])
+  const documentStorageProofKeys = [
+    'expanded-appended-no-indexes',
+    'expanded-appended-known-indexes',
+    'v0036-expanded-appended-no-indexes',
+    'v0036-expanded-appended-known-indexes'
+  ]
+  assert.deepEqual(
+    documentsStorageMigration.compatibility.legacy.map(({ proofKey }) => proofKey),
+    documentStorageProofKeys
+  )
+  assert.deepEqual(
+    documentsStorageMigration.sourceVariants.map(({ proofKey }) => proofKey),
+    documentStorageProofKeys
+  )
 })
 
 test('static contract runs the startup gate once after base tables and before all later initialization', () => {

@@ -274,6 +274,18 @@ const documentsExpandedAppendedLegacyDdl = `CREATE TABLE documents (
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     , category_id INTEGER, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER, original_name TEXT)`
 
+const documentsV0036ExpandedAppendedLegacyDdl = `CREATE TABLE "documents" (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  category TEXT,
+  subcategory TEXT,
+  tags TEXT,
+  file_path TEXT NOT NULL,
+  version REAL DEFAULT 1.0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+, category_id INTEGER, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER, original_name TEXT)`
+
 const documentVersionsExpandedAppendedLegacyDdl = `CREATE TABLE document_versions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       document_id INTEGER NOT NULL,
@@ -1638,20 +1650,25 @@ export const applicationMigrationRegistry = createMigrationRegistry([
     id: '0049_documents_storage_shape',
     sourceVariants: [
       { proofKey: 'expanded-appended-no-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE },
-      { proofKey: 'expanded-appended-known-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE }
+      { proofKey: 'expanded-appended-known-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE },
+      { proofKey: 'v0036-expanded-appended-no-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE },
+      { proofKey: 'v0036-expanded-appended-known-indexes', source: DOCUMENTS_STORAGE_MIGRATION_SOURCE }
     ],
     compatibility: {
       kind: 'table-transition',
       table: 'documents',
       target: DOCUMENTS_STORAGE_TARGET_SHAPE,
       legacy: [
-        ...[[], knownDocumentIndexes].map((indexes) => ({
-          proofKey: indexes.length === 0 ? 'expanded-appended-no-indexes' : 'expanded-appended-known-indexes',
-          shape: documentsExpandedAppendedLegacyShape,
-          createTableSqlSha256: sha256(documentsExpandedAppendedLegacyDdl),
-          indexes,
-          triggers: []
-        }))
+        ...[
+          { prefix: 'expanded-appended', ddl: documentsExpandedAppendedLegacyDdl },
+          { prefix: 'v0036-expanded-appended', ddl: documentsV0036ExpandedAppendedLegacyDdl }
+        ].flatMap(({ prefix, ddl }) => [[], knownDocumentIndexes].map((indexes) => ({
+            proofKey: `${prefix}-${indexes.length === 0 ? 'no-indexes' : 'known-indexes'}`,
+            shape: documentsExpandedAppendedLegacyShape,
+            createTableSqlSha256: sha256(ddl),
+            indexes,
+            triggers: []
+          })))
       ]
     }
   }
