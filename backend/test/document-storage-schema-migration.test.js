@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
-import { ensureMigrationControlTables } from '../src/config/migrationControlStore.js'
+import { ensureMigrationControlTables, listMigrationAttempts } from '../src/config/migrationControlStore.js'
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
 
@@ -74,13 +74,22 @@ for (const layout of ['appended']) {
     const database = createLegacyDatabase(layout)
     try {
       const registry = createMigrationRegistry(migrations)
-      const summary = executeMigrationBatch({
-        database,
-        registry,
-        plan: createMigrationPlan(registry, []),
-        lock: { state: 'active' },
-        now: () => '2026-08-13T00:00:00.000Z'
-      })
+      let summary
+      try {
+        summary = executeMigrationBatch({
+          database,
+          registry,
+          plan: createMigrationPlan(registry, []),
+          lock: { state: 'active' },
+          now: () => '2026-08-13T00:00:00.000Z'
+        })
+      } catch (error) {
+        assert.fail(JSON.stringify({
+          code: error?.code,
+          machineCode: error?.machineCode,
+          attempts: listMigrationAttempts(database)
+        }))
+      }
       assert.equal(summary.executedCount, 2)
       assert.deepEqual(database.prepare('SELECT * FROM documents WHERE id = 11').get(), {
         id: 11, title: '旧文档', category: '资料', subcategory: '', category_id: 7,
