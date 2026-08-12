@@ -95,7 +95,7 @@ export default {
     categoryTree: () => api.get('/documents/categories/tree'),
     createCategory: (data) => api.post('/documents/categories', data),
     updateCategory: (id, data) => api.put(`/documents/categories/${id}`, data),
-    deleteCategory: (id, deleteFiles = false) => api.delete(`/documents/categories/${id}`, { params: { deleteFiles } }),
+    deleteCategory: (id) => api.delete(`/documents/categories/${id}`),
     reorderCategories: (data) => api.put('/documents/categories/reorder', data),
     checkDuplicate: (params) => api.get('/documents/check-duplicate', { params }),
     tags: () => api.get('/documents/tags'),

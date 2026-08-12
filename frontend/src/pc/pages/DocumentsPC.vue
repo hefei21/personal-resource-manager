@@ -374,18 +374,10 @@
         </p>
         <p class="delete-info">
           <NativeIcon name="info" style="color: #0052d9; margin-right: 8px;" />
-          此操作将同时删除该分类下的所有子分类
+          此操作将同时删除该分类下的所有子分类，但不会删除文档、版本或文件。
         </p>
         <NativeDivider />
-        <p class="delete-question">请选择如何处理分类下的文件：</p>
-        <NativeRadioGroup v-model="deleteCategoryFileOption">
-          <NativeRadio value="keep">
-            保留文件（文件将提升到父分类，若删除根分类则移至「所有文档」）
-          </NativeRadio>
-          <NativeRadio value="delete">
-            同时删除文件（文件将被永久删除，无法恢复）
-          </NativeRadio>
-        </NativeRadioGroup>
+        <p class="delete-question">文档将移到该分类的父分类；删除一级分类时，文档将变为未分类并继续显示在“全部文档”。</p>
       </div>
     </NativeDialog>
 
@@ -886,7 +878,6 @@ const versionsDialogVisible = ref(false)
 const createCategoryDialogVisible = ref(false)
 const deleteCategoryDialogVisible = ref(false)
 const deleteCategoryData = ref(null)
-const deleteCategoryFileOption = ref('keep') // 'keep' 或 'delete'
 const renameCategoryDialogVisible = ref(false)
 const renameCategoryData = ref(null)
 const renameCategoryName = ref('')
@@ -1679,7 +1670,6 @@ async function handleCreateCategoryConfirm() {
 
 function handleDeleteCategory(category) {
   deleteCategoryData.value = category
-  deleteCategoryFileOption.value = 'keep' // 默认保留文件
   deleteCategoryDialogVisible.value = true
 }
 
@@ -1687,10 +1677,9 @@ async function handleDeleteCategoryConfirm() {
   try {
     if (!deleteCategoryData.value) return
 
-    const deleteFiles = deleteCategoryFileOption.value === 'delete'
-    await api.documents.deleteCategory(deleteCategoryData.value.id, deleteFiles)
+    await api.documents.deleteCategory(deleteCategoryData.value.id)
 
-    toast.success(deleteFiles ? '分类及相关文件已删除' : '分类已删除，文件已提升到父分类')
+    toast.success('分类已删除，文档已移到父分类或未分类')
     deleteCategoryDialogVisible.value = false
     deleteCategoryData.value = null
 

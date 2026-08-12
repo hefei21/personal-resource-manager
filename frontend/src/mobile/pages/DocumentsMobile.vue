@@ -266,7 +266,7 @@
         <div class="native-dialog-header">确认删除</div>
         <div class="delete-confirm-content">
           <p>确定要删除文件「{{ currentDoc?.title }}」吗？</p>
-          <p class="delete-warning">删除后无法恢复</p>
+          <p class="delete-warning">删除后将进入回收站，可在保留期内恢复</p>
         </div>
         <div class="native-dialog-footer">
           <button class="btn-cancel" @click="deleteConfirmVisible = false">取消</button>

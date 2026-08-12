@@ -27,6 +27,12 @@ import {
   restoreDocumentFromTrash,
   softDeleteDocument
 } from '../services/documentTrashService.js'
+import {
+  batchUpdateDocumentMetadata,
+  deleteDocumentCategoryTree,
+  renameDocumentCategory,
+  updateDocumentMetadata
+} from '../services/documentCategoryService.js'
 
 const router = express.Router()
 const DOCUMENT_EXTENSIONS = new Set([
@@ -109,6 +115,11 @@ function sendDocumentError(res, error, fallbackMessage) {
     , DOCUMENT_TRASH_NOT_FOUND: 404
     , DOCUMENT_TRASH_PURGE_IN_PROGRESS: 409
     , DOCUMENT_TRASH_LEGACY_MIGRATION_REQUIRED: 409
+    , DOCUMENT_CATEGORY_NAME_INVALID: 400
+    , DOCUMENT_CATEGORY_DUPLICATE: 409
+    , DOCUMENT_CATEGORY_PARENT_MISSING: 409
+    , DOCUMENT_TITLE_INVALID: 400
+    , DOCUMENT_IDS_INVALID: 400
   }
   const status = statusByCode[error?.code] ?? 500
   return res.status(status).json({ message: status === 500 ? fallbackMessage : error.message, code: error?.code })
@@ -275,145 +286,12 @@ router.get('/categories', authenticateToken, async (req, res) => {
   }
 })
 
-// 递归获取所有子分类ID及其信息
-function getAllSubcategories(db, parentId) {
-  const result = []
-  const stmt = db.prepare('SELECT id, name, path, parent_id, level FROM categories WHERE parent_id = ?')
-  const children = stmt.all(parentId)
-
-  for (const child of children) {
-    result.push({
-      id: child.id,
-      name: child.name,
-      path: child.path,
-      parentId: child.parent_id,
-      level: child.level
-    })
-    result.push(...getAllSubcategories(db, child.id))
-  }
-
-  return result
-}
-
-// 辅助函数：从分类path中提取category和subcategory
-function parseCategoryPath(path) {
-  const parts = path.split('/')
-  const category = parts[0]
-  const subcategory = parts.length > 1 ? parts.slice(1).join('/') : ''
-  return { category, subcategory }
-}
-
 // 删除分类
 router.delete('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const categoryId = req.params.id
-    const { deleteFiles } = req.query // 是否删除文件：'true' 或 'false'
-
-    // 检查分类是否存在
-    const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(categoryId)
-    if (!category) {
-      return res.status(404).json({ message: '分类不存在' })
-    }
-
-    // 获取当前分类及其所有子分类
-    const allCategories = [
-      {
-        id: category.id,
-        name: category.name,
-        path: category.path,
-        parentId: category.parent_id,
-        level: category.level
-      },
-      ...getAllSubcategories(db, categoryId)
-    ]
-
-    // 按层级从深到浅排序（先处理子分类，再处理父分类）
-    allCategories.sort((a, b) => b.level - a.level)
-
-    if (deleteFiles === 'true') {
-      // 删除文件模式：删除所有相关文档及其文件
-      for (const cat of allCategories) {
-        const { category: catName, subcategory: subcatPath } = parseCategoryPath(cat.path)
-
-        // 查找该分类下的文档（包括所有子分类下的文档）
-        let docStmt, documents
-        if (cat.level === 0) {
-          // 根分类：匹配 category = 分类名
-          docStmt = db.prepare('SELECT * FROM documents WHERE category = ?')
-          documents = docStmt.all(catName)
-        } else {
-          // 子分类：匹配 category = 根分类名 AND subcategory LIKE '子分类路径%'
-          docStmt = db.prepare('SELECT * FROM documents WHERE category = ? AND (subcategory = ? OR subcategory LIKE ?)')
-          documents = docStmt.all(catName, subcatPath, `${subcatPath}/%`)
-        }
-
-        // 删除物理文件和版本记录
-        for (const doc of documents) {
-          if (doc.file_path && fs.existsSync(doc.file_path)) {
-            fs.unlinkSync(doc.file_path)
-          }
-          const deleteVersionsStmt = db.prepare('DELETE FROM document_versions WHERE document_id = ?')
-          deleteVersionsStmt.run(doc.id)
-        }
-
-        // 删除文档记录
-        let deleteDocsStmt
-        if (cat.level === 0) {
-          deleteDocsStmt = db.prepare('DELETE FROM documents WHERE category = ?')
-          deleteDocsStmt.run(catName)
-        } else {
-          deleteDocsStmt = db.prepare('DELETE FROM documents WHERE category = ? AND (subcategory = ? OR subcategory LIKE ?)')
-          deleteDocsStmt.run(catName, subcatPath, `${subcatPath}/%`)
-        }
-      }
-    } else {
-      // 保留文件模式：将文件提升到父分类
-      for (const cat of allCategories) {
-        const { category: catName, subcategory: subcatPath } = parseCategoryPath(cat.path)
-
-        // 计算父分类路径
-        let newCategory = null
-        let newSubcategory = null
-
-        if (cat.parentId) {
-          // 有父分类，获取父分类信息
-          const parentCat = db.prepare('SELECT * FROM categories WHERE id = ?').get(cat.parentId)
-          if (parentCat) {
-            const { category: parentCatName, subcategory: parentSubcat } = parseCategoryPath(parentCat.path)
-            newCategory = parentCatName
-            newSubcategory = parentSubcat
-          }
-        }
-        // 如果没有父分类（根分类），则 newCategory 和 newSubcategory 都是 null
-
-        // 更新该分类下直接属于它的文档的分类信息（不包括子分类的文档）
-        let updateDocsStmt
-        if (cat.level === 0) {
-          // 根分类：更新 category = 根分类名 AND (subcategory IS NULL OR subcategory = '')
-          updateDocsStmt = db.prepare('UPDATE documents SET category = ?, subcategory = ? WHERE category = ? AND (subcategory IS NULL OR subcategory = \'\')')
-          updateDocsStmt.run(newCategory, newSubcategory || '', catName)
-        } else {
-          // 子分类：更新 category = 根分类名 AND subcategory = 子分类路径
-          updateDocsStmt = db.prepare('UPDATE documents SET category = ?, subcategory = ? WHERE category = ? AND subcategory = ?')
-          updateDocsStmt.run(newCategory, newSubcategory || '', catName, subcatPath)
-        }
-      }
-    }
-
-    // 删除所有分类（按层级从深到浅）
-    const deleteCategoryStmt = db.prepare('DELETE FROM categories WHERE id = ?')
-    for (const cat of allCategories) {
-      deleteCategoryStmt.run(cat.id)
-    }
-
-    // 清除分类缓存
-    await cache.del(CacheKeys.DOC_CATEGORIES)
-
-    res.json({
-      message: deleteFiles === 'true' ? '分类及相关文件已删除' : '分类已删除，文件已提升到父分类',
-      deletedCategories: allCategories.length
-    })
+    const result = deleteDocumentCategoryTree(getDatabase(), req.params.id)
+    try { await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    return res.json({ message: '分类已删除，文档已移到父分类或未分类', ...result })
   } catch (error) {
     console.error('删除分类失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -454,89 +332,9 @@ router.put('/categories/reorder', authenticateToken, requireWritePermission, asy
 // 更新分类名称
 router.put('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { name } = req.body
-    const categoryId = req.params.id
-
-    if (!name || !name.trim()) {
-      return res.status(400).json({ message: '分类名称不能为空' })
-    }
-
-    const db = getDatabase()
-
-    // 获取当前分类信息
-    const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(categoryId)
-    if (!category) {
-      return res.status(404).json({ message: '分类不存在' })
-    }
-
-    const newName = name.trim()
-    const oldPath = category.path
-
-    // 检查同层级下是否已存在同名分类
-    const checkStmt = db.prepare('SELECT * FROM categories WHERE name = ? AND parent_id IS ? AND id != ?')
-    const existing = checkStmt.get(newName, category.parent_id || null, categoryId)
-    if (existing) {
-      return res.status(400).json({ message: '同级分类下已存在同名分类' })
-    }
-
-    // 计算新路径
-    let newPath
-    if (category.parent_id) {
-      // 子分类：从父分类路径构建新路径
-      const parentCat = db.prepare('SELECT path FROM categories WHERE id = ?').get(category.parent_id)
-      if (parentCat) {
-        newPath = parentCat.path + '/' + newName
-      } else {
-        newPath = newName
-      }
-    } else {
-      // 根分类：路径就是名称
-      newPath = newName
-    }
-
-    // 更新分类名称和路径
-    const updateStmt = db.prepare('UPDATE categories SET name = ?, path = ? WHERE id = ?')
-    updateStmt.run(newName, newPath, categoryId)
-
-    // 更新所有子分类的路径
-    const updateSubcategories = db.transaction(() => {
-      const childrenStmt = db.prepare('SELECT id, path FROM categories WHERE path LIKE ?')
-      const children = childrenStmt.all(`${oldPath}/%`)
-
-      for (const child of children) {
-        const newChildPath = child.path.replace(oldPath + '/', newPath + '/')
-        db.prepare('UPDATE categories SET path = ? WHERE id = ?').run(newChildPath, child.id)
-      }
-    })
-    updateSubcategories()
-
-    // 更新文档的分类信息
-    const { category: oldCatName, subcategory: oldSubcat } = parseCategoryPath(oldPath)
-    const { category: newCatName, subcategory: newSubcat } = parseCategoryPath(newPath)
-
-    // 更新文档的 category 和 subcategory
-    if (category.level === 0) {
-      // 根分类：更新所有以旧名称为 category 的文档
-      const updateDocsCategory = db.prepare('UPDATE documents SET category = ? WHERE category = ?')
-      updateDocsCategory.run(newName, oldCatName)
-
-      // 更新子分类路径前缀
-      const updateDocsSubcategory = db.prepare('UPDATE documents SET subcategory = ? WHERE subcategory LIKE ?')
-      updateDocsSubcategory.run(newName + '/%', oldCatName + '/%')
-    } else {
-      // 子分类：更新匹配旧路径的文档
-      const updateDocs = db.prepare('UPDATE documents SET category = ?, subcategory = ? WHERE category = ? AND subcategory = ?')
-      updateDocs.run(newCatName, newSubcat, oldCatName, oldSubcat)
-
-      // 更新子分类路径前缀
-      const updateChildDocs = db.prepare('UPDATE documents SET subcategory = ? WHERE subcategory LIKE ?')
-      updateChildDocs.run(newSubcat + '/%', oldSubcat + '/%')
-    }
-
-    // 清除分类缓存
-    await cache.del(CacheKeys.DOC_CATEGORIES)
-
-    res.json({ message: '更新成功', newPath })
+    const renamed = renameDocumentCategory(getDatabase(), req.params.id, req.body.name)
+    try { await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    return res.json({ message: '更新成功', newPath: renamed.newPath })
   } catch (error) {
     console.error('更新分类名称失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -1041,18 +839,9 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
 // 更新文档
 router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { title, category, subcategory, tags } = req.body
-    const db = getDatabase()
-
-    const stmt = db.prepare(
-      `UPDATE documents SET title = ?, category = ?, subcategory = ?, tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
-    stmt.run(title, category, subcategory || '', tags, req.params.id)
-
-    // 清除标签缓存（可能修改了标签）
-    await cache.del(CacheKeys.DOC_TAGS)
-
-    res.json({ message: '更新成功' })
+    const result = updateDocumentMetadata(getDatabase(), req.params.id, req.body)
+    try { await cache.del(CacheKeys.DOC_TAGS); await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    return res.json({ message: '更新成功', categoryId: result.categoryId, tags: result.tags })
   } catch (error) {
     console.error('更新失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -1062,37 +851,9 @@ router.put('/:id', authenticateToken, requireWritePermission, async (req, res) =
 // 批量更新文档
 router.put('/batch/update', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { ids, category, subcategory, tags } = req.body
-    if (!ids || !Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ message: '请选择要更新的文档' })
-    }
-
-    const db = getDatabase()
-    const placeholders = ids.map(() => '?').join(',')
-
-    let sql = 'UPDATE documents SET updated_at = CURRENT_TIMESTAMP'
-    const params = []
-
-    if (category !== undefined) {
-      sql += ', category = ?'
-      params.push(category)
-    }
-    if (subcategory !== undefined) {
-      sql += ', subcategory = ?'
-      params.push(subcategory || '')
-    }
-    if (tags !== undefined) {
-      sql += ', tags = ?'
-      params.push(tags)
-    }
-
-    sql += ` WHERE id IN (${placeholders})`
-    params.push(...ids)
-
-    const stmt = db.prepare(sql)
-    stmt.run(...params)
-
-    res.json({ message: '批量更新成功', count: ids.length })
+    const result = batchUpdateDocumentMetadata(getDatabase(), req.body.ids, req.body)
+    try { await cache.del(CacheKeys.DOC_TAGS); await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    return res.json({ message: '批量更新成功', count: result.count, categoryId: result.categoryId })
   } catch (error) {
     console.error('批量更新失败:', error)
     res.status(500).json({ message: '服务器错误' })

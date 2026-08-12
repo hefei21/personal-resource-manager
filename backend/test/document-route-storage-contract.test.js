@@ -20,3 +20,12 @@ test('document list excludes unified trash entries and permanent deletion is exp
   assert.match(source, /router\.post\('\/trash\/:id\/restore', authenticateToken, requireWritePermission,/u)
   assert.match(source, /router\.delete\('\/trash\/:id', authenticateToken, requireWritePermission,/u)
 })
+
+test('category mutations use transactional domain services and cannot delete document content', () => {
+  const categoryDelete = source.slice(source.indexOf("router.delete('/categories/:id'"), source.indexOf("router.put('/categories/reorder'"))
+  assert.match(categoryDelete, /deleteDocumentCategoryTree/u)
+  assert.doesNotMatch(categoryDelete, /deleteFiles|unlinkSync|DELETE FROM documents|DELETE FROM document_versions/u)
+  const categoryRename = source.slice(source.indexOf("router.put('/categories/:id'"), source.indexOf('// 检查文档重名'))
+  assert.match(categoryRename, /renameDocumentCategory/u)
+  assert.doesNotMatch(categoryRename, /UPDATE documents/u)
+})
