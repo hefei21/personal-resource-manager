@@ -37,6 +37,9 @@ services:
       
       # 文档存储目录
       - ./data/docs:/app/data/documents
+
+      # 统一内容寻址对象库
+      - ./data/storage:/app/data/storage
       
       # 音乐存储目录
       - ./data/music:/app/data/music
@@ -64,6 +67,7 @@ services:
       
       # 资源路径
       - DOCUMENTS_PATH=/app/data/documents
+      - STORAGE_PATH=/app/data/storage
       - MUSIC_PATH=/app/data/music
       - BOOKS_PATH=/app/data/books
       - CODE_PATH=/app/data/code

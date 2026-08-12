@@ -8,6 +8,7 @@ services:
     volumes:
       - ${DATA_ROOT}/db:/app/data/database
       - ${DATA_ROOT}/docs:/app/data/documents
+      - ${DATA_ROOT}/storage:/app/data/storage
       - ${DATA_ROOT}/music:/app/data/music
       - ${DATA_ROOT}/books:/app/data/books
       - ${DATA_ROOT}/code:/app/data/code
@@ -19,6 +20,7 @@ services:
       DATA_PATH: /app/data
       DB_PATH: /app/data/database/app.db
       DOCUMENTS_PATH: /app/data/documents
+      STORAGE_PATH: /app/data/storage
       MUSIC_PATH: /app/data/music
       BOOKS_PATH: /app/data/books
       CODE_PATH: /app/data/code
