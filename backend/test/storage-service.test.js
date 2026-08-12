@@ -128,6 +128,7 @@ test('rejects tampered objects, invalid ranges, symlinks, and staging token reus
     fs.mkdirSync(path.dirname(objectPath), { recursive: true })
     const target = path.join(directory, 'outside.txt')
     fs.writeFileSync(target, 'link-target')
+    fs.rmSync(objectPath, { force: true })
     fs.symlinkSync(target, objectPath)
     await assert.rejects(service.createReadStream(key), { code: 'STORAGE_OBJECT_INVALID' })
   } finally { cleanup(directory) }
