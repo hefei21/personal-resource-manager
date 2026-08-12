@@ -829,19 +829,19 @@ SELECT CASE WHEN
 THEN 1 ELSE 0 END;
 DROP TABLE reading_progress;
 CREATE TABLE reading_progress (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  book_id INTEGER NOT NULL,
-  user_id INTEGER,
-  current_page INTEGER DEFAULT 0,
-  cfi TEXT,
-  progress REAL DEFAULT 0,
-  font_size INTEGER DEFAULT 16,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  UNIQUE(book_id, user_id)
-);
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL,
+        user_id INTEGER,
+        current_page INTEGER DEFAULT 0,
+        cfi TEXT,
+        progress REAL DEFAULT 0,
+        font_size INTEGER DEFAULT 16,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(book_id, user_id)
+      );
 INSERT INTO reading_progress
   (id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at)
 SELECT id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at

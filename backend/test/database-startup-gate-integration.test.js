@@ -680,7 +680,7 @@ test('application registry freezes 35 C2c columns and three registered table tra
     !/foreign_keys\s*=|writable_schema|\bPRAGMA\b/iu.test(source)
   )))
   const readingProgressMigration = applicationMigrationRegistry.migrations[37]
-  assert.equal(readingProgressMigration.checksum, 'a84594741f0490ba79cdb726a1a81608d15c9067ad437004fd416f709381e25f')
+  assert.equal(readingProgressMigration.checksum, '6462d6ba78b6e3c492c5e65436fc18031412aac46c842676897cd15cc7ad60f4')
   assert.equal(readingProgressMigration.compatibility.kind, 'table-transition')
   assert.equal(readingProgressMigration.compatibility.table, 'reading_progress')
   assert.deepEqual(
