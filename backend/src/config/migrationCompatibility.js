@@ -6,6 +6,8 @@ const COMPATIBILITY_KEYS = ['kind', 'table', 'column']
 const COLUMN_KEYS = ['name', 'type', 'notNull', 'defaultValue']
 const TABLE_TRANSITION_KEYS = ['kind', 'table', 'target', 'legacy']
 const TABLE_TRANSITION_LEGACY_PROOF_KEYS = ['shape', 'createTableSqlSha256', 'indexes', 'triggers']
+const TABLE_TRANSITION_KEYED_LEGACY_PROOF_KEYS = [...TABLE_TRANSITION_LEGACY_PROOF_KEYS, 'proofKey']
+const PROOF_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const TABLE_TRANSITION_LEGACY_INDEX_KEYS = ['name', 'createIndexSqlSha256']
 const TABLE_TRANSITION_LEGACY_TRIGGER_KEYS = ['name', 'createTriggerSqlSha256']
 const TABLE_SHAPE_KEYS = ['strict', 'withoutRowid', 'columns', 'foreignKeys', 'uniqueConstraints']
@@ -381,10 +383,22 @@ function normalizeTableTransitionLegacyTriggers(triggers, fieldName) {
   return Object.freeze(normalized)
 }
 
+function normalizeProofKey(value, fieldName) {
+  if (typeof value !== 'string' || !PROOF_KEY_PATTERN.test(value)) {
+    fail(`${fieldName} must be a safe proof identifier.`)
+  }
+  return value
+}
+
 function normalizeTableTransitionLegacyProof(proof, fieldName) {
   assertPlainObject(proof, fieldName)
-  assertExactKeys(proof, TABLE_TRANSITION_LEGACY_PROOF_KEYS, fieldName)
-  return Object.freeze({
+  const keyed = Object.hasOwn(proof, 'proofKey')
+  assertExactKeys(
+    proof,
+    keyed ? TABLE_TRANSITION_KEYED_LEGACY_PROOF_KEYS : TABLE_TRANSITION_LEGACY_PROOF_KEYS,
+    fieldName
+  )
+  const normalized = {
     shape: normalizeTableShape(proof.shape, `${fieldName}.shape`),
     createTableSqlSha256: normalizeCreateTableSqlSha256(
       proof.createTableSqlSha256,
@@ -392,7 +406,9 @@ function normalizeTableTransitionLegacyProof(proof, fieldName) {
     ),
     indexes: normalizeTableTransitionLegacyIndexes(proof.indexes, `${fieldName}.indexes`),
     triggers: normalizeTableTransitionLegacyTriggers(proof.triggers, `${fieldName}.triggers`)
-  })
+  }
+  if (keyed) normalized.proofKey = normalizeProofKey(proof.proofKey, `${fieldName}.proofKey`)
+  return Object.freeze(normalized)
 }
 
 function tableTransitionLegacyProofCanonicalKey(proof) {
@@ -414,23 +430,36 @@ function normalizeTableTransitionCompatibility(compatibility) {
     normalizeTableTransitionLegacyProof(proof, `compatibility.legacy[${index}]`)
   )
   const targetKey = JSON.stringify(target)
-  const legacyShapeKeys = new Set()
   const legacyProofKeys = new Set()
+  const explicitProofKeys = new Set()
+  let keyed
   for (const proof of legacy) {
     const shapeKey = JSON.stringify(proof.shape)
     if (shapeKey === targetKey) fail('compatibility.target must differ from every legacy shape.')
-    if (legacyShapeKeys.has(shapeKey)) {
-      const proofKey = tableTransitionLegacyProofCanonicalKey(proof)
-      if (legacyProofKeys.has(proofKey)) {
-        fail('compatibility.legacy contains a duplicate proof.')
-      }
+    const proofIsKeyed = Object.hasOwn(proof, 'proofKey')
+    if (keyed === undefined) keyed = proofIsKeyed
+    if (keyed !== proofIsKeyed) {
+      fail('compatibility.legacy must not mix keyed and unkeyed proofs.')
     }
-    legacyShapeKeys.add(shapeKey)
-    legacyProofKeys.add(tableTransitionLegacyProofCanonicalKey(proof))
+    const canonicalProof = tableTransitionLegacyProofCanonicalKey(proof)
+    if (legacyProofKeys.has(canonicalProof)) {
+      fail('compatibility.legacy contains a duplicate proof.')
+    }
+    legacyProofKeys.add(canonicalProof)
+    if (proofIsKeyed) {
+      if (explicitProofKeys.has(proof.proofKey)) {
+        fail('compatibility.legacy contains a duplicate proofKey.')
+      }
+      explicitProofKeys.add(proof.proofKey)
+    }
   }
   legacy.sort((left, right) => {
-    const leftKey = tableTransitionLegacyProofCanonicalKey(left)
-    const rightKey = tableTransitionLegacyProofCanonicalKey(right)
+    const leftKey = Object.hasOwn(left, 'proofKey')
+      ? left.proofKey
+      : tableTransitionLegacyProofCanonicalKey(left)
+    const rightKey = Object.hasOwn(right, 'proofKey')
+      ? right.proofKey
+      : tableTransitionLegacyProofCanonicalKey(right)
     if (leftKey < rightKey) return -1
     if (leftKey > rightKey) return 1
     return 0
@@ -502,13 +531,17 @@ function summary(status, compatibility, reason) {
   })
 }
 
-function tableTransitionSummary(status, compatibility, reason) {
-  return Object.freeze({
+function tableTransitionSummary(status, compatibility, reason, proofKey) {
+  const result = {
     status,
     kind: compatibility.kind,
     table: compatibility.table,
     reason
-  })
+  }
+  if (status === COMPATIBILITY_STATUSES.MISSING && proofKey !== undefined) {
+    result.proofKey = proofKey
+  }
+  return Object.freeze(result)
 }
 
 function assertDatabase(database) {
@@ -912,7 +945,23 @@ export function checkMigrationCompatibility(database, compatibility) {
                   JSON.stringify(persistentTriggers) === JSON.stringify(proof.triggers)
                 ))
               ) {
-                return tableTransitionSummary(COMPATIBILITY_STATUSES.MISSING, normalized, 'legacy-matched')
+                const exactProofs = matchingLegacyFingerprints.filter((proof) => (
+                  JSON.stringify(explicitIndexes) === JSON.stringify(proof.indexes) &&
+                  JSON.stringify(persistentTriggers) === JSON.stringify(proof.triggers)
+                ))
+                if (exactProofs.length !== 1) {
+                  return tableTransitionSummary(
+                    COMPATIBILITY_STATUSES.INCOMPATIBLE,
+                    normalized,
+                    'table-shape-incompatible'
+                  )
+                }
+                return tableTransitionSummary(
+                  COMPATIBILITY_STATUSES.MISSING,
+                  normalized,
+                  'legacy-matched',
+                  exactProofs[0].proofKey
+                )
               }
             }
           }

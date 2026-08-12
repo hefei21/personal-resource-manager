@@ -64,6 +64,10 @@ function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = [],
   return { shape, createTableSqlSha256, indexes, triggers }
 }
 
+function keyedLegacyProof(proofKey, shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = [], triggers = []) {
+  return { proofKey, shape, createTableSqlSha256, indexes, triggers }
+}
+
 function tableTransition(overrides = {}) {
   return {
     kind: 'table-transition',
@@ -207,6 +211,31 @@ test('normalizes, detaches, and deeply freezes a table-transition condition', ()
   assert.equal(normalized.table, 'items')
   assert.equal(normalized.target.columns[0].name, 'id')
   assert.equal(normalized.legacy[0].shape.columns.length, 2)
+})
+
+test('normalizes keyed legacy proofs and rejects mixed, duplicate, or unsafe proof keys', () => {
+  const first = keyedLegacyProof('legacy-a', tableShape({ strict: true }), 'a'.repeat(64))
+  const second = keyedLegacyProof('legacy-b', tableShape({ withoutRowid: true }), 'b'.repeat(64))
+  const input = tableTransition({ legacy: [second, first] })
+  const normalized = normalizeMigrationCompatibility(input)
+
+  assert.deepEqual(normalized.legacy.map(({ proofKey }) => proofKey), ['legacy-a', 'legacy-b'])
+  assert.ok(normalized.legacy.every(Object.isFrozen))
+  input.legacy[0].proofKey = 'changed'
+  assert.equal(normalized.legacy[1].proofKey, 'legacy-b')
+
+  for (const legacy of [
+    [first, legacyProof(tableShape({ withoutRowid: true }), 'b'.repeat(64))],
+    [first, { ...second, proofKey: 'legacy-a' }],
+    [first, { ...first, proofKey: 'legacy-b' }],
+    [{ ...first, proofKey: 'UPPER' }, second],
+    [{ ...first, proofKey: 'a'.repeat(65) }, second]
+  ]) {
+    assert.throws(
+      () => normalizeMigrationCompatibility(tableTransition({ legacy })),
+      (error) => error instanceof MigrationCompatibilityError && error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+    )
+  }
 })
 
 test('normalizes unique constraint collations, canonical order, and nested freezes', () => {
@@ -1317,6 +1346,37 @@ test('reads exact CREATE TABLE SQL with a bound mock query and never exposes it'
   assert.doesNotMatch(schemaSql, /secret-default|items/)
   assert.doesNotMatch(indexSchemaSql, /secret-index|lower|title|IS NOT NULL/)
   assert.doesNotMatch(JSON.stringify(result), /secret-default/)
+})
+
+test('returns only the uniquely matched keyed legacy proof identifier', () => {
+  const secretSql = "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'secret-default');"
+  const legacyShape = tableShape()
+  const expectedHash = createHash('sha256').update(Buffer.from(secretSql, 'utf8')).digest('hex')
+  const database = {
+    prepare(sql) {
+      if (sql.includes('SELECT 1 AS present')) return { get: () => ({ present: 1 }) }
+      if (sql.includes("type = 'trigger'")) return { all: () => [] }
+      if (sql.includes('SELECT sql FROM main.sqlite_schema')) return { get: () => ({ sql: secretSql }) }
+      if (sql.includes('pragma_table_list')) return { get: () => ({ wr: 0, strict: 0 }) }
+      if (sql.includes('pragma_table_xinfo')) return { all: () => tableMetadataColumns(legacyShape) }
+      if (sql.includes('pragma_foreign_key_list')) return { all: () => [] }
+      if (sql.includes('pragma_index_list')) return { all: () => [] }
+      throw new Error('unexpected query')
+    }
+  }
+
+  const result = checkMigrationCompatibility(database, tableTransition({
+    target: tableShape({ strict: true }),
+    legacy: [keyedLegacyProof('known-legacy', legacyShape, expectedHash)]
+  }))
+  assert.deepEqual(result, {
+    status: 'missing',
+    kind: 'table-transition',
+    table: 'items',
+    reason: 'legacy-matched',
+    proofKey: 'known-legacy'
+  })
+  assert.doesNotMatch(JSON.stringify(result), /secret-default|CREATE TABLE|[a-f0-9]{64}/u)
 })
 
 test('reads trigger SQL with a bound table name and never exposes trigger metadata', () => {

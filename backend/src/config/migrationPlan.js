@@ -6,6 +6,8 @@ import {
 
 const MIGRATION_ID_PATTERN = /^\d{4}_[a-z0-9][a-z0-9._-]*$/
 const CHECKSUM_PATTERN = /^[a-f0-9]{64}$/
+const PROOF_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const SOURCE_VARIANT_KEYS = ['proofKey', 'source']
 const APPLIED_STATUSES = new Set(['applied', 'failed', 'running'])
 
 /**
@@ -48,9 +50,21 @@ function assertChecksum(checksum, fieldName = 'checksum') {
 function publicMigration(migration) {
   const publicValue = { id: migration.id, checksum: migration.checksum }
   if (migration.compatibility !== undefined) {
-    publicValue.compatibility = migration.compatibility
+    publicValue.compatibility = migration.sourceVariants === undefined
+      ? migration.compatibility
+      : redactCompatibilityProofKeys(migration.compatibility)
   }
   return Object.freeze(publicValue)
+}
+
+function redactCompatibilityProofKeys(compatibility) {
+  if (compatibility.kind !== 'table-transition') return compatibility
+  return Object.freeze({
+    kind: compatibility.kind,
+    table: compatibility.table,
+    target: compatibility.target,
+    legacy: Object.freeze(compatibility.legacy.map(({ proofKey, ...proof }) => Object.freeze(proof)))
+  })
 }
 
 function publicRecord(record) {
@@ -95,6 +109,75 @@ export function computeMigrationChecksum(source, compatibility) {
   return hash.digest('hex')
 }
 
+function updateLengthPrefixed(hash, value) {
+  const bytes = Buffer.from(value, 'utf8')
+  const length = Buffer.alloc(8)
+  length.writeBigUInt64BE(BigInt(bytes.length))
+  hash.update(length)
+  hash.update(bytes)
+}
+
+function normalizeSourceText(source, fieldName) {
+  if (typeof source !== 'string' || source.trim().length === 0) {
+    fail('MIGRATION_SOURCE_INVALID', `${fieldName} must be non-empty text.`)
+  }
+  return source.replace(/\r\n?/g, '\n')
+}
+
+function normalizeSourceVariants(sourceVariants, compatibility) {
+  if (!Array.isArray(sourceVariants) || sourceVariants.length === 0) {
+    fail('MIGRATION_SOURCE_VARIANTS_INVALID', 'sourceVariants must be a non-empty array.')
+  }
+  if (compatibility?.kind !== 'table-transition') {
+    fail('MIGRATION_SOURCE_VARIANTS_INVALID', 'sourceVariants require table-transition compatibility.')
+  }
+  if (compatibility.legacy.some((proof) => !Object.hasOwn(proof, 'proofKey'))) {
+    fail('MIGRATION_SOURCE_VARIANTS_INVALID', 'Every legacy proof must declare proofKey.')
+  }
+
+  const proofKeys = new Set(compatibility.legacy.map((proof) => proof.proofKey))
+  const seen = new Set()
+  const normalized = sourceVariants.map((variant, index) => {
+    if (!variant || typeof variant !== 'object' || Array.isArray(variant)) {
+      fail('MIGRATION_SOURCE_VARIANTS_INVALID', `sourceVariants[${index}] must be an object.`)
+    }
+    const keys = Object.keys(variant).sort()
+    if (keys.length !== SOURCE_VARIANT_KEYS.length || keys.some((key, keyIndex) => key !== [...SOURCE_VARIANT_KEYS].sort()[keyIndex])) {
+      fail('MIGRATION_SOURCE_VARIANTS_INVALID', `sourceVariants[${index}] contains unsupported or missing fields.`)
+    }
+    if (typeof variant.proofKey !== 'string' || !PROOF_KEY_PATTERN.test(variant.proofKey)) {
+      fail('MIGRATION_SOURCE_VARIANTS_INVALID', `sourceVariants[${index}].proofKey is invalid.`)
+    }
+    if (seen.has(variant.proofKey)) {
+      fail('MIGRATION_SOURCE_VARIANTS_INVALID', 'sourceVariants contains a duplicate proofKey.')
+    }
+    if (!proofKeys.has(variant.proofKey)) {
+      fail('MIGRATION_SOURCE_VARIANTS_INVALID', 'sourceVariants contains an orphan proofKey.')
+    }
+    seen.add(variant.proofKey)
+    return Object.freeze({
+      proofKey: variant.proofKey,
+      source: normalizeSourceText(variant.source, `sourceVariants[${index}].source`)
+    })
+  })
+  if (seen.size !== proofKeys.size) {
+    fail('MIGRATION_SOURCE_VARIANTS_INVALID', 'sourceVariants must cover every legacy proof.')
+  }
+  normalized.sort((left, right) => compareMigrationIds(left.proofKey, right.proofKey))
+  return Object.freeze(normalized)
+}
+
+function computeSourceVariantsChecksum(sourceVariants, compatibility) {
+  const hash = createHash('sha256')
+  hash.update(Buffer.from('\0migration-source-variants-v1\0', 'utf8'))
+  updateLengthPrefixed(hash, JSON.stringify(compatibility))
+  for (const variant of sourceVariants) {
+    updateLengthPrefixed(hash, variant.proofKey)
+    updateLengthPrefixed(hash, variant.source)
+  }
+  return hash.digest('hex')
+}
+
 function normalizeCompatibilityForPlan(compatibility) {
   try {
     return normalizeMigrationCompatibility(compatibility)
@@ -119,12 +202,36 @@ export function defineMigration(definition) {
     fail('MIGRATION_DEFINITION_INVALID', 'Migration definition must be an object.')
   }
 
-  const { id, source } = definition
+  const { id } = definition
   assertMigrationId(id)
+  const hasSource = Object.hasOwn(definition, 'source')
+  const hasSourceVariants = Object.hasOwn(definition, 'sourceVariants')
+  const allowedKeys = new Set([
+    'id', 'checksum', 'compatibility', hasSource ? 'source' : 'sourceVariants'
+  ])
+  if (Object.keys(definition).some((key) => !allowedKeys.has(key))) {
+    fail('MIGRATION_DEFINITION_INVALID', 'Migration definition contains unsupported fields.')
+  }
+  if (hasSource === hasSourceVariants) {
+    fail('MIGRATION_SOURCE_INVALID', 'Migration must declare exactly one of source or sourceVariants.')
+  }
   const compatibility = definition.compatibility === undefined
     ? undefined
     : normalizeCompatibilityForPlan(definition.compatibility)
-  const computedChecksum = computeMigrationChecksum(source, compatibility)
+  const source = hasSource ? definition.source : undefined
+  if (
+    hasSource &&
+    compatibility?.kind === 'table-transition' &&
+    compatibility.legacy.some((proof) => Object.hasOwn(proof, 'proofKey'))
+  ) {
+    fail('MIGRATION_SOURCE_VARIANTS_INVALID', 'proofKey is only supported with sourceVariants.')
+  }
+  const sourceVariants = hasSourceVariants
+    ? normalizeSourceVariants(definition.sourceVariants, compatibility)
+    : undefined
+  const computedChecksum = hasSource
+    ? computeMigrationChecksum(source, compatibility)
+    : computeSourceVariantsChecksum(sourceVariants, compatibility)
 
   if (definition.checksum !== undefined) {
     assertChecksum(definition.checksum)
@@ -137,11 +244,9 @@ export function defineMigration(definition) {
     }
   }
 
-  const migration = {
-    id,
-    source,
-    checksum: computedChecksum
-  }
+  const migration = { id, checksum: computedChecksum }
+  if (hasSource) migration.source = source
+  else migration.sourceVariants = sourceVariants
   if (compatibility !== undefined) migration.compatibility = compatibility
   return Object.freeze(migration)
 }

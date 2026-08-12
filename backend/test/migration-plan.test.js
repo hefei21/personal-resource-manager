@@ -32,6 +32,10 @@ function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = [],
   return { shape, createTableSqlSha256, indexes, triggers }
 }
 
+function keyedLegacyProof(proofKey, shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = [], triggers = []) {
+  return { proofKey, shape, createTableSqlSha256, indexes, triggers }
+}
+
 function tableTransition(overrides = {}) {
   return {
     kind: 'table-transition',
@@ -123,6 +127,89 @@ test('keeps the checksum of a migration without compatibility unchanged', () => 
   assert.equal(
     defineMigration({ id: '0001_initial', source: 'SELECT 1;' }).checksum,
     '17db4fd369edb9244b9f91d9aeed145c3d04ad8ba6e95d06247f07a63527d11a'
+  )
+})
+
+test('normalizes, freezes, and hashes keyed source variants deterministically', () => {
+  const compatibility = tableTransition({
+    legacy: [
+      keyedLegacyProof('legacy-b', tableShape({ withoutRowid: true }), 'b'.repeat(64)),
+      keyedLegacyProof('legacy-a', tableShape({ strict: true }), 'a'.repeat(64))
+    ]
+  })
+  const input = [
+    { proofKey: 'legacy-b', source: 'SELECT 2;\r\n' },
+    { proofKey: 'legacy-a', source: 'SELECT 1;\r\n' }
+  ]
+  const migration = defineMigration({ id: '0001_initial', sourceVariants: input, compatibility })
+  const reversed = defineMigration({
+    id: '0001_initial',
+    sourceVariants: [...input].reverse(),
+    compatibility: { ...compatibility, legacy: [...compatibility.legacy].reverse() }
+  })
+
+  assert.equal(migration.checksum, reversed.checksum)
+  assert.deepEqual(migration.sourceVariants, [
+    { proofKey: 'legacy-a', source: 'SELECT 1;\n' },
+    { proofKey: 'legacy-b', source: 'SELECT 2;\n' }
+  ])
+  assert.ok(Object.isFrozen(migration))
+  assert.ok(Object.isFrozen(migration.sourceVariants))
+  assert.ok(migration.sourceVariants.every(Object.isFrozen))
+  assert.notEqual(
+    migration.checksum,
+    defineMigration({
+      id: '0001_initial',
+      sourceVariants: [{ proofKey: 'legacy-a', source: 'SELECT 3;' }, input[0]],
+      compatibility
+    }).checksum
+  )
+
+  input[0].source = 'changed'
+  compatibility.legacy[0].proofKey = 'changed'
+  assert.equal(migration.sourceVariants[1].source, 'SELECT 2;\n')
+  assert.equal(migration.compatibility.legacy[1].proofKey, 'legacy-b')
+
+  const plan = createMigrationPlan(createMigrationRegistry([migration]))
+  const serialized = JSON.stringify(plan)
+  assert.doesNotMatch(serialized, /SELECT [12]|legacy-[ab]/u)
+  assert.ok(plan.pending[0].compatibility.legacy.every((proof) => !('proofKey' in proof)))
+})
+
+test('rejects malformed, ambiguous, or incomplete source variant definitions', () => {
+  const first = keyedLegacyProof('legacy-a', tableShape({ strict: true }), 'a'.repeat(64))
+  const second = keyedLegacyProof('legacy-b', tableShape({ withoutRowid: true }), 'b'.repeat(64))
+  const compatibility = tableTransition({ legacy: [first, second] })
+  const valid = [
+    { proofKey: 'legacy-a', source: 'SELECT 1;' },
+    { proofKey: 'legacy-b', source: 'SELECT 2;' }
+  ]
+  const invalidDefinitions = [
+    { id: '0001_initial', source: 'SELECT 1;', sourceVariants: valid, compatibility },
+    { id: '0001_initial', compatibility },
+    { id: '0001_initial', sourceVariants: [], compatibility },
+    { id: '0001_initial', sourceVariants: [valid[0]], compatibility },
+    { id: '0001_initial', sourceVariants: [valid[0], valid[0]], compatibility },
+    { id: '0001_initial', sourceVariants: [valid[0], { proofKey: 'orphan', source: 'SELECT 2;' }], compatibility },
+    { id: '0001_initial', sourceVariants: [{ ...valid[0], extra: true }, valid[1]], compatibility },
+    { id: '0001_initial', sourceVariants: [{ proofKey: 'UPPER', source: 'SELECT 1;' }, valid[1]], compatibility },
+    { id: '0001_initial', sourceVariants: [{ proofKey: 'legacy-a', source: ' ' }, valid[1]], compatibility },
+    { id: '0001_initial', sourceVariants: valid, compatibility: tableTransition() },
+    { id: '0001_initial', sourceVariants: valid, compatibility: { kind: 'column', table: 'items', column: { name: 'title', type: 'TEXT', notNull: false, defaultValue: null } } },
+    { id: '0001_initial', sourceVariants: valid, compatibility, unsupported: true },
+    { id: '0001_initial', source: 'SELECT 1;', compatibility, unsupported: true }
+  ]
+  for (const definition of invalidDefinitions) {
+    assert.throws(() => defineMigration(definition), MigrationPlanError)
+  }
+
+  assert.throws(
+    () => defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: tableTransition({ legacy: [first, second] })
+    }),
+    MigrationPlanError
   )
 })
 
