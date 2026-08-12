@@ -34,7 +34,10 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
 
 const ACTIVE_LOCK = Object.freeze({ state: 'active' })
 const FIXED_NOW = '2026-08-11T00:00:00.000Z'
-const documentsMigration = applicationMigrationRegistry.migrations.at(-1)
+const documentsMigration = applicationMigrationRegistry.migrations.find(
+  ({ id }) => id === '0036_documents_version_real'
+)
+assert.ok(documentsMigration, '0036_documents_version_real must be registered')
 
 const LEGACY_DOCUMENTS_DDL = `CREATE TABLE documents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1438,9 +1438,7 @@ test('incompatible bookmarks columns fail closed at the matching migration with 
           "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_title'"
         ).get().count, 0)
         assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
-        assert.equal(verification.prepare(
-          "SELECT COUNT(*) AS count FROM pragma_table_info('code_repositories') WHERE name = 'languages'"
-        ).get().count, 0)
+        assertRegisteredColumn(verification, 'code_repositories', 'languages', 'TEXT', 0, "'{}'")
       } finally {
         verification.close()
       }
@@ -1516,9 +1514,7 @@ test('incompatible anime columns stop at early, middle, and final migration pref
         assert.equal(verification.prepare(
           "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_documents_title'"
         ).get().count, 0)
-        assert.equal(verification.prepare(
-          "SELECT COUNT(*) AS count FROM pragma_table_info('code_repositories') WHERE name = 'languages'"
-        ).get().count, 0)
+        assertRegisteredColumn(verification, 'code_repositories', 'languages', 'TEXT', 0, "'{}'")
         assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
       } finally {
         verification.close()
@@ -1588,9 +1584,7 @@ test('incompatible games columns preserve the frozen adoption and execution pref
             0
           )
         }
-        assert.equal(verification.prepare(
-          "SELECT COUNT(*) AS count FROM pragma_table_info('code_repositories') WHERE name = 'languages'"
-        ).get().count, 0)
+        assertRegisteredColumn(verification, 'code_repositories', 'languages', 'TEXT', 0, "'{}'")
       } finally {
         verification.close()
       }
@@ -1663,9 +1657,7 @@ test('incompatible music columns execute the prefix and stop at the explicit con
             0
           )
         }
-        assert.equal(verification.prepare(
-          "SELECT COUNT(*) AS count FROM pragma_table_info('code_repositories') WHERE name = 'languages'"
-        ).get().count, 0)
+        assertRegisteredColumn(verification, 'code_repositories', 'languages', 'TEXT', 0, "'{}'")
       } finally {
         verification.close()
       }
