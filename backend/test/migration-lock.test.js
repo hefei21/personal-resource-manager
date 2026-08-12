@@ -143,6 +143,7 @@ function spawnLockChild(mainDbPath, timeoutMs) {
 
 function runNasProbe(role, sharedRoot, runId) {
   const child = spawn(process.execPath, [nasProbeFixture, role, sharedRoot, runId], {
+    env: { ...process.env, PR_MIGRATION_LOCK_NAS_PROBE: '1' },
     stdio: ['ignore', 'pipe', 'pipe']
   })
   let stdout = ''

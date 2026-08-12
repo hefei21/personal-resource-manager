@@ -3,6 +3,8 @@ services:
     image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG:?IMAGE_TAG is required}
     container_name: pr-lock-test-holder
     restart: "no"
+    environment:
+      PR_MIGRATION_LOCK_NAS_PROBE: "1"
     command:
       - node
       - test/fixtures/migration-lock-nas-probe.js
@@ -16,6 +18,8 @@ services:
     image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG:?IMAGE_TAG is required}
     container_name: pr-lock-test-contender
     restart: "no"
+    environment:
+      PR_MIGRATION_LOCK_NAS_PROBE: "1"
     command:
       - node
       - test/fixtures/migration-lock-nas-probe.js

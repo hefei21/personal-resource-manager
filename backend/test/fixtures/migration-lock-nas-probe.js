@@ -6,6 +6,10 @@ import {
   acquireMigrationLock
 } from '../../src/config/migrationLock.js'
 
+if (process.env.PR_MIGRATION_LOCK_NAS_PROBE !== '1') {
+  process.exit(0)
+}
+
 const POLL_INTERVAL_MS = 100
 const WAIT_TIMEOUT_MS = 20000
 
