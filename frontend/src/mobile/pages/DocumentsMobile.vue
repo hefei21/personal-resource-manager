@@ -1287,7 +1287,7 @@ function handleUploadFail() {
 // 恢复版本
 async function restoreVersion(ver) {
   try {
-    await api.documents.update(currentDoc.value.id, { version: ver.version })
+    await api.documents.restoreVersion(currentDoc.value.id, ver.id)
     toast.success('恢复成功')
     versionsDialogVisible.value = false
     loadDocuments()

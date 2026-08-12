@@ -108,6 +108,7 @@ export default {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
     versions: (id) => api.get(`/documents/${id}/versions`),
+    restoreVersion: (id, versionId, data = {}) => api.post(`/documents/${id}/versions/${versionId}/restore`, data),
     getContent: (id) => api.get(`/documents/${id}/content`),
     updateContent: (id, data) => api.put(`/documents/${id}/content`, data),
     // 私密空间 API（路径使用中性命名，避免被网关拦截）

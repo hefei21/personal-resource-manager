@@ -20,6 +20,7 @@ import {
 import { documentOriginalName, getDocumentStorageRuntime } from '../services/documentStorageRuntime.js'
 import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
 import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
+import { restoreDocumentVersion, updateDocumentContent } from '../services/documentVersionService.js'
 
 const router = express.Router()
 const DOCUMENT_EXTENSIONS = new Set([
@@ -90,7 +91,14 @@ function sendDocumentError(res, error, fallbackMessage) {
     DOCUMENT_STORAGE_METADATA_INCOMPLETE: 409,
     DOCUMENT_STORAGE_METADATA_MISMATCH: 409,
     DOCUMENT_STORAGE_KIND_INVALID: 409,
-    DOCUMENT_CONTENT_INTEGRITY_FAILED: 409
+    DOCUMENT_CONTENT_INTEGRITY_FAILED: 409,
+    DOCUMENT_CONTENT_INVALID: 400,
+    DOCUMENT_ID_INVALID: 400,
+    DOCUMENT_VERSION_INVALID: 400,
+    DOCUMENT_VERSION_NOT_GREATER: 409,
+    DOCUMENT_VERSION_NOTE_INVALID: 400,
+    DOCUMENT_VERSION_NOT_FOUND: 404,
+    DOCUMENT_NOT_FOUND: 404
   }
   const status = statusByCode[error?.code] ?? 500
   return res.status(status).json({ message: status === 500 ? fallbackMessage : error.message, code: error?.code })
@@ -977,84 +985,20 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
 router.put('/:id/content', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { content, versionNote, newVersion } = req.body
-    if (!content) {
-      return res.status(400).json({ message: '内容不能为空' })
-    }
-
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    if (!document) {
-      return res.status(404).json({ message: '文档不存在' })
-    }
-
-    const filePath = document.file_path
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    // 确定新版本号
-    let finalVersion
-    if (newVersion) {
-      // 验证版本号格式
-      const versionRegex = /^\d+(\.\d+)*$/
-      if (!versionRegex.test(newVersion)) {
-        return res.status(400).json({ message: '版本号格式不正确' })
-      }
-
-      // 验证版本号是否大于当前版本
-      const currentVersion = document.version || '1.0'
-      if (!isVersionGreater(newVersion, currentVersion.toString())) {
-        return res.status(400).json({ message: `新版本号必须大于当前版本 ${currentVersion}` })
-      }
-
-      finalVersion = newVersion
-    } else {
-      // 自动递增版本号（小版本+1）
-      const currentVersion = document.version || 1
-      finalVersion = (parseFloat(currentVersion) + 0.1).toFixed(1)
-    }
-
-    // 备份当前版本
-    const backupStmt = db.prepare(
-      `INSERT INTO document_versions (document_id, version, file_path, note) VALUES (?, ?, ?, ?)`
-    )
-    backupStmt.run(req.params.id, finalVersion, filePath, versionNote || `版本 ${finalVersion}`)
-
-    // 写入新内容
-    fs.writeFileSync(filePath, content, 'utf-8')
-
-    // 更新文档版本号
-    const updateStmt = db.prepare(
-      `UPDATE documents SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
-    updateStmt.run(finalVersion, req.params.id)
-
-    res.json({ message: '保存成功', version: finalVersion })
+    const result = await updateDocumentContent({
+      database: getDatabase(),
+      runtime: getDocumentStorageRuntime(),
+      id: req.params.id,
+      content,
+      version: newVersion,
+      versionNote
+    })
+    res.json({ message: '保存成功', version: result.version })
   } catch (error) {
-    console.error('更新文档内容失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('更新文档内容失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error?.cause ?? error, '服务器错误')
   }
 })
-
-// 辅助函数：比较版本号
-function isVersionGreater(newVersion, currentVersion) {
-  const newParts = newVersion.split('.').map(Number)
-  const currentParts = currentVersion.toString().split('.').map(Number)
-
-  const maxLen = Math.max(newParts.length, currentParts.length)
-
-  for (let i = 0; i < maxLen; i++) {
-    const newPart = newParts[i] || 0
-    const currentPart = currentParts[i] || 0
-
-    if (newPart > currentPart) return true
-    if (newPart < currentPart) return false
-  }
-
-  return false // 版本号相等
-}
 
 // 获取文档版本
 router.get('/:id/versions', authenticateToken, async (req, res) => {
@@ -1070,7 +1014,7 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
       id: row.id,
       documentId: row.document_id,
       version: row.version,
-      filePath: row.file_path,
+      filePath: documentOriginalName(row.original_name || row.file_path || `version-${row.version}`),
       note: row.note,
       createdAt: row.created_at
     }))
@@ -1285,6 +1229,22 @@ router.get('/docs/special/inventory', authenticateToken, (req, res) => {
   } catch (error) {
     console.error('私密空间盘点失败:', error)
     res.status(500).json({ message: '盘点失败' })
+  }
+})
+
+router.post('/:id/versions/:versionId/restore', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = await restoreDocumentVersion({
+      database: getDatabase(),
+      runtime: getDocumentStorageRuntime(),
+      id: req.params.id,
+      versionId: req.params.versionId,
+      versionNote: req.body?.versionNote
+    })
+    res.json({ message: '恢复成功', version: result.version })
+  } catch (error) {
+    console.error('恢复文档版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error?.cause ?? error, '服务器错误')
   }
 })
 

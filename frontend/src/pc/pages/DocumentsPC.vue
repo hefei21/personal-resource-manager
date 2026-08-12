@@ -497,7 +497,7 @@
           <NativeFormItem label="新版本号" name="newVersion">
             <NativeInput
               v-model="editForm.newVersion"
-              placeholder="如: 1.1.2"
+              placeholder="留空自动递增，如: 3"
               style="width: 120px"
             />
           </NativeFormItem>
@@ -1900,14 +1900,13 @@ async function handleSaveContent() {
 
     // 验证版本号
     if (editForm.value.newVersion) {
-      const versionRegex = /^\d+(\.\d+)*$/
+      const versionRegex = /^[1-9]\d*$/
       if (!versionRegex.test(editForm.value.newVersion)) {
-        toast.error('版本号格式不正确，请使用数字和点号，如: 1.1.2')
+        toast.error('版本号必须是正整数，如：3；也可以留空自动递增')
         return
       }
 
-      // 比较版本号
-      if (!isVersionGreater(editForm.value.newVersion, editForm.value.currentVersion)) {
+      if (Number(editForm.value.newVersion) <= Number(editForm.value.currentVersion)) {
         toast.error(`新版本号必须大于当前版本 ${editForm.value.currentVersion}`)
         return
       }
@@ -1926,24 +1925,6 @@ async function handleSaveContent() {
     console.error('保存失败:', error)
     toast.error(error.response?.data?.message || '保存失败')
   }
-}
-
-// 比较版本号函数：判断 newVersion 是否大于 currentVersion
-function isVersionGreater(newVersion, currentVersion) {
-  const newParts = newVersion.split('.').map(Number)
-  const currentParts = currentVersion.split('.').map(Number)
-
-  const maxLen = Math.max(newParts.length, currentParts.length)
-
-  for (let i = 0; i < maxLen; i++) {
-    const newPart = newParts[i] || 0
-    const currentPart = currentParts[i] || 0
-
-    if (newPart > currentPart) return true
-    if (newPart < currentPart) return false
-  }
-
-  return false // 版本号相等
 }
 
 function getFileExtension(fileName) {
