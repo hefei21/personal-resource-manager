@@ -18,11 +18,14 @@
           <NativeRadio value="private">
             <NativeIcon name="lock" size="14" /> 私密空间
           </NativeRadio>
+          <NativeRadio value="trash">
+            <NativeIcon name="trash" size="14" /> 回收站
+          </NativeRadio>
         </NativeRadioGroup>
       </div>
       
       <!-- 搜索和排序另起一行 -->
-      <div class="toolbar-row toolbar-row-second">
+      <div v-if="viewMode !== 'trash'" class="toolbar-row toolbar-row-second">
         <!-- 左侧：搜索和高级搜索 -->
         <div class="toolbar-left">
           <NativeInput
@@ -80,7 +83,7 @@
       </div>
 
       <!-- 高级搜索面板 -->
-      <div v-if="advancedSearchVisible" class="advanced-search-panel">
+      <div v-if="advancedSearchVisible && viewMode !== 'trash'" class="advanced-search-panel">
         <NativeSpace>
           <NativeFormItem v-if="viewMode !== 'private'" label="标签" style="margin: 0;">
             <NativeSelect
@@ -223,7 +226,46 @@
     </NativeCard>
 
     <!-- 文档列表 -->
-    <NativeCard v-if="documents.length > 0" class="documents-list">
+    <NativeCard v-if="viewMode === 'trash'" class="documents-list">
+      <h3 class="section-title">文档回收站</h3>
+      <NativeAlert theme="info" title="删除的文档默认保留 30 天">
+        恢复会优先放回原分类；永久删除不可撤销。
+      </NativeAlert>
+      <div v-if="trashLoading" class="content-loading">
+        <NativeLoading size="small" />
+      </div>
+      <NativeTable v-else-if="trashDocuments.length > 0" :dataSource="trashDocuments" :columns="trashColumns" rowKey="id" hover>
+        <template #cell-originalPath="{ row }">
+          <span>{{ row.originalPath || '未分类' }}</span>
+        </template>
+        <template #cell-deletedAt="{ row }">
+          <span>{{ formatDateTime(row.deletedAt) }}</span>
+        </template>
+        <template #cell-purgeAfter="{ row }">
+          <span>{{ formatDateTime(row.purgeAfter) }}</span>
+        </template>
+        <template #cell-operation="{ row }">
+          <NativeSpace>
+            <NativePopconfirm content="恢复后将优先返回原分类，确定恢复吗？" @confirm="handleRestoreTrash(row.id)">
+              <template #trigger>
+                <NativeButton theme="primary" size="small" :disabled="!canWrite">恢复</NativeButton>
+              </template>
+            </NativePopconfirm>
+            <NativePopconfirm content="永久删除将同时清理该文档的历史版本，且不可恢复。确定继续吗？" @confirm="handlePermanentlyDeleteTrash(row.id)">
+              <template #trigger>
+                <NativeButton theme="danger" variant="outline" size="small" :disabled="!canWrite">永久删除</NativeButton>
+              </template>
+            </NativePopconfirm>
+          </NativeSpace>
+        </template>
+      </NativeTable>
+      <div v-else class="empty-state-inline">
+        <NativeIcon name="trash" size="48" />
+        <p>回收站为空</p>
+      </div>
+    </NativeCard>
+
+    <NativeCard v-if="viewMode !== 'trash' && documents.length > 0" class="documents-list">
       <h3 v-if="viewMode === 'category' && currentCategoryId" class="section-title">
         {{ currentCategoryPath }} - 文档列表
       </h3>
@@ -464,9 +506,16 @@
           <span>{{ row.version ? (row.version.toString().includes('.') ? row.version : `${row.version}.0`) : '1.0' }}</span>
         </template>
         <template #cell-operation="{ row }">
-          <NativeButton theme="primary" size="small" @click="handleDownloadVersion(row)">
-            <NativeIcon name="download" /> 下载
-          </NativeButton>
+          <NativeSpace>
+            <NativeButton theme="primary" size="small" @click="handleDownloadVersion(row)">
+              <NativeIcon name="download" /> 下载
+            </NativeButton>
+            <NativePopconfirm content="恢复此版本会创建一个新的当前版本，不会覆盖历史。确定恢复吗？" @confirm="handleRestoreVersion(row)">
+              <template #trigger>
+                <NativeButton theme="default" variant="outline" size="small" :disabled="!canWrite">恢复此版本</NativeButton>
+              </template>
+            </NativePopconfirm>
+          </NativeSpace>
         </template>
       </NativeTable>
     </NativeDialog>
@@ -873,6 +922,9 @@ const documents = ref([])
 const total = ref(0)
 const pagination = ref({ current: 1, pageSize: 30 })
 const versions = ref([])
+const versionDocumentId = ref(null)
+const trashDocuments = ref([])
+const trashLoading = ref(false)
 const uploadDialogVisible = ref(false)
 const versionsDialogVisible = ref(false)
 const createCategoryDialogVisible = ref(false)
@@ -1244,7 +1296,15 @@ const versionColumns = [
   { key: 'version', dataIndex: 'version', title: '版本号', width: 100 },
   { key: 'note', dataIndex: 'note', title: '说明' },
   { key: 'createdAt', dataIndex: 'createdAt', title: '创建时间', width: 180 },
-  { key: 'operation', title: '操作', width: 150 }
+  { key: 'operation', title: '操作', width: 240 }
+]
+
+const trashColumns = [
+  { key: 'title', dataIndex: 'title', title: '标题', minWidth: 200 },
+  { key: 'originalPath', dataIndex: 'originalPath', title: '原分类', minWidth: 160 },
+  { key: 'deletedAt', dataIndex: 'deletedAt', title: '删除时间', width: 180 },
+  { key: 'purgeAfter', dataIndex: 'purgeAfter', title: '保护期至', width: 180 },
+  { key: 'operation', title: '操作', width: 220 }
 ]
 
 const lineCount = computed(() => {
@@ -1368,7 +1428,9 @@ function handleViewModeChange() {
   documents.value = []
 
   // 处理私密空间 - 每次进入都要重新验证密码
-  if (viewMode.value === 'private') {
+  if (viewMode.value === 'trash') {
+    loadTrashDocuments()
+  } else if (viewMode.value === 'private') {
     // 游客无权访问私密空间
     if (isGuest.value) {
       toast.warning('游客无权访问私密空间')
@@ -1966,6 +2028,7 @@ async function handleDelete(id) {
 
 async function handleViewVersions(row) {
   try {
+    versionDocumentId.value = row.id
     const response = await api.documents.versions(row.id)
     console.log('版本响应:', response)
     const data = response.data?.data || response.data || []
@@ -1975,6 +2038,61 @@ async function handleViewVersions(row) {
     console.error('加载版本失败:', error)
     toast.error('加载版本失败')
   }
+}
+
+async function handleRestoreVersion(row) {
+  if (!versionDocumentId.value) return
+  try {
+    await api.documents.restoreVersion(versionDocumentId.value, row.id)
+    toast.success('版本恢复成功，已创建新的当前版本')
+    versionsDialogVisible.value = false
+    await loadDocuments()
+  } catch (error) {
+    console.error('恢复版本失败:', error)
+    toast.error(error.response?.data?.message || '恢复版本失败')
+  }
+}
+
+async function loadTrashDocuments() {
+  trashLoading.value = true
+  try {
+    const response = await api.documents.trash()
+    trashDocuments.value = response.data?.data || []
+  } catch (error) {
+    console.error('加载回收站失败:', error)
+    toast.error('加载回收站失败')
+    trashDocuments.value = []
+  } finally {
+    trashLoading.value = false
+  }
+}
+
+async function handleRestoreTrash(id) {
+  try {
+    await api.documents.restoreTrash(id)
+    toast.success('文档已恢复')
+    await Promise.all([loadTrashDocuments(), loadCategories()])
+  } catch (error) {
+    console.error('恢复文档失败:', error)
+    toast.error(error.response?.data?.message || '恢复文档失败')
+  }
+}
+
+async function handlePermanentlyDeleteTrash(id) {
+  try {
+    await api.documents.permanentlyDeleteTrash(id)
+    toast.success('文档已永久删除')
+    await loadTrashDocuments()
+  } catch (error) {
+    console.error('永久删除文档失败:', error)
+    toast.error(error.response?.data?.message || '永久删除文档失败')
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
 
 async function loadPreviewContent(row) {
@@ -2475,6 +2593,16 @@ onMounted(() => {
 <style scoped>
 .documents {
   padding: 0;
+}
+
+.empty-state-inline {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: #888;
 }
 
 /* 上传进度显示 */

@@ -109,6 +109,9 @@ export default {
     }),
     versions: (id) => api.get(`/documents/${id}/versions`),
     restoreVersion: (id, versionId, data = {}) => api.post(`/documents/${id}/versions/${versionId}/restore`, data),
+    trash: () => api.get('/documents/trash'),
+    restoreTrash: (id) => api.post(`/documents/trash/${id}/restore`),
+    permanentlyDeleteTrash: (id) => api.delete(`/documents/trash/${id}`),
     getContent: (id) => api.get(`/documents/${id}/content`),
     updateContent: (id, data) => api.put(`/documents/${id}/content`, data),
     // 私密空间 API（路径使用中性命名，避免被网关拦截）

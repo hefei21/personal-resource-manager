@@ -28,10 +28,18 @@
         <NativeIcon name="lock-on" />
         <span>私密</span>
       </div>
+      <div
+        class="tab-item"
+        :class="{ active: viewMode === 'trash' }"
+        @click="switchViewMode('trash')"
+      >
+        <NativeIcon name="trash" />
+        <span>回收站</span>
+      </div>
     </div>
 
     <!-- 搜索栏 -->
-    <div class="search-bar">
+    <div v-if="viewMode !== 'trash'" class="search-bar">
       <NativeInput
         v-model="searchKeyword"
         :placeholder="viewMode === 'private' ? '搜索私密文件...' : '搜索文档...'"
@@ -103,7 +111,28 @@
     </div>
 
     <!-- 文档列表 -->
-    <div class="documents-section" v-if="!loading || documents.length > 0">
+    <div v-if="viewMode === 'trash'" class="documents-section">
+      <div class="section-title">文档回收站</div>
+      <div v-if="trashLoading" class="loading-state"><NativeLoading size="medium" /></div>
+      <div v-else-if="trashDocuments.length === 0" class="empty-categories">
+        <span class="empty-text">回收站为空</span>
+      </div>
+      <div v-else class="document-list">
+        <div v-for="item in trashDocuments" :key="item.id" class="document-item trash-item">
+          <div class="file-icon"><NativeIcon name="file" size="24" /></div>
+          <div class="file-info">
+            <div class="file-name">{{ item.title }}</div>
+            <div class="file-meta">{{ item.originalPath || '未分类' }} · {{ formatDate(item.deletedAt) }}</div>
+          </div>
+          <div class="trash-actions">
+            <NativeButton theme="primary" size="small" @click.stop="handleRestoreTrash(item.id)" :disabled="!canWrite">恢复</NativeButton>
+            <NativeButton theme="danger" variant="outline" size="small" @click.stop="requestPermanentlyDelete(item)" :disabled="!canWrite">永久删除</NativeButton>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="documents-section" v-if="viewMode !== 'trash' && (!loading || documents.length > 0)">
       <!-- 批量操作栏（放在文档列表上方，多选模式下显示） -->
       <div v-if="batchMode" class="batch-bar">
         <span class="batch-info">已选 {{ selectedDocuments.length }} 项</span>
@@ -254,11 +283,30 @@
             </div>
             <div class="version-actions">
               <button class="version-preview-btn" @click.stop="previewVersion(ver)">预览</button>
+              <button class="version-preview-btn" @click.stop="requestRestoreVersion(ver)" :disabled="!canWrite">恢复</button>
             </div>
           </div>
         </div>
       </div>
     </div>
+
+    <NativeDialog
+      v-model="restoreVersionConfirmVisible"
+      title="恢复历史版本"
+      @confirm="confirmRestoreVersion"
+      class="centered-dialog"
+    >
+      <p>恢复会创建一个新的当前版本，不会覆盖已有历史。确定继续吗？</p>
+    </NativeDialog>
+
+    <NativeDialog
+      v-model="permanentDeleteConfirmVisible"
+      title="永久删除文档"
+      @confirm="confirmPermanentlyDelete"
+      class="centered-dialog"
+    >
+      <p>永久删除会清理文档及其历史版本，且不可恢复。确定继续吗？</p>
+    </NativeDialog>
 
     <!-- 删除确认弹窗 -->
     <div v-if="deleteConfirmVisible" class="native-dialog-overlay" @click.self="deleteConfirmVisible = false">
@@ -510,6 +558,12 @@ const batchEditForm = ref({
 // 版本
 const versions = ref([])
 const versionsDialogVisible = ref(false)
+const trashDocuments = ref([])
+const trashLoading = ref(false)
+const restoreVersionConfirmVisible = ref(false)
+const pendingVersion = ref(null)
+const permanentDeleteConfirmVisible = ref(false)
+const pendingTrashDocument = ref(null)
 
 // 预览
 const previewDialogVisible = ref(false)
@@ -594,6 +648,11 @@ function switchViewMode(mode) {
   selectedDocuments.value = []
   batchMode.value = false
   
+  if (mode === 'trash') {
+    loadTrashDocuments()
+    return
+  }
+
   if (mode === 'private') {
     if (isGuest.value) {
       toast.warning('游客无权访问私密空间')
@@ -1139,6 +1198,7 @@ function isSelected(id) {
 // 查看版本
 async function handleViewVersions(doc) {
   try {
+    currentDoc.value = doc
     const response = await api.documents.versions(doc.id)
     versions.value = response.data?.data || []
     versionsDialogVisible.value = true
@@ -1288,11 +1348,68 @@ function handleUploadFail() {
 async function restoreVersion(ver) {
   try {
     await api.documents.restoreVersion(currentDoc.value.id, ver.id)
-    toast.success('恢复成功')
+    toast.success('版本恢复成功，已创建新的当前版本')
     versionsDialogVisible.value = false
-    loadDocuments()
+    await loadDocuments()
+    return true
   } catch (error) {
-    toast.error('恢复失败')
+    toast.error(error.response?.data?.message || '恢复失败')
+    return false
+  }
+}
+
+function requestRestoreVersion(ver) {
+  pendingVersion.value = ver
+  restoreVersionConfirmVisible.value = true
+}
+
+async function confirmRestoreVersion() {
+  if (!pendingVersion.value) return
+  const restored = await restoreVersion(pendingVersion.value)
+  if (restored) {
+    restoreVersionConfirmVisible.value = false
+    pendingVersion.value = null
+  }
+}
+
+async function loadTrashDocuments() {
+  trashLoading.value = true
+  try {
+    const response = await api.documents.trash()
+    trashDocuments.value = response.data?.data || []
+  } catch (error) {
+    toast.error('加载回收站失败')
+    trashDocuments.value = []
+  } finally {
+    trashLoading.value = false
+  }
+}
+
+async function handleRestoreTrash(id) {
+  try {
+    await api.documents.restoreTrash(id)
+    toast.success('文档已恢复')
+    await Promise.all([loadTrashDocuments(), loadCategories()])
+  } catch (error) {
+    toast.error(error.response?.data?.message || '恢复文档失败')
+  }
+}
+
+function requestPermanentlyDelete(item) {
+  pendingTrashDocument.value = item
+  permanentDeleteConfirmVisible.value = true
+}
+
+async function confirmPermanentlyDelete() {
+  if (!pendingTrashDocument.value) return
+  try {
+    await api.documents.permanentlyDeleteTrash(pendingTrashDocument.value.id)
+    toast.success('文档已永久删除')
+    permanentDeleteConfirmVisible.value = false
+    pendingTrashDocument.value = null
+    await loadTrashDocuments()
+  } catch (error) {
+    toast.error(error.response?.data?.message || '永久删除文档失败')
   }
 }
 
@@ -1457,6 +1574,19 @@ watch(viewMode, (newMode) => {
 .tab-item.active {
   background: #0052d9;
   color: #fff;
+}
+
+.trash-item {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.trash-actions {
+  display: flex;
+  width: 100%;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
 }
 
 .search-bar {
