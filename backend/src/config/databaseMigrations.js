@@ -14,6 +14,44 @@ import { CREATE_RESOURCE_TRASH_SQL, RESOURCE_TRASH_SHAPE } from './resourceTrash
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
+export const PRIVATE_DOCUMENT_MIGRATION_TABLE = 'private_document_migration_map'
+
+export const CREATE_PRIVATE_DOCUMENT_MIGRATION_SQL = `CREATE TABLE ${PRIVATE_DOCUMENT_MIGRATION_TABLE} (
+  legacy_private_document_id INTEGER PRIMARY KEY,
+  document_id INTEGER,
+  version_id INTEGER,
+  status TEXT NOT NULL CHECK (status IN ('migrated', 'skipped', 'failed')),
+  source_sha256 TEXT,
+  source_bytes INTEGER,
+  storage_key TEXT,
+  content_sha256 TEXT,
+  content_bytes INTEGER,
+  issue_code TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`.trim()
+
+export const PRIVATE_DOCUMENT_MIGRATION_SHAPE = Object.freeze({
+  strict: false,
+  withoutRowid: false,
+  columns: Object.freeze([
+    { name: 'legacy_private_document_id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
+    { name: 'document_id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'version_id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'status', type: 'TEXT', notNull: true, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'source_sha256', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'source_bytes', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'storage_key', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'content_sha256', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'content_bytes', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'issue_code', type: 'TEXT', notNull: false, defaultValue: null, primaryKeyPosition: 0 },
+    { name: 'created_at', type: 'TEXT', notNull: true, defaultValue: 'CURRENT_TIMESTAMP', primaryKeyPosition: 0 },
+    { name: 'updated_at', type: 'TEXT', notNull: true, defaultValue: 'CURRENT_TIMESTAMP', primaryKeyPosition: 0 }
+  ].map(Object.freeze)),
+  foreignKeys: Object.freeze([]),
+  uniqueConstraints: Object.freeze([])
+})
+
 const documentColumns = (versionType, subcategoryPosition = 'canonical', versionDefault = '1.0') => {
   const columns = [
     { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
@@ -1682,6 +1720,23 @@ export const applicationMigrationRegistry = createMigrationRegistry([
       target: RESOURCE_TRASH_SHAPE,
       targetProof: {
         createTableSqlSha256: sha256(CREATE_RESOURCE_TRASH_SQL),
+        indexes: [],
+        triggers: [],
+        externalDependencies: { inboundForeignKeys: 'none', schemaSqlReferences: 'none' }
+      },
+      missingTable: 'create',
+      legacy: []
+    }
+  },
+  {
+    id: '0051_private_document_migration_map',
+    source: CREATE_PRIVATE_DOCUMENT_MIGRATION_SQL,
+    compatibility: {
+      kind: 'table-transition',
+      table: PRIVATE_DOCUMENT_MIGRATION_TABLE,
+      target: PRIVATE_DOCUMENT_MIGRATION_SHAPE,
+      targetProof: {
+        createTableSqlSha256: sha256(CREATE_PRIVATE_DOCUMENT_MIGRATION_SQL),
         indexes: [],
         triggers: [],
         externalDependencies: { inboundForeignKeys: 'none', schemaSqlReferences: 'none' }
