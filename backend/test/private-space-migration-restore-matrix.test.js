@@ -231,7 +231,7 @@ function restoreCopy({ root, backupDirectory, sourceLegacyRoot, label }) {
 
 async function assertMigratedContent(copy, records) {
   const mappings = copy.database.prepare(`
-    SELECT legacy_private_document_id, document_id, version_id, storage_key
+    SELECT legacy_private_document_id, document_id, version_id, storage_key, status
     FROM private_document_migration_map
     ORDER BY legacy_private_document_id
   `).all()
