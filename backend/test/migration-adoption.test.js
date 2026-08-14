@@ -503,6 +503,30 @@ test('fails closed on a ledger checksum conflict before starting an attempt', ()
   assert.equal(database.attempts.length, 0)
 })
 
+test('propagates safe planning diagnostics without exposing schema details', () => {
+  const registry = createMigrationRegistry([
+    definition('0001_first', 'private_table', 'private_column')
+  ])
+  const migration = registry.migrations[0]
+  const database = new FakeAdoptionDatabase(registry)
+  database.setProofs(migration, [matchingColumn(migration.compatibility, { type: 'INTEGER' })])
+
+  const error = thrown(() => adoptMigrationPrefix(request(registry, database)))
+
+  assert.equal(error.code, 'MIGRATION_ADOPTION_SCHEMA_INCOMPATIBLE')
+  assert.equal(error.message, 'Migration adoption planning failed.')
+  assert.deepEqual(error.diagnostics, {
+    migrationId: '0001_first',
+    category: 'schema-compatibility',
+    reason: 'column-incompatible'
+  })
+  assert.ok(Object.keys(error).includes('diagnostics'))
+  assert.ok(Object.isFrozen(error.diagnostics))
+  assert.doesNotMatch(JSON.stringify(error), /private_table|private_column|[a-f0-9]{64}/)
+  assert.equal(database.attempts.length, 0)
+  assert.equal(database.transactionCalls, 0)
+})
+
 test('rolls back and safely fails attempts when transaction proof changes', () => {
   for (const scenario of [
     {

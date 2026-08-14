@@ -281,7 +281,15 @@ test('fails safely on incompatible schema and does not inspect the suffix', () =
   }))
 
   assert.equal(error.code, 'MIGRATION_ADOPTION_SCHEMA_INCOMPATIBLE')
+  assert.deepEqual(error.diagnostics, {
+    migrationId: '0002_second',
+    category: 'schema-compatibility',
+    reason: 'column-incompatible'
+  })
+  assert.ok(Object.keys(error).includes('diagnostics'))
+  assert.ok(Object.isFrozen(error.diagnostics))
   assert.doesNotMatch(error.message, /private_table|private_column|synthetic|ALTER TABLE/)
+  assert.doesNotMatch(JSON.stringify(error), /private_table|private_column|synthetic|ALTER TABLE/)
   assert.deepEqual(probe.checkedColumns, [
     'first_table.first_column',
     'private_table.private_column'

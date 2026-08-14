@@ -119,10 +119,12 @@ function planningResult(input) {
     return createMigrationAdoptionPlan(input)
   } catch (error) {
     if (error instanceof MigrationAdoptionPlanError) {
-      fail(error.code, 'Migration adoption planning failed.', {
+      const options = {
         category: 'validation',
         machineCode: error.code
-      })
+      }
+      if (error.diagnostics) options.diagnostics = error.diagnostics
+      fail(error.code, 'Migration adoption planning failed.', options)
     }
     fail(
       'MIGRATION_ADOPTION_PLANNING_FAILED',
@@ -359,12 +361,23 @@ export function adoptMigrationPrefix({
 }
 
 export class MigrationAdoptionError extends Error {
-  constructor(code, message, { category = 'migration', machineCode = code } = {}) {
+  constructor(
+    code,
+    message,
+    { category = 'migration', machineCode = code, diagnostics } = {}
+  ) {
     super(message)
     this.name = 'MigrationAdoptionError'
     this.code = code
     this.category = category
     this.machineCode = machineCode
+    if (diagnostics) {
+      this.diagnostics = Object.freeze({
+        migrationId: diagnostics.migrationId,
+        category: diagnostics.category,
+        reason: diagnostics.reason
+      })
+    }
   }
 }
 

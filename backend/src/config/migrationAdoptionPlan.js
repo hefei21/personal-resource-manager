@@ -10,8 +10,42 @@ import {
 } from './migrationPlan.js'
 import { MIGRATION_LOCK_ACTIVE } from './migrationLock.js'
 
-function fail(code, message) {
-  throw new MigrationAdoptionPlanError(code, message)
+const SAFE_INCOMPATIBILITY_REASONS = new Set([
+  'table-missing',
+  'column-incompatible',
+  'table-shape-incompatible',
+  'target-proof-incompatible'
+])
+
+function normalizeDiagnostics(diagnostics) {
+  if (
+    !diagnostics ||
+    typeof diagnostics !== 'object' ||
+    Array.isArray(diagnostics) ||
+    typeof diagnostics.migrationId !== 'string' ||
+    typeof diagnostics.category !== 'string' ||
+    typeof diagnostics.reason !== 'string'
+  ) return undefined
+
+  return Object.freeze({
+    migrationId: diagnostics.migrationId,
+    category: diagnostics.category,
+    reason: diagnostics.reason
+  })
+}
+
+function createSchemaIncompatibilityDiagnostics(migrationId, compatibility) {
+  return Object.freeze({
+    migrationId,
+    category: 'schema-compatibility',
+    reason: SAFE_INCOMPATIBILITY_REASONS.has(compatibility.reason)
+      ? compatibility.reason
+      : 'incompatible'
+  })
+}
+
+function fail(code, message, options = {}) {
+  throw new MigrationAdoptionPlanError(code, message, options)
 }
 
 function assertDatabase(database) {
@@ -147,7 +181,13 @@ export function createMigrationAdoptionPlan({
     if (compatibility.status === COMPATIBILITY_STATUSES.INCOMPATIBLE) {
       fail(
         'MIGRATION_ADOPTION_SCHEMA_INCOMPATIBLE',
-        'Migration schema is incompatible with adoption.'
+        'Migration schema is incompatible with adoption.',
+        {
+          diagnostics: createSchemaIncompatibilityDiagnostics(
+            migration.id,
+            compatibility
+          )
+        }
       )
     }
     fail(
@@ -160,9 +200,11 @@ export function createMigrationAdoptionPlan({
 }
 
 export class MigrationAdoptionPlanError extends Error {
-  constructor(code, message) {
+  constructor(code, message, { diagnostics } = {}) {
     super(message)
     this.name = 'MigrationAdoptionPlanError'
     this.code = code
+    const safeDiagnostics = normalizeDiagnostics(diagnostics)
+    if (safeDiagnostics) this.diagnostics = safeDiagnostics
   }
 }

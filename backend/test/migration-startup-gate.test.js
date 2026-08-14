@@ -819,8 +819,19 @@ test('maps adoption failures safely and releases the sidecar lock', nativeTestOp
 
     assert.equal(error.code, MIGRATION_STARTUP_GATE_ERROR_CODES.FAILED)
     assert.equal(error.cause?.code, 'MIGRATION_ADOPTION_SCHEMA_INCOMPATIBLE')
+    assert.deepEqual(error.cause?.diagnostics, {
+      migrationId: '0001_incompatible',
+      category: 'schema-compatibility',
+      reason: 'column-incompatible'
+    })
+    assert.ok(Object.keys(error.cause).includes('diagnostics'))
+    assert.ok(Object.isFrozen(error.cause.diagnostics))
     assert.doesNotMatch(
       error.message,
+      /private_resources|private_title|DROP TABLE|must_survive|schema_migrations|checksum|\\|\//
+    )
+    assert.doesNotMatch(
+      JSON.stringify(error.cause),
       /private_resources|private_title|DROP TABLE|must_survive|schema_migrations|checksum|\\|\//
     )
     assert.deepEqual(database.prepare('SELECT * FROM schema_migrations').all(), beforeLegacy)
