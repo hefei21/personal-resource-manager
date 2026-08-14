@@ -426,6 +426,36 @@ function normalizeTableTransitionTargetProof(proof, fieldName) {
   })
 }
 
+function tableTransitionTargetProofCanonicalKey(proof) {
+  return JSON.stringify(proof)
+}
+
+function normalizeTableTransitionTargetProofVariants(proofs, fieldName) {
+  if (!Array.isArray(proofs) || proofs.length === 0) {
+    fail(`${fieldName} must be a non-empty array.`)
+  }
+
+  const normalized = proofs.map((proof, index) =>
+    normalizeTableTransitionTargetProof(proof, `${fieldName}[${index}]`)
+  )
+  normalized.sort((left, right) => {
+    const leftKey = tableTransitionTargetProofCanonicalKey(left)
+    const rightKey = tableTransitionTargetProofCanonicalKey(right)
+    if (leftKey < rightKey) return -1
+    if (leftKey > rightKey) return 1
+    return 0
+  })
+  for (let index = 1; index < normalized.length; index += 1) {
+    if (
+      tableTransitionTargetProofCanonicalKey(normalized[index - 1]) ===
+      tableTransitionTargetProofCanonicalKey(normalized[index])
+    ) {
+      fail(`${fieldName} contains a duplicate proof.`)
+    }
+  }
+  return Object.freeze(normalized)
+}
+
 function normalizeProofKey(value, fieldName) {
   if (typeof value !== 'string' || !PROOF_KEY_PATTERN.test(value)) {
     fail(`${fieldName} must be a safe proof identifier.`)
@@ -461,6 +491,7 @@ function tableTransitionLegacyProofCanonicalKey(proof) {
 function normalizeTableTransitionCompatibility(compatibility) {
   const expectedKeys = [...TABLE_TRANSITION_KEYS]
   if (Object.hasOwn(compatibility, 'targetProof')) expectedKeys.push('targetProof')
+  if (Object.hasOwn(compatibility, 'targetProofVariants')) expectedKeys.push('targetProofVariants')
   if (Object.hasOwn(compatibility, 'missingTable')) expectedKeys.push('missingTable')
   assertExactKeys(compatibility, expectedKeys, 'compatibility')
   if (compatibility.kind !== TABLE_TRANSITION_COMPATIBILITY_KIND) {
@@ -471,6 +502,15 @@ function normalizeTableTransitionCompatibility(compatibility) {
   const targetProof = Object.hasOwn(compatibility, 'targetProof')
     ? normalizeTableTransitionTargetProof(compatibility.targetProof, 'compatibility.targetProof')
     : undefined
+  const targetProofVariants = Object.hasOwn(compatibility, 'targetProofVariants')
+    ? normalizeTableTransitionTargetProofVariants(
+        compatibility.targetProofVariants,
+        'compatibility.targetProofVariants'
+      )
+    : undefined
+  if (targetProof !== undefined && targetProofVariants !== undefined) {
+    fail('compatibility.targetProof and compatibility.targetProofVariants are mutually exclusive.')
+  }
   const missingTable = Object.hasOwn(compatibility, 'missingTable')
     ? compatibility.missingTable
     : undefined
@@ -529,6 +569,7 @@ function normalizeTableTransitionCompatibility(compatibility) {
     legacy: Object.freeze(legacy)
   }
   if (targetProof !== undefined) normalized.targetProof = targetProof
+  if (targetProofVariants !== undefined) normalized.targetProofVariants = targetProofVariants
   if (missingTable !== undefined) normalized.missingTable = missingTable
   return Object.freeze(normalized)
 }
@@ -1081,8 +1122,7 @@ function readExternalSchemaSqlReferenceProof(database, table) {
   return true
 }
 
-function targetTableProofMatches(database, compatibility, indexMetadata) {
-  const targetProof = compatibility.targetProof
+function targetTableProofMatches(database, compatibility, indexMetadata, targetProof) {
   const createTableSql = readTableCreateTableSql(database, compatibility.table)
   if (createTableSql === null || createTableSqlSha256(createTableSql) !== targetProof.createTableSqlSha256) {
     return false
@@ -1195,9 +1235,14 @@ export function checkMigrationCompatibility(database, compatibility) {
       const { uniqueConstraints } = indexMetadata
 
       if (tableShapeMatches(tableInfo, columns, foreignKeys, uniqueConstraints, normalized.target)) {
+        const targetProofs = normalized.targetProofVariants ?? (
+          normalized.targetProof === undefined ? [] : [normalized.targetProof]
+        )
         if (
-          normalized.targetProof !== undefined &&
-          !targetTableProofMatches(database, normalized, indexMetadata)
+          targetProofs.length > 0 &&
+          !targetProofs.some((proof) =>
+            targetTableProofMatches(database, normalized, indexMetadata, proof)
+          )
         ) {
           return tableTransitionSummary(
             COMPATIBILITY_STATUSES.INCOMPATIBLE,

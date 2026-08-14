@@ -820,6 +820,27 @@ const readingProgressTargetDdl = `CREATE TABLE reading_progress (
         UNIQUE(book_id, user_id)
       )`
 
+// Historical inline startup cleanup created a temporary table, renamed it,
+// then added these two indexes. SQLite persists the quoted renamed-table DDL.
+const readingProgressInlineTargetDdl = `CREATE TABLE "reading_progress" (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          book_id INTEGER NOT NULL,
+          user_id INTEGER,
+          current_page INTEGER DEFAULT 0,
+          cfi TEXT,
+          progress REAL DEFAULT 0,
+          font_size INTEGER DEFAULT 16,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(book_id, user_id)
+        )`
+const readingProgressBookIndexDdl =
+  'CREATE INDEX idx_reading_progress_book_id ON reading_progress(book_id)'
+const readingProgressUserIndexDdl =
+  'CREATE INDEX idx_reading_progress_user_id ON reading_progress(user_id)'
+
 const readingProgressLegacyDdl = `CREATE TABLE reading_progress (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         book_id INTEGER NOT NULL UNIQUE,
@@ -1555,15 +1576,35 @@ export const applicationMigrationRegistry = createMigrationRegistry([
       kind: 'table-transition',
       table: 'reading_progress',
       target: readingProgressTargetShape,
-      targetProof: {
-        createTableSqlSha256: sha256(readingProgressTargetDdl),
-        indexes: [],
-        triggers: [],
-        externalDependencies: {
-          inboundForeignKeys: 'none',
-          schemaSqlReferences: 'none'
+      targetProofVariants: [
+        {
+          createTableSqlSha256: sha256(readingProgressTargetDdl),
+          indexes: [],
+          triggers: [],
+          externalDependencies: {
+            inboundForeignKeys: 'none',
+            schemaSqlReferences: 'none'
+          }
+        },
+        {
+          createTableSqlSha256: sha256(readingProgressInlineTargetDdl),
+          indexes: [
+            {
+              name: 'idx_reading_progress_book_id',
+              createIndexSqlSha256: sha256(readingProgressBookIndexDdl)
+            },
+            {
+              name: 'idx_reading_progress_user_id',
+              createIndexSqlSha256: sha256(readingProgressUserIndexDdl)
+            }
+          ],
+          triggers: [],
+          externalDependencies: {
+            inboundForeignKeys: 'none',
+            schemaSqlReferences: 'none'
+          }
         }
-      },
+      ],
       legacy: [
         {
           proofKey: 'legacy-8-columns',

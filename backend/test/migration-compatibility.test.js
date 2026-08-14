@@ -515,6 +515,39 @@ test('normalizes, freezes, and validates an optional target proof', () => {
   )
 })
 
+test('normalizes strict target proof variants and rejects ambiguous declarations', () => {
+  const first = targetProof({ createTableSqlSha256: 'b'.repeat(64) })
+  const second = targetProof({
+    createTableSqlSha256: 'c'.repeat(64),
+    indexes: [{ name: 'items_idx', createIndexSqlSha256: 'd'.repeat(64) }]
+  })
+  const input = tableTransition({ targetProofVariants: [second, first] })
+  const normalized = normalizeMigrationCompatibility(input)
+
+  assert.deepEqual(
+    normalized.targetProofVariants.map(({ createTableSqlSha256 }) => createTableSqlSha256),
+    ['b'.repeat(64), 'c'.repeat(64)]
+  )
+  assert.ok(Object.isFrozen(normalized.targetProofVariants))
+  assert.ok(Object.isFrozen(normalized.targetProofVariants[0]))
+  assert.ok(Object.isFrozen(normalized.targetProofVariants[1].indexes))
+  input.targetProofVariants[0].indexes[0].name = 'changed'
+  assert.equal(normalized.targetProofVariants[1].indexes[0].name, 'items_idx')
+
+  for (const invalid of [
+    tableTransition({ targetProofVariants: [] }),
+    tableTransition({ targetProofVariants: [first, { ...first }] }),
+    tableTransition({ targetProof: first, targetProofVariants: [second] }),
+    { ...tableTransition(), targetProofVariants: undefined }
+  ]) {
+    assert.throws(
+      () => normalizeMigrationCompatibility(invalid),
+      (error) => error instanceof MigrationCompatibilityError &&
+        error.code === 'MIGRATION_COMPATIBILITY_INVALID'
+    )
+  }
+})
+
 test('normalizes foreign key actions, null references, canonical order, and nested freezes', () => {
   const first = foreignKey({
     columns: [' title '],
@@ -745,6 +778,35 @@ test('requires exact target DDL, index, trigger, and external dependency proof',
     ['items', 'items_idx'], ['items'], ['items'], ['items']
   ])
 
+  const variants = tableTransition({
+    targetProofVariants: [
+      targetProof({ createTableSqlSha256: '0'.repeat(64) }),
+      targetProof({
+        createTableSqlSha256: ddlHash,
+        indexes: [{ name: 'items_idx', createIndexSqlSha256: indexHash }],
+        triggers: [{ name: 'items_hook', createTriggerSqlSha256: triggerHash }]
+      })
+    ]
+  })
+  const variantMatch = databaseWith({
+    indexRows: [{ seq: 0, name: 'items_idx', is_unique: 0, origin: 'c', partial: 0 }],
+    triggerRows: [{ name: 'items_hook', sql: targetTrigger }]
+  })
+  assert.deepEqual(checkMigrationCompatibility(variantMatch.database, variants), {
+    status: 'satisfied', kind: 'table-transition', table: 'items', reason: 'matched'
+  })
+  assert.ok(variantMatch.prepared.every((sql) => !sql.includes('items')))
+
+  const noVariantMatches = tableTransition({
+    targetProofVariants: [
+      targetProof({ createTableSqlSha256: '0'.repeat(64) }),
+      targetProof({ createTableSqlSha256: '1'.repeat(64) })
+    ]
+  })
+  assert.deepEqual(checkMigrationCompatibility(databaseWith().database, noVariantMatches), {
+    status: 'incompatible', kind: 'table-transition', table: 'items', reason: 'target-proof-incompatible'
+  })
+
   const mismatchCases = [
     {
       name: 'DDL',
@@ -806,11 +868,14 @@ test('proves strict target metadata and external dependencies with real SQLite',
   ].join('\n'))
   try {
     const strict = tableTransition({
-      targetProof: targetProof({
-        createTableSqlSha256: tableSqlSha256(database),
-        indexes: [{ name: 'items_idx', createIndexSqlSha256: indexSqlSha256(database, 'items_idx') }],
-        triggers: [{ name: 'items_hook', createTriggerSqlSha256: triggerSqlSha256(database, 'items_hook') }]
-      })
+      targetProofVariants: [
+        targetProof({ createTableSqlSha256: '0'.repeat(64) }),
+        targetProof({
+          createTableSqlSha256: tableSqlSha256(database),
+          indexes: [{ name: 'items_idx', createIndexSqlSha256: indexSqlSha256(database, 'items_idx') }],
+          triggers: [{ name: 'items_hook', createTriggerSqlSha256: triggerSqlSha256(database, 'items_hook') }]
+        })
+      ]
     })
     assert.equal(checkMigrationCompatibility(database, strict).status, 'satisfied')
 
