@@ -55,6 +55,7 @@ import searchRoutes from './routes/search.js'
 import bookSearchRoutes from './routes/bookSearch.js'
 import todosRoutes from './routes/todos.js'
 import blogRoutes from './routes/blog.js'
+import storageConsistencyRoutes from './routes/storageConsistency.js'
 import { getDatabase } from './config/database.js'
 import { authenticateToken, requireOwner } from './middlewares/auth.js'
 import { accessLogger, queryLogs, getLogStats, initLogger } from './services/logger.js'
@@ -293,6 +294,7 @@ app.use('/api/search', ...ownerOnly, searchRoutes)
 app.use('/api/book-search', ...ownerOnly, bookSearchRoutes)
 app.use('/api/todos', ...ownerOnly, todosRoutes)
 app.use('/api/blog', ...ownerOnly, blogRoutes)
+app.use('/api/storage-consistency', ...ownerOnly, storageConsistencyRoutes)
 
 // 管理员访问日志接口
 app.get('/api/admin/logs', authenticateToken, requireOwner, (req, res) => {
