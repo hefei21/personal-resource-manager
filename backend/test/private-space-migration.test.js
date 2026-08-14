@@ -303,8 +303,8 @@ test('duplicate source content creates independent documents and reuses one stor
     const content = 'duplicate-content'
     fs.writeFileSync(firstPath, content)
     fs.writeFileSync(secondPath, content)
-    insertLegacy(fixture.database, { id: 1, title: 'first', filePath: firstPath, size: content.length })
-    insertLegacy(fixture.database, { id: 2, title: 'second', filePath: secondPath, size: content.length })
+    insertLegacy(fixture.database, { id: 1, title: 'first', filePath: firstPath, size: Buffer.byteLength(content) })
+    insertLegacy(fixture.database, { id: 2, title: 'second', filePath: secondPath, size: Buffer.byteLength(content) })
 
     const report = await expandPrivateSpace({ database: fixture.database, runtime: fixture.runtime })
     assert.equal(report.verified, true)
@@ -334,8 +334,9 @@ for (const [name, buildCase] of [
   })],
   ['outside-root source', ({ fixture }) => {
     const filePath = path.join(fixture.root, 'outside.txt')
-    fs.writeFileSync(filePath, 'outside')
-    return { filePath, size: 7, code: 'PRIVATE_MIGRATION_SOURCE_OUTSIDE_ROOT' }
+    const content = 'outside'
+    fs.writeFileSync(filePath, content)
+    return { filePath, size: Buffer.byteLength(content), code: 'PRIVATE_MIGRATION_SOURCE_OUTSIDE_ROOT' }
   }],
   ['directory source', ({ fixture }) => {
     const filePath = path.join(fixture.legacyRoot, 'directory')
@@ -375,9 +376,10 @@ test('rejects a symlink source when the platform permits symlink fixtures', nati
   try {
     const outsidePath = path.join(fixture.root, 'outside.txt')
     const linkPath = path.join(fixture.legacyRoot, 'link.txt')
-    fs.writeFileSync(outsidePath, 'secret')
+    const content = 'secret'
+    fs.writeFileSync(outsidePath, content)
     fs.symlinkSync(outsidePath, linkPath)
-    insertLegacy(fixture.database, { id: 1, title: 'symlink', filePath: linkPath, size: 6 })
+    insertLegacy(fixture.database, { id: 1, title: 'symlink', filePath: linkPath, size: Buffer.byteLength(content) })
 
     const report = await expandPrivateSpace({ database: fixture.database, runtime: fixture.runtime })
     assert.equal(report.verified, false)
@@ -392,8 +394,9 @@ test('verify detects source hash drift and target object corruption', nativeTest
   const fixture = createFixture()
   try {
     const sourcePath = path.join(fixture.legacyRoot, 'hash.txt')
-    fs.writeFileSync(sourcePath, 'before')
-    insertLegacy(fixture.database, { id: 1, title: 'hash', filePath: sourcePath, size: 6 })
+    const content = 'before'
+    fs.writeFileSync(sourcePath, content)
+    insertLegacy(fixture.database, { id: 1, title: 'hash', filePath: sourcePath, size: Buffer.byteLength(content) })
     const expanded = await expandPrivateSpace({ database: fixture.database, runtime: fixture.runtime })
     assert.equal(expanded.verified, true)
 
@@ -402,7 +405,7 @@ test('verify detects source hash drift and target object corruption', nativeTest
     assert.equal(sourceDrift.verified, false)
     assert.ok(issueCodes(sourceDrift).includes('PRIVATE_MIGRATION_SOURCE_HASH_MISMATCH'))
 
-    fs.writeFileSync(sourcePath, 'before')
+    fs.writeFileSync(sourcePath, content)
     const mapping = fixture.database.prepare('SELECT storage_key FROM private_document_migration_map WHERE legacy_private_document_id = 1').get()
     fs.writeFileSync(fixture.runtime.storageService.objectFile(mapping.storage_key), 'tampered')
     const targetCorruption = await verifyPrivateSpace({ database: fixture.database, runtime: fixture.runtime })
@@ -417,8 +420,9 @@ test('existing mapping conflicts fail without creating duplicate ordinary resour
   const fixture = createFixture()
   try {
     const sourcePath = path.join(fixture.legacyRoot, 'conflict.txt')
-    fs.writeFileSync(sourcePath, 'conflict')
-    insertLegacy(fixture.database, { id: 1, title: 'original', filePath: sourcePath, size: 7 })
+    const content = 'conflict'
+    fs.writeFileSync(sourcePath, content)
+    insertLegacy(fixture.database, { id: 1, title: 'original', filePath: sourcePath, size: Buffer.byteLength(content) })
     const initial = await expandPrivateSpace({ database: fixture.database, runtime: fixture.runtime })
     assert.equal(initial.verified, true)
     fixture.database.prepare('UPDATE documents SET title = ? WHERE id = 1').run('changed')
@@ -440,7 +444,7 @@ test('database write failure leaves the object and rerun reuses it', nativeTestO
     const content = 'retry-content'
     const sourcePath = path.join(fixture.legacyRoot, 'retry.txt')
     fs.writeFileSync(sourcePath, content)
-    insertLegacy(fixture.database, { id: 1, title: 'retry', filePath: sourcePath, size: content.length })
+    insertLegacy(fixture.database, { id: 1, title: 'retry', filePath: sourcePath, size: Buffer.byteLength(content) })
     let failOnce = true
     const failingDatabase = {
       prepare: (...args) => fixture.database.prepare(...args),
