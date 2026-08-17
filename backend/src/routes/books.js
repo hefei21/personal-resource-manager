@@ -2,6 +2,7 @@ import express from 'express'
 import multer from 'multer'
 import path from 'path'
 import fs from 'fs'
+import { randomUUID } from 'node:crypto'
 import AdmZip from 'adm-zip'
 import sharp from 'sharp'
 import { getDatabase } from '../config/database.js'
@@ -13,6 +14,15 @@ import { ebookResourceLimiter } from '../middlewares/security.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
 import { inspectChunks, mergeChunkFiles, uploadPath, validateArchiveEntries, validateUploadDescriptor } from '../services/uploadSecurity.js'
+import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
+import { commitEbookUpload } from '../services/ebookStorageService.js'
+import {
+  listDeletedEbooks,
+  permanentlyDeleteEbook,
+  restoreEbookFromTrash,
+  softDeleteEbook,
+  softDeleteEbooks
+} from '../services/ebookTrashService.js'
 
 const router = express.Router()
 const BOOK_UPLOAD_POLICY = {
@@ -36,16 +46,20 @@ function validateEpubArchive(filePath) {
 
 // 分片上传临时目录
 const chunksDir = path.join(getStoragePath('books'), 'chunks')
+const incomingDir = path.join(getStoragePath('books'), 'incoming')
 
 // 确保分片目录存在
 if (!fs.existsSync(chunksDir)) {
   fs.mkdirSync(chunksDir, { recursive: true })
 }
+if (!fs.existsSync(incomingDir)) {
+  fs.mkdirSync(incomingDir, { recursive: true })
+}
 
 // 辅助函数：从EPUB文件中提取封面图片
 function extractEpubCover(epubPath) {
   try {
-    console.log(`🖼️ 开始提取EPUB封面: ${epubPath}`)
+    console.log('🖼️ 开始提取EPUB封面')
     const zip = new AdmZip(epubPath)
     const zipEntries = zip.getEntries()
 
@@ -176,7 +190,7 @@ function extractXmlText(xmlString, tagPattern) {
 // 辅助函数：解析EPUB元数据
 function parseEpubMetadata(epubPath) {
   try {
-    console.log(`📖 开始解析EPUB元数据: ${epubPath}`)
+    console.log('📖 开始解析EPUB元数据')
     const zip = new AdmZip(epubPath)
     const zipEntries = zip.getEntries()
 
@@ -315,7 +329,7 @@ function parseEpubMetadata(epubPath) {
 // 辅助函数：解析EPUB目录（TOC）
 function parseEpubToc(epubPath) {
   try {
-    console.log(`📑 开始解析EPUB目录: ${epubPath}`)
+    console.log('📑 开始解析EPUB目录')
     const zip = new AdmZip(epubPath)
     const zipEntries = zip.getEntries()
 
@@ -439,7 +453,7 @@ function parseEpubToc(epubPath) {
 // 配置文件上传
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, getStoragePath('books'))
+    cb(null, incomingDir)
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
@@ -486,7 +500,12 @@ router.get('/categories', authenticateToken, async (req, res) => {
 
     // 统计每个分类的书籍数量
     for (const cat of categories) {
-      const countStmt = db.prepare('SELECT COUNT(*) as count FROM books WHERE category_id = ?')
+      const countStmt = db.prepare(`
+        SELECT COUNT(*) AS count FROM books b WHERE b.category_id = ? AND NOT EXISTS (
+          SELECT 1 FROM resource_trash_entries t
+          WHERE t.resource_type = 'ebook' AND t.resource_id = b.id
+        )
+      `)
       const result = countStmt.get(cat.id)
       cat.bookCount = result.count
     }
@@ -663,6 +682,7 @@ router.post('/upload-chunk', authenticateToken, requireWritePermission, chunkUpl
 // 合并分片并解析元数据
 router.post('/merge-chunks', authenticateToken, requireWritePermission, async (req, res) => {
   let finalPath
+  let staged
   try {
     const descriptor = validateUploadDescriptor(req.body, BOOK_UPLOAD_POLICY)
     const { fileId, fileName, totalChunks, extension } = descriptor
@@ -671,10 +691,10 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     console.log(`📊 预期分片数: ${totalChunks}`)
 
     const fileDir = uploadPath(chunksDir, fileId)
-    finalPath = uploadPath(getStoragePath('books'), `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`)
+    finalPath = uploadPath(incomingDir, `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`)
     const inspected = inspectChunks(fileDir, fileId, totalChunks, (_id, index) => `chunk_${index}`, BOOK_UPLOAD_POLICY.maxTotalBytes)
     await mergeChunkFiles(inspected.paths, finalPath)
-    console.log(`✅ 分片合并完成: ${finalPath} (${(inspected.totalBytes / 1024 / 1024).toFixed(2)}MB)`)
+    console.log(`✅ 分片合并完成 (${(inspected.totalBytes / 1024 / 1024).toFixed(2)}MB)`)
 
     // 验证ZIP文件完整性（对于EPUB）
     const fileType = extension.replace('.', '')
@@ -702,8 +722,7 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
       year: null,
       publisher: null,
       isbn: null,
-      description: null,
-      filePath: finalPath
+      description: null
     }
 
     if (fileType === 'epub') {
@@ -722,10 +741,22 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
       }
     }
 
-    res.json({ data: metadata })
+    staged = await stageTemporaryFile(finalPath)
+    finalPath = null
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: {
+      ...metadata,
+      stagingToken: staged.token,
+      contentSha256: staged.sha256,
+      contentBytes: staged.bytes,
+      originalName: fileName
+    } })
   } catch (error) {
     console.error('合并分片失败:', error)
     if (finalPath && fs.existsSync(finalPath)) fs.rmSync(finalPath, { force: true })
+    if (staged?.token) {
+      try { getResourceStorageRuntime().storageService.discardStaged(staged.token) } catch {}
+    }
     res.status(400).json({ message: '合并失败' })
   }
 })
@@ -816,7 +847,10 @@ router.get('/', authenticateToken, async (req, res) => {
                FROM books b
                LEFT JOIN book_categories c ON b.category_id = c.id
                ${progressJoin}
-               WHERE 1=1`
+               WHERE NOT EXISTS (
+                 SELECT 1 FROM resource_trash_entries t
+                 WHERE t.resource_type = 'ebook' AND t.resource_id = b.id
+               )`
     const params = userId ? [userId] : []
 
     if (keyword) {
@@ -857,7 +891,6 @@ router.get('/', authenticateToken, async (req, res) => {
       coverImage: row.cover_image,
       categoryId: row.category_id,
       categoryName: row.category_name,
-      filePath: row.file_path,
       fileType: row.file_type,
       fileSize: row.file_size,
       totalPages: row.total_pages,
@@ -881,6 +914,7 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
   let storedFilePath
   let bookInserted = false
   try {
+    if (!req.file) return res.status(400).json({ message: '请选择文件' })
     const { title, author, year, publisher, isbn, description, categoryId } = req.body
     const filePath = req.file.path
     storedFilePath = filePath
@@ -946,34 +980,20 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
       }
     }
 
-    const stmt = db.prepare(
-      `INSERT INTO books (title, author, year, publisher, isbn, description, category_id, file_path, file_type, file_size, total_pages, cover_image)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    const result = stmt.run(
-      finalTitle,
-      author || null,
-      year || null,
-      publisher || null,
-      isbn || null,
-      description || null,
-      categoryId || null,
-      filePath,
-      fileType,
-      fileSize,
+    const staged = await stageTemporaryFile(filePath)
+    storedFilePath = null
+    const created = await createManagedBook({
+      database: db,
+      staged,
+      originalName: req.file.originalname,
+      fields: { title: finalTitle, author, year, publisher, isbn, description, categoryId },
       totalPages,
       coverImagePath
-    )
+    })
     bookInserted = true
 
-    // 创建初始阅读进度
-    db.prepare(
-      `INSERT INTO reading_progress (book_id, current_page, progress, font_size)
-       VALUES (?, 0, 0, 16)`
-    ).run(result.lastInsertRowid)
-
     console.log(`✅ 书籍上传成功:`, {
-      ID: result.lastInsertRowid,
+      ID: created.id,
       书名: finalTitle,
       作者: author || '未填写',
       封面: coverImagePath ? '已提取' : '无'
@@ -982,56 +1002,127 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
     // 清除分类缓存，确保分类数量统计实时更新
     await cache.del(CacheKeys.BOOK_CATEGORIES)
 
-    res.json({ id: result.lastInsertRowid, title: finalTitle, message: '上传成功' })
+    res.json({ id: created.id, title: created.title, message: '上传成功' })
   } catch (error) {
-    console.error('❌ 上传书籍失败:', error)
+    console.error('❌ 上传书籍失败:', error?.code || error?.name || 'UNKNOWN')
     if (!bookInserted && storedFilePath && fs.existsSync(storedFilePath)) fs.rmSync(storedFilePath, { force: true })
     res.status(400).json({ message: '上传失败' })
   }
 })
 
+function ebookFileType(originalName) {
+  const extension = path.extname(String(originalName || '')).toLowerCase()
+  if (!BOOK_UPLOAD_POLICY.extensions.includes(extension)) {
+    throw Object.assign(new Error('Unsupported ebook file type.'), { code: 'EBOOK_UPLOAD_INVALID' })
+  }
+  return extension.slice(1)
+}
+
+async function stageTemporaryFile(filePath) {
+  const runtime = getResourceStorageRuntime()
+  try {
+    return await runtime.storageService.stageFromStream(fs.createReadStream(filePath))
+  } finally {
+    fs.rmSync(filePath, { force: true })
+  }
+}
+
+function uniqueBookTitle(database, requestedTitle, originalName) {
+  const base = String(requestedTitle || path.basename(originalName, path.extname(originalName))).trim() || '未命名书籍'
+  let candidate = base
+  let suffix = 1
+  while (database.prepare('SELECT 1 FROM books WHERE title = ?').get(candidate)) {
+    candidate = `${base} (${suffix})`
+    suffix += 1
+  }
+  return candidate
+}
+
+async function createManagedBook({ database, staged, originalName, fields, totalPages, coverImagePath }) {
+  const runtime = getResourceStorageRuntime()
+  const finalTitle = uniqueBookTitle(database, fields.title, originalName)
+  const created = await commitEbookUpload({
+    database,
+    storageService: runtime.storageService,
+    staged,
+    ebook: {
+      ...fields,
+      title: finalTitle,
+      originalName,
+      fileType: ebookFileType(originalName),
+      totalPages,
+      coverImagePath
+    }
+  })
+  return Object.freeze({ id: created.id, title: created.title })
+}
+
+async function verifiedBookPath(book) {
+  return (await getResourceStorageRuntime().contentService.resolveVerifiedFilePath(book)).filePath
+}
+
+function activeBook(database, id) {
+  return database.prepare(`
+    SELECT b.* FROM books b WHERE b.id = ? AND NOT EXISTS (
+      SELECT 1 FROM resource_trash_entries t
+      WHERE t.resource_type = 'ebook' AND t.resource_id = b.id
+    )
+  `).get(id)
+}
+
+function sendEbookRouteError(res, error) {
+  const code = String(error?.code || '')
+  if (code.endsWith('_INVALID') || code === 'EBOOK_IDS_INVALID') return res.status(400).json({ code, message: '请求无效' })
+  if (code === 'EBOOK_NOT_FOUND' || code === 'EBOOK_TRASH_NOT_FOUND' || code === 'RESOURCE_CONTENT_MISSING') {
+    return res.status(404).json({ code, message: '资源不存在' })
+  }
+  if (code === 'EBOOK_ALREADY_TRASHED' || code === 'EBOOK_TRASH_PURGE_IN_PROGRESS') {
+    return res.status(409).json({ code, message: '资源状态冲突' })
+  }
+  if (code === 'EBOOK_TRASH_LEGACY_MIGRATION_REQUIRED') {
+    return res.status(409).json({ code, message: '旧版内容迁移后才能永久删除' })
+  }
+  return res.status(500).json({ code: code || 'EBOOK_OPERATION_FAILED', message: '服务器错误' })
+}
+
 // 使用已上传的文件路径创建书籍（分片上传后调用）
 router.post('/upload-with-path', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { title, author, year, publisher, isbn, description, categoryId } = req.body
-    const booksRoot = getStoragePath('books')
-    const submittedPath = String(req.body.filePath || '')
-    const filePath = uploadPath(booksRoot, path.relative(booksRoot, submittedPath))
+    const stagingToken = String(req.body.stagingToken || '')
+    const contentSha256 = String(req.body.contentSha256 || '')
+    const contentBytes = Number(req.body.contentBytes)
+    const originalName = path.basename(String(req.body.originalName || ''))
+    const runtime = getResourceStorageRuntime()
+    const filePath = runtime.storageService.stagingFile(stagingToken)
 
     console.log('📤 收到upload-with-path请求:', {
-      文件路径: filePath,
       书名: title,
       作者: author,
       分类ID: categoryId
     })
 
-    if (!filePath) {
-      console.error('❌ 文件路径为空')
-      return res.status(400).json({ message: '文件路径不能为空' })
+    if (!/^[a-f0-9]{64}$/.test(contentSha256) || !Number.isSafeInteger(contentBytes) || contentBytes < 0 || !originalName) {
+      return res.status(400).json({ message: '暂存文件元数据无效' })
     }
 
     if (!fs.existsSync(filePath)) {
-      console.error('❌ 文件不存在:', filePath)
-      return res.status(400).json({ message: '文件不存在: ' + filePath })
+      return res.status(400).json({ message: '暂存文件不存在' })
     }
 
     const fileSize = fs.statSync(filePath).size
-    const fileType = path.extname(filePath).toLowerCase().replace('.', '')
-    if (!BOOK_UPLOAD_POLICY.extensions.includes(`.${fileType}`)) {
-      return res.status(400).json({ message: '不支持的文件格式' })
-    }
+    const fileType = ebookFileType(originalName)
+    if (fileSize !== contentBytes) return res.status(400).json({ message: '暂存文件大小不一致' })
 
     console.log('📤 文件信息:', {
-      文件路径: filePath,
       文件大小: (fileSize / 1024 / 1024).toFixed(2) + 'MB',
-      文件类型: fileType,
-      文件存在: fs.existsSync(filePath)
+      文件类型: fileType
     })
 
     const db = getDatabase()
 
     // 检查重名
-    let finalTitle = title || path.basename(filePath).replace(/\.[^/.]+$/, '')
+    let finalTitle = title || originalName.replace(/\.[^/.]+$/, '')
     let suffix = 1
     let unique = false
 
@@ -1041,7 +1132,7 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
       if (!existing) {
         unique = true
       } else {
-        finalTitle = `${title || path.basename(filePath).replace(/\.[^/.]+$/, '')} (${suffix})`
+        finalTitle = `${title || originalName.replace(/\.[^/.]+$/, '')} (${suffix})`
         suffix++
       }
     }
@@ -1077,43 +1168,26 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
       }
     }
 
-    const stmt = db.prepare(
-      `INSERT INTO books (title, author, year, publisher, isbn, description, category_id, file_path, file_type, file_size, total_pages, cover_image)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    const result = stmt.run(
-      finalTitle,
-      author || null,
-      year || null,
-      publisher || null,
-      isbn || null,
-      description || null,
-      categoryId || null,
-      filePath,
-      fileType,
-      fileSize,
+    const created = await createManagedBook({
+      database: db,
+      staged: { token: stagingToken, sha256: contentSha256, bytes: contentBytes },
+      originalName,
+      fields: { title: finalTitle, author, year, publisher, isbn, description, categoryId },
       totalPages,
       coverImagePath
-    )
-
-    // 创建初始阅读进度
-    db.prepare(
-      `INSERT INTO reading_progress (book_id, current_page, progress, font_size)
-       VALUES (?, 0, 0, 16)`
-    ).run(result.lastInsertRowid)
+    })
 
     console.log(`✅ 书籍创建成功:`, {
-      ID: result.lastInsertRowid,
+      ID: created.id,
       书名: finalTitle,
-      文件路径: filePath,
       文件类型: fileType,
       封面: coverImagePath ? '已提取' : '无'
     })
 
-    res.json({ id: result.lastInsertRowid, title: finalTitle, message: '上传成功' })
+    res.json({ id: created.id, title: created.title, message: '上传成功' })
   } catch (error) {
-    console.error('❌ 创建书籍失败:', error)
-    res.status(500).json({ message: '创建失败', error: error.message })
+    console.error('❌ 创建书籍失败:', error?.code || error?.name || 'UNKNOWN')
+    sendEbookRouteError(res, error)
   }
 })
 
@@ -1121,27 +1195,12 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
 router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
-    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id)
-
-    if (!book) {
-      return res.status(404).json({ message: '书籍不存在' })
-    }
-
-    // 删除文件
-    if (book.file_path && fs.existsSync(book.file_path)) {
-      fs.unlinkSync(book.file_path)
-    }
-
-    // 删除数据库记录（reading_progress 和 book_chapters 会级联删除）
-    db.prepare('DELETE FROM books WHERE id = ?').run(req.params.id)
-
-    // 清除分类缓存，确保分类数量统计实时更新
+    const result = softDeleteEbook({ database: db, id: req.params.id })
     await cache.del(CacheKeys.BOOK_CATEGORIES)
-
-    res.json({ message: '删除成功' })
+    res.json({ data: result, message: '已移入回收站' })
   } catch (error) {
-    console.error('删除书籍失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('删除书籍失败:', error?.code || error?.name || 'UNKNOWN')
+    sendEbookRouteError(res, error)
   }
 })
 
@@ -1154,22 +1213,48 @@ router.post('/batch-delete', authenticateToken, requireWritePermission, async (r
     }
 
     const db = getDatabase()
-
-    for (const id of ids) {
-      const book = db.prepare('SELECT * FROM books WHERE id = ?').get(id)
-      if (book && book.file_path && fs.existsSync(book.file_path)) {
-        fs.unlinkSync(book.file_path)
-      }
-      db.prepare('DELETE FROM books WHERE id = ?').run(id)
-    }
-
-    // 清除分类缓存，确保分类数量统计实时更新
+    const result = softDeleteEbooks({ database: db, ids })
     await cache.del(CacheKeys.BOOK_CATEGORIES)
-
-    res.json({ message: '批量删除成功' })
+    res.json({ data: result, message: '已批量移入回收站' })
   } catch (error) {
-    console.error('批量删除失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('批量删除失败:', error?.code || error?.name || 'UNKNOWN')
+    sendEbookRouteError(res, error)
+  }
+})
+
+router.get('/trash', authenticateToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: listDeletedEbooks(getDatabase()) })
+  } catch (error) {
+    sendEbookRouteError(res, error)
+  }
+})
+
+router.post('/trash/:id/restore', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = restoreEbookFromTrash({ database: getDatabase(), id: req.params.id })
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: result, message: '恢复成功' })
+  } catch (error) {
+    sendEbookRouteError(res, error)
+  }
+})
+
+router.delete('/trash/:id/permanent', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const runtime = getResourceStorageRuntime()
+    const result = await permanentlyDeleteEbook({
+      database: getDatabase(),
+      storageService: runtime.storageService,
+      id: req.params.id
+    })
+    await cache.del(CacheKeys.BOOK_CATEGORIES)
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: result, message: '已永久删除' })
+  } catch (error) {
+    sendEbookRouteError(res, error)
   }
 })
 
@@ -1202,7 +1287,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
     console.log('📖 获取书籍内容请求, ID:', req.params.id)
 
     const db = getDatabase()
-    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id)
+    const book = activeBook(db, req.params.id)
 
     if (!book) {
       console.log('❌ 书籍不存在, ID:', req.params.id)
@@ -1212,26 +1297,14 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
     console.log('📖 书籍信息:', {
       ID: book.id,
       书名: book.title,
-      文件路径: book.file_path,
       文件类型: book.file_type
     })
 
-    if (!book.file_path) {
-      console.log('❌ 文件路径为空')
-      return res.status(404).json({ message: '文件路径为空' })
-    }
-
-    if (!fs.existsSync(book.file_path)) {
-      console.log('❌ 文件不存在:', book.file_path)
-      return res.status(404).json({ message: '文件不存在: ' + book.file_path })
-    }
-
-    console.log('✅ 文件存在:', book.file_path)
-
-    const ext = path.extname(book.file_path).toLowerCase()
+    const bookFilePath = await verifiedBookPath(book)
+    const ext = `.${String(book.file_type || '').toLowerCase()}`
 
     if (ext === '.txt') {
-      const content = fs.readFileSync(book.file_path, 'utf-8')
+      const content = fs.readFileSync(bookFilePath, 'utf-8')
 
       // 分页处理
       const pageSize = 2000 // 每页字符数
@@ -1273,11 +1346,10 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
       }
 
       // EPUB 文件解析
-      console.log('📖 开始解析EPUB文件:', book.file_path)
-      console.log('📖 文件大小:', (fs.statSync(book.file_path).size / 1024 / 1024).toFixed(2), 'MB')
+      console.log('📖 开始解析EPUB文件')
 
       try {
-        const zip = new AdmZip(book.file_path)
+        const zip = new AdmZip(bookFilePath)
         const zipEntries = zip.getEntries()
         console.log('📖 ZIP条目数:', zipEntries.length)
 
@@ -1348,7 +1420,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
         console.log('📖 Manifest前5项:', Object.entries(manifest).slice(0, 5))
 
         // 解析目录
-        const chapters = parseEpubToc(book.file_path)
+        const chapters = parseEpubToc(bookFilePath)
         console.log('📖 目录章节数:', chapters.length)
 
         // 构建章节内容（保留HTML格式，支持图片）
@@ -1629,13 +1701,13 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
           title: book.title
         })
       } catch (zipError) {
-        console.error('❌ EPUB解析错误:', zipError)
-        return res.status(500).json({ message: 'EPUB文件解析失败: ' + zipError.message })
+        console.error('❌ EPUB解析错误:', zipError?.code || zipError?.name || 'UNKNOWN')
+        return res.status(500).json({ message: 'EPUB文件解析失败' })
       }
     } else if (ext === '.pdf') {
-      // PDF 返回文件路径，前端使用 PDF.js 处理
+      // PDF 通过受控下载接口读取，不暴露服务器路径。
       res.json({
-        filePath: book.file_path,
+        downloadUrl: `/api/ebooks/download/${book.id}`,
         totalPages: book.total_pages,
         fileType: 'pdf',
         title: book.title
@@ -1648,8 +1720,8 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: '认证失败' })
     }
-    console.error('获取书籍内容失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('获取书籍内容失败:', error?.code || error?.name || 'UNKNOWN')
+    sendEbookRouteError(res, error)
   }
 })
 
@@ -1661,13 +1733,13 @@ router.get('/:id/chapters', authenticateToken, async (req, res) => {
     const count = parseInt(req.query.count) || 5
     
     const db = getDatabase()
-    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(bookId)
+    const book = activeBook(db, bookId)
     
-    if (!book || !book.file_path || !fs.existsSync(book.file_path)) {
+    if (!book) {
       return res.status(404).json({ message: '书籍不存在' })
     }
-    
-    const ext = path.extname(book.file_path).toLowerCase()
+    const bookFilePath = await verifiedBookPath(book)
+    const ext = `.${String(book.file_type || '').toLowerCase()}`
     
     // 优先使用缓存
     let allChapters = []
@@ -1698,7 +1770,7 @@ router.get('/:id/chapters', authenticateToken, async (req, res) => {
     // 如果没有缓存，解析EPUB
     if (allChapters.length === 0 && ext === '.epub') {
       // 返回简化版目录结构，不加载内容
-      const zip = new AdmZip(book.file_path)
+      const zip = new AdmZip(bookFilePath)
       const zipEntries = zip.getEntries()
       
       // 解析目录
@@ -1774,7 +1846,7 @@ router.get('/:id/chapters', authenticateToken, async (req, res) => {
     const chaptersToLoad = allChapters.slice(startIndex, endIndex)
     
     if (ext === '.epub') {
-      const zip = new AdmZip(book.file_path)
+      const zip = new AdmZip(bookFilePath)
       for (const chapter of chaptersToLoad) {
         if (!chapter.content && chapter.href) {
           const entry = zip.getEntries().find(e => 
@@ -1820,8 +1892,8 @@ router.get('/:id/chapters', authenticateToken, async (req, res) => {
     })
     
   } catch (error) {
-    console.error('获取章节失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('获取章节失败:', error?.code || error?.name || 'UNKNOWN')
+    sendEbookRouteError(res, error)
   }
 })
 
@@ -1917,23 +1989,27 @@ router.post('/:id/progress', authenticateToken, requireWritePermission, async (r
 router.get('/download/:id', authenticateToken, async (req, res) => {
   try {
     const db = getDatabase()
-    const book = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id)
+    const book = activeBook(db, req.params.id)
 
     if (!book) {
       return res.status(404).json({ message: '书籍不存在' })
     }
 
-    if (!fs.existsSync(book.file_path)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const fileName = `${book.title}.${book.file_type}`
+    const contentService = getResourceStorageRuntime().contentService
+    const metadata = await contentService.stat(book)
+    const readable = await contentService.createReadStream(book)
+    const fileName = book.original_name || `${book.title}.${book.file_type}`
     res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fileName)}"`)
-    res.sendFile(book.file_path)
+    res.setHeader('Content-Length', String(metadata.bytes))
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`)
+    readable.stream.on('error', () => {
+      if (!res.headersSent) res.status(500).json({ message: '文件读取失败' })
+      else res.destroy()
+    })
+    readable.stream.pipe(res)
   } catch (error) {
-    console.error('下载书籍失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('下载书籍失败:', error?.code || error?.name || 'UNKNOWN')
+    sendEbookRouteError(res, error)
   }
 })
 
@@ -1957,16 +2033,15 @@ router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req,
       return res.status(400).json({ message: '缺少资源路径' })
     }
 
-    console.log('📷 获取资源:', resourcePath)
-
     const db = getDatabase()
-    const book = db.prepare('SELECT file_path FROM books WHERE id = ?').get(req.params.id)
+    const book = activeBook(db, req.params.id)
 
-    if (!book || !book.file_path || !fs.existsSync(book.file_path)) {
+    if (!book) {
       return res.status(404).json({ message: '书籍不存在' })
     }
 
-    const zip = new AdmZip(book.file_path)
+    const bookFilePath = await verifiedBookPath(book)
+    const zip = new AdmZip(bookFilePath)
     const zipEntries = zip.getEntries()
 
     // EPUB 资源只能按规范化后的精确条目名读取。
@@ -1985,20 +2060,14 @@ router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req,
       return res.status(400).json({ message: '资源路径无效' })
     }
 
-    console.log('📷 规范化路径:', normalizedPath)
-
     const resourceEntry = zipEntries.find(
       entry => entry.entryName.replace(/\\/g, '/') === normalizedPath
     )
 
     if (!resourceEntry) {
-      console.log('❌ 资源未找到:', normalizedPath)
-      console.log('📁 ZIP中的图片文件:', zipEntries.filter(e => /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(e.entryName)).map(e => e.entryName).slice(0, 20))
       // 返回204 No Content而不是500，避免控制台报错
       return res.status(204).end()
     }
-
-    console.log('✅ 找到资源:', resourceEntry.entryName)
 
     const ext = path.extname(normalizedPath).toLowerCase()
     const contentTypes = {
@@ -2038,10 +2107,8 @@ router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req,
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: '认证失败' })
     }
-    console.error('❌ 获取资源失败:', error)
-    console.error('❌ 错误堆栈:', error.stack)
-    console.error('❌ 请求参数:', { bookId: req.params.id, resourcePath: req.query.path })
-    res.status(500).json({ message: '服务器错误', error: error.message })
+    console.error('❌ 获取资源失败:', error?.code || error?.name || 'UNKNOWN')
+    sendEbookRouteError(res, error)
   }
 })
 
