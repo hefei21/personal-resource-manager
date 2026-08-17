@@ -9,7 +9,7 @@ import {
   BOOKS_STORAGE_TARGET_SHAPE
 } from '../src/config/ebookStorageSchema.js'
 import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
-import { ensureMigrationControlTables, listAppliedMigrations } from '../src/config/migrationControlStore.js'
+import { ensureMigrationControlTables } from '../src/config/migrationControlStore.js'
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { checkMigrationCompatibility } from '../src/config/migrationCompatibility.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
@@ -171,11 +171,7 @@ test('migrates books without losing rows, identities, sequences, indexes, or inb
     const second = executeMigrationBatch({
       database,
       registry,
-      plan: createMigrationPlan(registry, listAppliedMigrations(database).map((record) => ({
-        id: record.migrationId,
-        checksum: record.checksum,
-        status: 'applied'
-      }))),
+      plan: createMigrationPlan(registry, []),
       lock: { state: 'active' },
       now: () => '2026-08-17T00:01:00.000Z'
     })

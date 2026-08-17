@@ -1522,7 +1522,7 @@ test('reading_progress unknown character_offset schema fails closed before DROP 
     database.exec(`
       ALTER TABLE reading_progress ADD COLUMN character_offset INTEGER;
       INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
-      INSERT INTO books (id) VALUES (7);
+      INSERT INTO books (id, title) VALUES (7, 'reading-progress-invalid-shape');
       INSERT INTO reading_progress
         (id, book_id, current_page, current_chapter, character_offset, progress, font_size, created_at, updated_at)
       VALUES
@@ -1598,7 +1598,9 @@ test('reading_progress legacy guard rejects invalid owner, row, and sequence cas
       createLegacyReadingProgressSchema(database)
       database.exec(`
         INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
-        INSERT INTO books (id) VALUES (7), (11);
+        INSERT INTO books (id, title) VALUES
+          (7, 'reading-progress-guard-7'),
+          (11, 'reading-progress-guard-11');
         INSERT INTO reading_progress
           (id, book_id, current_page, current_chapter, progress, font_size, created_at, updated_at)
         VALUES
@@ -1640,7 +1642,9 @@ test('reading_progress unknown explicit index fails before DROP and fully rolls 
     createLegacyReadingProgressSchema(database)
     database.exec(`
       INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
-      INSERT INTO books (id) VALUES (7), (11);
+      INSERT INTO books (id, title) VALUES
+        (7, 'reading-progress-index-7'),
+        (11, 'reading-progress-index-11');
       INSERT INTO reading_progress
         (id, book_id, current_page, current_chapter, progress, font_size, created_at, updated_at)
       VALUES
