@@ -8,6 +8,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
+import { BOOKS_STORAGE_LEGACY_DDL, BOOKS_STORAGE_TARGET_DDL } from '../src/config/ebookStorageSchema.js'
 
 const require = createRequire(import.meta.url)
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -211,7 +212,8 @@ function createLegacyReadingProgressSchema(database) {
       password TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE TABLE books (id INTEGER PRIMARY KEY AUTOINCREMENT);
+    CREATE TABLE book_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
+    ${BOOKS_STORAGE_TARGET_DDL};
   `)
   database.exec(legacyReadingProgressDdl)
 }
@@ -224,7 +226,8 @@ function createTargetReadingProgressSchema(database) {
       password TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE TABLE books (id INTEGER PRIMARY KEY AUTOINCREMENT);
+    CREATE TABLE book_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
+    ${BOOKS_STORAGE_TARGET_DDL};
   `)
   database.exec(targetReadingProgressDdl)
 }
@@ -237,7 +240,8 @@ function createInlineTargetReadingProgressSchema(database) {
       password TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    CREATE TABLE books (id INTEGER PRIMARY KEY AUTOINCREMENT);
+    CREATE TABLE book_categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
+    ${BOOKS_STORAGE_TARGET_DDL};
   `)
   database.exec(inlineTargetReadingProgressNewDdl)
   database.exec(`
@@ -1401,7 +1405,7 @@ test('adopts the historical inline reading_progress target proof without rewriti
     createInlineTargetReadingProgressSchema(database)
     database.exec(`
       INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
-      INSERT INTO books (id) VALUES (7);
+      INSERT INTO books (id, title) VALUES (7, 'reading-progress-fixture');
       INSERT INTO reading_progress
         (id, book_id, user_id, current_page, cfi, progress, font_size, created_at, updated_at)
       VALUES
@@ -1464,7 +1468,9 @@ test('migrates the exact legacy reading_progress shape with user 41, row values,
     createLegacyReadingProgressSchema(database)
     database.exec(`
       INSERT INTO users (id, username, password) VALUES (41, 'legacy-owner', 'legacy-hash');
-      INSERT INTO books (id) VALUES (7), (11);
+      INSERT INTO books (id, title) VALUES
+        (7, 'reading-progress-fixture-7'),
+        (11, 'reading-progress-fixture-11');
       INSERT INTO reading_progress
         (id, book_id, current_page, current_chapter, progress, font_size, created_at, updated_at)
       VALUES
@@ -2263,14 +2269,11 @@ test('old anime, games, and music schemas execute all registered migrations befo
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-      CREATE TABLE books (
+      CREATE TABLE book_categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        last_read_at DATETIME
+        name TEXT NOT NULL UNIQUE
       );
+      ${BOOKS_STORAGE_LEGACY_DDL};
       CREATE TABLE bookmarks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,

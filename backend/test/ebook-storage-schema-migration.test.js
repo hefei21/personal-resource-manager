@@ -171,7 +171,11 @@ test('migrates books without losing rows, identities, sequences, indexes, or inb
     const second = executeMigrationBatch({
       database,
       registry,
-      plan: createMigrationPlan(registry, listAppliedMigrations(database)),
+      plan: createMigrationPlan(registry, listAppliedMigrations(database).map((record) => ({
+        id: record.migrationId,
+        checksum: record.checksum,
+        status: 'applied'
+      }))),
       lock: { state: 'active' },
       now: () => '2026-08-17T00:01:00.000Z'
     })
