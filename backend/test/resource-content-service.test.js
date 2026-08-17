@@ -112,10 +112,12 @@ test('supports controlled legacy stat, range streams, and verified internal path
   try {
     const storageRoot = path.join(directory, 'storage')
     const legacyRoot = path.join(directory, 'books')
+    const musicLegacyRoot = path.join(directory, 'music')
     fs.mkdirSync(legacyRoot)
+    fs.mkdirSync(musicLegacyRoot)
     const legacyFile = path.join(legacyRoot, 'book.epub')
     fs.writeFileSync(legacyFile, 'legacy-content')
-    const runtime = createResourceStorageRuntime({ storageRoot, ebooksLegacyRoot: legacyRoot })
+    const runtime = createResourceStorageRuntime({ storageRoot, ebooksLegacyRoot: legacyRoot, musicLegacyRoot })
     const resource = { file_path: legacyFile }
     assert.deepEqual(await runtime.contentService.stat(resource), {
       source: 'legacy', bytes: 14, modifiedAt: fs.statSync(legacyFile).mtime.toISOString()

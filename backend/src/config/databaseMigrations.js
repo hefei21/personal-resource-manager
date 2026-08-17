@@ -20,6 +20,15 @@ import {
   BOOKS_STORAGE_MIGRATION_SOURCE_NO_INDEXES,
   BOOKS_STORAGE_TARGET_SHAPE
 } from './ebookStorageSchema.js'
+import {
+  MUSIC_STORAGE_KNOWN_INDEXES,
+  MUSIC_STORAGE_LEGACY_DDL,
+  MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE,
+  MUSIC_STORAGE_LEGACY_SHAPE,
+  MUSIC_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES,
+  MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES,
+  MUSIC_STORAGE_TARGET_SHAPE
+} from './musicStorageSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -1834,6 +1843,50 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           shape: BOOKS_STORAGE_LEGACY_SHAPE,
           createTableSqlSha256: sha256(BOOKS_STORAGE_LEGACY_DDL_DATABASE_BASE),
           indexes: BOOKS_STORAGE_KNOWN_INDEXES,
+          triggers: []
+        }
+      ]
+    }
+  },
+  {
+    id: '0053_music_storage_shape',
+    sourceVariants: [
+      { proofKey: 'legacy-no-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
+      { proofKey: 'legacy-known-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES },
+      { proofKey: 'legacy-database-base-no-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
+      { proofKey: 'legacy-database-base-known-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES }
+    ],
+    compatibility: {
+      kind: 'table-transition',
+      table: 'music',
+      target: MUSIC_STORAGE_TARGET_SHAPE,
+      legacy: [
+        {
+          proofKey: 'legacy-no-indexes',
+          shape: MUSIC_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(MUSIC_STORAGE_LEGACY_DDL),
+          indexes: [],
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-known-indexes',
+          shape: MUSIC_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(MUSIC_STORAGE_LEGACY_DDL),
+          indexes: MUSIC_STORAGE_KNOWN_INDEXES,
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-database-base-no-indexes',
+          shape: MUSIC_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE),
+          indexes: [],
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-database-base-known-indexes',
+          shape: MUSIC_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE),
+          indexes: MUSIC_STORAGE_KNOWN_INDEXES,
           triggers: []
         }
       ]

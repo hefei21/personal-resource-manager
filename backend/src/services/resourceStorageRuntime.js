@@ -31,10 +31,8 @@ export function createResourceStorageRuntime({
   const legacyStorageAdapters = {
     ebooks: new LegacyStorageAdapter({ roots: normalizeRoots(ebookRoots, 'ebooksLegacyRoot') })
   }
-  const musicRoots = configuredRoots.music ?? musicLegacyRoot
-  if (musicRoots !== undefined) {
-    legacyStorageAdapters.music = new LegacyStorageAdapter({ roots: normalizeRoots(musicRoots, 'musicLegacyRoot') })
-  }
+  const musicRoots = configuredRoots.music ?? musicLegacyRoot ?? getStoragePath('music')
+  legacyStorageAdapters.music = new LegacyStorageAdapter({ roots: normalizeRoots(musicRoots, 'musicLegacyRoot') })
   Object.freeze(legacyStorageAdapters)
   const contentService = new ResourceContentService({
     storageService,

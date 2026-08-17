@@ -7,6 +7,7 @@ import { applicationMigrationRegistry } from './databaseMigrations.js'
 import { createDatabaseBackupSync } from './databaseBackup.js'
 import { ENSURE_STORAGE_COMMIT_OPERATIONS_SQL } from './storageCommitSchema.js'
 import { BOOKS_STORAGE_TARGET_DDL } from './ebookStorageSchema.js'
+import { MUSIC_STORAGE_TARGET_DDL } from './musicStorageSchema.js'
 import { getContext } from '../utils/dbContext.js'
 import {
   initializeOwner,
@@ -187,23 +188,7 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
     )`,
 
     // 音乐表
-    `CREATE TABLE IF NOT EXISTS music (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      artist TEXT,
-      album TEXT,
-      duration INTEGER DEFAULT 0,
-      file_path TEXT,
-      file_size INTEGER DEFAULT 0,
-      file_type TEXT,
-      cover_image TEXT,
-      lyrics TEXT,
-      lyrics_source TEXT,
-      has_lyrics INTEGER DEFAULT 0,
-      lyrics_updated_at TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`,
+    MUSIC_STORAGE_TARGET_DDL.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS '),
 
     // 歌单表
     `CREATE TABLE IF NOT EXISTS playlists (
