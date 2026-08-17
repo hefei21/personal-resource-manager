@@ -53,3 +53,41 @@ test('duplicate responses do not include legacy paths', () => {
   assert.doesNotMatch(duplicateRoute, /m1\.file_path/u)
   assert.doesNotMatch(duplicateRoute, /, file_path/u)
 })
+
+test('music trash routes and destructive flows use the generic lifecycle without physical or playlist unlinking', () => {
+  assert.match(routeSource, /softDeleteMusic\(/u)
+  assert.match(routeSource, /softDeleteMusics\(/u)
+  assert.match(routeSource, /listDeletedMusic\(/u)
+  assert.match(routeSource, /restoreMusicFromTrash\(/u)
+  assert.match(routeSource, /permanentlyDeleteMusic\(/u)
+  assert.match(routeSource, /router\.get\('\/trash', authenticateToken/u)
+  assert.match(routeSource, /router\.post\('\/trash\/:id\/restore', authenticateToken, requireWritePermission/u)
+  assert.match(routeSource, /router\.delete\('\/trash\/:id\/permanent', authenticateToken, requireWritePermission/u)
+  assert.match(routeSource, /router\.post\('\/remove-duplicates', authenticateToken, requireWritePermission/u)
+
+  const singleDeleteRoute = routeSource.slice(
+    routeSource.indexOf("router.delete('/:id'"),
+    routeSource.indexOf('// 批量删除音乐')
+  )
+  assert.doesNotMatch(singleDeleteRoute, /unlinkSync|DELETE FROM playlist_songs|DELETE FROM music/u)
+
+  const duplicateDeleteRoute = routeSource.slice(
+    routeSource.indexOf("router.post('/remove-duplicates'"),
+    routeSource.indexOf('// 播放音乐')
+  )
+  assert.doesNotMatch(duplicateDeleteRoute, /unlinkSync|DELETE FROM playlist_songs|DELETE FROM music|file_path/u)
+  assert.match(duplicateDeleteRoute, /softDeleteMusics\(/u)
+})
+
+test('music visibility queries exclude generic trash entries', () => {
+  const queryRoutes = [
+    routeSource.slice(routeSource.indexOf("router.get('/all-ids'"), routeSource.indexOf('// 获取音乐列表')),
+    routeSource.slice(routeSource.indexOf("router.get('/',"), routeSource.indexOf('// 获取所有艺术家列表')),
+    routeSource.slice(routeSource.indexOf("router.get('/artists'"), routeSource.indexOf('// 获取所有专辑列表')),
+    routeSource.slice(routeSource.indexOf("router.get('/albums'"), routeSource.indexOf('// 重新解析音乐元数据')),
+    routeSource.slice(routeSource.indexOf("router.get('/playlists'"), routeSource.indexOf('// 创建歌单')),
+    routeSource.slice(routeSource.indexOf("router.get('/playlists/:id/songs'"), routeSource.indexOf('// 获取歌单内所有歌曲ID')),
+    routeSource.slice(routeSource.indexOf("router.get('/playlists/:id/all-ids'"), routeSource.indexOf('// 向歌单添加歌曲'))
+  ]
+  for (const route of queryRoutes) assert.match(route, /resource_trash_entries/u)
+})

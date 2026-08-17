@@ -18,6 +18,13 @@ import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js
 import { getStorageCommitOperation } from '../services/storageCommitCoordinator.js'
 import { commitMusicUpload } from '../services/musicStorageService.js'
 import { hashMusicFile, musicContentType, parseMusicRange } from '../services/musicPlaybackService.js'
+import {
+  listDeletedMusic,
+  permanentlyDeleteMusic,
+  restoreMusicFromTrash,
+  softDeleteMusic,
+  softDeleteMusics
+} from '../services/musicTrashService.js'
 
 const execFileAsync = promisify(execFile)
 const MUSIC_UPLOAD_POLICY = {
@@ -438,11 +445,25 @@ function sendMusicRouteError(res, error) {
   if (code === 'MUSIC_RANGE_INVALID' || code === 'RESOURCE_CONTENT_RANGE_INVALID') {
     return res.status(416).json({ code, message: '请求范围无效' })
   }
+  if (code === 'MUSIC_NOT_FOUND' || code === 'MUSIC_TRASH_NOT_FOUND') {
+    return res.status(404).json({ code, message: '资源不存在' })
+  }
+  if (code === 'MUSIC_ALREADY_TRASHED' || code === 'MUSIC_TRASH_PURGE_IN_PROGRESS' ||
+      code === 'MUSIC_TRASH_LEGACY_MIGRATION_REQUIRED' || code === 'MUSIC_TRASH_CONTENT_REFERENCE_MISSING') {
+    return res.status(409).json({ code, message: '资源状态冲突' })
+  }
   if (code.endsWith('_INVALID') || code === 'RESOURCE_STORAGE_METADATA_INCOMPLETE' ||
       code === 'RESOURCE_STORAGE_METADATA_MISMATCH' || code === 'RESOURCE_STORAGE_KIND_INVALID') {
     return res.status(400).json({ code, message: '请求无效' })
   }
   return res.status(500).json({ code: code || 'MUSIC_OPERATION_FAILED', message: '服务器错误' })
+}
+
+async function invalidateMusicCaches() {
+  await cache.delPattern('music:list:*')
+  await cache.del(CacheKeys.MUSIC_ARTISTS)
+  await cache.del(CacheKeys.MUSIC_ALBUMS)
+  await cache.del(CacheKeys.MUSIC_PLAYLISTS)
 }
 
 // 分片上传
@@ -914,7 +935,10 @@ router.get('/all-ids', authenticateToken, async (req, res) => {
     const { keyword, artist, album } = req.query
     const db = getDatabase()
 
-    let whereClause = 'WHERE 1=1'
+    let whereClause = `WHERE NOT EXISTS (
+      SELECT 1 FROM resource_trash_entries t
+      WHERE t.resource_type = 'music' AND t.resource_id = music.id
+    )`
     const params = []
 
     if (keyword) {
@@ -997,7 +1021,10 @@ router.get('/', authenticateToken, async (req, res) => {
     selectFields.push('created_at', 'updated_at')
 
     // 构建基础查询条件（不包含排序和分页）
-    let whereClause = 'WHERE 1=1'
+    let whereClause = `WHERE NOT EXISTS (
+      SELECT 1 FROM resource_trash_entries t
+      WHERE t.resource_type = 'music' AND t.resource_id = music.id
+    )`
     const params = []
 
     if (keyword) {
@@ -1085,7 +1112,15 @@ router.get('/artists', authenticateToken, async (req, res) => {
     }
 
     // 获取所有艺术家
-    const rows = db.prepare(`SELECT DISTINCT TRIM(artist) as artist FROM music WHERE artist IS NOT NULL AND TRIM(artist) != ''`).all()
+    const rows = db.prepare(`
+      SELECT DISTINCT TRIM(artist) as artist
+      FROM music
+      WHERE NOT EXISTS (
+        SELECT 1 FROM resource_trash_entries t
+        WHERE t.resource_type = 'music' AND t.resource_id = music.id
+      )
+        AND artist IS NOT NULL AND TRIM(artist) != ''
+    `).all()
     
     // 按拼音排序（使用 Intl.Collator，支持中文拼音排序）
     const artists = rows.map(r => r.artist).sort((a, b) => zhCollator.compare(a, b))
@@ -1120,7 +1155,15 @@ router.get('/albums', authenticateToken, async (req, res) => {
     }
 
     // 获取所有专辑
-    const rows = db.prepare(`SELECT DISTINCT TRIM(album) as album FROM music WHERE album IS NOT NULL AND TRIM(album) != ''`).all()
+    const rows = db.prepare(`
+      SELECT DISTINCT TRIM(album) as album
+      FROM music
+      WHERE NOT EXISTS (
+        SELECT 1 FROM resource_trash_entries t
+        WHERE t.resource_type = 'music' AND t.resource_id = music.id
+      )
+        AND album IS NOT NULL AND TRIM(album) != ''
+    `).all()
     
     // 按拼音排序（使用 Intl.Collator，支持中文拼音排序）
     const albums = rows.map(r => r.album).sort((a, b) => zhCollator.compare(a, b))
@@ -1222,30 +1265,13 @@ router.put('/:id', authenticateToken, async (req, res) => {
 // 删除音乐
 router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM music WHERE id = ?')
-    const music = stmt.get(req.params.id)
-
-    if (music && music.file_path && fs.existsSync(music.file_path)) {
-      fs.unlinkSync(music.file_path)
-    }
-
-    // 从所有歌单中移除
-    db.prepare('DELETE FROM playlist_songs WHERE music_id = ?').run(req.params.id)
-    
-    // 删除音乐记录
-    db.prepare('DELETE FROM music WHERE id = ?').run(req.params.id)
-
-    // 清除相关缓存
-    await cache.delPattern('music:list:*')
-    await cache.del(CacheKeys.MUSIC_ARTISTS)
-    await cache.del(CacheKeys.MUSIC_ALBUMS)
-    await cache.del(CacheKeys.MUSIC_PLAYLISTS)
-
-    res.json({ message: '删除成功' })
+    const result = softDeleteMusic({ database: getDatabase(), id: req.params.id })
+    await invalidateMusicCaches()
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: result, message: '已移入回收站' })
   } catch (error) {
-    console.error('删除失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('删除音乐失败:', error?.code || error?.name || 'UNKNOWN')
+    sendMusicRouteError(res, error)
   }
 })
 
@@ -1253,31 +1279,55 @@ router.delete('/:id', authenticateToken, requireWritePermission, async (req, res
 router.post('/batch-delete', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { ids } = req.body
-    const db = getDatabase()
-    
-    const transaction = db.transaction(() => {
-      for (const id of ids) {
-        const music = db.prepare('SELECT * FROM music WHERE id = ?').get(id)
-        if (music && music.file_path && fs.existsSync(music.file_path)) {
-          fs.unlinkSync(music.file_path)
-        }
-        db.prepare('DELETE FROM playlist_songs WHERE music_id = ?').run(id)
-        db.prepare('DELETE FROM music WHERE id = ?').run(id)
-      }
-    })
-    
-    transaction()
-    
-    // 清除相关缓存
-    await cache.delPattern('music:list:*')
-    await cache.del(CacheKeys.MUSIC_ARTISTS)
-    await cache.del(CacheKeys.MUSIC_ALBUMS)
-    await cache.del(CacheKeys.MUSIC_PLAYLISTS)
-
-    res.json({ message: '删除成功', count: ids.length })
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: '请选择要删除的音乐' })
+    }
+    const result = softDeleteMusics({ database: getDatabase(), ids })
+    await invalidateMusicCaches()
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: result, message: '已批量移入回收站', count: result.length })
   } catch (error) {
-    console.error('批量删除失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('批量删除音乐失败:', error?.code || error?.name || 'UNKNOWN')
+    sendMusicRouteError(res, error)
+  }
+})
+
+// 音乐回收站
+router.get('/trash', authenticateToken, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: listDeletedMusic(getDatabase()) })
+  } catch (error) {
+    console.error('获取音乐回收站失败:', error?.code || error?.name || 'UNKNOWN')
+    sendMusicRouteError(res, error)
+  }
+})
+
+router.post('/trash/:id/restore', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = restoreMusicFromTrash({ database: getDatabase(), id: req.params.id })
+    await invalidateMusicCaches()
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: result, message: '恢复成功' })
+  } catch (error) {
+    console.error('恢复音乐失败:', error?.code || error?.name || 'UNKNOWN')
+    sendMusicRouteError(res, error)
+  }
+})
+
+router.delete('/trash/:id/permanent', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = await permanentlyDeleteMusic({
+      database: getDatabase(),
+      storageService: getResourceStorageRuntime().storageService,
+      id: req.params.id
+    })
+    await invalidateMusicCaches()
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: result, message: '已永久删除' })
+  } catch (error) {
+    console.error('永久删除音乐失败:', error?.code || error?.name || 'UNKNOWN')
+    sendMusicRouteError(res, error)
   }
 })
 
@@ -1295,19 +1345,27 @@ router.get('/duplicates', authenticateToken, async (req, res) => {
     if (columnNames.includes('title') && columnNames.includes('artist')) {
       // 按 标题+艺术家 查找重复
       const rows = db.prepare(`
-        SELECT 
-          m1.id, m1.title, m1.artist, m1.album, m1.duration, m1.file_size, m1.created_at,
-          (SELECT COUNT(*) FROM music m2 WHERE 
-            LOWER(TRIM(m2.title)) = LOWER(TRIM(m1.title)) AND 
-            (LOWER(TRIM(m2.artist)) = LOWER(TRIM(m1.artist)) OR (m2.artist IS NULL AND m1.artist IS NULL))
-          ) as duplicate_count
+        SELECT
+          m1.id, m1.title, m1.artist, m1.album, m1.duration, m1.file_size, m1.created_at
         FROM music m1
-        WHERE m1.id IN (
+        WHERE NOT EXISTS (
+          SELECT 1 FROM resource_trash_entries t
+          WHERE t.resource_type = 'music' AND t.resource_id = m1.id
+        )
+          AND m1.id IN (
           SELECT MIN(m3.id) FROM music m3 
-          WHERE EXISTS (
+          WHERE NOT EXISTS (
+            SELECT 1 FROM resource_trash_entries t3
+            WHERE t3.resource_type = 'music' AND t3.resource_id = m3.id
+          )
+            AND EXISTS (
             SELECT 1 FROM music m4 WHERE m4.id != m3.id AND 
-              LOWER(TRIM(m4.title)) = LOWER(TRIM(m3.title)) AND 
-              (LOWER(TRIM(m4.artist)) = LOWER(TRIM(m3.artist)) OR (m4.artist IS NULL AND m3.artist IS NULL))
+              NOT EXISTS (
+                SELECT 1 FROM resource_trash_entries t4
+                WHERE t4.resource_type = 'music' AND t4.resource_id = m4.id
+              ) AND
+            LOWER(TRIM(m4.title)) = LOWER(TRIM(m3.title)) AND
+            (LOWER(TRIM(m4.artist)) = LOWER(TRIM(m3.artist)) OR (m4.artist IS NULL AND m3.artist IS NULL))
           )
           GROUP BY LOWER(TRIM(m3.title)), LOWER(TRIM(COALESCE(m3.artist, '')))
         )
@@ -1319,7 +1377,11 @@ router.get('/duplicates', authenticateToken, async (req, res) => {
         const groupSongs = db.prepare(`
           SELECT id, title, artist, album, duration, file_size, created_at
           FROM music
-          WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) AND 
+          WHERE NOT EXISTS (
+                  SELECT 1 FROM resource_trash_entries t
+                  WHERE t.resource_type = 'music' AND t.resource_id = music.id
+                )
+            AND LOWER(TRIM(title)) = LOWER(TRIM(?)) AND
                 (LOWER(TRIM(artist)) = LOWER(TRIM(?)) OR (artist IS NULL AND ? IS NULL))
           ORDER BY created_at ASC
         `).all(row.title, row.artist, row.artist)
@@ -1350,7 +1412,7 @@ router.get('/duplicates', authenticateToken, async (req, res) => {
 })
 
 // 删除重复音乐（保留最早添加的）
-router.post('/remove-duplicates', authenticateToken, async (req, res) => {
+router.post('/remove-duplicates', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     
@@ -1369,57 +1431,44 @@ router.post('/remove-duplicates', authenticateToken, async (req, res) => {
         LOWER(TRIM(COALESCE(artist, ''))) as artist_key,
         MIN(id) as keep_id
       FROM music
+      WHERE NOT EXISTS (
+        SELECT 1 FROM resource_trash_entries t
+        WHERE t.resource_type = 'music' AND t.resource_id = music.id
+      )
       GROUP BY title_key, artist_key
       HAVING COUNT(*) > 1
     `).all()
-    
-    let deletedCount = 0
-    const deletedFiles = []
-    
-    const transaction = db.transaction(() => {
-      for (const group of duplicateGroups) {
-        // 获取要删除的歌曲（保留 ID 最小的）
-        const toDelete = db.prepare(`
-          SELECT id, file_path FROM music
-          WHERE LOWER(TRIM(title)) = ? AND LOWER(TRIM(COALESCE(artist, ''))) = ?
+
+    const toTrashIds = []
+    for (const group of duplicateGroups) {
+      // 获取要移入回收站的歌曲（保留 ID 最小的）
+      const toTrash = db.prepare(`
+        SELECT id
+        FROM music
+        WHERE NOT EXISTS (
+                SELECT 1 FROM resource_trash_entries t
+                WHERE t.resource_type = 'music' AND t.resource_id = music.id
+              )
+          AND LOWER(TRIM(title)) = ?
+          AND LOWER(TRIM(COALESCE(artist, ''))) = ?
           AND id != ?
-        `).all(group.title_key, group.artist_key, group.keep_id)
-        
-        for (const song of toDelete) {
-          // 从歌单中移除
-          db.prepare('DELETE FROM playlist_songs WHERE music_id = ?').run(song.id)
-          // 删除音乐记录
-          db.prepare('DELETE FROM music WHERE id = ?').run(song.id)
-          deletedCount++
-          
-          // 记录文件路径，稍后删除
-          if (song.file_path && fs.existsSync(song.file_path)) {
-            deletedFiles.push(song.file_path)
-          }
-        }
-      }
-    })
-    
-    transaction()
-    
-    // 删除文件
-    for (const filePath of deletedFiles) {
-      try {
-        fs.unlinkSync(filePath)
-        console.log(`[去重] 删除文件: ${filePath}`)
-      } catch (e) {
-        console.error(`[去重] 删除文件失败: ${filePath}`, e.message)
-      }
+      `).all(group.title_key, group.artist_key, group.keep_id)
+      toTrashIds.push(...toTrash.map(({ id }) => id))
     }
-    
-    res.json({ 
+
+    const trashed = toTrashIds.length === 0
+      ? []
+      : softDeleteMusics({ database: db, ids: toTrashIds })
+    if (trashed.length > 0) await invalidateMusicCaches()
+
+    res.json({
       message: '去重完成',
-      deletedCount,
-      filesDeleted: deletedFiles.length
+      deletedCount: trashed.length,
+      trashedCount: trashed.length
     })
   } catch (error) {
-    console.error('删除重复音乐失败:', error)
-    res.status(500).json({ message: '服务器错误', error: error.message })
+    console.error('删除重复音乐失败:', error?.code || error?.name || 'UNKNOWN')
+    sendMusicRouteError(res, error)
   }
 })
 
@@ -1489,7 +1538,14 @@ router.get('/playlists', authenticateToken, async (req, res) => {
     const db = getDatabase()
     const rows = db.prepare(`
       SELECT p.*, 
-        (SELECT COUNT(*) FROM playlist_songs WHERE playlist_id = p.id) as song_count
+        (SELECT COUNT(*)
+         FROM playlist_songs ps
+         JOIN music m ON m.id = ps.music_id
+         WHERE ps.playlist_id = p.id
+           AND NOT EXISTS (
+             SELECT 1 FROM resource_trash_entries t
+             WHERE t.resource_type = 'music' AND t.resource_id = m.id
+           )) as song_count
       FROM playlists p
       ORDER BY p.created_at DESC
     `).all()
@@ -1600,6 +1656,10 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
       FROM music m
       JOIN playlist_songs ps ON m.id = ps.music_id
       WHERE ps.playlist_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM resource_trash_entries t
+          WHERE t.resource_type = 'music' AND t.resource_id = m.id
+        )
     `).get(playlistId)
     const total = countResult ? countResult.total : 0
     
@@ -1609,6 +1669,10 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
       FROM music m
       JOIN playlist_songs ps ON m.id = ps.music_id
       WHERE ps.playlist_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM resource_trash_entries t
+          WHERE t.resource_type = 'music' AND t.resource_id = m.id
+        )
       ORDER BY ps.sort_order
       LIMIT ? OFFSET ?
     `).all(playlistId, pageSize, offset)
@@ -1643,6 +1707,10 @@ router.get('/playlists/:id/all-ids', authenticateToken, async (req, res) => {
       FROM music m
       JOIN playlist_songs ps ON m.id = ps.music_id
       WHERE ps.playlist_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM resource_trash_entries t
+          WHERE t.resource_type = 'music' AND t.resource_id = m.id
+        )
       ORDER BY ps.sort_order
     `).all(playlistId)
     
