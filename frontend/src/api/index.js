@@ -124,6 +124,9 @@ export default {
     update: (id, data) => api.put(`/music/${id}`, data),
     delete: (id) => api.delete(`/music/${id}`),
     batchDelete: (data) => api.post('/music/batch-delete', data),
+    trash: () => api.get('/music/trash'),
+    restoreTrash: (id) => api.post(`/music/trash/${id}/restore`),
+    permanentlyDeleteTrash: (id) => api.delete(`/music/trash/${id}/permanent`),
     // 去重
     getDuplicates: () => api.get('/music/duplicates'),
     removeDuplicates: () => api.post('/music/remove-duplicates'),
