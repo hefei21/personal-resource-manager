@@ -60,6 +60,30 @@ export const BOOKS_STORAGE_LEGACY_DDL_DATABASE_BASE = `CREATE TABLE books (
       FOREIGN KEY (category_id) REFERENCES book_categories(id) ON DELETE SET NULL
     )`
 
+// Historical databases created the base books table first and later applied
+// migration 0004 with ALTER TABLE. SQLite preserves the appended column in
+// sqlite_master SQL, so this exact DDL needs its own adoption proof even though
+// its normalized table shape matches BOOKS_STORAGE_LEGACY_SHAPE.
+export const BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE = `CREATE TABLE books (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      author TEXT,
+      year TEXT,
+      publisher TEXT,
+      isbn TEXT,
+      description TEXT,
+      cover_image TEXT,
+      category_id INTEGER,
+      file_path TEXT NOT NULL,
+      file_type TEXT,
+      file_size INTEGER DEFAULT 0,
+      total_pages INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_read_at DATETIME, content_cache TEXT,
+      FOREIGN KEY (category_id) REFERENCES book_categories(id) ON DELETE SET NULL
+    )`
+
 export const BOOKS_STORAGE_TARGET_DDL = `CREATE TABLE books (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,

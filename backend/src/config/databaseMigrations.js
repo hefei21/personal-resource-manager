@@ -14,6 +14,7 @@ import { CREATE_RESOURCE_TRASH_SQL, RESOURCE_TRASH_SHAPE } from './resourceTrash
 import {
   BOOKS_STORAGE_KNOWN_INDEXES,
   BOOKS_STORAGE_LEGACY_DDL,
+  BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE,
   BOOKS_STORAGE_LEGACY_DDL_DATABASE_BASE,
   BOOKS_STORAGE_LEGACY_SHAPE,
   BOOKS_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES,
@@ -1814,7 +1815,9 @@ export const applicationMigrationRegistry = createMigrationRegistry([
       { proofKey: 'legacy-no-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
       { proofKey: 'legacy-known-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES },
       { proofKey: 'legacy-database-base-no-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
-      { proofKey: 'legacy-database-base-known-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES }
+      { proofKey: 'legacy-database-base-known-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES },
+      { proofKey: 'legacy-appended-content-cache-no-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
+      { proofKey: 'legacy-appended-content-cache-known-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES }
     ],
     compatibility: {
       kind: 'table-transition',
@@ -1846,6 +1849,20 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           proofKey: 'legacy-database-base-known-indexes',
           shape: BOOKS_STORAGE_LEGACY_SHAPE,
           createTableSqlSha256: sha256(BOOKS_STORAGE_LEGACY_DDL_DATABASE_BASE),
+          indexes: BOOKS_STORAGE_KNOWN_INDEXES,
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-appended-content-cache-no-indexes',
+          shape: BOOKS_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE),
+          indexes: [],
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-appended-content-cache-known-indexes',
+          shape: BOOKS_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE),
           indexes: BOOKS_STORAGE_KNOWN_INDEXES,
           triggers: []
         }

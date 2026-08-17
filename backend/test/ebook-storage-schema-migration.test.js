@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 
 import {
   BOOKS_STORAGE_KNOWN_INDEXES,
   BOOKS_STORAGE_LEGACY_DDL,
+  BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE,
   BOOKS_STORAGE_TARGET_DDL,
   BOOKS_STORAGE_TARGET_SHAPE
 } from '../src/config/ebookStorageSchema.js'
@@ -57,7 +59,13 @@ const bookChaptersDdl = `CREATE TABLE book_chapters (
   FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
 )`
 
-function createLegacyDatabase({ indexes = true, unknownColumn = false, unknownIndex = false, childTrigger = false } = {}) {
+function createLegacyDatabase({
+  indexes = true,
+  unknownColumn = false,
+  unknownIndex = false,
+  childTrigger = false,
+  booksDdl = BOOKS_STORAGE_LEGACY_DDL
+} = {}) {
   const database = new Database(':memory:')
   database.pragma('foreign_keys = ON')
   database.exec(`
@@ -66,7 +74,7 @@ function createLegacyDatabase({ indexes = true, unknownColumn = false, unknownIn
       name TEXT NOT NULL UNIQUE
     );
     INSERT INTO book_categories (id, name) VALUES (3, '技术');
-    ${BOOKS_STORAGE_LEGACY_DDL};
+    ${booksDdl};
     ${readingProgressDdl};
     ${bookChaptersDdl};
   `)
@@ -182,6 +190,79 @@ test('migrates books without losing rows, identities, sequences, indexes, or inb
       skippedCount: 1,
       total: 1
     })
+  } finally {
+    database.close()
+  }
+})
+
+test('freezes the observed appended content_cache books DDL proof', () => {
+  assert.equal(
+    createHash('sha256').update(Buffer.from(BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE, 'utf8')).digest('hex'),
+    '009abe20ef070a756e7ad7a8c761bb794be6ec6d641c18dbf2dd653f92a2b367'
+  )
+})
+
+test('migrates the observed appended content_cache books DDL without widening compatibility', nativeTestOptions, () => {
+  const database = createLegacyDatabase({ booksDdl: BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE })
+  try {
+    assert.deepEqual(checkMigrationCompatibility(database, migration.compatibility), {
+      status: 'missing', kind: 'table-transition', table: 'books', reason: 'legacy-matched',
+      proofKey: 'legacy-appended-content-cache-known-indexes'
+    })
+    assert.equal(runMigration(database).executedCount, 1)
+    assert.deepEqual(database.prepare(`
+      SELECT id, title, file_path, storage_key, content_sha256, content_bytes, original_name, content_cache
+      FROM books WHERE id = 17
+    `).get(), {
+      id: 17,
+      title: '旧书',
+      file_path: '/legacy/book.epub',
+      storage_key: null,
+      content_sha256: null,
+      content_bytes: null,
+      original_name: null,
+      content_cache: 'cached'
+    })
+    assert.deepEqual(database.pragma('foreign_key_check'), [])
+    assert.deepEqual(
+      database.pragma('foreign_key_list(books)'),
+      [{
+        id: 0,
+        seq: 0,
+        table: 'book_categories',
+        from: 'category_id',
+        to: 'id',
+        on_update: 'NO ACTION',
+        on_delete: 'SET NULL',
+        match: 'NONE'
+      }]
+    )
+    assert.deepEqual(
+      database.prepare(`
+        SELECT s.name AS source_table, fk."from" AS source_column, fk."to" AS target_column,
+               fk.on_update, fk.on_delete
+        FROM sqlite_master AS s, pragma_foreign_key_list(s.name) AS fk
+        WHERE s.type = 'table' AND fk."table" = 'books'
+        ORDER BY s.name
+      `).all(),
+      [
+        { source_table: 'book_chapters', source_column: 'book_id', target_column: 'id',
+          on_update: 'NO ACTION', on_delete: 'CASCADE' },
+        { source_table: 'reading_progress', source_column: 'book_id', target_column: 'id',
+          on_update: 'NO ACTION', on_delete: 'CASCADE' }
+      ]
+    )
+    assert.deepEqual(
+      database.prepare(`
+        SELECT name, sql FROM sqlite_master
+        WHERE type = 'index' AND tbl_name = 'books' AND sql IS NOT NULL
+        ORDER BY name
+      `).all(),
+      [
+        { name: 'idx_books_created_at', sql: 'CREATE INDEX idx_books_created_at ON books(created_at)' },
+        { name: 'idx_books_title', sql: 'CREATE INDEX idx_books_title ON books(title)' }
+      ]
+    )
   } finally {
     database.close()
   }

@@ -8,7 +8,10 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
-import { BOOKS_STORAGE_LEGACY_DDL, BOOKS_STORAGE_TARGET_DDL } from '../src/config/ebookStorageSchema.js'
+import {
+  BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE,
+  BOOKS_STORAGE_TARGET_DDL
+} from '../src/config/ebookStorageSchema.js'
 import { MUSIC_STORAGE_TARGET_DDL } from '../src/config/musicStorageSchema.js'
 
 const require = createRequire(import.meta.url)
@@ -2240,7 +2243,7 @@ test('incompatible music columns execute the prefix and stop at the explicit con
   }
 })
 
-test('old anime, games, and music schemas execute all registered migrations before remaining inline upgrades', nativeTestOptions, () => {
+test('observed old books plus anime, games, and music schemas execute the complete startup chain', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -2276,7 +2279,7 @@ test('old anime, games, and music schemas execute all registered migrations befo
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE
       );
-      ${BOOKS_STORAGE_LEGACY_DDL};
+      ${BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE};
       CREATE TABLE bookmarks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
