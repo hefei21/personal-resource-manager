@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 
 import {
   MUSIC_STORAGE_KNOWN_INDEXES,
   MUSIC_STORAGE_LEGACY_DDL_APPENDED,
+  MUSIC_STORAGE_LEGACY_DDL_CATEGORY_TAGS_APPENDED,
   MUSIC_STORAGE_LEGACY_DDL,
   MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE,
   MUSIC_STORAGE_LEGACY_DDL_PARTIAL_APPENDED,
@@ -35,6 +37,7 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
 
 const migration = applicationMigrationRegistry.migrations.find(({ id }) => id === '0053_music_storage_shape')
 const registry = createMigrationRegistry([migration])
+const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
 const playlistsDdl = `CREATE TABLE playlists (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,6 +109,9 @@ function createLegacyDatabase({
     17, '旧歌', '歌手', '专辑', 245, '/legacy/music.mp3', 1234, 'mp3', '/legacy/cover.jpg',
     '歌词', 'manual', 1, '2026-08-01T00:00:00.000Z', '2026-01-01', '2026-02-01'
   )
+  if (database.pragma('table_xinfo(music)').some(({ name }) => name === 'category')) {
+    database.prepare('UPDATE music SET category = ?, tags = ? WHERE id = ?').run('收藏夹', '怀旧,摇滚', 17)
+  }
   database.prepare(`INSERT INTO playlist_songs
     (id, playlist_id, music_id, sort_order, added_at) VALUES (?, ?, ?, ?, ?)`).run(
     29, 2, 17, 4, '2026-03-01'
@@ -153,6 +159,16 @@ test('registers music storage migration and keeps empty target DDL aligned', nat
   }
 })
 
+test('freezes the verified category/tags music schema proof', () => {
+  const expectedSha256 = 'be1176a4eb60455fc6f7f8fd1540080aaf89a062ddc82a793278fafb9a1faf3f'
+  assert.equal(sha256(MUSIC_STORAGE_LEGACY_DDL_CATEGORY_TAGS_APPENDED), expectedSha256)
+  assert.equal(
+    migration.compatibility.legacy.find(({ proofKey }) => proofKey === 'legacy-category-tags-appended-known-indexes')
+      ?.createTableSqlSha256,
+    expectedSha256
+  )
+})
+
 for (const variant of [
   { name: 'legacy-no-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL, indexes: false },
   { name: 'legacy-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL, indexes: true },
@@ -161,7 +177,9 @@ for (const variant of [
   { name: 'legacy-upgraded-appended-no-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_APPENDED, indexes: false },
   { name: 'legacy-upgraded-appended-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_APPENDED, indexes: true },
   { name: 'legacy-partial-appended-no-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_PARTIAL_APPENDED, indexes: false },
-  { name: 'legacy-partial-appended-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_PARTIAL_APPENDED, indexes: true }
+  { name: 'legacy-partial-appended-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_PARTIAL_APPENDED, indexes: true },
+  { name: 'legacy-category-tags-appended-no-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_CATEGORY_TAGS_APPENDED, indexes: false, legacyMetadata: true },
+  { name: 'legacy-category-tags-appended-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_CATEGORY_TAGS_APPENDED, indexes: true, legacyMetadata: true }
 ]) {
   test(`migrates ${variant.name} without losing music rows, identities, sequences, indexes, or inbound foreign keys`, nativeTestOptions, () => {
     const database = createLegacyDatabase(variant)
@@ -177,6 +195,8 @@ for (const variant of [
         title: '旧歌',
         artist: '歌手',
         album: '专辑',
+        category: variant.legacyMetadata ? '收藏夹' : null,
+        tags: variant.legacyMetadata ? '怀旧,摇滚' : null,
         duration: 245,
         file_path: '/legacy/music.mp3',
         storage_key: null,

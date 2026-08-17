@@ -107,13 +107,27 @@ id | name   | parent_id | path         | level | sort_order
 | title | TEXT | NOT NULL | - | 歌曲名称 |
 | artist | TEXT | - | NULL | 艺术家 |
 | album | TEXT | - | NULL | 专辑名称 |
+| category | TEXT | - | NULL | 历史分类元数据（兼容保留） |
+| tags | TEXT | - | NULL | 历史标签元数据（兼容保留） |
 | duration | INTEGER | - | 0 | 时长（秒） |
-| file_path | TEXT | NOT NULL | - | 文件存储路径 |
+| file_path | TEXT | - | NULL | 旧文件存储路径（兼容读取） |
+| storage_key | TEXT | - | NULL | 受管对象存储键 |
+| content_sha256 | TEXT | - | NULL | 内容 SHA-256 |
+| content_bytes | INTEGER | - | NULL | 受管对象字节数 |
+| original_name | TEXT | - | NULL | 原始文件名 |
 | file_size | INTEGER | - | 0 | 文件大小（字节） |
 | file_type | TEXT | - | NULL | 文件类型（mp3, flac 等） |
 | cover_image | TEXT | - | NULL | 封面图片（base64） |
+| lyrics | TEXT | - | NULL | 歌词内容 |
+| lyrics_source | TEXT | - | NULL | 歌词来源 |
+| has_lyrics | INTEGER | - | 0 | 是否已有歌词 |
+| lyrics_updated_at | TEXT | - | NULL | 歌词更新时间 |
 | created_at | DATETIME | - | CURRENT_TIMESTAMP | 创建时间 |
 | updated_at | DATETIME | - | CURRENT_TIMESTAMP | 更新时间 |
+
+**迁移参考**：本表保留历史 `category`、`tags`，0053 存储迁移不得静默丢弃。
+本节用于逻辑字段参考；精确 SQLite DDL、列顺序、hash 和兼容变体以
+`backend/src/config/musicStorageSchema.js` 及对应迁移测试为准。
 
 ---
 

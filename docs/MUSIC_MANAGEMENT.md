@@ -26,8 +26,14 @@
 | title | TEXT | 歌曲标题，必填 |
 | artist | TEXT | 艺术家 |
 | album | TEXT | 专辑名称 |
+| category | TEXT | 历史分类元数据（兼容保留） |
+| tags | TEXT | 历史标签元数据（兼容保留） |
 | duration | INTEGER | 时长（秒） |
-| file_path | TEXT | 文件存储路径，必填 |
+| file_path | TEXT | 旧文件存储路径（兼容读取，可为空） |
+| storage_key | TEXT | 受管对象存储键 |
+| content_sha256 | TEXT | 内容 SHA-256 |
+| content_bytes | INTEGER | 受管对象字节数 |
+| original_name | TEXT | 原始文件名 |
 | file_size | INTEGER | 文件大小（字节） |
 | file_type | TEXT | 文件类型（mp3, flac 等） |
 | cover_image | TEXT | 封面图片（base64） |
@@ -35,6 +41,9 @@
 | lyrics_source | TEXT | 歌词来源 |
 | created_at | DATETIME | 创建时间 |
 | updated_at | DATETIME | 更新时间 |
+
+> 本表格用于业务字段参考。精确 SQLite DDL、列顺序、索引、hash 与历史兼容变体，
+> 以 `backend/src/config/musicStorageSchema.js` 和迁移回归测试为准。
 
 ### 2. playlists 表（歌单表）
 

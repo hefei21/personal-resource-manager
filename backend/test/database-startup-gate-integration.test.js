@@ -12,7 +12,10 @@ import {
   BOOKS_STORAGE_LEGACY_DDL_APPENDED_CONTENT_CACHE,
   BOOKS_STORAGE_TARGET_DDL
 } from '../src/config/ebookStorageSchema.js'
-import { MUSIC_STORAGE_TARGET_DDL } from '../src/config/musicStorageSchema.js'
+import {
+  MUSIC_STORAGE_LEGACY_DDL_CATEGORY_TAGS_APPENDED,
+  MUSIC_STORAGE_TARGET_DDL
+} from '../src/config/musicStorageSchema.js'
 
 const require = createRequire(import.meta.url)
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -2243,7 +2246,7 @@ test('incompatible music columns execute the prefix and stop at the explicit con
   }
 })
 
-test('observed old books plus anime, games, and music schemas execute the complete startup chain', nativeTestOptions, () => {
+test('observed old books and category/tags music schemas execute the complete startup chain', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -2308,19 +2311,9 @@ test('observed old books plus anime, games, and music schemas execute the comple
         steam_appid INTEGER UNIQUE,
         title TEXT NOT NULL
       );
-      CREATE TABLE music (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        artist TEXT,
-        album TEXT,
-        duration INTEGER DEFAULT 0,
-        file_path TEXT,
-        file_size INTEGER DEFAULT 0,
-        file_type TEXT,
-        cover_image TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
+      ${MUSIC_STORAGE_LEGACY_DDL_CATEGORY_TAGS_APPENDED};
+      INSERT INTO music (id, title, artist, album, category, tags, file_path)
+      VALUES (23, '历史歌曲', '历史歌手', '历史专辑', '收藏夹', '怀旧,摇滚', '/legacy/music.mp3');
     `)
   } finally {
     database.close()
@@ -2358,6 +2351,10 @@ test('observed old books plus anime, games, and music schemas execute the comple
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = 'idx_categories_sort_order'"
       ).get().count, 1)
       assert.equal(verification.prepare('SELECT COUNT(*) AS count FROM users').get().count, 1)
+      assert.deepEqual(
+        verification.prepare('SELECT id, category, tags, file_path, storage_key FROM music WHERE id = 23').get(),
+        { id: 23, category: '收藏夹', tags: '怀旧,摇滚', file_path: '/legacy/music.mp3', storage_key: null }
+      )
     } finally {
       verification.close()
     }
