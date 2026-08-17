@@ -4,6 +4,7 @@ import test from 'node:test'
 
 import {
   MUSIC_STORAGE_KNOWN_INDEXES,
+  MUSIC_STORAGE_LEGACY_DDL_APPENDED,
   MUSIC_STORAGE_LEGACY_DDL,
   MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE,
   MUSIC_STORAGE_TARGET_DDL,
@@ -155,7 +156,9 @@ for (const variant of [
   { name: 'legacy-no-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL, indexes: false },
   { name: 'legacy-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL, indexes: true },
   { name: 'legacy-database-base-no-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE, indexes: false },
-  { name: 'legacy-database-base-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE, indexes: true }
+  { name: 'legacy-database-base-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE, indexes: true },
+  { name: 'legacy-upgraded-appended-no-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_APPENDED, indexes: false },
+  { name: 'legacy-upgraded-appended-known-indexes', ddl: MUSIC_STORAGE_LEGACY_DDL_APPENDED, indexes: true }
 ]) {
   test(`migrates ${variant.name} without losing music rows, identities, sequences, indexes, or inbound foreign keys`, nativeTestOptions, () => {
     const database = createLegacyDatabase(variant)

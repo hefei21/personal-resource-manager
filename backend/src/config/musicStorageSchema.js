@@ -54,6 +54,17 @@ export const MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE = `CREATE TABLE music (
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
 
+// Historical installs created the five-column table first and then received
+// migrations 0026-0035 through ALTER TABLE. SQLite persists appended columns
+// in this exact canonical form, so it must be proven separately from base DDL.
+export const MUSIC_STORAGE_LEGACY_DDL_APPENDED = `CREATE TABLE music (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        file_path TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      , artist TEXT, album TEXT, duration INTEGER DEFAULT 0, file_size INTEGER DEFAULT 0, file_type TEXT, cover_image TEXT, lyrics TEXT, lyrics_source TEXT, has_lyrics INTEGER DEFAULT 0, lyrics_updated_at TEXT)`
+
 export const MUSIC_STORAGE_TARGET_DDL = `CREATE TABLE music (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
@@ -92,6 +103,24 @@ export const MUSIC_STORAGE_LEGACY_SHAPE = shape([
   column('lyrics_updated_at', 'TEXT'),
   column('created_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
   column('updated_at', 'DATETIME', false, 'CURRENT_TIMESTAMP')
+])
+
+export const MUSIC_STORAGE_LEGACY_APPENDED_SHAPE = shape([
+  column('id', 'INTEGER', false, null, 1),
+  column('title', 'TEXT', true),
+  column('file_path', 'TEXT'),
+  column('created_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  column('updated_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  column('artist', 'TEXT'),
+  column('album', 'TEXT'),
+  column('duration', 'INTEGER', false, '0'),
+  column('file_size', 'INTEGER', false, '0'),
+  column('file_type', 'TEXT'),
+  column('cover_image', 'TEXT'),
+  column('lyrics', 'TEXT'),
+  column('lyrics_source', 'TEXT'),
+  column('has_lyrics', 'INTEGER', false, '0'),
+  column('lyrics_updated_at', 'TEXT')
 ])
 
 export const MUSIC_STORAGE_TARGET_SHAPE = shape([

@@ -9,6 +9,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
 import { BOOKS_STORAGE_LEGACY_DDL, BOOKS_STORAGE_TARGET_DDL } from '../src/config/ebookStorageSchema.js'
+import { MUSIC_STORAGE_TARGET_DDL } from '../src/config/musicStorageSchema.js'
 
 const require = createRequire(import.meta.url)
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -888,6 +889,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.doesNotMatch(databaseSource, /versionCol|documents_new|CAST\(version AS REAL\)/u)
   assert.match(databaseMigrationsSource, /id: '0036_documents_version_real'/u)
   assert.match(databaseSource, /BOOKS_STORAGE_TARGET_DDL\.replace\('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS '\)/u)
+  assert.match(databaseSource, /MUSIC_STORAGE_TARGET_DDL\.replace\('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS '\)/u)
   assert.doesNotMatch(databaseSource, /hasContentCache|ALTER TABLE books ADD COLUMN content_cache TEXT/u)
   assert.doesNotMatch(databaseSource, /DROP TABLE IF EXISTS code_versions/u)
   assert.doesNotMatch(databaseSource, /AS notNull|AS defaultValue/u)
@@ -942,11 +944,7 @@ test('static contract runs the startup gate once after base tables and before al
     )
   }
   assert.doesNotMatch(databaseSource, /musicColumns|musicNewFields|ALTER TABLE music ADD COLUMN/u)
-  const musicTableStart = databaseSource.indexOf('CREATE TABLE IF NOT EXISTS music (')
-  const musicTableEnd = databaseSource.indexOf('    )`,', musicTableStart)
-  assert.ok(musicTableStart >= 0)
-  assert.ok(musicTableEnd > musicTableStart)
-  const baseMusicSource = databaseSource.slice(musicTableStart, musicTableEnd)
+  const baseMusicSource = MUSIC_STORAGE_TARGET_DDL
   for (const { name, type, defaultValue } of expectedMusicMigrations.map(({ compatibility }) => compatibility.column)) {
     const defaultClause = defaultValue === null ? '' : `\\s+DEFAULT\\s+${defaultValue}`
     assert.match(
