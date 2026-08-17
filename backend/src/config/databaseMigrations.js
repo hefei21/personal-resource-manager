@@ -26,6 +26,8 @@ import {
   MUSIC_STORAGE_LEGACY_DDL,
   MUSIC_STORAGE_LEGACY_DDL_APPENDED,
   MUSIC_STORAGE_LEGACY_DDL_DATABASE_BASE,
+  MUSIC_STORAGE_LEGACY_DDL_PARTIAL_APPENDED,
+  MUSIC_STORAGE_LEGACY_PARTIAL_APPENDED_SHAPE,
   MUSIC_STORAGE_LEGACY_SHAPE,
   MUSIC_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES,
   MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES,
@@ -1858,7 +1860,9 @@ export const applicationMigrationRegistry = createMigrationRegistry([
       { proofKey: 'legacy-database-base-no-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
       { proofKey: 'legacy-database-base-known-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES },
       { proofKey: 'legacy-upgraded-appended-no-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
-      { proofKey: 'legacy-upgraded-appended-known-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES }
+      { proofKey: 'legacy-upgraded-appended-known-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES },
+      { proofKey: 'legacy-partial-appended-no-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
+      { proofKey: 'legacy-partial-appended-known-indexes', source: MUSIC_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES }
     ],
     compatibility: {
       kind: 'table-transition',
@@ -1904,6 +1908,20 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           proofKey: 'legacy-upgraded-appended-known-indexes',
           shape: MUSIC_STORAGE_LEGACY_APPENDED_SHAPE,
           createTableSqlSha256: sha256(MUSIC_STORAGE_LEGACY_DDL_APPENDED),
+          indexes: MUSIC_STORAGE_KNOWN_INDEXES,
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-partial-appended-no-indexes',
+          shape: MUSIC_STORAGE_LEGACY_PARTIAL_APPENDED_SHAPE,
+          createTableSqlSha256: sha256(MUSIC_STORAGE_LEGACY_DDL_PARTIAL_APPENDED),
+          indexes: [],
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-partial-appended-known-indexes',
+          shape: MUSIC_STORAGE_LEGACY_PARTIAL_APPENDED_SHAPE,
+          createTableSqlSha256: sha256(MUSIC_STORAGE_LEGACY_DDL_PARTIAL_APPENDED),
           indexes: MUSIC_STORAGE_KNOWN_INDEXES,
           triggers: []
         }

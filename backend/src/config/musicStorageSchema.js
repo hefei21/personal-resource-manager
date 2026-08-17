@@ -65,6 +65,22 @@ export const MUSIC_STORAGE_LEGACY_DDL_APPENDED = `CREATE TABLE music (
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       , artist TEXT, album TEXT, duration INTEGER DEFAULT 0, file_size INTEGER DEFAULT 0, file_type TEXT, cover_image TEXT, lyrics TEXT, lyrics_source TEXT, has_lyrics INTEGER DEFAULT 0, lyrics_updated_at TEXT)`
 
+// Another historical base table already contained the metadata columns through
+// cover_image. Migrations 0032-0035 then appended only the lyrics columns.
+export const MUSIC_STORAGE_LEGACY_DDL_PARTIAL_APPENDED = `CREATE TABLE music (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        artist TEXT,
+        album TEXT,
+        duration INTEGER DEFAULT 0,
+        file_path TEXT,
+        file_size INTEGER DEFAULT 0,
+        file_type TEXT,
+        cover_image TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      , lyrics TEXT, lyrics_source TEXT, has_lyrics INTEGER DEFAULT 0, lyrics_updated_at TEXT)`
+
 export const MUSIC_STORAGE_TARGET_DDL = `CREATE TABLE music (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
@@ -117,6 +133,24 @@ export const MUSIC_STORAGE_LEGACY_APPENDED_SHAPE = shape([
   column('file_size', 'INTEGER', false, '0'),
   column('file_type', 'TEXT'),
   column('cover_image', 'TEXT'),
+  column('lyrics', 'TEXT'),
+  column('lyrics_source', 'TEXT'),
+  column('has_lyrics', 'INTEGER', false, '0'),
+  column('lyrics_updated_at', 'TEXT')
+])
+
+export const MUSIC_STORAGE_LEGACY_PARTIAL_APPENDED_SHAPE = shape([
+  column('id', 'INTEGER', false, null, 1),
+  column('title', 'TEXT', true),
+  column('artist', 'TEXT'),
+  column('album', 'TEXT'),
+  column('duration', 'INTEGER', false, '0'),
+  column('file_path', 'TEXT'),
+  column('file_size', 'INTEGER', false, '0'),
+  column('file_type', 'TEXT'),
+  column('cover_image', 'TEXT'),
+  column('created_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
+  column('updated_at', 'DATETIME', false, 'CURRENT_TIMESTAMP'),
   column('lyrics', 'TEXT'),
   column('lyrics_source', 'TEXT'),
   column('has_lyrics', 'INTEGER', false, '0'),
