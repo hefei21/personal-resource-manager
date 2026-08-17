@@ -14,6 +14,10 @@ import { compressBase64Image } from '../utils/imageCompress.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION, TIMEOUT } from '../config/constants.js'
 import { inspectChunks, mergeChunkFiles, readFileHeader, uploadPath, validateUploadDescriptor } from '../services/uploadSecurity.js'
+import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
+import { getStorageCommitOperation } from '../services/storageCommitCoordinator.js'
+import { commitMusicUpload } from '../services/musicStorageService.js'
+import { hashMusicFile, musicContentType, parseMusicRange } from '../services/musicPlaybackService.js'
 
 const execFileAsync = promisify(execFile)
 const MUSIC_UPLOAD_POLICY = {
@@ -381,6 +385,66 @@ async function parseMusicMetadata(filePath, originalName) {
   }
 }
 
+function isRegularFile(filePath) {
+  try {
+    const stat = fs.lstatSync(filePath)
+    return stat.isFile() && !stat.isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+function removeUploadFile(filePath) {
+  try { fs.rmSync(filePath, { force: true }) } catch {}
+}
+
+function musicChunkPath(fileId, index) {
+  return uploadPath(tempDir, `${fileId}_${index}`)
+}
+
+function clearMusicUploadInputs(fileId, totalChunks, mergedPath) {
+  for (let index = 0; index < totalChunks; index++) {
+    removeUploadFile(musicChunkPath(fileId, index))
+  }
+  if (mergedPath) removeUploadFile(mergedPath)
+}
+
+function musicUploadIdempotencyKey(fileId) {
+  return `music-upload:${fileId}`
+}
+
+function existingMusicUpload(database, operation) {
+  if (!operation?.storageKey) return null
+  const music = database.prepare(`
+    SELECT id, title, artist, album
+      FROM music
+     WHERE storage_key = ?
+     LIMIT 1
+  `).get(operation.storageKey)
+  return music ? Object.freeze({
+    id: music.id,
+    title: music.title,
+    artist: music.artist,
+    album: music.album,
+    message: '上传成功'
+  }) : null
+}
+
+function sendMusicRouteError(res, error) {
+  const code = String(error?.code || '')
+  if (code === 'RESOURCE_CONTENT_MISSING' || code === 'MUSIC_CONTENT_MISSING') {
+    return res.status(404).json({ code, message: '音乐文件不存在' })
+  }
+  if (code === 'MUSIC_RANGE_INVALID' || code === 'RESOURCE_CONTENT_RANGE_INVALID') {
+    return res.status(416).json({ code, message: '请求范围无效' })
+  }
+  if (code.endsWith('_INVALID') || code === 'RESOURCE_STORAGE_METADATA_INCOMPLETE' ||
+      code === 'RESOURCE_STORAGE_METADATA_MISMATCH' || code === 'RESOURCE_STORAGE_KIND_INVALID') {
+    return res.status(400).json({ code, message: '请求无效' })
+  }
+  return res.status(500).json({ code: code || 'MUSIC_OPERATION_FAILED', message: '服务器错误' })
+}
+
 // 分片上传
 
 // 上传分片
@@ -501,189 +565,182 @@ router.post('/check-duplicate', authenticateToken, async (req, res) => {
 
 // 合并分片
 router.post('/merge-chunks', authenticateToken, requireWritePermission, async (req, res) => {
+  let lockFile = null
   try {
     const descriptor = validateUploadDescriptor(req.body, MUSIC_UPLOAD_POLICY)
     const { fileId, fileName, totalChunks, extension: ext } = descriptor
     const { skipDuplicate } = req.body
     const db = getDatabase()
-    
-    // 检查是否已取消
-    if (cancelledUploads.has(fileId)) {
+    const runtime = getResourceStorageRuntime()
+    const idempotencyKey = musicUploadIdempotencyKey(fileId)
+    const mergedPath = uploadPath(tempDir, `${fileId}.merged`)
+    const operation = getStorageCommitOperation(db, idempotencyKey)
+
+    if (operation?.state === 'database_committed') {
+      const existing = existingMusicUpload(db, operation)
+      if (!existing) return res.status(500).json({ message: '上传状态异常' })
+      clearMusicUploadInputs(fileId, totalChunks, mergedPath)
+      uploadProgress.delete(fileId)
+      cancelledUploads.delete(fileId)
+      return res.json(existing)
+    }
+
+    // A cancelled upload without a commit ledger is no longer retryable.
+    // An existing ledger must still be allowed to finish its compensation retry.
+    if (!operation && cancelledUploads.has(fileId)) {
       console.log(`[合并取消] 文件 ${fileId} 已取消，拒绝合并`)
-      // 清理可能残留的临时文件
-      for (let i = 0; i < totalChunks; i++) {
-        const chunkPath = path.join(tempDir, `${fileId}_${i}`)
-        if (fs.existsSync(chunkPath)) {
-          fs.unlinkSync(chunkPath)
-        }
-      }
+      clearMusicUploadInputs(fileId, totalChunks, mergedPath)
       return res.status(400).json({ message: '上传已取消', cancelled: true })
     }
-    
-    // 先计算文件大小（通过分片）
-    const inspected = inspectChunks(tempDir, fileId, totalChunks, (id, index) => `${id}_${index}`, MUSIC_UPLOAD_POLICY.maxTotalBytes)
-    const totalSize = inspected.totalBytes
-    
-    // 检查重复（除非明确跳过）
-    if (!skipDuplicate) {
-      const existing = db.prepare(`
-        SELECT id, title, artist, album, file_size 
-        FROM music 
-        WHERE file_size = ?
-        LIMIT 1
-      `).get(totalSize)
-      
-      if (existing) {
-        // 清理临时分片
-        for (let i = 0; i < totalChunks; i++) {
-          const chunkPath = path.join(tempDir, `${fileId}_${i}`)
-          if (fs.existsSync(chunkPath)) {
-            fs.unlinkSync(chunkPath)
-          }
-        }
-        
-        return res.status(409).json({
-          message: '检测到重复文件',
-          duplicate: true,
-          existing: {
-            id: existing.id,
-            title: existing.title,
-            artist: existing.artist,
-            album: existing.album
-          }
-        })
-      }
-    }
-    
-    // 生成最终文件名
-    // 生成最终路径和临时路径（使用临时文件+原子重命名）
-    const finalFileName = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}${ext}`
-    const finalPath = path.join(musicDir, finalFileName)
-    const tempFinalPath = path.join(tempDir, `${finalFileName}.tmp`)
-    const lockFile = uploadPath(tempDir, `${fileId}.lock`)
-    
-    // 文件锁：防止并发上传同一文件
+
+    lockFile = uploadPath(tempDir, `${fileId}.lock`)
     if (fs.existsSync(lockFile)) {
       return res.status(409).json({ 
         message: '文件正在处理中，请稍后重试',
         error: 'concurrent_upload'
       })
     }
-    
-    // 创建锁文件
-    fs.writeFileSync(lockFile, process.pid.toString())
-    
+
     try {
-      // 使用临时文件路径写入，避免产生不完整的目标文件
-      await mergeChunkFiles(inspected.paths, tempFinalPath)
-      
-      // 原子重命名：确保目标文件要么完整存在，要么不存在
-      fs.renameSync(tempFinalPath, finalPath)
-      
-      // 合并成功后清理分片
-      for (let i = 0; i < totalChunks; i++) {
-        const chunkPath = path.join(tempDir, `${fileId}_${i}`)
-        if (fs.existsSync(chunkPath)) {
-          fs.unlinkSync(chunkPath)
-        }
-      }
-      
+      fs.writeFileSync(lockFile, process.pid.toString(), { flag: 'wx' })
     } catch (error) {
-      console.error(`文件合并失败: ${error.message}`)
-      
-      // 清理临时文件
-      if (fs.existsSync(tempFinalPath)) {
-        fs.unlinkSync(tempFinalPath)
+      if (error?.code === 'EEXIST') {
+        return res.status(409).json({ message: '文件正在处理中，请稍后重试', error: 'concurrent_upload' })
       }
-      
-      return res.status(400).json({ 
-        message: '文件合并失败，请重试',
-        error: 'merge_failed'
+      throw error
+    }
+
+    try {
+      let sourcePath
+      let staged
+
+      if (!operation) {
+        // The only physical merge target is a controlled temporary file. It is
+        // kept until the database commit succeeds so a retry can rebuild or
+        // restage the same input safely.
+        const inspected = inspectChunks(
+          tempDir,
+          fileId,
+          totalChunks,
+          (id, index) => `${id}_${index}`,
+          MUSIC_UPLOAD_POLICY.maxTotalBytes
+        )
+        if (!skipDuplicate) {
+          const existing = db.prepare(`
+            SELECT id, title, artist, album, file_size
+              FROM music
+             WHERE file_size = ?
+             LIMIT 1
+          `).get(inspected.totalBytes)
+
+          if (existing) {
+            return res.status(409).json({
+              message: '检测到重复文件',
+              duplicate: true,
+              existing: {
+                id: existing.id,
+                title: existing.title,
+                artist: existing.artist,
+                album: existing.album
+              }
+            })
+          }
+        }
+
+        // Rebuild from the retained chunks on every new ledger attempt. The
+        // chunks remain available until the database commit has succeeded.
+        removeUploadFile(mergedPath)
+        await mergeChunkFiles(inspected.paths, mergedPath)
+        sourcePath = mergedPath
+      } else if (operation.state === 'staged') {
+        sourcePath = runtime.storageService.stagingFile(operation.stagingToken)
+        if (!isRegularFile(sourcePath)) {
+          throw Object.assign(new Error('Music staging input is missing.'), { code: 'MUSIC_UPLOAD_STAGING_MISSING' })
+        }
+        const stagedMetadata = await hashMusicFile(sourcePath)
+        staged = { token: operation.stagingToken, ...stagedMetadata }
+      } else if (operation.state === 'object_committed' || operation.state === 'orphaned') {
+        const managedReference = {
+          storage_key: operation.storageKey,
+          content_sha256: operation.sha256,
+          content_bytes: operation.bytes
+        }
+        sourcePath = (await runtime.contentServiceFor('music').resolveVerifiedFilePath(managedReference)).filePath
+        staged = {
+          token: operation.stagingToken,
+          sha256: operation.sha256,
+          bytes: operation.bytes
+        }
+      } else {
+        throw Object.assign(new Error('Music upload operation is not retryable.'), { code: 'MUSIC_UPLOAD_STATE_INVALID' })
+      }
+
+      const fileHeader = readFileHeader(sourcePath).toString('hex')
+      const extLower = ext.toLowerCase()
+      let isFormatValid = true
+      if (extLower === '.flac') {
+        isFormatValid = fileHeader.startsWith('664c6143')
+      } else if (extLower === '.mp3') {
+        isFormatValid = fileHeader.startsWith('494433') || fileHeader.startsWith('fffb') ||
+          fileHeader.startsWith('fff3') || fileHeader.startsWith('fff2')
+      }
+
+      if (!isFormatValid) {
+        return res.status(400).json({
+          message: `文件格式验证失败：${ext} 文件头签名无效，可能不是有效的音频文件或文件已损坏`,
+          error: 'invalid_format'
+        })
+      }
+
+      const metadata = await parseMusicMetadata(sourcePath, fileName)
+      if (!staged) {
+        staged = await runtime.storageService.stageFromStream(fs.createReadStream(sourcePath))
+      }
+
+      const committed = await commitMusicUpload({
+        database: db,
+        storageService: runtime.storageService,
+        staged,
+        idempotencyKey,
+        music: {
+          title: metadata.title,
+          artist: metadata.artist,
+          album: metadata.album,
+          duration: metadata.duration,
+          originalName: fileName,
+          fileType: metadata.fileType,
+          coverImage: metadata.coverImage
+        }
+      })
+
+      const response = {
+        id: committed.id,
+        title: committed.title,
+        artist: metadata.artist,
+        album: metadata.album,
+        message: '上传成功'
+      }
+      clearMusicUploadInputs(fileId, totalChunks, mergedPath)
+      uploadProgress.delete(fileId)
+      cancelledUploads.delete(fileId)
+      return res.json(response)
+    } catch (error) {
+      // Keep chunks and the controlled merge target for database, staging, or
+      // compensation retries. The commit coordinator owns object cleanup.
+      console.error('合并分片失败:', error?.code || error?.name || 'UNKNOWN')
+      const code = String(error?.code || '')
+      const status = code.endsWith('_INVALID') || code.startsWith('MUSIC_UPLOAD_') ? 400 : 500
+      return res.status(status).json({
+        message: status === 400 ? '文件合并失败，请重试' : '合并失败'
       })
     } finally {
-      // 释放锁文件
-      if (fs.existsSync(lockFile)) {
-        fs.unlinkSync(lockFile)
-      }
+      removeUploadFile(lockFile)
     }
-
-    // 验证文件完整性（检查文件魔数/签名）
-    const fileSize = fs.statSync(finalPath).size
-    const fileHeader = readFileHeader(finalPath).toString('hex')
-    
-    console.log(`[文件验证] ${fileName}, 大小: ${fileSize} 字节`)
-    console.log(`[文件验证] 文件头: ${fileHeader}`)
-    
-    // 检查常见音频格式签名
-    const formatSignatures = {
-      flac: '664c61430000000022', // FLAC: fLaC
-      mp3_id3: '494433',          // MP3 with ID3 tag
-      mp3_frame: 'fffb',          // MP3 frame sync
-      wav: '52494646',            // WAV: RIFF
-      ogg: '4f676753',            // OGG: OggS
-      m4a: '000000',              // M4A/M4P (box structure)
-      ape: '4d415043',            // APE: MAC
-    }
-    
-    const extLower = ext.toLowerCase()
-    let isFormatValid = true
-    
-    if (extLower === '.flac') {
-      // FLAC 文件必须以 'fLaC' 开头
-      isFormatValid = fileHeader.startsWith('664c6143')
-      if (!isFormatValid) {
-        console.error(`[文件验证] FLAC 文件签名无效`)
-      }
-    } else if (extLower === '.mp3') {
-      // MP3 文件以 ID3 标签或帧同步开头
-      isFormatValid = fileHeader.startsWith('494433') || fileHeader.startsWith('fffb') || fileHeader.startsWith('fff3') || fileHeader.startsWith('fff2')
-      if (!isFormatValid) {
-        console.error(`[文件验证] MP3 文件签名无效`)
-      }
-    }
-    
-    if (!isFormatValid) {
-      fs.unlinkSync(finalPath)
-      return res.status(400).json({
-        message: `文件格式验证失败：${ext} 文件头签名无效，可能不是有效的音频文件或文件已损坏`,
-        error: 'invalid_format'
-      })
-    }
-
-    // 解析元数据
-    const metadata = await parseMusicMetadata(finalPath, fileName)
-
-    // 保存到数据库（包含封面图片）
-    const stmt = db.prepare(`
-      INSERT INTO music (title, artist, album, duration, file_path, file_size, file_type, cover_image)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `)
-    const result = stmt.run(
-      metadata.title,
-      metadata.artist,
-      metadata.album,
-      metadata.duration,
-      finalPath,
-      metadata.fileSize,
-      metadata.fileType,
-      metadata.coverImage
-    )
-
-    console.log(`音乐上传成功: ${metadata.title} - ${metadata.artist}${metadata.coverImage ? ' [有封面]' : ''}`)
-    
-    // 清除上传进度记录
-    uploadProgress.delete(fileId)
-    
-    res.json({ 
-      id: result.lastInsertRowid,
-      title: metadata.title,
-      artist: metadata.artist,
-      album: metadata.album,
-      message: '上传成功'
-    })
   } catch (error) {
-    console.error('合并分片失败:', error)
-    res.status(500).json({ message: '合并失败', error: error.message })
+    console.error('合并分片失败:', error?.code || error?.name || 'UNKNOWN')
+    const code = String(error?.code || '')
+    const status = code.endsWith('_INVALID') || code.startsWith('MUSIC_UPLOAD_') ? 400 : 500
+    res.status(status).json({ message: status === 400 ? '合并失败' : '服务器错误' })
   }
 })
 
@@ -701,7 +758,7 @@ router.delete('/cancel-upload', authenticateToken, async (req, res) => {
     const files = fs.readdirSync(tempDir)
     let deletedCount = 0
     files.forEach(file => {
-      if (file.startsWith(`${fileId}_`) || file === `${fileId}.lock`) {
+      if (file.startsWith(`${fileId}_`) || file === `${fileId}.lock` || file === `${fileId}.merged`) {
         fs.unlinkSync(path.join(tempDir, file))
         deletedCount++
       }
@@ -1088,14 +1145,13 @@ router.post('/:id/reparse', authenticateToken, requireWritePermission, async (re
       return res.status(404).json({ message: '音乐不存在' })
     }
 
-    if (!music.file_path || !fs.existsSync(music.file_path)) {
-      return res.status(404).json({ message: '音乐文件不存在' })
-    }
-
-    console.log(`[元数据] 重新解析文件: ${music.file_path}`)
+    const contentService = getResourceStorageRuntime().contentServiceFor('music')
+    const verified = await contentService.resolveVerifiedFilePath(music)
+    const originalName = music.original_name || `${music.title || 'music'}.${music.file_type || 'mp3'}`
+    console.log(`[元数据] 重新解析音乐内容: ${verified.source}`)
 
     // 重新解析元数据
-    const metadata = await parseMusicMetadata(music.file_path, music.file_path)
+    const metadata = await parseMusicMetadata(verified.filePath, originalName)
 
     // 更新数据库
     const stmt = db.prepare(`
@@ -1130,8 +1186,8 @@ router.post('/:id/reparse', authenticateToken, requireWritePermission, async (re
       }
     })
   } catch (error) {
-    console.error('重新解析失败:', error)
-    res.status(500).json({ message: '重新解析失败', error: error.message })
+    console.error('重新解析失败:', error?.code || error?.name || 'UNKNOWN')
+    sendMusicRouteError(res, error)
   }
 })
 
@@ -1241,7 +1297,6 @@ router.get('/duplicates', authenticateToken, async (req, res) => {
       const rows = db.prepare(`
         SELECT 
           m1.id, m1.title, m1.artist, m1.album, m1.duration, m1.file_size, m1.created_at,
-          m1.file_path,
           (SELECT COUNT(*) FROM music m2 WHERE 
             LOWER(TRIM(m2.title)) = LOWER(TRIM(m1.title)) AND 
             (LOWER(TRIM(m2.artist)) = LOWER(TRIM(m1.artist)) OR (m2.artist IS NULL AND m1.artist IS NULL))
@@ -1262,7 +1317,7 @@ router.get('/duplicates', authenticateToken, async (req, res) => {
       // 获取每个重复组的所有歌曲
       for (const row of rows) {
         const groupSongs = db.prepare(`
-          SELECT id, title, artist, album, duration, file_size, created_at, file_path
+          SELECT id, title, artist, album, duration, file_size, created_at
           FROM music
           WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) AND 
                 (LOWER(TRIM(artist)) = LOWER(TRIM(?)) OR (artist IS NULL AND ? IS NULL))
@@ -1289,8 +1344,8 @@ router.get('/duplicates', authenticateToken, async (req, res) => {
       total: duplicates.reduce((sum, d) => sum + d.count - 1, 0) // 可删除的总数
     })
   } catch (error) {
-    console.error('查找重复音乐失败:', error)
-    res.status(500).json({ message: '服务器错误', error: error.message })
+    console.error('查找重复音乐失败:', error?.code || error?.name || 'UNKNOWN')
+    res.status(500).json({ message: '服务器错误' })
   }
 })
 
@@ -1370,6 +1425,7 @@ router.post('/remove-duplicates', authenticateToken, async (req, res) => {
 
 // 播放音乐（返回文件流）
 router.get('/play/:id', authenticateToken, async (req, res) => {
+  let contentSize
   try {
     const db = getDatabase()
     const music = db.prepare('SELECT * FROM music WHERE id = ?').get(req.params.id)
@@ -1378,81 +1434,50 @@ router.get('/play/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '音乐不存在' })
     }
 
-    const filePath = music.file_path
-    if (!filePath || !fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
+    const contentService = getResourceStorageRuntime().contentServiceFor('music')
+    const metadata = await contentService.stat(music)
+    contentSize = metadata.bytes
+    let range
+    try {
+      range = parseMusicRange(req.headers.range, metadata.bytes)
+    } catch (error) {
+      if (error?.code !== 'MUSIC_RANGE_INVALID') throw error
+      res.setHeader('Content-Range', `bytes */${metadata.bytes}`)
+      res.setHeader('Accept-Ranges', 'bytes')
+      return res.status(416).json({ message: '请求范围无效' })
     }
 
-    const ext = path.extname(filePath).toLowerCase()
-    const contentType = {
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.flac': 'audio/flac',
-      '.ogg': 'audio/ogg',
-      '.m4a': 'audio/mp4',
-      '.aac': 'audio/aac',
-      '.ape': 'audio/ape'
-    }[ext] || 'audio/mpeg'
-
-    // 支持 Range 请求（用于拖动进度条）
-    const stat = fs.statSync(filePath)
-    const fileSize = stat.size
-    const range = req.headers.range
-
+    const readable = await contentService.createReadStream(music, range || {})
+    const contentType = musicContentType(music.original_name, music.file_type)
+    const headers = {
+      'Accept-Ranges': 'bytes',
+      'Content-Length': String(range ? range.length : metadata.bytes),
+      'Content-Type': contentType
+    }
     if (range) {
-      const parts = range.replace(/bytes=/, '').split('-')
-      const start = parseInt(parts[0], 10)
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
-      
-      // 验证范围有效性
-      if (start >= fileSize || start < 0 || end >= fileSize || start > end) {
-        return res.status(416).json({ message: '请求范围无效' })
-      }
-      
-      const chunkSize = end - start + 1
-
-      res.writeHead(206, {
-        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-        'Accept-Ranges': 'bytes',
-        'Content-Length': chunkSize,
-        'Content-Type': contentType
-      })
-
-      const readStream = fs.createReadStream(filePath, { start, end })
-      
-      // 监听流错误，避免进程崩溃
-      readStream.on('error', (streamError) => {
-        console.error('文件流错误:', streamError)
-        if (!res.headersSent) {
-          res.status(500).json({ message: '文件读取失败' })
-        }
-      })
-      
-      readStream.pipe(res)
+      headers['Content-Range'] = `bytes ${range.start}-${range.end}/${metadata.bytes}`
+      res.writeHead(206, headers)
     } else {
-      res.setHeader('Content-Type', contentType)
-      res.setHeader('Content-Length', fileSize)
-      const readStream = fs.createReadStream(filePath)
-      
-      // 监听流错误
-      readStream.on('error', (streamError) => {
-        console.error('文件流错误:', streamError)
-        if (!res.headersSent) {
-          res.status(500).json({ message: '文件读取失败' })
-        }
-      })
-      
-      readStream.pipe(res)
+      res.writeHead(200, headers)
     }
+
+    readable.stream.on('error', (streamError) => {
+      console.error('文件流错误:', streamError?.code || streamError?.name || 'UNKNOWN')
+      if (!res.headersSent) res.status(500).json({ message: '文件读取失败' })
+      else res.destroy()
+    })
+    readable.stream.pipe(res)
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: '认证失败' })
     }
-    console.error('播放失败:', error)
-    // 确保没有发送过headers才发送错误响应
-    if (!res.headersSent) {
-      res.status(500).json({ message: '服务器错误' })
+    console.error('播放失败:', error?.code || error?.name || 'UNKNOWN')
+    if ((error?.code === 'MUSIC_RANGE_INVALID' || error?.code === 'RESOURCE_CONTENT_RANGE_INVALID') &&
+        Number.isSafeInteger(contentSize)) {
+      res.setHeader('Content-Range', `bytes */${contentSize}`)
+      res.setHeader('Accept-Ranges', 'bytes')
     }
+    if (!res.headersSent) sendMusicRouteError(res, error)
   }
 })
 
