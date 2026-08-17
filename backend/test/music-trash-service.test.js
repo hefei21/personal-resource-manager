@@ -57,10 +57,14 @@ function setup(directory) {
       FOREIGN KEY (music_id) REFERENCES music(id) ON DELETE CASCADE
     );
   `)
-  fs.mkdirSync(path.join(directory, 'legacy'))
+  const musicLegacyRoot = path.join(directory, 'legacy-music')
+  const ebooksLegacyRoot = path.join(directory, 'legacy-ebooks')
+  fs.mkdirSync(musicLegacyRoot)
+  fs.mkdirSync(ebooksLegacyRoot)
   const runtime = createResourceStorageRuntime({
     storageRoot: path.join(directory, 'storage'),
-    musicLegacyRoot: path.join(directory, 'legacy')
+    musicLegacyRoot,
+    ebooksLegacyRoot
   })
   database.prepare('INSERT INTO playlists (id, name) VALUES (1, ?)').run('收藏')
   return { database, runtime }
@@ -181,7 +185,7 @@ test('permanent delete fails closed for legacy-only music and preserves its file
   let value
   try {
     value = setup(directory)
-    const legacyFile = path.join(directory, 'legacy', 'old.mp3')
+    const legacyFile = path.join(directory, 'legacy-music', 'old.mp3')
     fs.writeFileSync(legacyFile, 'legacy-audio')
     value.database.prepare(`
       INSERT INTO music (id, title, file_path, file_type) VALUES (1, '旧歌', ?, 'mp3')
