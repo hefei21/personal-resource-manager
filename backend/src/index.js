@@ -45,6 +45,7 @@ import {
 import authRoutes from './routes/auth.js'
 import demoRoutes from './routes/demo.js'
 import documentsRoutes from './routes/documents.js'
+import privateSpaceRetiredRoutes from './routes/privateSpaceRetired.js'
 import musicRoutes from './routes/music.js'
 import booksRoutes from './routes/books.js'
 import codeRoutes from './routes/code.js'
@@ -247,9 +248,7 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
       code: db.prepare('SELECT COUNT(*) as count FROM code_repositories').get()?.count || 0,
       bookmarks: db.prepare('SELECT COUNT(*) as count FROM bookmarks').get()?.count || 0,
       blog: {
-        total: db.prepare('SELECT COUNT(*) as count FROM blog_posts').get()?.count || 0,
-        published: db.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'published'").get()?.count || 0,
-        draft: db.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'draft'").get()?.count || 0
+        total: db.prepare('SELECT COUNT(*) as count FROM blog_posts').get()?.count || 0
       },
       anime: isGuest ? {
         // 游客：过滤已隐藏的动漫
@@ -284,7 +283,7 @@ app.use('/api/auth', authRoutes)
 
 // API 路由（authenticateToken 中间件会自动设置数据库上下文）
 const ownerOnly = [authenticateToken, requireOwner]
-app.use('/api/documents', ...ownerOnly, documentsRoutes)
+app.use('/api/documents', ...ownerOnly, privateSpaceRetiredRoutes, documentsRoutes)
 app.use('/api/music', ...ownerOnly, musicRoutes)
 app.use('/api/ebooks', ...ownerOnly, booksRoutes)
 app.use('/api/code', ...ownerOnly, codeRoutes)

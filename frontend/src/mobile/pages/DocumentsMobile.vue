@@ -20,14 +20,6 @@
         <NativeIcon name="view-list" />
         <span>列表</span>
       </div>
-      <div 
-        class="tab-item" 
-        :class="{ active: viewMode === 'private' }"
-        @click="switchViewMode('private')"
-      >
-        <NativeIcon name="lock-on" />
-        <span>私密</span>
-      </div>
       <div
         class="tab-item"
         :class="{ active: viewMode === 'trash' }"
@@ -42,7 +34,7 @@
     <div v-if="viewMode !== 'trash'" class="search-bar">
       <NativeInput
         v-model="searchKeyword"
-        :placeholder="viewMode === 'private' ? '搜索私密文件...' : '搜索文档...'"
+        placeholder="搜索文档..."
         clearable
         @clear="handleSearch"
         @enter="handleSearch"
@@ -323,26 +315,6 @@
       </div>
     </div>
 
-    <!-- 私密空间密码验证 -->
-    <NativeDialog
-      v-model="privatePasswordDialogVisible"
-      title="私密空间"
-      :close-on-overlay-click="false"
-      :show-close="false"
-    >
-      <NativeInput
-        v-model="privatePasswordInput"
-        type="password"
-        placeholder="请输入私密空间密码"
-        :status="privatePasswordError ? 'error' : ''"
-        :tips="privatePasswordError"
-        @enter="verifyPrivatePassword"
-      />
-      <template #footer>
-        <NativeButton theme="primary" block @click="verifyPrivatePassword">确认</NativeButton>
-      </template>
-    </NativeDialog>
-
     <!-- 文件预览弹窗（原生全屏方案，最大化显示面积） -->
     <div v-if="previewDialogVisible" class="native-preview-overlay" @click.self="closePreview">
       <div class="native-preview-container">
@@ -498,7 +470,7 @@ const pageSize = ref(20)
 const hasMore = computed(() => documents.value.length < total.value)
 
 // 视图模式
-const viewMode = ref('category') // category, list, private
+const viewMode = ref('category') // category, list, trash
 const categories = ref([])
 const currentCategoryId = ref(null)
 const categoryPath = ref([])
@@ -615,27 +587,6 @@ const sanitizedPreviewContent = computed(() =>
 const createCategoryDialogVisible = ref(false)
 const newCategoryName = ref('')
 
-// 私密空间
-const privatePasswordDialogVisible = ref(false)
-const privatePasswordInput = ref('')
-const privatePasswordError = ref('')
-const privateAccessGranted = ref(false)
-
-// 检查 sessionStorage 中是否有私密空间访问权限
-function checkPrivateAccess() {
-  return sessionStorage.getItem('privateAccessGranted') === 'true'
-}
-
-// 设置私密空间访问权限
-function setPrivateAccess(granted) {
-  if (granted) {
-    sessionStorage.setItem('privateAccessGranted', 'true')
-  } else {
-    sessionStorage.removeItem('privateAccessGranted')
-  }
-  privateAccessGranted.value = granted
-}
-
 // 方法定义
 
 // 切换视图模式
@@ -653,62 +604,11 @@ function switchViewMode(mode) {
     return
   }
 
-  if (mode === 'private') {
-    if (isGuest.value) {
-      toast.warning('游客无权访问私密空间')
-      viewMode.value = 'category'
-      loadDocuments()
-      return
-    }
-    // 从 sessionStorage 检查访问权限
-    const hasAccess = checkPrivateAccess()
-    if (!hasAccess) {
-      privatePasswordDialogVisible.value = true
-      return
-    }
-    privateAccessGranted.value = true
-  }
-  
   loadDocuments()
-}
-
-// 验证私密空间密码
-async function verifyPrivatePassword() {
-  try {
-    const response = await api.documents.verifyPrivatePassword({
-      password: privatePasswordInput.value
-    })
-    if (response.data.success) {
-      // 持久化访问权限到 sessionStorage
-      setPrivateAccess(true)
-      privatePasswordDialogVisible.value = false
-      privatePasswordError.value = ''
-      privatePasswordInput.value = ''
-      // 清空搜索关键词，避免带着之前的搜索词搜索私密文件
-      searchKeyword.value = ''
-      loadPrivateDocuments()
-    } else {
-      privatePasswordError.value = response.data.message || '密码错误'
-    }
-  } catch (error) {
-    // 处理密码错误（400状态码）
-    if (error.response?.status === 400) {
-      privatePasswordError.value = error.response.data?.message || '密码错误'
-    } else {
-      privatePasswordError.value = error.response?.data?.message || '验证失败'
-    }
-  }
 }
 
 // 加载文档
 async function loadDocuments() {
-  if (viewMode.value === 'private') {
-    if (privateAccessGranted.value) {
-      loadPrivateDocuments()
-    }
-    return
-  }
-  
   loading.value = true
   try {
     const params = {
@@ -741,33 +641,6 @@ async function loadDocuments() {
   } catch (error) {
     console.error('加载文档失败:', error)
     toast.error('加载失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-// 加载私密文档
-async function loadPrivateDocuments() {
-  loading.value = true
-  try {
-    const response = await api.documents.listPrivate({
-      keyword: searchKeyword.value,
-      page: page.value,
-      pageSize: pageSize.value
-    })
-    const data = response.data?.data || []
-    total.value = response.data?.total || 0
-    
-    // 给私密文档添加 isPrivate 标记，用于预览时调用正确的 API
-    const privateData = data.map(doc => ({ ...doc, isPrivate: true }))
-    
-    if (page.value === 1) {
-      documents.value = privateData
-    } else {
-      documents.value.push(...privateData)
-    }
-  } catch (error) {
-    console.error('加载私密文档失败:', error)
   } finally {
     loading.value = false
   }
@@ -972,10 +845,7 @@ function nextPage() {
 function handleDownloadFile() {
   const doc = documents.value.find(d => d.id === previewDocumentId.value)
   if (!doc) return
-  // 根据是否是私密文档使用不同的下载链接
-  const downloadUrl = doc.isPrivate
-    ? authenticatedAssetUrl(`/api/documents/secure/download/${doc.id}?download=1`)
-    : authenticatedAssetUrl(`/api/documents/${doc.id}/content?download=1`)
+  const downloadUrl = authenticatedAssetUrl(`/api/documents/${doc.id}/content?download=1`)
   window.open(downloadUrl, '_blank')
 }
 
@@ -990,7 +860,7 @@ async function previewDocument(doc) {
     // 图片文件走 t-image-viewer 弹窗
     if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
       try {
-        const response = doc.isPrivate ? await api.documents.getPrivateContent(doc.id) : await api.documents.getContent(doc.id)
+        const response = await api.documents.getContent(doc.id)
         const data = response.data || {}
         if (data.isBase64 && data.content) {
           currentDoc.value = doc; previewContent.value = data.content
@@ -1002,17 +872,14 @@ async function previewDocument(doc) {
         }
       } catch (e) { console.warn('图片base64获取失败，回退URL模式') }
       currentDoc.value = doc
-      // 私密文档使用不同的图片预览链接
-      previewImageUrl.value = doc.isPrivate
-        ? authenticatedAssetUrl(`/api/documents/docs/special/view/${doc.id}`)
-        : authenticatedAssetUrl(`/api/documents/${doc.id}/content`)
+      previewImageUrl.value = authenticatedAssetUrl(`/api/documents/${doc.id}/content`)
       imagePreviewVisible.value = true
       previewingDocIds.value.delete(doc.id)
       return
     }
 
     // 获取内容
-    const response = doc.isPrivate ? await api.documents.getPrivateContent(doc.id) : await api.documents.getContent(doc.id)
+    const response = await api.documents.getContent(doc.id)
     const data = response.data || {}
     const content = data.content || ''
     const isBase64 = data.isBase64 || false
@@ -1516,11 +1383,10 @@ onMounted(() => {
 
 // 监听视图模式变化
 watch(viewMode, (newMode) => {
-  if (newMode !== 'private' || privateAccessGranted.value) {
-    page.value = 1
-    documents.value = []
-    loadDocuments()
-  }
+  if (newMode === 'trash') return
+  page.value = 1
+  documents.value = []
+  loadDocuments()
 })
 </script>
 

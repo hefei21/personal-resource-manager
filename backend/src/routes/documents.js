@@ -1,17 +1,11 @@
 import express from 'express'
 import multer from 'multer'
 import path from 'path'
-import fs from 'fs'
-import bcrypt from 'bcryptjs'
 import { randomUUID } from 'node:crypto'
 import { getDatabase } from '../config/database.js'
-import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
-import { privateSpaceLimiter } from '../middlewares/security.js'
 import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
-import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
-import { collectPrivateSpaceInventory } from '../services/privateSpaceInventory.js'
 import {
   categoryCompatibilityFields,
   normalizeDocumentTags,
@@ -964,53 +958,6 @@ router.delete('/:id', authenticateToken, requireWritePermission, async (req, res
   }
 })
 
-// 私密空间
-
-// 私密空间密码验证（路径使用中性命名，避免被网关拦截）
-router.post('/docs/special/verify', authenticateToken, privateSpaceLimiter, async (req, res) => {
-  try {
-    const { password } = req.body
-    if (!password) {
-      return res.status(400).json({ message: '请输入密码' })
-    }
-
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT password FROM private_settings WHERE id = 1')
-    const settings = stmt.get()
-
-    if (!settings) {
-      return res.status(500).json({ message: '私密空间未初始化' })
-    }
-
-    const isValid = bcrypt.compareSync(password, settings.password)
-
-    if (isValid) {
-      res.json({ success: true })
-    } else {
-      res.status(400).json({ message: '密码错误', code: 'PASSWORD_INCORRECT' })
-    }
-  } catch (error) {
-    console.error('验证密码失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
-const privateSpaceFrozen = (req, res) => res.status(410).json({
-  message: '私密空间已冻结，等待数据迁移',
-  code: 'PRIVATE_SPACE_FROZEN'
-})
-
-// 仅统计记录和受管文件状态，不读取标题、路径或文件内容。
-router.get('/docs/special/inventory', authenticateToken, (req, res) => {
-  try {
-    const inventory = collectPrivateSpaceInventory(getDatabase(), getStoragePath('uploads'))
-    res.json({ data: inventory })
-  } catch (error) {
-    console.error('私密空间盘点失败:', error)
-    res.status(500).json({ message: '盘点失败' })
-  }
-})
-
 router.post('/:id/versions/:versionId/restore', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const result = await restoreDocumentVersion({
@@ -1024,162 +971,6 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, requireWriteP
   } catch (error) {
     console.error('恢复文档版本失败:', error?.code ?? error?.name)
     return sendDocumentError(res, error?.cause ?? error, '服务器错误')
-  }
-})
-
-// 私密空间已进入只读迁移期，禁止改密。
-router.post('/docs/special/update-auth', authenticateToken, async (req, res) => {
-  privateSpaceFrozen(req, res)
-})
-
-// 获取私密文件列表（路径使用中性命名）
-router.get('/docs/special/list', authenticateToken, async (req, res) => {
-  try {
-    const { keyword, page = 1, pageSize = 30 } = req.query
-    const db = getDatabase()
-
-    let sql = 'SELECT * FROM private_documents WHERE 1=1'
-    const params = []
-
-    if (keyword) {
-      sql += ' AND title LIKE ?'
-      params.push(`%${keyword}%`)
-    }
-
-    sql += ' ORDER BY updated_at DESC'
-
-    const stmt = db.prepare(sql)
-    const rows = stmt.all(...params)
-
-    // 转换为驼峰命名并转换时区
-    const result = rows.map(row => ({
-      id: row.id,
-      title: row.title,
-      filePath: row.file_path,
-      size: row.size || 0,
-      createdAt: convertToUTC8(row.created_at),
-      updatedAt: convertToUTC8(row.updated_at)
-    }))
-
-    // 分页
-    const total = result.length
-    const pageNum = parseInt(page) || PAGINATION.DEFAULT_PAGE
-    const pageSizeNum = parseInt(pageSize) || PAGINATION.DEFAULT_PAGE_SIZE
-    const startIndex = (pageNum - 1) * pageSizeNum
-    const paginatedResult = result.slice(startIndex, startIndex + pageSizeNum)
-
-    res.json({ data: paginatedResult, total })
-  } catch (error) {
-    console.error('获取私密文件列表失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
-// 上传私密文件（路径避免敏感词）
-router.post('/secure/upload', authenticateToken, requireWritePermission, privateSpaceFrozen)
-
-// 下载私密文件（路径避免敏感词）
-router.get('/secure/download/:id', authenticateToken, requireWritePermission, async (req, res) => {
-  try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    if (!document) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const filePath = document.file_path
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const fileName = path.basename(filePath)
-    res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
-    res.sendFile(filePath)
-  } catch (error) {
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ message: '认证失败' })
-    }
-    console.error('下载私密文件失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
-// 删除私密文件（路径避免敏感词）
-router.delete('/secure/files/:id', authenticateToken, requireWritePermission, privateSpaceFrozen)
-
-// 获取私密文件内容用于预览（路径使用中性命名）
-router.get('/docs/special/view/:id', authenticateToken, requireWritePermission, async (req, res) => {
-  try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    if (!document) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const filePath = document.file_path
-    const fileSize = document.size || 0
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const ext = path.extname(filePath).toLowerCase()
-    const textFormats = ['.txt', '.md', '.json', '.xml', '.html', '.css', '.js', '.ts', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.go', '.rs', '.sql', '.sh', '.bat', '.yml', '.yaml', '.csv', '.log']
-    const binaryFormats = ['.pdf', '.zip', '.rar', '.7z', '.tar', '.gz']
-    const officeFormats = ['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']
-    const imageFormats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg']
-
-    if (officeFormats.includes(ext)) {
-      const content = fs.readFileSync(filePath)
-      const base64 = content.toString('base64')
-      res.json({
-        content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
-        isBase64: true
-      })
-    } else if (binaryFormats.includes(ext)) {
-      const content = fs.readFileSync(filePath)
-      const base64 = content.toString('base64')
-      res.json({
-        content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
-        isBase64: true
-      })
-    } else if (textFormats.includes(ext)) {
-      const content = fs.readFileSync(filePath, 'utf-8')
-      res.json({
-        content,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
-        isBase64: false
-      })
-    } else if (imageFormats.includes(ext)) {
-      const content = fs.readFileSync(filePath)
-      const base64 = content.toString('base64')
-      res.json({
-        content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
-        isBase64: true
-      })
-    } else {
-      return res.status(400).json({
-        message: '不支持的文件格式'
-      })
-    }
-  } catch (error) {
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ message: '认证失败' })
-    }
-    console.error('获取私密文件内容失败:', error)
-    res.status(500).json({ message: '服务器错误' })
   }
 })
 

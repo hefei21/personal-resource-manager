@@ -113,16 +113,7 @@ export default {
     restoreTrash: (id) => api.post(`/documents/trash/${id}/restore`),
     permanentlyDeleteTrash: (id) => api.delete(`/documents/trash/${id}`),
     getContent: (id) => api.get(`/documents/${id}/content`),
-    updateContent: (id, data) => api.put(`/documents/${id}/content`, data),
-    // 私密空间 API（路径使用中性命名，避免被网关拦截）
-    verifyPrivatePassword: (data) => api.post('/documents/docs/special/verify', data),
-    changePrivatePassword: (data) => api.post('/documents/docs/special/update-auth', data),
-    listPrivate: (params) => api.get('/documents/docs/special/list', { params }),
-    uploadPrivate: (formData) => api.post('/documents/docs/special/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    }),
-    deletePrivate: (id) => api.delete(`/documents/docs/special/list/${id}`),
-    getPrivateContent: (id) => api.get(`/documents/docs/special/view/${id}`)
+    updateContent: (id, data) => api.put(`/documents/${id}/content`, data)
   },
   music: {
     list: (params) => api.get('/music', { params }),

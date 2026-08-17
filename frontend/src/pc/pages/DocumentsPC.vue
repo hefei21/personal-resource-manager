@@ -15,9 +15,6 @@
           <NativeRadio value="list">
             <NativeIcon name="list-dashes" size="14" /> 列表视图
           </NativeRadio>
-          <NativeRadio value="private">
-            <NativeIcon name="lock" size="14" /> 私密空间
-          </NativeRadio>
           <NativeRadio value="trash">
             <NativeIcon name="trash" size="14" /> 回收站
           </NativeRadio>
@@ -30,7 +27,7 @@
         <div class="toolbar-left">
           <NativeInput
             v-model="searchKeyword"
-            :placeholder="viewMode === 'private' ? '搜索私密文件...' : '搜索文档...'"
+            placeholder="搜索文档..."
             clearable
             @clear="handleSearch"
             @enter="handleSearch"
@@ -85,7 +82,7 @@
       <!-- 高级搜索面板 -->
       <div v-if="advancedSearchVisible && viewMode !== 'trash'" class="advanced-search-panel">
         <NativeSpace>
-          <NativeFormItem v-if="viewMode !== 'private'" label="标签" style="margin: 0;">
+          <NativeFormItem label="标签" style="margin: 0;">
             <NativeSelect
               v-model="selectedTags"
               placeholder="选择标签"
@@ -347,12 +344,12 @@
       </div>
     </NativeCard>
 
-    <!-- 空状态（私密空间不显示）- 仅在加载完成且无数据时显示 -->
-    <NativeCard v-if="documents.length === 0 && !loading && !currentCategoryId && viewMode !== 'private' && viewMode !== 'category'" class="empty-state">
+    <!-- 空状态 - 仅在加载完成且无数据时显示 -->
+    <NativeCard v-if="documents.length === 0 && !loading && !currentCategoryId && viewMode !== 'category'" class="empty-state">
       <NativeIcon name="file" size="64" />
       <p>暂无文档</p>
     </NativeCard>
-    <NativeCard v-else-if="documents.length === 0 && !loading && currentCategoryId && viewMode !== 'private'" class="empty-state">
+    <NativeCard v-else-if="documents.length === 0 && !loading && currentCategoryId" class="empty-state">
       <NativeIcon name="file" size="64" />
       <p>当前分类下暂无文档</p>
       <NativeButton theme="primary" @click="handleUpload">上传第一个文档</NativeButton>
@@ -666,182 +663,6 @@
       </div>
     </NativeDialog>
 
-    <!-- 私密空间密码验证对话框 -->
-    <NativeDialog
-      v-model="privatePasswordDialogVisible"
-      title="私密空间 - 密码验证"
-      width="400px"
-      :close-on-overlay-click="false"
-      :close-on-esc-keydown="false"
-      @confirm="handlePrivatePasswordConfirm"
-      @cancel="handlePrivatePasswordCancel"
-      @close="handlePrivatePasswordCancel"
-    >
-      <NativeForm autocomplete="off">
-        <NativeFormItem label="密码">
-          <NativeInput
-            ref="privatePasswordInputRef"
-            v-model="privatePasswordInput"
-            type="password"
-            placeholder="请输入私密空间密码"
-            autocomplete="one-time-code"
-            name="private-space-token"
-            data-lpignore="true"
-            @enter="handlePrivatePasswordConfirm"
-          />
-        </NativeFormItem>
-      </NativeForm>
-      <p v-if="privatePasswordError" style="color: #e34d59; font-size: 12px;">{{ privatePasswordError }}</p>
-    </NativeDialog>
-
-    <!-- 私密空间修改密码对话框 -->
-    <NativeDialog
-      v-model="privateChangePasswordDialogVisible"
-      header="修改私密空间密码"
-      width="400px"
-      @confirm="handleChangePrivatePasswordConfirm"
-    >
-      <NativeForm autocomplete="off">
-        <NativeFormItem label="当前密码">
-          <NativeInput
-            v-model="privateOldPassword"
-            type="password"
-            placeholder="请输入当前密码"
-            autocomplete="one-time-code"
-            name="private-old-token"
-            data-lpignore="true"
-          />
-        </NativeFormItem>
-        <NativeFormItem label="新密码">
-          <NativeInput
-            v-model="privateNewPassword"
-            type="password"
-            placeholder="请输入新密码"
-            autocomplete="one-time-code"
-            name="private-new-token"
-            data-lpignore="true"
-          />
-        </NativeFormItem>
-        <NativeFormItem label="确认新密码">
-          <NativeInput
-            v-model="privateConfirmPassword"
-            type="password"
-            placeholder="请再次输入新密码"
-            autocomplete="one-time-code"
-            name="private-confirm-token"
-            data-lpignore="true"
-          />
-        </NativeFormItem>
-      </NativeForm>
-    </NativeDialog>
-
-    <!-- 私密空间上传对话框 -->
-    <NativeDialog
-      v-model="privateUploadDialogVisible"
-      title="上传私密文件"
-      width="500px"
-      @confirm="handlePrivateUploadConfirm"
-    >
-      <NativeForm :modelValue="privateUploadForm">
-        <NativeFormItem label="文件" required>
-          <NativeUpload
-            v-model="privateUploadForm.file"
-            drag
-            accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.gif,.bmp"
-            :multiple="false"
-            :autoUpload="false"
-            @change="onPrivateFileChange"
-          />
-        </NativeFormItem>
-        <NativeFormItem label="标题" required>
-          <NativeInput v-model="privateUploadForm.title" placeholder="文件标题" />
-        </NativeFormItem>
-      </NativeForm>
-    </NativeDialog>
-
-    <!-- 私密空间视图 -->
-    <NativeCard v-if="viewMode === 'private' && privateAccessGranted" class="private-space-view">
-      <div class="private-header">
-        <h3>私密文件列表</h3>
-        <NativeSpace>
-          <NativeButton theme="primary" @click="handlePrivateUpload" :disabled="isGuest">
-            <template #icon><NativeIcon name="upload" /></template>
-            上传文件
-          </NativeButton>
-          <NativeButton theme="default" @click="openChangePrivatePassword" :disabled="isGuest">
-            <template #icon><NativeIcon name="lock" /></template>
-            修改密码
-          </NativeButton>
-        </NativeSpace>
-      </div>
-
-      <!-- 批量操作栏 -->
-      <div v-if="privateSelectedRowKeys.length > 0" class="batch-actions-bar">
-        <NativePopconfirm
-          content="确定删除选中的文件吗？"
-          @confirm="handlePrivateBatchDelete"
-        >
-          <template #trigger>
-            <NativeButton theme="danger" variant="outline" size="small">
-              <template #icon><NativeIcon name="trash" /></template>
-              批量删除 ({{ privateSelectedRowKeys.length }})
-            </NativeButton>
-          </template>
-        </NativePopconfirm>
-        <span class="batch-actions-hint">已选择 {{ privateSelectedRowKeys.length }} 项</span>
-      </div>
-
-      <!-- 私密文件列表 -->
-      <NativeTable
-        :dataSource="privateDocuments"
-        :columns="privateColumns"
-        :loading="privateLoading"
-        rowKey="id"
-        hover
-        selectable
-        :selectedKeys="privateSelectedRowKeys"
-        :allRowKeys="allPrivateDocumentIds"
-        @selectionChange="handlePrivateSelectChange"
-      >
-        <template #cell-type="{ row }">
-          <span>{{ getFileExtension(row.filePath || '') }}</span>
-        </template>
-        <template #cell-size="{ row }">
-          <span>{{ formatFileSize(row.size || 0) }}</span>
-        </template>
-        <template #cell-operation="{ row }">
-          <NativeSpace>
-            <NativeButton theme="primary" variant="outline" size="small" iconSize="1.2em" @click="handlePrivateView(row)">
-              <template #icon><NativeIcon name="eye" /></template>预览
-            </NativeButton>
-            <NativeButton theme="default" variant="outline" size="small" iconSize="1.2em" @click="handlePrivateDownload(row)">
-              <template #icon><NativeIcon name="download" /></template>下载
-            </NativeButton>
-            <NativePopconfirm
-              content="确定删除吗？"
-              @confirm="handlePrivateDelete(row.id)"
-            >
-              <template #trigger>
-                <NativeButton theme="danger" variant="outline" size="small" iconSize="1.2em">
-                  <template #icon><NativeIcon name="trash" /></template>删除
-                </NativeButton>
-              </template>
-            </NativePopconfirm>
-          </NativeSpace>
-        </template>
-      </NativeTable>
-
-      <!-- 私密空间分页 -->
-      <div class="pagination-wrapper" v-if="viewMode === 'private' && privateTotal > 0">
-        <NativePagination
-          v-model:current="privatePagination.current"
-          v-model:pageSize="privatePagination.pageSize"
-          :total="privateTotal"
-          @change="handlePrivatePageChange"
-        />
-      </div>
-    </NativeCard>
-
   </div>
 </template>
 
@@ -1058,28 +879,6 @@ const batchEditForm = ref({
   tags: ''
 })
 
-// 私密空间相关状态
-const privatePasswordDialogVisible = ref(false)
-const privatePasswordInput = ref('')
-const privatePasswordInputRef = ref(null)
-const privatePasswordError = ref('')
-const privateAccessGranted = ref(false)
-const privateChangePasswordDialogVisible = ref(false)
-const privateOldPassword = ref('')
-const privateNewPassword = ref('')
-const privateConfirmPassword = ref('')
-const privateDocuments = ref([])
-const privateTotal = ref(0)
-const privatePagination = ref({ current: 1, pageSize: 30 })
-const privateLoading = ref(false)
-const privateSelectedRowKeys = ref([])
-const allPrivateDocumentIds = ref([])  // 所有私密文件ID（用于跨页全选）
-const privateUploadDialogVisible = ref(false)
-const privateUploadForm = ref({
-  file: [],
-  title: ''
-})
-
 // 高级搜索相关
 const advancedSearchVisible = ref(false)
 const selectedTags = ref([])
@@ -1283,15 +1082,6 @@ const columns = computed(() => [
   { key: 'operation', title: '操作', width: 200, align: 'left', headerAlign: 'left' }
 ])
 
-// 私密空间表格列（无版本控制）
-const privateColumns = [
-  { key: 'title', dataIndex: 'title', title: '标题', minWidth: 200 },
-  { key: 'type', dataIndex: 'filePath', title: '类型', width: 100 },
-  { key: 'size', dataIndex: 'size', title: '大小', width: 100 },
-  { key: 'updatedAt', dataIndex: 'updatedAt', title: '更新时间', width: 180 },
-  { key: 'operation', title: '操作', width: 160, align: 'left', headerAlign: 'left' }
-]
-
 const versionColumns = [
   { key: 'version', dataIndex: 'version', title: '版本号', width: 100 },
   { key: 'note', dataIndex: 'note', title: '说明' },
@@ -1427,105 +1217,17 @@ function handleViewModeChange() {
   categoryPath.value = []
   documents.value = []
 
-  // 处理私密空间 - 每次进入都要重新验证密码
   if (viewMode.value === 'trash') {
     loadTrashDocuments()
-  } else if (viewMode.value === 'private') {
-    // 游客无权访问私密空间
-    if (isGuest.value) {
-      toast.warning('游客无权访问私密空间')
-      viewMode.value = 'category'  // 重置为分类浏览模式
-      loadDocuments()  // 重新加载文档列表
-      return
-    }
-    
-    // 重置授权状态
-    privateAccessGranted.value = false
-    // 显示密码验证对话框
-    privatePasswordDialogVisible.value = true
-    privatePasswordInput.value = ''
-    privatePasswordError.value = ''
-    // 自动聚焦密码输入框
-    nextTick(() => {
-      privatePasswordInputRef.value?.focus()
-    })
   } else {
     loadDocuments()
-  }
-}
-
-// 私密空间密码验证
-async function handlePrivatePasswordConfirm() {
-  try {
-    const response = await api.documents.verifyPrivatePassword({ password: privatePasswordInput.value })
-    if (response.data?.success) {
-      privateAccessGranted.value = true
-      privatePasswordDialogVisible.value = false
-      privatePasswordInput.value = ''
-      privatePasswordError.value = ''
-      loadPrivateDocuments()
-    } else {
-      privatePasswordError.value = '密码错误'
-      privatePasswordInput.value = ''
-    }
-  } catch (error) {
-    console.error('密码验证失败:', error)
-    privatePasswordError.value = error.response?.data?.message || '密码验证失败'
-    privatePasswordInput.value = ''
-  }
-}
-
-// 私密空间密码验证取消
-function handlePrivatePasswordCancel() {
-  // 关闭对话框并回到分类浏览视图
-  privatePasswordDialogVisible.value = false
-  privatePasswordInput.value = ''
-  privatePasswordError.value = ''
-  viewMode.value = 'category'
-  loadDocuments()
-}
-
-// 打开修改密码对话框
-function openChangePrivatePassword() {
-  privateOldPassword.value = ''
-  privateNewPassword.value = ''
-  privateConfirmPassword.value = ''
-  privateChangePasswordDialogVisible.value = true
-}
-
-// 修改私密空间密码
-async function handleChangePrivatePasswordConfirm() {
-  if (!privateOldPassword.value || !privateNewPassword.value || !privateConfirmPassword.value) {
-    toast.warning('请填写所有字段')
-    return
-  }
-  if (privateNewPassword.value !== privateConfirmPassword.value) {
-    toast.error('两次输入的新密码不一致')
-    return
-  }
-
-  try {
-    await api.documents.changePrivatePassword({
-      oldPassword: privateOldPassword.value,
-      newPassword: privateNewPassword.value
-    })
-    toast.success('密码修改成功')
-    privateChangePasswordDialogVisible.value = false
-  } catch (error) {
-    console.error('修改密码失败:', error)
-    toast.error(error.response?.data?.message || '修改密码失败')
   }
 }
 
 // 统一搜索处理
 function handleSearch() {
-  if (viewMode.value === 'private') {
-    privatePagination.value.current = 1
-    loadPrivateDocuments()
-  } else {
-    pagination.value.current = 1
-    loadDocuments()
-  }
+  pagination.value.current = 1
+  loadDocuments()
 }
 
 // 分页处理
@@ -1543,132 +1245,6 @@ function handlePageSizeChange() {
   const scrollContainer = document.querySelector('.scrollable-content')
   if (scrollContainer) {
     scrollContainer.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-}
-
-function handlePrivatePageChange() {
-  loadPrivateDocuments()
-  const scrollContainer = document.querySelector('.scrollable-content')
-  if (scrollContainer) {
-    scrollContainer.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-}
-
-function handlePrivatePageSizeChange() {
-  privatePagination.value.current = 1
-  loadPrivateDocuments()
-  const scrollContainer = document.querySelector('.scrollable-content')
-  if (scrollContainer) {
-    scrollContainer.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-}
-
-// 加载私密文件列表
-async function loadPrivateDocuments() {
-  privateLoading.value = true
-  try {
-    const params = {
-      page: privatePagination.value.current,
-      pageSize: privatePagination.value.pageSize
-    }
-    if (searchKeyword.value) {
-      params.keyword = searchKeyword.value
-    }
-    // 同时获取分页数据和所有私密文件ID（用于跨页全选）
-    const [response, allIdsResponse] = await Promise.all([
-      api.documents.listPrivate(params),
-      api.documents.listPrivate({ ...params, page: 1, pageSize: 10000 })  // 获取所有ID
-    ])
-    privateDocuments.value = response.data?.data || []
-    privateTotal.value = response.data?.total || 0
-    // 存储所有私密文件ID用于跨页全选
-    const allData = allIdsResponse.data?.data || []
-    allPrivateDocumentIds.value = (Array.isArray(allData) ? allData : []).map(doc => doc.id)
-  } catch (error) {
-    console.error('加载私密文件失败:', error)
-    toast.error('加载私密文件失败')
-    privateDocuments.value = []
-    privateTotal.value = 0
-  } finally {
-    privateLoading.value = false
-  }
-}
-
-// 私密文件上传
-function handlePrivateUpload() {
-  privateUploadForm.value = { file: [], title: '' }
-  privateUploadDialogVisible.value = true
-}
-
-function onPrivateFileChange(files) {
-  if (files.length > 0) {
-    const fileName = files[0].name
-    privateUploadForm.value.title = fileName.replace(/\.[^/.]+$/, '')
-  }
-}
-
-async function handlePrivateUploadConfirm() {
-  try {
-    if (!privateUploadForm.value.file || privateUploadForm.value.file.length === 0) {
-      toast.error('请选择文件')
-      return
-    }
-
-    const file = privateUploadForm.value.file[0]
-    const formData = new FormData()
-    const fileToUpload = file.raw || file.originFileObj || file
-    formData.append('file', fileToUpload)
-    formData.append('title', privateUploadForm.value.title)
-
-    await api.documents.uploadPrivate(formData)
-    toast.success('上传成功')
-    privateUploadDialogVisible.value = false
-    loadPrivateDocuments()
-  } catch (error) {
-    console.error('上传失败:', error)
-    toast.error(error.response?.data?.message || '上传失败')
-  }
-}
-
-// 私密文件操作
-function handlePrivateView(row) {
-  // 复用现有的预览功能
-  loadPreviewContent({ ...row, isPrivate: true })
-}
-
-function handlePrivateDownload(row) {
-  window.open(authenticatedAssetUrl(`/api/documents/secure/download/${row.id}`), '_blank')
-}
-
-async function handlePrivateDelete(id) {
-  try {
-    await api.documents.deletePrivate(id)
-    toast.success('删除成功')
-    loadPrivateDocuments()
-  } catch (error) {
-    console.error('删除失败:', error)
-    toast.error('删除失败')
-  }
-}
-
-function handlePrivateSelectChange(selectedKeys) {
-  privateSelectedRowKeys.value = selectedKeys
-}
-
-async function handlePrivateBatchDelete() {
-  if (privateSelectedRowKeys.value.length === 0) {
-    toast.warning('请选择要删除的文件')
-    return
-  }
-
-  try {
-    await Promise.all(privateSelectedRowKeys.value.map(id => api.documents.deletePrivate(id)))
-    toast.success('批量删除成功')
-    privateSelectedRowKeys.value = []
-    loadPrivateDocuments()
-  } catch (error) {
-    console.error('批量删除失败:', error)
-    toast.error('批量删除失败')
   }
 }
 
@@ -2107,10 +1683,7 @@ async function loadPreviewContent(row) {
     totalPages.value = 0
     pdfDoc.value = null
 
-    // 根据是否为私密文件调用不同的 API
-    const response = row.isPrivate
-      ? await api.documents.getPrivateContent(row.id)
-      : await api.documents.getContent(row.id)
+    const response = await api.documents.getContent(row.id)
     console.log('预览内容响应:', response)
 
     const data = response.data || {}
@@ -3544,36 +3117,10 @@ onMounted(() => {
   overflow-y: auto;
 }
 
-/* 私密空间样式 */
-.private-space-view {
-  margin-top: 16px;
-}
-
 /* 视图切换按钮图标大小调整 */
 :deep(.native-radio-button .native-icon) {
   width: 16px;
   height: 16px;
-}
-
-.private-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  gap: 24px;
-}
-
-.private-header :deep(.native-space) {
-  gap: 12px;
-}
-
-.private-header h3 {
-  font-size: 18px;
-  color: #333;
-  margin: 0;
-  padding-bottom: 8px;
-  border-bottom: 2px solid #e34d59;
-  white-space: nowrap;
 }
 
 /* NativeTable 样式 */
