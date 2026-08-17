@@ -12,13 +12,15 @@ function root() { return fs.mkdtempSync(path.join(os.tmpdir(), 'pr-storage-consi
 function cleanup(value) { fs.rmSync(value, { recursive: true, force: true }) }
 function sha256(value) { return createHash('sha256').update(Buffer.from(value)).digest('hex') }
 
-function databaseFixture({ documents = [], versions = [], operations = [] } = {}) {
-  const state = structuredClone({ documents, versions, operations })
+function databaseFixture({ documents = [], versions = [], ebooks = [], music = [], operations = [] } = {}) {
+  const state = structuredClone({ documents, versions, ebooks, music, operations })
   return {
     state,
     prepare(sql) {
       if (sql.includes('FROM document_versions')) return { all: () => structuredClone(state.versions) }
       if (sql.includes('FROM documents')) return { all: () => structuredClone(state.documents) }
+      if (sql.includes('FROM books')) return { all: () => structuredClone(state.ebooks) }
+      if (sql.includes('FROM music')) return { all: () => structuredClone(state.music) }
       if (sql.includes('FROM storage_commit_operations')) return { all: () => structuredClone(state.operations) }
       throw new Error(`Unexpected read: ${sql}`)
     }
@@ -122,6 +124,8 @@ test('healthy, legitimate version deduplication, active staging and legacy-only 
   try {
     const storageService = new StorageService({ rootPath: directory })
     const content = writeObject(storageService, 'documents', 'shared-version-content')
+    const ebookContent = writeObject(storageService, 'ebooks', 'shared-ebook-content')
+    const musicContent = writeObject(storageService, 'music', 'shared-music-content')
     const activeToken = 'd'.repeat(32)
     fs.writeFileSync(path.join(storageService.stagingPath, activeToken), 'active')
     const old = new Date('2026-08-01T00:00:00.000Z')
@@ -135,12 +139,44 @@ test('healthy, legitimate version deduplication, active staging and legacy-only 
         { id: 3, document_id: 1, storage_key: content.key, content_sha256: content.hash, content_bytes: content.bytes, file_path: null },
         { id: 4, document_id: 1, storage_key: content.key, content_sha256: content.hash, content_bytes: content.bytes, file_path: null }
       ],
+      ebooks: [
+        { id: 5, storage_key: ebookContent.key, content_sha256: ebookContent.hash, content_bytes: ebookContent.bytes },
+        { id: 6, storage_key: ebookContent.key, content_sha256: ebookContent.hash, content_bytes: ebookContent.bytes },
+        { id: 7, storage_key: null, content_sha256: null, content_bytes: null }
+      ],
+      music: [
+        { id: 8, storage_key: musicContent.key, content_sha256: musicContent.hash, content_bytes: musicContent.bytes },
+        { id: 9, storage_key: musicContent.key, content_sha256: musicContent.hash, content_bytes: musicContent.bytes },
+        { id: 10, storage_key: null, content_sha256: null, content_bytes: null }
+      ],
       operations: [{ staging_token: activeToken, state: 'staged' }]
     })
     const result = await new StorageConsistencyService({
       database, storageService, now: new Date('2026-08-14T00:00:00.000Z'), stagingMaxAgeMs: 1
     }).inspect()
     assert.deepEqual(result.issues, [])
+  } finally { cleanup(directory) }
+})
+
+test('reports a business reference whose storage kind does not match its table', async () => {
+  const directory = root()
+  try {
+    const storageService = new StorageService({ rootPath: directory })
+    const musicContent = writeObject(storageService, 'music', 'wrong-kind-reference')
+    const database = databaseFixture({
+      ebooks: [{
+        id: 1,
+        storage_key: musicContent.key,
+        content_sha256: musicContent.hash,
+        content_bytes: musicContent.bytes
+      }]
+    })
+    const result = await new StorageConsistencyService({
+      database, storageService, now: new Date('2026-08-14T00:00:00.000Z')
+    }).inspect()
+    assert.equal(result.issues.some(value => value.code === 'STORAGE_METADATA_MISMATCH' &&
+      value.evidence.source === 'ebook'), true)
+    assert.equal(result.issues.some(value => value.code === 'ORPHAN_OBJECT'), false)
   } finally { cleanup(directory) }
 })
 

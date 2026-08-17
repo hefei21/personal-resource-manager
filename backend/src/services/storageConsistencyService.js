@@ -96,17 +96,28 @@ function readReferences(database) {
     const documents = database.prepare(`
       SELECT id, storage_key, content_sha256, content_bytes
       FROM documents
-    `).all().map(row => ({ ...row, source: 'document', documentId: row.id }))
+    `).all().map(row => ({ ...row, source: 'document', expectedKind: 'documents', documentId: row.id }))
     const versions = database.prepare(`
       SELECT id, document_id, storage_key, content_sha256, content_bytes
       FROM document_versions
-    `).all().map(row => ({ ...row, source: 'document_version', documentId: row.document_id }))
+    `).all().map(row => ({ ...row, source: 'document_version', expectedKind: 'documents', documentId: row.document_id }))
+    const ebooks = database.prepare(`
+      SELECT id, storage_key, content_sha256, content_bytes
+      FROM books
+    `).all().map(row => ({ ...row, source: 'ebook', expectedKind: 'ebooks' }))
+    const music = database.prepare(`
+      SELECT id, storage_key, content_sha256, content_bytes
+      FROM music
+    `).all().map(row => ({ ...row, source: 'music', expectedKind: 'music' }))
     const operations = database.prepare(`
       SELECT staging_token, state
       FROM storage_commit_operations
       WHERE state IN ('staged', 'object_committed')
     `).all()
-    return { references: [...documents, ...versions], resumableTokens: new Set(operations.map(row => row.staging_token)) }
+    return {
+      references: [...documents, ...versions, ...ebooks, ...music],
+      resumableTokens: new Set(operations.map(row => row.staging_token))
+    }
   } catch (error) {
     fail('CONSISTENCY_DATABASE_READ_FAILED', 'Consistency references could not be read.', error)
   }
@@ -185,7 +196,8 @@ export class StorageConsistencyService {
           reference.source, `${reference.source}:${reference.id}`, { referenceId: reference.id }))
         continue
       }
-      if (!HASH_PATTERN.test(reference.content_sha256 ?? '') ||
+      if (parsed.kind !== reference.expectedKind ||
+          !HASH_PATTERN.test(reference.content_sha256 ?? '') ||
           !Number.isSafeInteger(reference.content_bytes) || reference.content_bytes < 0 ||
           parsed.sha256 !== reference.content_sha256) {
         issues.push(issue('STORAGE_METADATA_MISMATCH', 'error', CONSISTENCY_DISPOSITIONS.MANUAL_CONFIRMATION,

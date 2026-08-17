@@ -45,9 +45,9 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
 function sha256(value) { return createHash('sha256').update(Buffer.from(value)).digest('hex') }
 function deterministicRandomBytes() { return Buffer.alloc(16, 0xcd) }
 
-function writeObject(service, content) {
+function writeObject(service, content, kind = 'documents') {
   const hash = sha256(content)
-  const storageKey = createStorageKey('documents', hash)
+  const storageKey = createStorageKey(kind, hash)
   const filePath = service.objectFile(storageKey, { createParents: true })
   fs.writeFileSync(filePath, content)
   return { storageKey, hash, bytes: Buffer.byteLength(content), filePath }
@@ -82,6 +82,8 @@ test('restores a 2.3 backup set, injects the isolated fault matrix, and reports 
     const sourceStorage = new StorageService({ rootPath: sourceStorageRoot })
     const healthy = writeObject(sourceStorage, 'healthy restored content')
     const corruptTarget = writeObject(sourceStorage, 'corruption target')
+    const healthyEbook = writeObject(sourceStorage, 'healthy restored ebook', 'ebooks')
+    const healthyMusic = writeObject(sourceStorage, 'healthy restored music', 'music')
 
     const sourceDatabasePath = path.join(sourceDatabaseRoot, 'app.db')
     sourceDatabase = new Database(sourceDatabasePath)
@@ -106,6 +108,18 @@ test('restores a 2.3 backup set, injects the isolated fault matrix, and reports 
         staging_token TEXT PRIMARY KEY,
         state TEXT NOT NULL
       );
+      CREATE TABLE books (
+        id INTEGER PRIMARY KEY,
+        storage_key TEXT,
+        content_sha256 TEXT,
+        content_bytes INTEGER
+      );
+      CREATE TABLE music (
+        id INTEGER PRIMARY KEY,
+        storage_key TEXT,
+        content_sha256 TEXT,
+        content_bytes INTEGER
+      );
     `)
     const insertDocument = sourceDatabase.prepare(`
       INSERT INTO documents (id, title, file_path, storage_key, content_sha256, content_bytes)
@@ -121,6 +135,12 @@ test('restores a 2.3 backup set, injects the isolated fault matrix, and reports 
       INSERT INTO document_versions (id, document_id, file_path, storage_key, content_sha256, content_bytes)
       VALUES (?, ?, NULL, ?, ?, ?)
     `).run(2, 1, corruptTarget.storageKey, corruptTarget.hash, corruptTarget.bytes)
+    sourceDatabase.prepare(`
+      INSERT INTO books (id, storage_key, content_sha256, content_bytes) VALUES (?, ?, ?, ?)
+    `).run(1, healthyEbook.storageKey, healthyEbook.hash, healthyEbook.bytes)
+    sourceDatabase.prepare(`
+      INSERT INTO music (id, storage_key, content_sha256, content_bytes) VALUES (?, ?, ?, ?)
+    `).run(1, healthyMusic.storageKey, healthyMusic.hash, healthyMusic.bytes)
 
     const backupRoot = path.join(root, 'backups')
     const databaseBackup = createDatabaseBackupSync({
@@ -133,7 +153,7 @@ test('restores a 2.3 backup set, injects the isolated fault matrix, and reports 
     })
     createResourceBackup({
       backupDirectory: databaseBackup.backupDirectory,
-      entries: [healthy, corruptTarget].map(value => ({
+      entries: [healthy, corruptTarget, healthyEbook, healthyMusic].map(value => ({
         kind: 'storage', rootPath: sourceStorage.rootPath, sourcePath: value.filePath
       }))
     })
@@ -184,6 +204,8 @@ test('restores a 2.3 backup set, injects the isolated fault matrix, and reports 
     assert.deepEqual(restoredDatabase.serialize(), beforeDatabase)
     assert.equal(JSON.stringify(report).includes(root), false)
     assert.equal(JSON.stringify(report).includes('private-name.txt'), false)
+    assert.equal(report.issues.some(issue => issue.code === 'ORPHAN_OBJECT' &&
+      ['ebooks', 'music'].includes(issue.resourceType)), false)
   } finally {
     restoredDatabase?.close()
     sourceDatabase?.close()
@@ -206,6 +228,8 @@ test('fault injector rejects unmarked roots and mismatched restore markers befor
       CREATE TABLE documents (id INTEGER PRIMARY KEY, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER);
       CREATE TABLE document_versions (id INTEGER PRIMARY KEY, document_id INTEGER, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER);
       CREATE TABLE storage_commit_operations (staging_token TEXT PRIMARY KEY, state TEXT);
+      CREATE TABLE books (id INTEGER PRIMARY KEY, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER);
+      CREATE TABLE music (id INTEGER PRIMARY KEY, storage_key TEXT, content_sha256 TEXT, content_bytes INTEGER);
     `)
     const storageService = new StorageService({ rootPath: storageRoot })
     assert.throws(() => injectConsistencyFaultMatrix({
