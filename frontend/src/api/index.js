@@ -187,6 +187,9 @@ export default {
     update: (id, data) => api.put(`/ebooks/${id}`, data),
     delete: (id) => api.delete(`/ebooks/${id}`),
     batchDelete: (data) => api.post('/ebooks/batch-delete', data),
+    trash: () => api.get('/ebooks/trash'),
+    restoreTrash: (id) => api.post(`/ebooks/trash/${id}/restore`),
+    permanentlyDeleteTrash: (id) => api.delete(`/ebooks/trash/${id}/permanent`),
     getContent: (id) => api.get(`/ebooks/${id}/content`),
     // 虚拟滚动：分页获取章节内容
     getChapters: (id, start, count) => api.get(`/ebooks/${id}/chapters`, { params: { start, count } }),
