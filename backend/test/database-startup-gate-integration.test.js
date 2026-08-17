@@ -587,11 +587,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 43 column migrations and eight registered table transitions', () => {
+test('application registry freezes 43 column migrations and nine registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 51)
+  assert.equal(applicationMigrationRegistry.migrations.length, 52)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -619,7 +619,8 @@ test('application registry freezes 43 column migrations and eight registered tab
       '0048_document_versions_storage_shape',
       '0049_documents_storage_shape',
       '0050_resource_trash_entries',
-      '0051_private_document_migration_map'
+      '0051_private_document_migration_map',
+      '0052_books_storage_shape'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -881,7 +882,7 @@ test('static contract runs the startup gate once after base tables and before al
   assert.doesNotMatch(databaseSource, /bookmarkColumns|hasIcon|hasIconData|ALTER TABLE bookmarks ADD COLUMN icon/u)
   assert.doesNotMatch(databaseSource, /versionCol|documents_new|CAST\(version AS REAL\)/u)
   assert.match(databaseMigrationsSource, /id: '0036_documents_version_real'/u)
-  assert.match(databaseSource, /last_read_at DATETIME,\s+content_cache TEXT/u)
+  assert.match(databaseSource, /BOOKS_STORAGE_TARGET_DDL\.replace\('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS '\)/u)
   assert.doesNotMatch(databaseSource, /hasContentCache|ALTER TABLE books ADD COLUMN content_cache TEXT/u)
   assert.doesNotMatch(databaseSource, /DROP TABLE IF EXISTS code_versions/u)
   assert.doesNotMatch(databaseSource, /AS notNull|AS defaultValue/u)
@@ -1016,6 +1017,11 @@ test('empty database adopts all registered migrations without executing schema c
       assertRegisteredColumn(verification, 'categories', 'sort_order', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'todos', 'confirmed', 'INTEGER', 0, '0')
       assertRegisteredColumn(verification, 'books', 'content_cache', 'TEXT', 0, null)
+      assertRegisteredColumn(verification, 'books', 'file_path', 'TEXT', 0, null)
+      assertRegisteredColumn(verification, 'books', 'storage_key', 'TEXT', 0, null)
+      assertRegisteredColumn(verification, 'books', 'content_sha256', 'TEXT', 0, null)
+      assertRegisteredColumn(verification, 'books', 'content_bytes', 'INTEGER', 0, null)
+      assertRegisteredColumn(verification, 'books', 'original_name', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'bookmarks', 'icon', 'TEXT', 0, null)
       assertRegisteredColumn(verification, 'bookmarks', 'icon_data', 'TEXT', 0, null)
       for (const { name, type, notNull, defaultValue } of expectedAnimeMigrations.map(({ compatibility }) => compatibility.column)) {

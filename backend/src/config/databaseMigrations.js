@@ -11,6 +11,15 @@ import {
   DOCUMENT_VERSIONS_STORAGE_TARGET_SHAPE
 } from './documentStorageSchema.js'
 import { CREATE_RESOURCE_TRASH_SQL, RESOURCE_TRASH_SHAPE } from './resourceTrashSchema.js'
+import {
+  BOOKS_STORAGE_KNOWN_INDEXES,
+  BOOKS_STORAGE_LEGACY_DDL,
+  BOOKS_STORAGE_LEGACY_DDL_DATABASE_BASE,
+  BOOKS_STORAGE_LEGACY_SHAPE,
+  BOOKS_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES,
+  BOOKS_STORAGE_MIGRATION_SOURCE_NO_INDEXES,
+  BOOKS_STORAGE_TARGET_SHAPE
+} from './ebookStorageSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -1784,6 +1793,50 @@ export const applicationMigrationRegistry = createMigrationRegistry([
       },
       missingTable: 'create',
       legacy: []
+    }
+  },
+  {
+    id: '0052_books_storage_shape',
+    sourceVariants: [
+      { proofKey: 'legacy-no-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
+      { proofKey: 'legacy-known-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES },
+      { proofKey: 'legacy-database-base-no-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_NO_INDEXES },
+      { proofKey: 'legacy-database-base-known-indexes', source: BOOKS_STORAGE_MIGRATION_SOURCE_KNOWN_INDEXES }
+    ],
+    compatibility: {
+      kind: 'table-transition',
+      table: 'books',
+      target: BOOKS_STORAGE_TARGET_SHAPE,
+      legacy: [
+        {
+          proofKey: 'legacy-no-indexes',
+          shape: BOOKS_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(BOOKS_STORAGE_LEGACY_DDL),
+          indexes: [],
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-known-indexes',
+          shape: BOOKS_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(BOOKS_STORAGE_LEGACY_DDL),
+          indexes: BOOKS_STORAGE_KNOWN_INDEXES,
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-database-base-no-indexes',
+          shape: BOOKS_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(BOOKS_STORAGE_LEGACY_DDL_DATABASE_BASE),
+          indexes: [],
+          triggers: []
+        },
+        {
+          proofKey: 'legacy-database-base-known-indexes',
+          shape: BOOKS_STORAGE_LEGACY_SHAPE,
+          createTableSqlSha256: sha256(BOOKS_STORAGE_LEGACY_DDL_DATABASE_BASE),
+          indexes: BOOKS_STORAGE_KNOWN_INDEXES,
+          triggers: []
+        }
+      ]
     }
   }
 ])

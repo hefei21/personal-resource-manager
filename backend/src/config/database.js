@@ -6,6 +6,7 @@ import { CREATE_RESOURCE_TRASH_SQL } from './resourceTrashSchema.js'
 import { applicationMigrationRegistry } from './databaseMigrations.js'
 import { createDatabaseBackupSync } from './databaseBackup.js'
 import { ENSURE_STORAGE_COMMIT_OPERATIONS_SQL } from './storageCommitSchema.js'
+import { BOOKS_STORAGE_TARGET_DDL } from './ebookStorageSchema.js'
 import { getContext } from '../utils/dbContext.js'
 import {
   initializeOwner,
@@ -312,26 +313,7 @@ function initDatabaseInstance(database, dbType = 'main', runBaseSchemaGate = nul
     )`,
 
     // 书籍表
-    `CREATE TABLE IF NOT EXISTS books (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      author TEXT,
-      year TEXT,
-      publisher TEXT,
-      isbn TEXT,
-      description TEXT,
-      cover_image TEXT,
-      category_id INTEGER,
-      file_path TEXT NOT NULL,
-      file_type TEXT,
-      file_size INTEGER DEFAULT 0,
-      total_pages INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      last_read_at DATETIME,
-      content_cache TEXT,
-      FOREIGN KEY (category_id) REFERENCES book_categories(id) ON DELETE SET NULL
-    )`,
+    BOOKS_STORAGE_TARGET_DDL.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS '),
 
     // 阅读进度表
     ...(shouldCreateReadingProgress ? [
