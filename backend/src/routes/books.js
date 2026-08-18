@@ -13,7 +13,7 @@ import { compressImage } from '../utils/imageCompress.js'
 import { ebookResourceLimiter } from '../middlewares/security.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
-import { inspectChunks, mergeChunkFiles, uploadPath, validateArchiveEntries, validateUploadDescriptor } from '../services/uploadSecurity.js'
+import { ensureUploadDirectory, inspectChunks, mergeChunkFiles, uploadPath, validateArchiveEntries, validateUploadDescriptor } from '../services/uploadSecurity.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { commitEbookUpload } from '../services/ebookStorageService.js'
 import { EbookCoverError, encodeEbookCoverJpeg, ensureEbookCover } from '../services/ebookCoverService.js'
@@ -47,16 +47,11 @@ function validateEpubArchive(filePath) {
 }
 
 // 分片上传临时目录
-const chunksDir = path.join(getStoragePath('books'), 'chunks')
-const incomingDir = path.join(getStoragePath('books'), 'incoming')
-
-// 确保分片目录存在
-if (!fs.existsSync(chunksDir)) {
-  fs.mkdirSync(chunksDir, { recursive: true })
-}
-if (!fs.existsSync(incomingDir)) {
-  fs.mkdirSync(incomingDir, { recursive: true })
-}
+const booksRoot = getStoragePath('books')
+const currentChunksDir = () => ensureUploadDirectory(booksRoot, 'chunks')
+const currentIncomingDir = () => ensureUploadDirectory(booksRoot, 'incoming')
+currentChunksDir()
+currentIncomingDir()
 
 // 辅助函数：从EPUB文件中提取封面图片
 function extractEpubCover(epubPath) {
@@ -458,7 +453,7 @@ function parseEpubToc(epubPath) {
 // 配置文件上传
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, incomingDir)
+    try { cb(null, currentIncomingDir()) } catch (error) { cb(error) }
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
@@ -652,7 +647,13 @@ router.put('/categories/reorder', authenticateToken, requireWritePermission, asy
 // 分片上传
 
 // 上传分片
-const chunkUpload = multer({ dest: chunksDir, limits: { fileSize: BOOK_UPLOAD_POLICY.maxChunkBytes, files: 1 } })
+const chunkStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    try { cb(null, currentChunksDir()) } catch (error) { cb(error) }
+  },
+  filename: (req, file, cb) => cb(null, randomUUID())
+})
+const chunkUpload = multer({ storage: chunkStorage, limits: { fileSize: BOOK_UPLOAD_POLICY.maxChunkBytes, files: 1 } })
 
 router.post('/upload-chunk', authenticateToken, requireWritePermission, chunkUpload.single('chunk'), async (req, res) => {
   try {
@@ -666,7 +667,7 @@ router.post('/upload-chunk', authenticateToken, requireWritePermission, chunkUpl
     console.log(`📦 收到分片 ${index}/${totalChunks}: ${fileName}`)
 
     // 创建文件专属目录
-    const fileDir = uploadPath(chunksDir, fileId)
+    const fileDir = uploadPath(currentChunksDir(), fileId)
     if (!fs.existsSync(fileDir)) {
       fs.mkdirSync(fileDir, { recursive: true })
     }
@@ -695,8 +696,8 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     console.log(`🔧 开始合并分片: ${fileName}`)
     console.log(`📊 预期分片数: ${totalChunks}`)
 
-    const fileDir = uploadPath(chunksDir, fileId)
-    finalPath = uploadPath(incomingDir, `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`)
+    const fileDir = uploadPath(currentChunksDir(), fileId)
+    finalPath = uploadPath(currentIncomingDir(), `${Date.now()}-${Math.round(Math.random() * 1E9)}${extension}`)
     const inspected = inspectChunks(fileDir, fileId, totalChunks, (_id, index) => `chunk_${index}`, BOOK_UPLOAD_POLICY.maxTotalBytes)
     await mergeChunkFiles(inspected.paths, finalPath)
     console.log(`✅ 分片合并完成 (${(inspected.totalBytes / 1024 / 1024).toFixed(2)}MB)`)
@@ -771,7 +772,7 @@ router.delete('/cancel-upload', authenticateToken, async (req, res) => {
   try {
     const fileId = String(req.body?.fileId || '')
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(fileId)) return res.status(400).json({ message: '上传标识无效' })
-    const fileDir = uploadPath(chunksDir, fileId)
+    const fileDir = uploadPath(currentChunksDir(), fileId)
 
     if (fs.existsSync(fileDir)) {
       fs.rmSync(fileDir, { recursive: true, force: true })
@@ -787,12 +788,13 @@ router.delete('/cancel-upload', authenticateToken, async (req, res) => {
 
 // 解析书籍元数据（上传前预解析）
 router.post('/parse-metadata', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
+  let filePath
   try {
     if (!req.file) {
       return res.status(400).json({ message: '请选择文件' })
     }
 
-    const filePath = req.file.path
+    filePath = req.file.path
     const fileType = path.extname(req.file.originalname).toLowerCase().replace('.', '')
 
     let metadata = {
@@ -813,18 +815,13 @@ router.post('/parse-metadata', authenticateToken, requireWritePermission, upload
     }
 
     // 删除临时文件
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath)
-    }
-
     res.json({ data: metadata })
   } catch (error) {
     console.error('解析元数据失败:', error)
     // 删除临时文件
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path)
-    }
     res.status(500).json({ message: '解析失败', error: error.message })
+  } finally {
+    if (filePath) fs.rmSync(filePath, { force: true })
   }
 })
 
@@ -916,12 +913,13 @@ router.get('/', authenticateToken, async (req, res) => {
 
 // 上传书籍
 router.post('/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
+  let filePath
   let storedFilePath
   let bookInserted = false
   try {
     if (!req.file) return res.status(400).json({ message: '请选择文件' })
     const { title, author, year, publisher, isbn, description, categoryId } = req.body
-    const filePath = req.file.path
+    filePath = req.file.path
     storedFilePath = filePath
     const fileSize = fs.statSync(filePath).size
     const fileType = path.extname(req.file.originalname).toLowerCase().replace('.', '')
@@ -1010,7 +1008,7 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
     res.json({ id: created.id, title: created.title, message: '上传成功' })
   } catch (error) {
     console.error('❌ 上传书籍失败:', error?.code || error?.name || 'UNKNOWN')
-    if (!bookInserted && storedFilePath && fs.existsSync(storedFilePath)) fs.rmSync(storedFilePath, { force: true })
+    if (!bookInserted && storedFilePath) fs.rmSync(storedFilePath, { force: true })
     res.status(400).json({ message: '上传失败' })
   }
 })

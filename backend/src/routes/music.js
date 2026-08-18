@@ -13,7 +13,7 @@ import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION, TIMEOUT } from '../config/constants.js'
-import { inspectChunks, mergeChunkFiles, readFileHeader, uploadPath, validateUploadDescriptor } from '../services/uploadSecurity.js'
+import { ensureUploadDirectory, inspectChunks, mergeChunkFiles, readFileHeader, uploadPath, validateUploadDescriptor } from '../services/uploadSecurity.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { getStorageCommitOperation } from '../services/storageCommitCoordinator.js'
 import { commitMusicUpload } from '../services/musicStorageService.js'
@@ -64,7 +64,7 @@ setInterval(() => {
     if (now - progress.timestamp > 60 * 60 * 1000) {
       // 清理临时分片文件
       for (let i = 0; i < (progress.totalChunks || 0); i++) {
-        const chunkPath = path.join(tempDir, `${fileId}_${i}`)
+        const chunkPath = path.join(currentMusicTempDir(), `${fileId}_${i}`)
         try {
           if (fs.existsSync(chunkPath)) {
             fs.unlinkSync(chunkPath)
@@ -255,15 +255,13 @@ const router = express.Router()
 const musicDir = getStoragePath('music')
 
 // 临时上传目录
-const tempDir = path.join(musicDir, 'temp')
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true })
-}
+const currentMusicTempDir = () => ensureUploadDirectory(musicDir, 'temp')
+currentMusicTempDir()
 
 // 配置分片上传
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, tempDir)
+    try { cb(null, currentMusicTempDir()) } catch (error) { cb(error) }
   },
   filename: (req, file, cb) => {
     try {
@@ -406,7 +404,7 @@ function removeUploadFile(filePath) {
 }
 
 function musicChunkPath(fileId, index) {
-  return uploadPath(tempDir, `${fileId}_${index}`)
+  return uploadPath(currentMusicTempDir(), `${fileId}_${index}`)
 }
 
 function clearMusicUploadInputs(fileId, totalChunks, mergedPath) {
@@ -423,18 +421,29 @@ function musicUploadIdempotencyKey(fileId) {
 function existingMusicUpload(database, operation) {
   if (!operation?.storageKey) return null
   const music = database.prepare(`
-    SELECT id, title, artist, album
+    SELECT id, title, artist, album, storage_key, content_sha256, content_bytes
       FROM music
      WHERE storage_key = ?
      LIMIT 1
   `).get(operation.storageKey)
   return music ? Object.freeze({
-    id: music.id,
-    title: music.title,
-    artist: music.artist,
-    album: music.album,
-    message: '上传成功'
+    response: Object.freeze({
+      id: music.id,
+      title: music.title,
+      artist: music.artist,
+      album: music.album,
+      message: '上传成功'
+    }),
+    reference: Object.freeze({
+      storage_key: music.storage_key,
+      content_sha256: music.content_sha256,
+      content_bytes: music.content_bytes
+    })
   }) : null
+}
+
+async function verifyMusicUploadContent(runtime, reference) {
+  await runtime.contentServiceFor('music').stat(reference)
 }
 
 function sendMusicRouteError(res, error) {
@@ -594,16 +603,17 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
     const db = getDatabase()
     const runtime = getResourceStorageRuntime()
     const idempotencyKey = musicUploadIdempotencyKey(fileId)
-    const mergedPath = uploadPath(tempDir, `${fileId}.merged`)
+    const mergedPath = uploadPath(currentMusicTempDir(), `${fileId}.merged`)
     const operation = getStorageCommitOperation(db, idempotencyKey)
 
     if (operation?.state === 'database_committed') {
       const existing = existingMusicUpload(db, operation)
       if (!existing) return res.status(500).json({ message: '上传状态异常' })
+      await verifyMusicUploadContent(runtime, existing.reference)
       clearMusicUploadInputs(fileId, totalChunks, mergedPath)
       uploadProgress.delete(fileId)
       cancelledUploads.delete(fileId)
-      return res.json(existing)
+      return res.json(existing.response)
     }
 
     // A cancelled upload without a commit ledger is no longer retryable.
@@ -614,7 +624,7 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
       return res.status(400).json({ message: '上传已取消', cancelled: true })
     }
 
-    lockFile = uploadPath(tempDir, `${fileId}.lock`)
+    lockFile = uploadPath(currentMusicTempDir(), `${fileId}.lock`)
     if (fs.existsSync(lockFile)) {
       return res.status(409).json({ 
         message: '文件正在处理中，请稍后重试',
@@ -640,7 +650,7 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
         // kept until the database commit succeeds so a retry can rebuild or
         // restage the same input safely.
         const inspected = inspectChunks(
-          tempDir,
+          currentMusicTempDir(),
           fileId,
           totalChunks,
           (id, index) => `${id}_${index}`,
@@ -733,6 +743,11 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
           coverImage: metadata.coverImage
         }
       })
+      await verifyMusicUploadContent(runtime, {
+        storage_key: committed.storageKey,
+        content_sha256: committed.sha256,
+        content_bytes: committed.bytes
+      })
 
       const response = {
         id: committed.id,
@@ -776,11 +791,11 @@ router.delete('/cancel-upload', authenticateToken, async (req, res) => {
     cancelledUploads.add(fileId)
     
     // 删除临时分片
-    const files = fs.readdirSync(tempDir)
+    const files = fs.readdirSync(currentMusicTempDir())
     let deletedCount = 0
     files.forEach(file => {
       if (file.startsWith(`${fileId}_`) || file === `${fileId}.lock` || file === `${fileId}.merged`) {
-        fs.unlinkSync(path.join(tempDir, file))
+        fs.unlinkSync(path.join(currentMusicTempDir(), file))
         deletedCount++
       }
     })
@@ -895,11 +910,11 @@ router.delete('/cancel-all-uploads', authenticateToken, async (req, res) => {
     }
     
     // 删除所有临时分片
-    const files = fs.readdirSync(tempDir)
+    const files = fs.readdirSync(currentMusicTempDir())
     let deletedCount = 0
     files.forEach(file => {
       try {
-        fs.unlinkSync(path.join(tempDir, file))
+        fs.unlinkSync(path.join(currentMusicTempDir(), file))
         deletedCount++
       } catch (e) {
         // 忽略删除失败

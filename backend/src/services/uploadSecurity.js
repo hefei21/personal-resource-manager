@@ -4,6 +4,30 @@ import { pipeline } from 'stream/promises'
 
 const FILE_ID_PATTERN = /^[A-Za-z0-9_-]{8,80}$/
 
+export function ensureUploadDirectory(storageRoot, directoryName, fileSystem = fs) {
+  const requestedRoot = path.resolve(storageRoot)
+  fileSystem.mkdirSync(requestedRoot, { recursive: true })
+  const rootStat = fileSystem.lstatSync(requestedRoot)
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error('上传根目录无效')
+  }
+
+  const realRoot = fileSystem.realpathSync.native(requestedRoot)
+  const requestedDirectory = uploadPath(realRoot, directoryName)
+  fileSystem.mkdirSync(requestedDirectory, { recursive: true })
+  const directoryStat = fileSystem.lstatSync(requestedDirectory)
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new Error('上传临时目录无效')
+  }
+
+  const realDirectory = fileSystem.realpathSync.native(requestedDirectory)
+  const relative = path.relative(realRoot, realDirectory)
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('上传临时目录越界')
+  }
+  return realDirectory
+}
+
 export function validateUploadDescriptor(input, policy) {
   const fileId = String(input.fileId || '')
   const fileName = path.basename(String(input.fileName || ''))

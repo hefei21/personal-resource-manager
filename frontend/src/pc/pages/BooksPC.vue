@@ -399,9 +399,11 @@
       title="上传书籍"
       @confirm="handleUploadConfirm"
       width="600px"
-      :confirm-btn="{ content: uploading ? '上传中...' : '确定', loading: uploading }"
-      :close-on-overlay-click="!uploading"
-      :close-btn="!uploading"
+      :confirm-text="uploading ? '上传中...' : (parsingMetadata ? '解析中...' : '确定')"
+      :confirm-loading="uploading"
+      :confirm-disabled="uploading || parsingMetadata"
+      :close-on-overlay-click="!uploading && !parsingMetadata"
+      :close-btn="!uploading && !parsingMetadata"
       class="upload-book-dialog"
     >
       <NativeForm :model="uploadForm" :rules="uploadRules">
@@ -1152,6 +1154,7 @@ async function uploadFileInChunks(file) {
 }
 
 async function handleUploadConfirm() {
+  if (uploading.value || parsingMetadata.value) return
   try {
     if (!uploadForm.value.file || uploadForm.value.file.length === 0) {
       toast.error('请选择文件')

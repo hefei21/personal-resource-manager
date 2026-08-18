@@ -249,7 +249,7 @@
           <button class="btn-cancel" @click="closeUploadDialog">取消</button>
           <button
             class="btn-confirm"
-            :disabled="uploading || !uploadForm.title.trim() || !selectedFile"
+            :disabled="uploading || parsingMetadata || !uploadForm.title.trim() || !selectedFile"
             @click="confirmUpload"
           >
             {{ uploading ? '上传中...' : '确定' }}
@@ -496,7 +496,7 @@ function handleUpload() {
 
 // 关闭上传对话框
 function closeUploadDialog() {
-  if (uploading.value) return
+  if (uploading.value || parsingMetadata.value) return
   showUploadDialog.value = false
 }
 
@@ -545,6 +545,7 @@ async function parseBookMetadata(file) {
 
 // 确认上传
 async function confirmUpload() {
+  if (uploading.value || parsingMetadata.value) return
   if (!selectedFile.value || !uploadForm.value.title.trim()) {
     showToast('请选择文件并填写书名', 'warning')
     return

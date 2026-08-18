@@ -15,18 +15,31 @@ test('music upload and content routes use the managed storage contracts', () => 
   assert.match(routeSource, /contentService\.stat\(music\)/u)
   assert.match(routeSource, /contentService\.createReadStream\(music/u)
   assert.match(routeSource, /resolveVerifiedFilePath\(/u)
+  assert.match(routeSource, /currentMusicTempDir\(\)/u)
+  assert.match(routeSource, /contentServiceFor\('music'\)\.stat\(reference\)/u)
+  assert.doesNotMatch(routeSource, /\btempDir\b/u)
 
   const mergeRoute = routeSource.slice(
     routeSource.indexOf("router.post('/merge-chunks'"),
     routeSource.indexOf("// 取消上传")
   )
   assert.doesNotMatch(mergeRoute, /INSERT INTO music/u)
+  assert.match(mergeRoute, /verifyMusicUploadContent\(runtime/u)
   const completedRetry = mergeRoute.slice(
     mergeRoute.indexOf("operation?.state === 'database_committed'"),
     mergeRoute.indexOf('// A cancelled upload')
   )
+  const retryVerifyIndex = completedRetry.indexOf('await verifyMusicUploadContent(runtime, existing.reference)')
+  const retryCleanupIndex = completedRetry.indexOf('clearMusicUploadInputs(fileId, totalChunks, mergedPath)')
+  const retryResponseIndex = completedRetry.indexOf('return res.json(existing.response)')
+  assert.ok(retryVerifyIndex >= 0 && retryVerifyIndex < retryCleanupIndex && retryVerifyIndex < retryResponseIndex)
   assert.match(completedRetry, /clearMusicUploadInputs\(fileId, totalChunks, mergedPath\)/u)
   assert.match(completedRetry, /cancelledUploads\.delete\(fileId\)/u)
+
+  const committedVerifyIndex = mergeRoute.indexOf('await verifyMusicUploadContent(runtime, {')
+  const committedCleanupIndex = mergeRoute.indexOf('clearMusicUploadInputs(fileId, totalChunks, mergedPath)', committedVerifyIndex)
+  const committedResponseIndex = mergeRoute.indexOf('return res.json(response)', committedVerifyIndex)
+  assert.ok(committedVerifyIndex >= 0 && committedVerifyIndex < committedCleanupIndex && committedVerifyIndex < committedResponseIndex)
 
   const playRoute = routeSource.slice(
     routeSource.indexOf("router.get('/play/:id'"),

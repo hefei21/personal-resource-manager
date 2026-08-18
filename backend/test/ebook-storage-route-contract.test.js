@@ -19,6 +19,26 @@ test('ebook routes use managed commit, controlled content resolution, and generi
   assert.match(routeSource, /router\.get\('\/trash'/u)
   assert.match(routeSource, /router\.post\('\/trash\/:id\/restore'/u)
   assert.match(routeSource, /router\.delete\('\/trash\/:id\/permanent'/u)
+  assert.match(routeSource, /currentIncomingDir\(\)/u)
+  assert.match(routeSource, /currentChunksDir\(\)/u)
+})
+
+test('ebook metadata parsing owns and always cleans its multer temporary file', () => {
+  const parseRoute = routeSource.slice(
+    routeSource.indexOf("router.post('/parse-metadata'"),
+    routeSource.indexOf('// 获取书籍列表')
+  )
+  assert.match(parseRoute, /let filePath/u)
+  assert.match(parseRoute, /filePath = req\.file\.path/u)
+  assert.doesNotMatch(parseRoute, /const filePath = req\.file\.path/u)
+  assert.match(parseRoute, /finally\s*\{[\s\S]*fs\.rmSync\(filePath, \{ force: true \}\)/u)
+
+  const uploadRoute = routeSource.slice(
+    routeSource.indexOf("router.post('/upload'"),
+    routeSource.indexOf('function ebookFileType')
+  )
+  assert.match(uploadRoute, /let filePath/u)
+  assert.match(uploadRoute, /filePath = req\.file\.path/u)
 })
 
 test('ebook routes do not expose or directly delete original content paths', () => {

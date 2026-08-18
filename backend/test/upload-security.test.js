@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { mergeChunkFiles, uploadPath, validateArchiveEntries, validateUploadDescriptor } from '../src/services/uploadSecurity.js'
+import { ensureUploadDirectory, mergeChunkFiles, uploadPath, validateArchiveEntries, validateUploadDescriptor } from '../src/services/uploadSecurity.js'
 
 const policy = { extensions: ['.epub'], maxChunks: 100 }
 
@@ -17,6 +17,30 @@ test('rejects traversal identifiers and filenames', () => {
   assert.throws(() => validateUploadDescriptor({ fileId: '../escape', fileName: 'book.epub', totalChunks: 1 }, policy))
   assert.throws(() => validateUploadDescriptor({ fileId: '12345678-safe', fileName: '../book.epub', totalChunks: 1 }, policy))
   assert.throws(() => uploadPath('C:/safe/root', '..', 'escape'))
+})
+
+test('recreates deleted upload directories and rejects symbolic-link replacements', (context) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-upload-root-'))
+  try {
+    const first = ensureUploadDirectory(root, 'incoming')
+    assert.equal(fs.realpathSync.native(first), first)
+    fs.rmSync(first, { recursive: true, force: true })
+    const recreated = ensureUploadDirectory(root, 'incoming')
+    assert.equal(fs.realpathSync.native(recreated), recreated)
+
+    assert.throws(() => ensureUploadDirectory(root, '..'))
+    if (process.platform === 'win32') {
+      context.diagnostic('upload-directory symlink rejection is covered by Linux CI')
+      return
+    }
+    fs.rmSync(recreated, { recursive: true, force: true })
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-upload-outside-'))
+    fs.symlinkSync(outside, recreated, 'dir')
+    assert.throws(() => ensureUploadDirectory(root, 'incoming'), /上传临时目录无效/u)
+    fs.rmSync(outside, { recursive: true, force: true })
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('merges chunks without loading the whole upload into memory', async () => {
