@@ -16,6 +16,7 @@ import { PAGINATION } from '../config/constants.js'
 import { inspectChunks, mergeChunkFiles, uploadPath, validateArchiveEntries, validateUploadDescriptor } from '../services/uploadSecurity.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { commitEbookUpload } from '../services/ebookStorageService.js'
+import { EbookCoverError, encodeEbookCoverJpeg, ensureEbookCover } from '../services/ebookCoverService.js'
 import {
   listDeletedEbooks,
   permanentlyDeleteEbook,
@@ -25,6 +26,7 @@ import {
 } from '../services/ebookTrashService.js'
 
 const router = express.Router()
+const ebookCoverRequests = new Map()
 const BOOK_UPLOAD_POLICY = {
   extensions: ['.txt', '.epub', '.pdf', '.mobi', '.azw', '.azw3', '.fb2', '.html', '.htm'],
   maxChunks: 1000,
@@ -62,6 +64,10 @@ function extractEpubCover(epubPath) {
     console.log('🖼️ 开始提取EPUB封面')
     const zip = new AdmZip(epubPath)
     const zipEntries = zip.getEntries()
+    const normalizedEntries = new Map(zipEntries.map(entry => [
+      path.posix.normalize(entry.entryName.replace(/\\/g, '/')).replace(/^\/+/, ''),
+      entry
+    ]))
 
     // 查找封面图片（常见的封面文件名）
     const coverPatterns = [
@@ -73,32 +79,31 @@ function extractEpubCover(epubPath) {
       /OEBPS\/Images\/cover\.(jpg|jpeg|png|gif)$/i
     ]
 
-    // 也尝试从OPF文件中解析封面
-    let coverId = null
+    // 优先从 OPF manifest 精确解析封面，避免模糊路径匹配到错误条目。
     for (const entry of zipEntries) {
-      if (entry.entryName.endsWith('.opf')) {
+      const opfName = path.posix.normalize(entry.entryName.replace(/\\/g, '/')).replace(/^\/+/, '')
+      if (opfName.toLowerCase().endsWith('.opf')) {
         const opfContent = entry.getData().toString('utf8')
-        // 查找 meta 元素中的 cover 属性
-        const coverMatch = opfContent.match(/<meta[^>]*name=["']cover["'][^>]*content=["']([^"']+)["']/i)
-        if (coverMatch) {
-          coverId = coverMatch[1]
-          console.log(`📋 从OPF找到封面ID: ${coverId}`)
-        }
-        // 如果找到cover id，在manifest中查找对应的href
-        if (coverId) {
-          const hrefMatch = opfContent.match(new RegExp(`<item[^>]*id=["']${coverId}["'][^>]*href=["']([^"']+)["']`, 'i'))
-          if (hrefMatch) {
-            const coverHref = hrefMatch[1]
-            console.log(`📋 封面文件路径: ${coverHref}`)
-            // 查找对应的文件
-            for (const e of zipEntries) {
-              if (e.entryName.includes(coverHref)) {
-                console.log(`✅ 通过OPF找到封面: ${e.entryName}`)
-                return {
-                  data: e.getData(),
-                  ext: path.extname(e.entryName).toLowerCase()
-                }
-              }
+        const attribute = (tag, name) => tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']+)["']`, 'i'))?.[1]
+        const metaTags = opfContent.match(/<meta\b[^>]*>/gi) || []
+        const coverMeta = metaTags.find(tag => String(attribute(tag, 'name')).toLowerCase() === 'cover')
+        const coverId = coverMeta ? attribute(coverMeta, 'content') : null
+        const itemTags = opfContent.match(/<item\b[^>]*>/gi) || []
+        const coverItem = itemTags.find(tag => {
+          const properties = String(attribute(tag, 'properties') || '').split(/\s+/u)
+          return properties.includes('cover-image') || (coverId && attribute(tag, 'id') === coverId)
+        })
+        const rawHref = coverItem ? attribute(coverItem, 'href') : null
+        if (rawHref) {
+          let decodedHref
+          try { decodedHref = decodeURIComponent(rawHref.split('#')[0]) } catch { decodedHref = rawHref.split('#')[0] }
+          const coverName = path.posix.normalize(path.posix.join(path.posix.dirname(opfName), decodedHref)).replace(/^\/+/, '')
+          const coverEntry = normalizedEntries.get(coverName)
+          if (coverEntry) {
+            console.log(`✅ 通过OPF找到封面: ${coverEntry.entryName}`)
+            return {
+              data: coverEntry.getData(),
+              ext: path.extname(coverEntry.entryName).toLowerCase()
             }
           }
         }
@@ -888,7 +893,7 @@ router.get('/', authenticateToken, async (req, res) => {
       publisher: row.publisher,
       isbn: row.isbn,
       description: row.description,
-      coverImage: row.cover_image,
+      coverImage: Boolean(row.cover_image),
       categoryId: row.category_id,
       categoryName: row.category_name,
       fileType: row.file_type,
@@ -1059,6 +1064,37 @@ async function createManagedBook({ database, staged, originalName, fields, total
 
 async function verifiedBookPath(book) {
   return (await getResourceStorageRuntime().contentService.resolveVerifiedFilePath(book)).filePath
+}
+
+async function verifiedBookCover(database, book) {
+  const requestKey = String(book.id)
+  if (!ebookCoverRequests.has(requestKey)) {
+    const request = ensureEbookCover({
+      book,
+      booksRoot: getStoragePath('books'),
+      resolveBookPath: verifiedBookPath,
+      extractCover: async (bookPath) => {
+        try {
+          validateEpubArchive(bookPath)
+        } catch (error) {
+          throw new EbookCoverError('EBOOK_COVER_ARCHIVE_INVALID', 'EPUB archive validation failed.', error)
+        }
+        return extractEpubCover(bookPath)
+      },
+      compressCover: encodeEbookCoverJpeg,
+      updateCoverPath: (coverPath, previousCoverPath) => {
+        const result = database.prepare(`
+          UPDATE books SET cover_image = ?
+          WHERE id = ? AND cover_image IS ?
+        `).run(coverPath, book.id, previousCoverPath)
+        if (result.changes !== 1) {
+          throw new EbookCoverError('EBOOK_COVER_UPDATE_CONFLICT', 'Ebook cover changed concurrently.')
+        }
+      }
+    }).finally(() => ebookCoverRequests.delete(requestKey))
+    ebookCoverRequests.set(requestKey, request)
+  }
+  return ebookCoverRequests.get(requestKey)
 }
 
 function activeBook(database, id) {
@@ -2112,22 +2148,24 @@ router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req,
   }
 })
 
-// 获取封面图片
-router.get('/:id/cover', async (req, res) => {
+// 获取封面图片；派生封面缺失时从受控 EPUB 原文件按需重建。
+router.get('/:id/cover', authenticateToken, ebookResourceLimiter, async (req, res) => {
   try {
+    const bookId = Number(req.params.id)
+    if (!Number.isSafeInteger(bookId) || bookId <= 0) {
+      return res.status(400).json({ message: '书籍编号无效' })
+    }
     const db = getDatabase()
-    const book = db.prepare('SELECT cover_image FROM books WHERE id = ?').get(req.params.id)
+    const book = activeBook(db, bookId)
 
-    if (!book || !book.cover_image) {
+    if (!book) {
       return res.status(404).json({ message: '封面不存在' })
     }
 
-    if (!fs.existsSync(book.cover_image)) {
-      return res.status(404).json({ message: '封面文件不存在' })
-    }
+    const cover = await verifiedBookCover(db, book)
 
     // 根据文件扩展名设置Content-Type
-    const ext = path.extname(book.cover_image).toLowerCase()
+    const ext = path.extname(cover.filePath).toLowerCase()
     const contentTypes = {
       '.jpg': 'image/jpeg',
       '.jpeg': 'image/jpeg',
@@ -2138,9 +2176,21 @@ router.get('/:id/cover', async (req, res) => {
     const contentType = contentTypes[ext] || 'image/jpeg'
 
     res.setHeader('Content-Type', contentType)
-    res.sendFile(book.cover_image)
+    res.setHeader('Cache-Control', 'private, max-age=86400')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.sendFile(cover.fileName, { root: cover.root })
   } catch (error) {
-    console.error('获取封面失败:', error)
+    if (error instanceof EbookCoverError &&
+        (error.code === 'EBOOK_COVER_NOT_FOUND' || error.code === 'EBOOK_COVER_SOURCE_MISSING')) {
+      return res.status(404).json({ code: error.code, message: '封面不存在' })
+    }
+    if (error instanceof EbookCoverError && error.code === 'EBOOK_COVER_TOO_LARGE') {
+      return res.status(413).json({ code: error.code, message: '封面文件过大' })
+    }
+    if (error instanceof EbookCoverError && error.code === 'EBOOK_COVER_ARCHIVE_INVALID') {
+      return res.status(422).json({ code: error.code, message: '电子书文件无效' })
+    }
+    console.error('获取封面失败:', error?.code || error?.name || 'UNKNOWN')
     res.status(500).json({ message: '服务器错误' })
   }
 })
