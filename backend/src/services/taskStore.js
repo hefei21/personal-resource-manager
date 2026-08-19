@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 
 import { TASK_TABLE } from '../config/taskSchema.js'
 
@@ -8,8 +8,12 @@ const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
 const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const SUBJECT_ID_MAX_LENGTH = 512
 const DEFAULT_MAX_ATTEMPTS = 3
+const DEFAULT_LEASE_DURATION_MS = 60_000
+const MAX_LEASE_DURATION_MS = 365 * 24 * 60 * 60 * 1000
 const DEFAULT_LIST_LIMIT = 50
 const MAX_LIST_LIMIT = 100
+const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
+const MAX_ERROR_SUMMARY_LENGTH = 2048
 const TASK_STATUS_SET = new Set(['pending', 'leased', 'running', 'succeeded', 'failed', 'cancelled'])
 const EXECUTION_CLASS_SET = new Set(['cpu', 'disk', 'network', 'gpu'])
 
@@ -19,6 +23,7 @@ export const TASK_STATUS_RUNNING = 'running'
 export const TASK_STATUS_SUCCEEDED = 'succeeded'
 export const TASK_STATUS_FAILED = 'failed'
 export const TASK_STATUS_CANCELLED = 'cancelled'
+export const TASK_ERROR_LEASE_EXPIRED = 'TASK_LEASE_EXPIRED'
 
 export class TaskStoreError extends Error {
   constructor(code, message, details = {}, options = {}) {
@@ -211,6 +216,105 @@ function normalizeInteger(value, fieldName, { min = 0, max = Number.MAX_SAFE_INT
   return resolved
 }
 
+function normalizeDuration(value, fieldName = 'leaseDurationMs') {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_LEASE_DURATION_MS) {
+    fail('TASK_DURATION_INVALID', `${fieldName} must be a positive duration in milliseconds.`)
+  }
+  return value
+}
+
+function resolveAlias(source, primaryName, aliasName, fieldName, normalize) {
+  const hasPrimary = Object.hasOwn(source, primaryName) && source[primaryName] !== undefined
+  const hasAlias = Object.hasOwn(source, aliasName) && source[aliasName] !== undefined
+  if (!hasPrimary && !hasAlias) return undefined
+  const primary = hasPrimary ? normalize(source[primaryName], fieldName) : undefined
+  const alias = hasAlias ? normalize(source[aliasName], fieldName) : undefined
+  if (primary !== undefined && alias !== undefined && primary !== alias) {
+    fail('TASK_INPUT_INVALID', `${fieldName} aliases must match.`)
+  }
+  return primary ?? alias
+}
+
+function normalizeLeaseCredentialToken(value, fieldName, errorCode = 'TASK_LEASE_CREDENTIALS_INVALID') {
+  if (typeof value !== 'string') fail(errorCode, `${fieldName} is invalid.`)
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || normalized.length > 128 || !TOKEN_PATTERN.test(normalized)) {
+    fail(errorCode, `${fieldName} is invalid.`)
+  }
+  return normalized
+}
+
+function normalizeLeaseCredentials(source, { required = true, tokenRequired = required } = {}) {
+  assertOptionsObject(source, 'lease credentials')
+  const owner = resolveAlias(
+    source,
+    'owner',
+    'leaseOwner',
+    'owner',
+    normalizeLeaseCredentialToken
+  )
+  const token = resolveAlias(
+    source,
+    'token',
+    'leaseToken',
+    'leaseToken',
+    normalizeLeaseCredentialToken
+  )
+  if (required && !owner) {
+    fail('TASK_LEASE_CREDENTIALS_INVALID', 'Lease owner is required.')
+  }
+  if (tokenRequired && !token) {
+    fail('TASK_LEASE_CREDENTIALS_INVALID', 'Lease token is required.')
+  }
+  return Object.freeze({ owner: owner ?? null, token: token ?? null })
+}
+
+function normalizeErrorCode(value) {
+  if (typeof value !== 'string') fail('TASK_ERROR_INVALID', 'errorCode is invalid.')
+  const normalized = value.normalize('NFKC').trim()
+  if (!ERROR_CODE_PATTERN.test(normalized)) fail('TASK_ERROR_INVALID', 'errorCode is invalid.')
+  return normalized
+}
+
+function normalizeErrorSummary(value) {
+  if (typeof value !== 'string') fail('TASK_ERROR_INVALID', 'errorSummary is invalid.')
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || normalized.length > MAX_ERROR_SUMMARY_LENGTH || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    fail('TASK_ERROR_INVALID', 'errorSummary is invalid.')
+  }
+  return normalized
+}
+
+function timestampAfter(timestamp, duration, fieldName = 'leaseExpiresAt') {
+  const milliseconds = Date.parse(timestamp) + duration
+  if (!Number.isSafeInteger(milliseconds)) {
+    fail('TASK_TIMESTAMP_INVALID', `${fieldName} is outside the supported range.`)
+  }
+  const result = new Date(milliseconds)
+  if (Number.isNaN(result.getTime())) fail('TASK_TIMESTAMP_INVALID', `${fieldName} is invalid.`)
+  return result.toISOString()
+}
+
+function normalizeExecutionClassFilter(source) {
+  const hasSingular = Object.hasOwn(source, 'executionClass') && source.executionClass !== undefined
+  const hasPlural = Object.hasOwn(source, 'executionClasses') && source.executionClasses !== undefined
+  if (!hasSingular && !hasPlural) return null
+  const raw = hasPlural ? source.executionClasses : source.executionClass
+  const values = Array.isArray(raw) ? raw : [raw]
+  if (values.length === 0) fail('TASK_EXECUTION_CLASS_INVALID', 'executionClass filter is invalid.')
+  const normalized = values.map((value) => normalizeExecutionClass(value))
+  if (hasSingular && hasPlural) {
+    const singularValues = Array.isArray(source.executionClass)
+      ? source.executionClass.map((value) => normalizeExecutionClass(value))
+      : [normalizeExecutionClass(source.executionClass)]
+    const singular = [...new Set(singularValues)]
+    if (singular.length !== [...new Set(normalized)].length || singular.some((value) => !normalized.includes(value))) {
+      fail('TASK_INPUT_INVALID', 'executionClass aliases must match.')
+    }
+  }
+  return [...new Set(normalized)]
+}
+
 function normalizeExecutionClass(value) {
   const resolved = value === undefined ? 'cpu' : value
   if (typeof resolved !== 'string' || !EXECUTION_CLASS_SET.has(resolved)) {
@@ -324,6 +428,188 @@ function normalizeIdempotencyKey(value) {
     fail('TASK_IDEMPOTENCY_KEY_INVALID', 'Task idempotency key is invalid.')
   }
   return value
+}
+
+function normalizeTaskActionOptions(taskOrOptions, rawOptions, allowed, fieldName) {
+  let source
+  if (rawOptions === undefined && isPlainObject(taskOrOptions)) {
+    source = { ...taskOrOptions }
+  } else {
+    const id = normalizeTaskId(taskOrOptions)
+    if (rawOptions === undefined) {
+      source = { id }
+    } else {
+      assertOptionsObject(rawOptions, `${fieldName} options`)
+      for (const alias of ['id', 'taskId']) {
+        if (Object.hasOwn(rawOptions, alias) && normalizeTaskId(rawOptions[alias]) !== id) {
+          fail('TASK_ID_INVALID', 'Task id aliases must match.')
+        }
+      }
+      source = { ...rawOptions, id }
+    }
+  }
+  if (Object.keys(source).some((key) => !allowed.has(key))) {
+    fail('TASK_INPUT_INVALID', `${fieldName} options contain unsupported fields.`)
+  }
+  const hasId = Object.hasOwn(source, 'id')
+  const hasTaskId = Object.hasOwn(source, 'taskId')
+  if (!hasId && !hasTaskId) fail('TASK_ID_INVALID', 'Task id is required.')
+  const id = normalizeTaskId(hasId ? source.id : source.taskId)
+  if (hasId && hasTaskId && normalizeTaskId(source.taskId) !== id) {
+    fail('TASK_ID_INVALID', 'Task id aliases must match.')
+  }
+  source.id = id
+  delete source.taskId
+  return source
+}
+
+function runImmediateTransaction(database, callback) {
+  const transaction = database.transaction(callback)
+  return typeof transaction.immediate === 'function' ? transaction.immediate() : transaction()
+}
+
+function operationNow(now) {
+  return nowTimestamp(now)
+}
+
+function operationError(error, fallbackCode = 'TASK_STORE_WRITE_FAILED', fallbackMessage = 'Task operation failed.') {
+  if (error instanceof TaskStoreError) throw error
+  fail(fallbackCode, fallbackMessage)
+}
+
+function taskNotFound() {
+  fail('TASK_NOT_FOUND', 'Task was not found.')
+}
+
+function invalidState() {
+  fail('TASK_INVALID_STATE', 'Task is not in a valid state for this operation.')
+}
+
+function assertUsableLease(row, expectedStatuses, credentials, timestamp) {
+  if (!row) taskNotFound()
+  if (!expectedStatuses.includes(row.status)) invalidState()
+  if (!credentials.owner || !credentials.token ||
+    row.lease_owner !== credentials.owner || row.lease_token !== credentials.token) {
+    fail('TASK_LEASE_MISMATCH', 'Lease credentials do not match.')
+  }
+  if (!row.lease_expires_at || row.lease_expires_at <= timestamp) {
+    fail(TASK_ERROR_LEASE_EXPIRED, 'Task lease has expired.')
+  }
+}
+
+function clearLeaseSql() {
+  return `
+    lease_token = NULL,
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    heartbeat_at = NULL`
+}
+
+function normalizeLeaseNextOptions(options = {}) {
+  assertOptionsObject(options, 'lease options')
+  const allowed = new Set([
+    'owner', 'leaseOwner', 'leaseDurationMs', 'leaseDuration', 'durationMs',
+    'executionClass', 'executionClasses', 'now', 'tokenFactory', 'leaseTokenFactory'
+  ])
+  if (Object.keys(options).some((key) => !allowed.has(key))) {
+    fail('TASK_INPUT_INVALID', 'Lease options contain unsupported fields.')
+  }
+  const credentials = normalizeLeaseCredentials(options, { tokenRequired: false })
+  const durations = ['leaseDurationMs', 'leaseDuration', 'durationMs']
+    .filter((key) => Object.hasOwn(options, key) && options[key] !== undefined)
+    .map((key) => normalizeDuration(options[key], 'leaseDurationMs'))
+  if (new Set(durations).size > 1) fail('TASK_DURATION_INVALID', 'Lease duration aliases must match.')
+  const leaseDurationMs = durations[0] ?? DEFAULT_LEASE_DURATION_MS
+  const executionClasses = normalizeExecutionClassFilter(options)
+  const tokenFactories = ['tokenFactory', 'leaseTokenFactory']
+    .filter((key) => Object.hasOwn(options, key) && options[key] !== undefined)
+    .map((key) => options[key])
+  if (tokenFactories.some((factory) => typeof factory !== 'function')) {
+    fail('TASK_TOKEN_INVALID', 'Lease token factory is invalid.')
+  }
+  if (tokenFactories.length === 2 && tokenFactories[0] !== tokenFactories[1]) {
+    fail('TASK_TOKEN_INVALID', 'Lease token factory aliases must match.')
+  }
+  return Object.freeze({
+    owner: credentials.owner,
+    leaseDurationMs,
+    executionClasses,
+    now: options.now,
+    tokenFactory: tokenFactories[0]
+  })
+}
+
+function normalizeHeartbeatOptions(taskOrOptions, rawOptions) {
+  const source = normalizeTaskActionOptions(taskOrOptions, rawOptions, new Set([
+    'id', 'taskId', 'owner', 'leaseOwner', 'token', 'leaseToken',
+    'leaseDurationMs', 'leaseDuration', 'durationMs', 'now'
+  ]), 'heartbeat')
+  const credentials = normalizeLeaseCredentials(source)
+  const durations = ['leaseDurationMs', 'leaseDuration', 'durationMs']
+    .filter((key) => Object.hasOwn(source, key) && source[key] !== undefined)
+    .map((key) => normalizeDuration(source[key], 'leaseDurationMs'))
+  if (new Set(durations).size > 1) fail('TASK_DURATION_INVALID', 'Lease duration aliases must match.')
+  return Object.freeze({
+    id: source.id,
+    owner: credentials.owner,
+    token: credentials.token,
+    leaseDurationMs: durations[0] ?? DEFAULT_LEASE_DURATION_MS,
+    now: source.now
+  })
+}
+
+function normalizeCredentialActionOptions(taskOrOptions, rawOptions, fieldName) {
+  const source = normalizeTaskActionOptions(taskOrOptions, rawOptions, new Set([
+    'id', 'taskId', 'owner', 'leaseOwner', 'token', 'leaseToken', 'now'
+  ]), fieldName)
+  const credentials = normalizeLeaseCredentials(source)
+  return Object.freeze({ id: source.id, owner: credentials.owner, token: credentials.token, now: source.now })
+}
+
+function normalizeSucceedOptions(taskOrOptions, rawOptions) {
+  const source = normalizeTaskActionOptions(taskOrOptions, rawOptions, new Set([
+    'id', 'taskId', 'owner', 'leaseOwner', 'token', 'leaseToken', 'result', 'now'
+  ]), 'succeed')
+  const credentials = normalizeLeaseCredentials(source)
+  const result = Object.hasOwn(source, 'result') ? source.result : null
+  return Object.freeze({
+    id: source.id,
+    owner: credentials.owner,
+    token: credentials.token,
+    resultJson: canonicalJson(result, 'result'),
+    now: source.now
+  })
+}
+
+function normalizeFailOptions(taskOrOptions, rawOptions) {
+  const source = normalizeTaskActionOptions(taskOrOptions, rawOptions, new Set([
+    'id', 'taskId', 'owner', 'leaseOwner', 'token', 'leaseToken',
+    'errorCode', 'errorSummary', 'retryAt', 'now'
+  ]), 'fail')
+  const credentials = normalizeLeaseCredentials(source)
+  if (!Object.hasOwn(source, 'errorCode') || !Object.hasOwn(source, 'errorSummary')) {
+    fail('TASK_ERROR_INVALID', 'errorCode and errorSummary are required.')
+  }
+  const retryAt = source.retryAt === undefined || source.retryAt === null
+    ? null
+    : normalizeTimestamp(source.retryAt, 'retryAt')
+  return Object.freeze({
+    id: source.id,
+    owner: credentials.owner,
+    token: credentials.token,
+    errorCode: normalizeErrorCode(source.errorCode),
+    errorSummary: normalizeErrorSummary(source.errorSummary),
+    retryAt,
+    now: source.now
+  })
+}
+
+function normalizeCancelOptions(taskOrOptions, rawOptions) {
+  const source = normalizeTaskActionOptions(taskOrOptions, rawOptions, new Set([
+    'id', 'taskId', 'owner', 'leaseOwner', 'token', 'leaseToken', 'now'
+  ]), 'cancel')
+  const credentials = normalizeLeaseCredentials(source, { required: false })
+  return Object.freeze({ id: source.id, owner: credentials.owner, token: credentials.token, now: source.now })
 }
 
 export function getTaskById(database, value) {
@@ -449,22 +735,429 @@ export function enqueueTask(database, input, options = {}) {
   }
 }
 
+const defaultLeaseTokenFactory = () => randomBytes(32).toString('base64url')
+const LEASE_EXPIRED_SUMMARY = 'Task lease expired before completion.'
+
+function operationTimestamp(rawNow, fallbackNow) {
+  return operationNow(rawNow === undefined ? fallbackNow : rawNow)
+}
+
+function protectedUpdate(database, sql, parameters, failureMessage = 'Task operation could not be applied.') {
+  const outcome = database.prepare(sql).run(...parameters)
+  if (outcome.changes !== 1) fail('TASK_STATE_CONFLICT', failureMessage)
+}
+
+function generatedLeaseToken(tokenFactory) {
+  let value
+  try {
+    value = tokenFactory()
+  } catch {
+    fail('TASK_TOKEN_INVALID', 'Lease token generation failed.')
+  }
+  return normalizeLeaseCredentialToken(value, 'leaseToken', 'TASK_TOKEN_INVALID')
+}
+
+export function leaseNext(database, options = {}, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeLeaseNextOptions(options)
+  const timestamp = operationTimestamp(normalized.now, dependencies.now)
+  const tokenFactory = normalized.tokenFactory ?? dependencies.tokenFactory ?? defaultLeaseTokenFactory
+  if (typeof tokenFactory !== 'function') fail('TASK_TOKEN_INVALID', 'Lease token factory is invalid.')
+  try {
+    const row = runImmediateTransaction(database, () => {
+      const classClause = normalized.executionClasses
+        ? ` AND execution_class IN (${normalized.executionClasses.map(() => '?').join(', ')})`
+        : ''
+      const selectionParameters = [timestamp, ...normalized.executionClasses ?? []]
+      const candidate = database.prepare(`
+        SELECT id
+          FROM ${TASK_TABLE}
+         WHERE status = 'pending'
+           AND available_at <= ?
+           AND attempt_count < max_attempts
+           ${classClause}
+         ORDER BY priority DESC, available_at ASC, id ASC
+         LIMIT 1
+      `).get(...selectionParameters)
+      if (!candidate) return null
+
+      const leaseToken = generatedLeaseToken(tokenFactory)
+      const leaseExpiresAt = timestampAfter(timestamp, normalized.leaseDurationMs)
+      const update = database.prepare(`
+        UPDATE ${TASK_TABLE}
+           SET status = 'leased',
+               lease_token = ?,
+               lease_owner = ?,
+               lease_expires_at = ?,
+               heartbeat_at = ?,
+               attempt_count = attempt_count + 1,
+               progress = 0,
+               result_json = NULL,
+               started_at = NULL,
+               finished_at = NULL,
+               updated_at = ?
+         WHERE id = ?
+           AND status = 'pending'
+           AND available_at <= ?
+           AND attempt_count < max_attempts
+           ${classClause}
+      `).run(
+        leaseToken,
+        normalized.owner,
+        leaseExpiresAt,
+        timestamp,
+        timestamp,
+        candidate.id,
+        timestamp,
+        ...normalized.executionClasses ?? []
+      )
+      if (update.changes !== 1) return null
+      return readById(database, candidate.id)
+    })
+    return publicTask(row)
+  } catch (error) {
+    operationError(error)
+  }
+}
+
+export function markRunning(database, taskOrOptions, rawOptions, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeCredentialActionOptions(taskOrOptions, rawOptions, 'markRunning')
+  const timestamp = operationTimestamp(normalized.now, dependencies.now)
+  try {
+    const row = runImmediateTransaction(database, () => {
+      const current = readById(database, normalized.id)
+      assertUsableLease(current, [TASK_STATUS_LEASED], normalized, timestamp)
+      protectedUpdate(database, `
+        UPDATE ${TASK_TABLE}
+           SET status = 'running',
+               started_at = ?,
+               heartbeat_at = ?,
+               updated_at = ?
+         WHERE id = ?
+           AND status = 'leased'
+           AND lease_owner = ?
+           AND lease_token = ?
+           AND lease_expires_at > ?
+      `, [
+        timestamp, timestamp, timestamp, normalized.id,
+        normalized.owner, normalized.token, timestamp
+      ])
+      return readById(database, normalized.id)
+    })
+    return publicTask(row)
+  } catch (error) {
+    operationError(error)
+  }
+}
+
+export function heartbeat(database, taskOrOptions, rawOptions, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeHeartbeatOptions(taskOrOptions, rawOptions)
+  const timestamp = operationTimestamp(normalized.now, dependencies.now)
+  try {
+    const row = runImmediateTransaction(database, () => {
+      const current = readById(database, normalized.id)
+      assertUsableLease(current, [TASK_STATUS_LEASED, TASK_STATUS_RUNNING], normalized, timestamp)
+      const requestedExpiry = timestampAfter(timestamp, normalized.leaseDurationMs)
+      const leaseExpiresAt = current.lease_expires_at > requestedExpiry
+        ? current.lease_expires_at
+        : requestedExpiry
+      protectedUpdate(database, `
+        UPDATE ${TASK_TABLE}
+           SET lease_expires_at = ?,
+               heartbeat_at = ?,
+               updated_at = ?
+         WHERE id = ?
+           AND status IN ('leased', 'running')
+           AND lease_owner = ?
+           AND lease_token = ?
+           AND lease_expires_at > ?
+      `, [
+        leaseExpiresAt, timestamp, timestamp, normalized.id,
+        normalized.owner, normalized.token, timestamp
+      ])
+      return readById(database, normalized.id)
+    })
+    return publicTask(row)
+  } catch (error) {
+    operationError(error)
+  }
+}
+
+export function succeed(database, taskOrOptions, rawOptions, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeSucceedOptions(taskOrOptions, rawOptions)
+  const timestamp = operationTimestamp(normalized.now, dependencies.now)
+  try {
+    const row = runImmediateTransaction(database, () => {
+      const current = readById(database, normalized.id)
+      assertUsableLease(current, [TASK_STATUS_RUNNING], normalized, timestamp)
+      protectedUpdate(database, `
+        UPDATE ${TASK_TABLE}
+           SET status = 'succeeded',
+               result_json = ?,
+               progress = 100,
+               error_code = NULL,
+               error_summary = NULL,
+               finished_at = ?,
+               ${clearLeaseSql()},
+               updated_at = ?
+         WHERE id = ?
+           AND status = 'running'
+           AND lease_owner = ?
+           AND lease_token = ?
+           AND lease_expires_at > ?
+      `, [
+        normalized.resultJson, timestamp, timestamp, normalized.id,
+        normalized.owner, normalized.token, timestamp
+      ])
+      return readById(database, normalized.id)
+    })
+    return publicTask(row)
+  } catch (error) {
+    operationError(error)
+  }
+}
+
+export function failTask(database, taskOrOptions, rawOptions, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeFailOptions(taskOrOptions, rawOptions)
+  const timestamp = operationTimestamp(normalized.now, dependencies.now)
+  try {
+    const outcome = runImmediateTransaction(database, () => {
+      const current = readById(database, normalized.id)
+      assertUsableLease(current, [TASK_STATUS_LEASED, TASK_STATUS_RUNNING], normalized, timestamp)
+      const retryScheduled = current.attempt_count < current.max_attempts && normalized.retryAt !== null
+      const status = retryScheduled ? TASK_STATUS_PENDING : TASK_STATUS_FAILED
+      const finishedAt = retryScheduled ? null : timestamp
+      const availableAt = retryScheduled ? normalized.retryAt : current.available_at
+      protectedUpdate(database, `
+        UPDATE ${TASK_TABLE}
+           SET status = ?,
+               available_at = ?,
+               progress = 0,
+               error_code = ?,
+               error_summary = ?,
+               started_at = CASE WHEN ? = 'pending' THEN NULL ELSE started_at END,
+               finished_at = ?,
+               ${clearLeaseSql()},
+               updated_at = ?
+         WHERE id = ?
+           AND status IN ('leased', 'running')
+           AND lease_owner = ?
+           AND lease_token = ?
+           AND lease_expires_at > ?
+      `, [
+        status, availableAt, normalized.errorCode, normalized.errorSummary,
+        status, finishedAt, timestamp, normalized.id,
+        normalized.owner, normalized.token, timestamp
+      ])
+      return { row: readById(database, normalized.id), retryScheduled }
+    })
+    return Object.freeze({ task: publicTask(outcome.row), retryScheduled: outcome.retryScheduled })
+  } catch (error) {
+    operationError(error)
+  }
+}
+
+export function cancel(database, taskOrOptions, rawOptions, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeCancelOptions(taskOrOptions, rawOptions)
+  const timestamp = operationTimestamp(normalized.now, dependencies.now)
+  try {
+    const row = runImmediateTransaction(database, () => {
+      const current = readById(database, normalized.id)
+      if (!current) taskNotFound()
+      if (current.status === TASK_STATUS_PENDING) {
+        protectedUpdate(database, `
+          UPDATE ${TASK_TABLE}
+             SET status = 'cancelled',
+                 finished_at = ?,
+                 ${clearLeaseSql()},
+                 updated_at = ?
+           WHERE id = ?
+             AND status = 'pending'
+        `, [timestamp, timestamp, normalized.id])
+      } else {
+        assertUsableLease(current, [TASK_STATUS_LEASED, TASK_STATUS_RUNNING], normalized, timestamp)
+        protectedUpdate(database, `
+          UPDATE ${TASK_TABLE}
+             SET status = 'cancelled',
+                 finished_at = ?,
+                 ${clearLeaseSql()},
+                 updated_at = ?
+           WHERE id = ?
+             AND status IN ('leased', 'running')
+             AND lease_owner = ?
+             AND lease_token = ?
+             AND lease_expires_at > ?
+        `, [
+          timestamp, timestamp, normalized.id,
+          normalized.owner, normalized.token, timestamp
+        ])
+      }
+      return readById(database, normalized.id)
+    })
+    return publicTask(row)
+  } catch (error) {
+    operationError(error)
+  }
+}
+
+export function recoverExpiredLeases(database, options = {}, dependencies = {}) {
+  assertDatabase(database, true)
+  assertOptionsObject(options, 'recover options')
+  if (Object.keys(options).some((key) => key !== 'now')) {
+    fail('TASK_INPUT_INVALID', 'Recover options contain unsupported fields.')
+  }
+  const timestamp = operationTimestamp(options.now, dependencies.now)
+  try {
+    const outcome = runImmediateTransaction(database, () => {
+      const expiredRows = database.prepare(`
+        SELECT id, attempt_count, max_attempts
+          FROM ${TASK_TABLE}
+         WHERE status IN ('leased', 'running')
+           AND lease_expires_at IS NOT NULL
+           AND lease_expires_at <= ?
+         ORDER BY id ASC
+      `).all(timestamp)
+      const recoveredIds = []
+      const failedIds = []
+      const recover = database.prepare(`
+        UPDATE ${TASK_TABLE}
+           SET status = 'pending',
+               available_at = ?,
+               progress = 0,
+               error_code = ?,
+               error_summary = ?,
+               started_at = NULL,
+               finished_at = NULL,
+               ${clearLeaseSql()},
+               updated_at = ?
+         WHERE id = ?
+           AND status IN ('leased', 'running')
+           AND lease_expires_at IS NOT NULL
+           AND lease_expires_at <= ?
+      `)
+      const terminate = database.prepare(`
+        UPDATE ${TASK_TABLE}
+           SET status = 'failed',
+               progress = 0,
+               error_code = ?,
+               error_summary = ?,
+               finished_at = ?,
+               ${clearLeaseSql()},
+               updated_at = ?
+         WHERE id = ?
+           AND status IN ('leased', 'running')
+           AND lease_expires_at IS NOT NULL
+           AND lease_expires_at <= ?
+      `)
+      for (const row of expiredRows) {
+        const parameters = row.attempt_count < row.max_attempts
+          ? [timestamp, TASK_ERROR_LEASE_EXPIRED, LEASE_EXPIRED_SUMMARY, timestamp, row.id, timestamp]
+          : [TASK_ERROR_LEASE_EXPIRED, LEASE_EXPIRED_SUMMARY, timestamp, timestamp, row.id, timestamp]
+        const result = row.attempt_count < row.max_attempts
+          ? recover.run(...parameters)
+          : terminate.run(...parameters)
+        if (result.changes !== 1) fail('TASK_STATE_CONFLICT', 'Expired task lease could not be recovered.')
+        if (row.attempt_count < row.max_attempts) recoveredIds.push(row.id)
+        else failedIds.push(row.id)
+      }
+      return { recoveredIds, failedIds }
+    })
+    return deepFreeze({
+      recoveredCount: outcome.recoveredIds.length,
+      recoveredIds: [...outcome.recoveredIds],
+      failedCount: outcome.failedIds.length,
+      failedIds: [...outcome.failedIds]
+    })
+  } catch (error) {
+    operationError(error)
+  }
+}
+
+export const leaseNextTask = leaseNext
+export const markTaskRunning = markRunning
+export const heartbeatTask = heartbeat
+export const succeedTask = succeed
+export const cancelTask = cancel
+
 export class TaskStore {
   constructor(options = {}) {
     if (options && typeof options.prepare === 'function') options = { database: options }
     assertOptionsObject(options, 'TaskStore options')
+    const allowed = new Set(['database', 'now', 'tokenFactory', 'leaseTokenFactory'])
+    if (Object.keys(options).some((key) => !allowed.has(key))) {
+      fail('TASK_STORE_INPUT_INVALID', 'TaskStore options contain unsupported fields.')
+    }
     assertDatabase(options.database, true)
     if (options.now !== undefined && typeof options.now !== 'function' && !(options.now instanceof Date) && typeof options.now !== 'string') {
       fail('TASK_TIMESTAMP_INVALID', 'TaskStore now must be a Date, ISO text, or function.')
     }
+    const hasTokenFactory = options.tokenFactory !== undefined
+    const hasLeaseTokenFactory = options.leaseTokenFactory !== undefined
+    if (hasTokenFactory && typeof options.tokenFactory !== 'function') {
+      fail('TASK_TOKEN_INVALID', 'Lease token factory is invalid.')
+    }
+    if (hasLeaseTokenFactory && typeof options.leaseTokenFactory !== 'function') {
+      fail('TASK_TOKEN_INVALID', 'Lease token factory is invalid.')
+    }
+    if (hasTokenFactory && hasLeaseTokenFactory && options.tokenFactory !== options.leaseTokenFactory) {
+      fail('TASK_TOKEN_INVALID', 'Lease token factory aliases must match.')
+    }
     this.database = options.database
     this.now = options.now
+    this.tokenFactory = options.tokenFactory ?? options.leaseTokenFactory ?? defaultLeaseTokenFactory
   }
 
   enqueue(input) { return enqueueTask(this.database, input, { now: this.now }) }
   getById(id) { return getTaskById(this.database, id) }
   getByIdempotencyKey(key) { return getTaskByIdempotencyKey(this.database, key) }
   list(options) { return listTasks(this.database, options) }
+  leaseNext(options = {}) { return leaseNext(this.database, options, { now: this.now, tokenFactory: this.tokenFactory }) }
+  markRunning(taskOrOptions, rawOptions, rawToken) {
+    const options = typeof rawOptions === 'string'
+      ? { owner: rawOptions, token: rawToken }
+      : rawOptions
+    return markRunning(this.database, taskOrOptions, options, { now: this.now })
+  }
+  heartbeat(taskOrOptions, rawOptions, rawToken, rawDuration) {
+    const options = typeof rawOptions === 'string'
+      ? {
+          owner: rawOptions,
+          token: rawToken,
+          ...(rawDuration === undefined ? {} : { leaseDurationMs: rawDuration })
+        }
+      : rawOptions
+    return heartbeat(this.database, taskOrOptions, options, { now: this.now })
+  }
+  succeed(taskOrOptions, rawOptions, rawTokenOrResult, rawResult) {
+    const options = typeof rawOptions === 'string'
+      ? { owner: rawOptions, token: rawTokenOrResult, result: rawResult }
+      : rawTokenOrResult === undefined || !isPlainObject(rawOptions)
+        ? rawOptions
+        : { ...rawOptions, result: rawTokenOrResult }
+    return succeed(this.database, taskOrOptions, options, { now: this.now })
+  }
+  fail(taskOrOptions, rawOptions, rawTokenOrFailure, rawFailure) {
+    const options = typeof rawOptions === 'string'
+      ? { owner: rawOptions, token: rawTokenOrFailure, ...(isPlainObject(rawFailure) ? rawFailure : {}) }
+      : (rawTokenOrFailure === undefined && rawFailure === undefined) || !isPlainObject(rawOptions)
+        ? rawOptions
+        : { ...rawOptions, ...(isPlainObject(rawFailure) ? rawFailure : rawTokenOrFailure) }
+    return failTask(this.database, taskOrOptions, options, { now: this.now })
+  }
+  cancel(taskOrOptions, rawOptions, rawToken) {
+    const options = typeof rawOptions === 'string'
+      ? { owner: rawOptions, token: rawToken }
+      : rawOptions
+    return cancel(this.database, taskOrOptions, options, { now: this.now })
+  }
+  recoverExpiredLeases(options = {}) {
+    return recoverExpiredLeases(this.database, options, { now: this.now })
+  }
 }
 
 export function createTaskStore(options) {
