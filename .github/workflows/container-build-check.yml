@@ -90,7 +90,8 @@ jobs:
             test ! -e /app/.test-runtime
             test -f /app/migrate-access-logs.js
             node --check /app/migrate-access-logs.js
-            node -e "import(\"/app/migrate-access-logs.js\").then(m => { if (typeof m.migrate !== \"function\") process.exit(1) })"
+            DATA_PATH=/app/data DB_PATH=/app/data/database/app.db \
+              node -e "import(process.argv[1]).then(m => { if (typeof m.migrate !== process.argv[2]) process.exit(1) })" /app/migrate-access-logs.js function
             node --check /app/src/index.js
           '
 
