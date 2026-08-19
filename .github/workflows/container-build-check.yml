@@ -81,6 +81,8 @@ jobs:
             command -v git >/dev/null
             command -v ffmpeg >/dev/null
             command -v ffprobe >/dev/null
+            command -v update-ca-certificates >/dev/null
+            test -s /etc/ssl/certs/ca-certificates.crt
             ! command -v python3 >/dev/null
             ! command -v make >/dev/null
             ! command -v g++ >/dev/null
@@ -94,6 +96,9 @@ jobs:
             DATA_PATH=/app/data DB_PATH=/app/data/database/app.db \
               node -e "import(process.argv[1]).then(m => { if (typeof m.migrate !== process.argv[2]) process.exit(1) })" /app/migrate-access-logs.js function
             node --check /app/src/index.js
+            GIT_TERMINAL_PROMPT=0 timeout 60 \
+              git -c http.sslVerify=true ls-remote --exit-code \
+              https://github.com/hefei21/personal-resource-manager.git HEAD >/dev/null
           '
 
       - name: Check frontend runtime contents

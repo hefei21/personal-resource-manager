@@ -25,8 +25,10 @@ ENV NODE_ENV=production \
 # git is used by the code repository routes; ffmpeg also provides ffprobe.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        ca-certificates \
         git \
         ffmpeg \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=dependencies /app/node_modules ./node_modules
