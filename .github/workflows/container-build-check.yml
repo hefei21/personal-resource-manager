@@ -17,6 +17,7 @@ on:
       - "frontend/src/**"
       - "frontend/nginx.conf"
       - "frontend/vite.config.js"
+      - ".github/workflows/baseline-images.yml"
       - ".github/workflows/container-build-check.yml"
   workflow_dispatch:
 
