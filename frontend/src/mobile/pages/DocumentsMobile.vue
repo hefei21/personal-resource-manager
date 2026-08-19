@@ -70,7 +70,8 @@
       title="上传文档"
       @confirm="handleUpload"
       :show-close="true"
-      :confirm-btn="{ content: '上传', loading: uploading, disabled: uploading || !canWrite }"
+      :confirm-loading="uploading"
+      :confirm-disabled="uploading || !canWrite"
       class="centered-dialog"
     >
       <div class="mobile-upload-form">

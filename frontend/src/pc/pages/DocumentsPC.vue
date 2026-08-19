@@ -448,7 +448,8 @@
       @dragover.prevent
       @dragleave.prevent="handleDialogDragLeave"
       @drop.prevent="handleFileDrop"
-      :confirm-btn="{ content: '上传', loading: uploading, disabled: uploading }"
+      :confirm-loading="uploading"
+      :confirm-disabled="uploading || !canWrite"
       :close-btn="!uploading"
     >
       <NativeForm :modelValue="uploadForm" :rules="uploadRules">

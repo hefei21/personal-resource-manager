@@ -36,6 +36,11 @@ test('document API exposes the version trash lifecycle routes', () => {
 
 test('PC and mobile document upload UIs expose the same explicit conflict choices', () => {
   for (const source of [pcSource, mobileSource]) {
+    const uploadDialogStart = source.indexOf('title="上传文档"')
+    const uploadDialogEnd = source.indexOf('<!-- 上传冲突对话框', uploadDialogStart)
+    assert.notEqual(uploadDialogStart, -1)
+    assert.notEqual(uploadDialogEnd, -1)
+    const uploadDialog = source.slice(uploadDialogStart, uploadDialogEnd)
     assert.match(source, /DOCUMENT_UPLOAD_CONFLICT/u)
     assert.match(source, /formData\.append\('resolution', 'create'\)/u)
     assert.match(source, /formData\.append\('resolution', 'new_version'\)/u)
@@ -52,6 +57,9 @@ test('PC and mobile document upload UIs expose the same explicit conflict choice
     assert.match(source, /使用建议标题另建/u)
     assert.match(source, /选择候选作为新版本/u)
     assert.match(source, /@click="cancelUploadConflict"/u)
+    assert.match(uploadDialog, /:confirm-loading="uploading"/u)
+    assert.match(uploadDialog, /:confirm-disabled="uploading \|\| !canWrite"/u)
+    assert.doesNotMatch(uploadDialog, /:confirm-btn=/u)
 
     const cancel = functionSource(source, 'cancelUploadConflict')
     assert.doesNotMatch(cancel, /api\.documents\.upload/u)
