@@ -14,7 +14,21 @@ import {
 import { documentOriginalName, getDocumentStorageRuntime } from '../services/documentStorageRuntime.js'
 import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
 import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
-import { restoreDocumentVersion, updateDocumentContent } from '../services/documentVersionService.js'
+import {
+  appendDocumentVersion,
+  DocumentVersionError,
+  normalizeDocumentVersionNote,
+  restoreDocumentVersion,
+  updateDocumentContent
+} from '../services/documentVersionService.js'
+import {
+  DocumentConflictError,
+  documentUploadConflict,
+  findDocumentUploadConflicts,
+  normalizeDocumentConflictResolution,
+  normalizeDocumentTitle,
+  selectDocumentConflictTarget
+} from '../services/documentConflictService.js'
 import {
   listDeletedDocuments,
   permanentlyDeleteDocument,
@@ -85,7 +99,12 @@ async function readDocumentBuffer(contentService, document, maximumBytes = MAX_D
 
 function sendDocumentError(res, error, fallbackMessage) {
   const statusByCode = {
+    DOCUMENT_UPLOAD_CONFLICT: 409,
+    DOCUMENT_CONFLICT_RESOLUTION_INVALID: 400,
+    DOCUMENT_CONFLICT_TARGET_INVALID: 400,
+    DOCUMENT_CONTENT_IDENTICAL: 409,
     DOCUMENT_CATEGORY_ID_INVALID: 400,
+    DOCUMENT_CATEGORY_INVALID: 400,
     DOCUMENT_CATEGORY_PATH_INVALID: 400,
     DOCUMENT_CATEGORY_NOT_FOUND: 400,
     DOCUMENT_TAGS_INVALID: 400,
@@ -100,10 +119,16 @@ function sendDocumentError(res, error, fallbackMessage) {
     DOCUMENT_CONTENT_INTEGRITY_FAILED: 409,
     DOCUMENT_CONTENT_INVALID: 400,
     DOCUMENT_ID_INVALID: 400,
+    DOCUMENT_VERSION_MANAGED: 400,
     DOCUMENT_VERSION_INVALID: 400,
     DOCUMENT_VERSION_NOT_GREATER: 409,
     DOCUMENT_VERSION_NOTE_INVALID: 400,
     DOCUMENT_VERSION_NOT_FOUND: 404,
+    DOCUMENT_VERSION_IS_CURRENT: 409,
+    DOCUMENT_VERSION_NOT_CURRENT: 409,
+    DOCUMENT_VERSION_TRASHED: 409,
+    DOCUMENT_VERSION_NOT_TRASHED: 409,
+    DOCUMENT_VERSION_PURGE_BLOCKED: 409,
     DOCUMENT_NOT_FOUND: 404
     , DOCUMENT_ALREADY_TRASHED: 409
     , DOCUMENT_TRASH_NOT_FOUND: 404
@@ -116,7 +141,15 @@ function sendDocumentError(res, error, fallbackMessage) {
     , DOCUMENT_IDS_INVALID: 400
   }
   const status = statusByCode[error?.code] ?? 500
-  return res.status(status).json({ message: status === 500 ? fallbackMessage : error.message, code: error?.code })
+  const body = {
+    message: status === 500 ? fallbackMessage : error.message,
+    code: error?.code
+  }
+  if (error?.code === 'DOCUMENT_UPLOAD_CONFLICT') {
+    body.candidates = Array.isArray(error.details?.candidates) ? error.details.candidates : []
+    body.suggestedTitle = error.details?.suggestedTitle ?? null
+  }
+  return res.status(status).json(body)
 }
 
 // 创建分类
@@ -619,11 +652,11 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
   let stagedToken = req.file?.stagingToken
   try {
     if (!req.file?.stagingToken) return res.status(400).json({ message: '请选择文件' })
-    const title = typeof req.body.title === 'string' ? req.body.title.trim() : ''
-    if (title === '') {
-      getDocumentStorageRuntime().storageService.discardStaged(stagedToken)
-      stagedToken = null
-      return res.status(400).json({ message: '标题不能为空' })
+    const title = normalizeDocumentTitle(req.body.title)
+    const resolution = normalizeDocumentConflictResolution(req.body.resolution)
+    if (Object.prototype.hasOwnProperty.call(req.body, 'newVersion') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'version')) {
+      throw new DocumentVersionError('DOCUMENT_VERSION_MANAGED', 'Document version numbers are managed by the system.')
     }
 
     const db = getDatabase()
@@ -635,24 +668,47 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
     const compatibility = categoryCompatibilityFields(category)
     const normalizedTags = normalizeDocumentTags(req.body.tags)
     const originalName = documentOriginalName(req.file.originalName)
+    const initialVersionNote = normalizeDocumentVersionNote(req.body.versionNote)
+    const conflicts = findDocumentUploadConflicts(db, {
+      title,
+      category,
+      contentSha256: req.file.contentSha256
+    })
 
-    // 检查重名并自动添加后缀
-    let finalTitle = title
-    let suffix = 1
-    let unique = false
-
-    while (!unique) {
-      const checkStmt = db.prepare(
-        'SELECT id FROM documents WHERE title = ? AND category IS ? AND subcategory IS ?'
-      )
-      const existing = checkStmt.get(finalTitle, compatibility.category, compatibility.subcategory)
-      if (!existing) {
-        unique = true
-      } else {
-        finalTitle = `${title} (${suffix})`
-        suffix++
+    if (resolution === 'new_version') {
+      const target = selectDocumentConflictTarget(conflicts, req.body.targetDocumentId)
+      if (target.hashMatches) {
+        throw new DocumentConflictError(
+          'DOCUMENT_CONTENT_IDENTICAL',
+          'Document content is identical to the current version.'
+        )
       }
+      const runtime = getDocumentStorageRuntime()
+      const result = await appendDocumentVersion({
+        database: db,
+        runtime,
+        id: target.id,
+        staged: {
+          token: req.file.stagingToken,
+          sha256: req.file.contentSha256,
+          bytes: req.file.contentBytes
+        },
+        versionNote: initialVersionNote
+      })
+      stagedToken = null
+      return res.json({
+        id: target.id,
+        title: target.title,
+        version: result.version,
+        resolution: 'new_version',
+        message: '上传成功'
+      })
     }
+
+    const conflict = conflicts.length > 0
+      ? documentUploadConflict({ database: db, title, category, contentSha256: req.file.contentSha256 })
+      : null
+    if (conflict) throw conflict
 
     let documentId
     const runtime = getDocumentStorageRuntime()
@@ -671,7 +727,7 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
              content_sha256, content_bytes, original_name, version)
           VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 1.0)
         `).run(
-          finalTitle,
+          title,
           compatibility.category,
           compatibility.subcategory,
           category?.id ?? null,
@@ -686,7 +742,7 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
           INSERT INTO document_versions
             (document_id, version, file_path, storage_key, content_sha256, content_bytes, note)
           VALUES (?, 1, NULL, ?, ?, ?, ?)
-        `).run(documentId, storageKey, sha256, bytes, req.body.versionNote?.trim() || '初始版本')
+        `).run(documentId, storageKey, sha256, bytes, initialVersionNote || '初始版本')
       }
     })
     stagedToken = null
@@ -696,7 +752,7 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
       console.warn('文档标签缓存清理失败:', error?.code ?? error?.name)
     }
 
-    res.json({ id: documentId, title: finalTitle, message: '上传成功' })
+    res.json({ id: documentId, title, resolution: 'create', message: '上传成功' })
   } catch (error) {
     if (stagedToken) {
       try { getDocumentStorageRuntime().storageService.discardStaged(stagedToken) } catch {}
@@ -788,15 +844,17 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
 // 更新文档内容
 router.put('/:id/content', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { content, versionNote, newVersion } = req.body
-    const result = await updateDocumentContent({
+    const body = req.body ?? {}
+    const update = {
       database: getDatabase(),
       runtime: getDocumentStorageRuntime(),
       id: req.params.id,
-      content,
-      version: newVersion,
-      versionNote
-    })
+      content: body.content,
+      versionNote: body.versionNote
+    }
+    if (Object.prototype.hasOwnProperty.call(body, 'newVersion')) update.newVersion = body.newVersion
+    if (Object.prototype.hasOwnProperty.call(body, 'version')) update.version = body.version
+    const result = await updateDocumentContent(update)
     res.json({ message: '保存成功', version: result.version })
   } catch (error) {
     console.error('更新文档内容失败:', error?.code ?? error?.name)
@@ -809,7 +867,11 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
   try {
     const db = getDatabase()
     const stmt = db.prepare(
-      'SELECT * FROM document_versions WHERE document_id = ? ORDER BY version DESC'
+      `SELECT v.*, d.version AS current_version
+       FROM document_versions v
+       JOIN documents d ON d.id = v.document_id
+       WHERE v.document_id = ?
+       ORDER BY v.version DESC`
     )
     const rows = stmt.all(req.params.id)
 
@@ -820,13 +882,15 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
       version: row.version,
       filePath: documentOriginalName(row.original_name || row.file_path || `version-${row.version}`),
       note: row.note,
-      createdAt: row.created_at
+      createdAt: row.created_at,
+      isCurrent: Number.isFinite(Number(row.current_version)) &&
+        Number(row.version) === Number(row.current_version)
     }))
 
     res.json({ data: result })
   } catch (error) {
     console.error('获取版本失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '获取版本失败')
   }
 })
 

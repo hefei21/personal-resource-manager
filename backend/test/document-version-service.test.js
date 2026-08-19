@@ -3,10 +3,15 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import { test } from 'node:test'
 import { CREATE_STORAGE_COMMIT_OPERATIONS_SQL } from '../src/services/storageCommitCoordinator.js'
 import { createDocumentStorageRuntime } from '../src/services/documentStorageRuntime.js'
-import { restoreDocumentVersion, updateDocumentContent } from '../src/services/documentVersionService.js'
+import {
+  appendDocumentVersion,
+  restoreDocumentVersion,
+  updateDocumentContent
+} from '../src/services/documentVersionService.js'
 
 const require = createRequire(import.meta.url)
 function bindingMissing(error) { return /^Could not locate the bindings file\. Tried:/u.test(String(error?.message ?? '')) }
@@ -25,7 +30,8 @@ function setup(directory) {
   database.exec(CREATE_STORAGE_COMMIT_OPERATIONS_SQL)
   database.exec(`
     CREATE TABLE documents (
-      id INTEGER PRIMARY KEY, title TEXT NOT NULL, file_path TEXT, storage_key TEXT,
+      id INTEGER PRIMARY KEY, title TEXT NOT NULL, category TEXT, subcategory TEXT,
+      category_id INTEGER, tags TEXT, file_path TEXT, storage_key TEXT,
       content_sha256 TEXT, content_bytes INTEGER, original_name TEXT, version REAL,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -47,16 +53,19 @@ test('creates immutable content versions and advances the current reference atom
   try {
     const value = setup(directory); database = value.database
     const first = await updateDocumentContent({ database, runtime: value.runtime, id: 7, content: 'first', versionNote: 'first edit' })
-    const second = await updateDocumentContent({ database, runtime: value.runtime, id: 7, content: 'second', version: 5 })
+    const second = await updateDocumentContent({ database, runtime: value.runtime, id: 7, content: 'second' })
     assert.equal(first.version, 2)
-    assert.equal(second.version, 5)
+    assert.equal(second.version, 3)
     const rows = database.prepare('SELECT version, storage_key, note FROM document_versions ORDER BY version').all()
     assert.equal(rows.length, 2)
     assert.notEqual(rows[0].storage_key, rows[1].storage_key)
-    assert.deepEqual(rows.map(({ version }) => version), [2, 5])
+    assert.deepEqual(rows.map(({ version }) => version), [2, 3])
     assert.equal(database.prepare('SELECT version, storage_key, file_path FROM documents WHERE id = 7').get().file_path, null)
     await assert.rejects(updateDocumentContent({ database, runtime: value.runtime, id: 7, content: 'old', version: 4 }), {
-      code: 'STORAGE_COMMIT_DATABASE_FAILED'
+      code: 'DOCUMENT_VERSION_MANAGED'
+    })
+    await assert.rejects(updateDocumentContent({ database, runtime: value.runtime, id: 7, content: 'second' }), {
+      code: 'DOCUMENT_CONTENT_IDENTICAL'
     })
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM document_versions').get().count, 2)
   } finally { database?.close(); cleanup(directory) }
@@ -71,30 +80,64 @@ test('restores storage and legacy versions as a new immutable current version', 
     const legacyVersion = database.prepare(`
       INSERT INTO document_versions (document_id, version, file_path, note) VALUES (7, 1, ?, 'legacy')
     `).run(legacyFile)
+    database.prepare('UPDATE documents SET version = 2 WHERE id = 7').run()
     const restored = await restoreDocumentVersion({
       database, runtime: value.runtime, id: 7, versionId: Number(legacyVersion.lastInsertRowid)
     })
-    assert.equal(restored.version, 2)
+    assert.equal(restored.version, 3)
     assert.equal(database.prepare('SELECT storage_key FROM documents WHERE id = 7').get().storage_key, restored.storageKey)
     assert.equal(database.prepare('SELECT file_path FROM document_versions WHERE id = ?').get(restored.versionId).file_path, null)
   } finally { database?.close(); cleanup(directory) }
 })
 
-test('rejects missing documents, foreign versions, invalid versions and empty content', nativeOptions, async () => {
+test('rejects restoring the current version and invalid content/version inputs', nativeOptions, async () => {
   const directory = root(); let database
   try {
     const value = setup(directory); database = value.database
-    await assert.rejects(updateDocumentContent({ database, runtime: value.runtime, id: 99, content: 'x' }), {
-      code: 'STORAGE_COMMIT_DATABASE_FAILED'
+    const currentVersion = database.prepare(`
+      INSERT INTO document_versions (document_id, version, file_path) VALUES (7, 1, ?)
+    `).run(path.join(value.legacy, 'current.txt'))
+    await assert.rejects(restoreDocumentVersion({
+      database, runtime: value.runtime, id: 7, versionId: Number(currentVersion.lastInsertRowid)
+    }), {
+      code: 'DOCUMENT_VERSION_IS_CURRENT'
     })
-    await assert.rejects(updateDocumentContent({ database, runtime: value.runtime, id: 7, content: '', version: 2 }), {
+    await assert.rejects(updateDocumentContent({ database, runtime: value.runtime, id: 99, content: 'x' }), {
+      code: 'DOCUMENT_NOT_FOUND'
+    })
+    await assert.rejects(updateDocumentContent({ database, runtime: value.runtime, id: 7, content: '' }), {
       code: 'DOCUMENT_CONTENT_INVALID'
     })
-    await assert.rejects(updateDocumentContent({ database, runtime: value.runtime, id: 7, content: 'x', version: '1.2' }), {
-      code: 'DOCUMENT_VERSION_INVALID'
+    await assert.rejects(updateDocumentContent({ database, runtime: value.runtime, id: 7, content: 'x', newVersion: 2 }), {
+      code: 'DOCUMENT_VERSION_MANAGED'
     })
     await assert.rejects(restoreDocumentVersion({ database, runtime: value.runtime, id: 7, versionId: 99 }), {
       code: 'DOCUMENT_VERSION_NOT_FOUND'
     })
+  } finally { database?.close(); cleanup(directory) }
+})
+
+test('appends a staged upload without changing document metadata', nativeOptions, async () => {
+  const directory = root(); let database
+  try {
+    const value = setup(directory); database = value.database
+    database.prepare(`
+      UPDATE documents
+      SET category = 'Notes', subcategory = 'Daily', tags = 'keep', original_name = 'original.txt'
+      WHERE id = 7
+    `).run()
+    const staged = await value.runtime.storageService.stageFromStream(Readable.from([Buffer.from('uploaded')]))
+    const result = await appendDocumentVersion({
+      database,
+      runtime: value.runtime,
+      id: 7,
+      staged,
+      versionNote: 'upload'
+    })
+    assert.equal(result.version, 2)
+    assert.deepEqual(
+      database.prepare('SELECT title, category, subcategory, tags, original_name, version FROM documents WHERE id = 7').get(),
+      { title: 'Note', category: 'Notes', subcategory: 'Daily', tags: 'keep', original_name: 'original.txt', version: 2 }
+    )
   } finally { database?.close(); cleanup(directory) }
 })
