@@ -161,7 +161,7 @@
         </NativeAlert>
         <!-- 创建子分类按钮和返回按钮 -->
         <div class="category-actions-bar" v-if="!isGuest">
-          <NativeButton theme="primary" @click="handleUpload" :disabled="isGuest">
+          <NativeButton theme="primary" @click="handleUpload" :disabled="!canWrite">
             <template #icon><NativeIcon name="plus" size="14" /></template>
             上传文档
           </NativeButton>
@@ -300,7 +300,7 @@
         @sortChange="handleSortChange"
       >
         <template #cell-version="{ row }">
-          <span>{{ row.version ? (row.version.toString().includes('.') ? row.version : `${row.version}.0`) : '1.0' }}</span>
+          <span>v{{ row.version }}</span>
         </template>
         <template #cell-type="{ row }">
           <span>{{ getFileExtension(row.filePath || '') }}</span>
@@ -491,6 +491,62 @@
       </NativeForm>
     </NativeDialog>
 
+    <!-- 上传冲突对话框：必须由用户明确选择另建、新版本或取消 -->
+    <NativeDialog
+      v-model="uploadConflictDialogVisible"
+      title="上传冲突"
+      width="760px"
+      :show-footer="false"
+    >
+      <NativeAlert theme="warning" title="检测到同名文档">
+        {{ uploadConflict?.message || '请选择处理方式，系统不会自动改名或合并。' }}
+      </NativeAlert>
+      <p class="upload-conflict-suggestion">
+        建议标题：<strong>{{ uploadConflict?.suggestedTitle || '-' }}</strong>
+      </p>
+      <div class="upload-conflict-candidates">
+        <label
+          v-for="candidate in uploadConflict?.candidates || []"
+          :key="candidate.id"
+          class="upload-conflict-candidate"
+          :class="{ 'hash-match': candidate.hashMatches }"
+        >
+          <input
+            v-model="selectedUploadConflictCandidateId"
+            type="radio"
+            name="pc-upload-conflict-candidate"
+            :value="candidate.id"
+            :disabled="candidate.hashMatches || uploading"
+          />
+          <span class="upload-conflict-candidate-body">
+            <strong>{{ candidate.title }}</strong>
+            <span>分类：{{ candidate.categoryPath || '未分类' }}</span>
+            <span>当前版本：{{ candidate.currentVersion ?? '-' }}</span>
+            <span>更新时间：{{ formatDateTime(candidate.updatedAt) }}</span>
+            <span>内容大小：{{ formatFileSize(candidate.contentBytes) }}</span>
+            <span v-if="candidate.hashMatches" class="upload-conflict-hash-match">
+              hashMatches：是；内容相同，不能作为新版本
+            </span>
+            <span v-else>hashMatches：否</span>
+          </span>
+        </label>
+      </div>
+      <div class="upload-conflict-actions">
+        <NativeButton variant="outline" @click="cancelUploadConflict" :disabled="uploading">取消</NativeButton>
+        <NativeButton theme="primary" @click="retryUploadAsNewDocument" :disabled="!canWrite || uploading || !uploadConflict?.suggestedTitle">
+          使用建议标题另建
+        </NativeButton>
+        <NativeButton
+          theme="primary"
+          variant="outline"
+          @click="retryUploadAsCandidateVersion"
+          :disabled="!canWrite || uploading || !selectedUploadConflictCandidate || selectedUploadConflictCandidate.hashMatches"
+        >
+          选择候选作为新版本
+        </NativeButton>
+      </div>
+    </NativeDialog>
+
     <!-- 版本对话框 -->
     <NativeDialog
       v-model="versionsDialogVisible"
@@ -498,23 +554,64 @@
       width="800px"
       :show-footer="false"
     >
+      <div class="version-dialog-toolbar">
+        <NativeButton variant="outline" size="small" @click="openVersionTrash">
+          版本回收站
+        </NativeButton>
+      </div>
       <NativeTable :dataSource="versions" :columns="versionColumns" rowKey="id">
         <template #cell-version="{ row }">
           <span>{{ row.version ? (row.version.toString().includes('.') ? row.version : `${row.version}.0`) : '1.0' }}</span>
+        </template>
+        <template #cell-isCurrent="{ row }">
+          <span v-if="row.isCurrent" class="version-current-label">当前版本</span>
+          <span v-else>历史版本</span>
         </template>
         <template #cell-operation="{ row }">
           <NativeSpace>
             <NativeButton theme="primary" size="small" @click="handleDownloadVersion(row)">
               <NativeIcon name="download" /> 下载
             </NativeButton>
-            <NativePopconfirm content="恢复此版本会创建一个新的当前版本，不会覆盖历史。确定恢复吗？" @confirm="handleRestoreVersion(row)">
+            <template v-if="!row.isCurrent">
+              <NativePopconfirm content="恢复此版本会创建一个新的当前版本，不会覆盖历史。确定恢复吗？" @confirm="handleRestoreVersion(row)">
               <template #trigger>
                 <NativeButton theme="default" variant="outline" size="small" :disabled="!canWrite">恢复此版本</NativeButton>
               </template>
-            </NativePopconfirm>
+              </NativePopconfirm>
+              <NativePopconfirm content="移入版本回收站后可在保护期内恢复，确定继续吗？" @confirm="handleDeleteVersion(row)">
+                <template #trigger>
+                  <NativeButton theme="danger" variant="outline" size="small" :disabled="!canWrite">移入版本回收站</NativeButton>
+                </template>
+              </NativePopconfirm>
+            </template>
           </NativeSpace>
         </template>
       </NativeTable>
+    </NativeDialog>
+
+    <!-- 版本回收列表 -->
+    <NativeDialog
+      v-model="versionTrashDialogVisible"
+      title="版本回收站"
+      width="700px"
+      :show-footer="false"
+    >
+      <div v-if="versionTrashLoading" class="content-loading">
+        <NativeLoading size="small" />
+      </div>
+      <div v-else-if="versionTrash.length === 0" class="empty-state-inline">
+        <p>版本回收站为空</p>
+      </div>
+      <div v-else class="version-trash-list">
+        <div v-for="row in versionTrash" :key="row.id" class="version-trash-item">
+          <span>v{{ row.version }}</span>
+          <span>{{ row.note || '无说明' }}</span>
+          <span>{{ formatDateTime(row.deletedAt || row.trashedAt) }}</span>
+          <NativeButton v-if="!row.isCurrent" size="small" theme="primary" @click="handleRestoreVersionTrash(row)" :disabled="!canWrite">
+            恢复
+          </NativeButton>
+        </div>
+      </div>
     </NativeDialog>
 
     <!-- 编辑对话框 -->
@@ -531,13 +628,6 @@
         <NativeForm layout="inline" style="margin-bottom: 16px;">
           <NativeFormItem label="当前版本">
             <NativeInput :modelValue="editForm.currentVersion" disabled style="width: 100px" />
-          </NativeFormItem>
-          <NativeFormItem label="新版本号" name="newVersion">
-            <NativeInput
-              v-model="editForm.newVersion"
-              placeholder="留空自动递增，如: 3"
-              style="width: 120px"
-            />
           </NativeFormItem>
           <NativeFormItem label="版本说明">
             <NativeInput
@@ -735,9 +825,15 @@ const total = ref(0)
 const pagination = ref({ current: 1, pageSize: 30 })
 const versions = ref([])
 const versionDocumentId = ref(null)
+const versionTrash = ref([])
+const versionTrashLoading = ref(false)
+const versionTrashDialogVisible = ref(false)
 const trashDocuments = ref([])
 const trashLoading = ref(false)
 const uploadDialogVisible = ref(false)
+const uploadConflictDialogVisible = ref(false)
+const uploadConflict = ref(null)
+const selectedUploadConflictCandidateId = ref(null)
 const versionsDialogVisible = ref(false)
 const createCategoryDialogVisible = ref(false)
 const deleteCategoryDialogVisible = ref(false)
@@ -816,7 +912,6 @@ const editForm = ref({
   content: '',
   versionNote: '',
   currentVersion: '1.0',
-  newVersion: ''
 })
 
 const editDialogVisible = ref(false)
@@ -826,6 +921,11 @@ const uploadRules = {
   title: [{ required: true, message: '请输入标题', type: 'error' }],
   file: [{ required: true, message: '请选择文件', type: 'error' }]
 }
+
+const selectedUploadConflictCandidate = computed(() => {
+  const candidates = uploadConflict.value?.candidates || []
+  return candidates.find(candidate => String(candidate.id) === String(selectedUploadConflictCandidateId.value)) || null
+})
 
 // 排序相关状态
 const sortBy = ref('updated_at')
@@ -1075,9 +1175,10 @@ const columns = computed(() => [
 
 const versionColumns = [
   { key: 'version', dataIndex: 'version', title: '版本号', width: 100 },
+  { key: 'isCurrent', dataIndex: 'isCurrent', title: '状态', width: 100 },
   { key: 'note', dataIndex: 'note', title: '说明' },
   { key: 'createdAt', dataIndex: 'createdAt', title: '创建时间', width: 180 },
-  { key: 'operation', title: '操作', width: 240 }
+  { key: 'operation', title: '操作', width: 420 }
 ]
 
 const trashColumns = [
@@ -1357,6 +1458,10 @@ async function handleRenameCategoryConfirm() {
 }
 
 function handleUpload() {
+  if (!canWrite.value) return
+  uploadConflictDialogVisible.value = false
+  uploadConflict.value = null
+  selectedUploadConflictCandidateId.value = null
   uploadForm.value = {
     file: [],
     title: '',
@@ -1387,56 +1492,93 @@ function onFileChange(files) {
   }
 }
 
-async function handleUploadConfirm() {
+function documentErrorMessage(error, fallback) {
+  const message = error?.response?.data?.message
+  return typeof message === 'string' && message.trim() ? message : fallback
+}
+
+function openUploadConflict(error) {
+  const data = error?.response?.data || {}
+  const candidates = Array.isArray(data.candidates) ? data.candidates : []
+  uploadConflict.value = {
+    message: data.message || '请选择处理方式，系统不会自动改名或合并。',
+    suggestedTitle: data.suggestedTitle || '',
+    candidates
+  }
+  const firstEligible = candidates.find(candidate => !candidate.hashMatches)
+  selectedUploadConflictCandidateId.value = (firstEligible || candidates[0])?.id ?? null
+  uploadConflictDialogVisible.value = true
+}
+
+async function submitUpload({ resolution = null, title = uploadForm.value.title, targetDocumentId = null } = {}) {
+  if (uploading.value) return false
+  if (!canWrite.value || !uploadForm.value.file || uploadForm.value.file.length === 0) {
+    if (!uploadForm.value.file || uploadForm.value.file.length === 0) toast.error('请选择文件')
+    return false
+  }
+
+  uploading.value = true
   try {
-    if (!uploadForm.value.file || uploadForm.value.file.length === 0) {
-      toast.error('请选择文件')
-      return
-    }
-
-    console.log('上传文件信息:', uploadForm.value.file)
     const file = uploadForm.value.file[0]
-    console.log('文件对象:', file)
-    console.log('文件原始数据:', file.raw)
-    console.log('文件URL:', file.url)
-    console.log('文件名称:', file.name)
-
-    // 开始上传，设置loading状态
-    uploading.value = true
-
     const formData = new FormData()
     const fileToUpload = file.raw || file.originFileObj || file
     formData.append('file', fileToUpload)
-    formData.append('title', uploadForm.value.title)
+    formData.append('title', title)
     formData.append('category', uploadForm.value.category)
     formData.append('subcategory', uploadForm.value.subcategory)
     formData.append('tags', uploadForm.value.tags)
     formData.append('versionNote', uploadForm.value.versionNote)
-
-    console.log('准备上传的FormData:', formData)
-    const response = await api.documents.upload(formData)
-    console.log('上传响应:', response)
-
-    // 如果标题被修改了（重名自动添加后缀），提示用户
-    if (response.data?.title && response.data.title !== uploadForm.value.title) {
-      toast.warning(`文件名已重命名为：${response.data.title}`)
-    } else {
-      toast.success('上传成功')
+    if (resolution === 'create') formData.append('resolution', 'create')
+    if (resolution === 'new_version') {
+      formData.append('resolution', 'new_version')
+      formData.append('targetDocumentId', String(targetDocumentId))
     }
 
+    const response = await api.documents.upload(formData)
+    toast.success(response.data?.message || '上传成功')
     uploadDialogVisible.value = false
-    // 清除文件数量缓存，以便悬停时重新加载
+    uploadConflictDialogVisible.value = false
+    uploadConflict.value = null
+    selectedUploadConflictCandidateId.value = null
     categoryFileCount.value = {}
-    loadCategories()
-    loadAllTags()
-    loadDocuments()
+    await Promise.all([loadCategories(), loadAllTags(), loadDocuments()])
+    return true
   } catch (error) {
-    console.error('上传错误:', error)
-    console.error('错误详情:', error.response?.data)
-    toast.error(error.response?.data?.message || '上传失败')
+    if (!resolution && error?.response?.data?.code === 'DOCUMENT_UPLOAD_CONFLICT') {
+      openUploadConflict(error)
+    } else {
+      console.error('上传错误:', error)
+      toast.error(documentErrorMessage(error, '上传失败'))
+    }
+    return false
   } finally {
     uploading.value = false
   }
+}
+
+async function handleUploadConfirm() {
+  return submitUpload()
+}
+
+async function retryUploadAsNewDocument() {
+  const suggestedTitle = uploadConflict.value?.suggestedTitle
+  if (!suggestedTitle) return
+  return submitUpload({ resolution: 'create', title: suggestedTitle })
+}
+
+async function retryUploadAsCandidateVersion() {
+  const candidate = selectedUploadConflictCandidate.value
+  if (!candidate || candidate.hashMatches) {
+    toast.warning('内容 hash 相同，不能作为新版本；可使用建议标题另建。')
+    return false
+  }
+  return submitUpload({ resolution: 'new_version', targetDocumentId: candidate.id })
+}
+
+function cancelUploadConflict() {
+  uploadConflictDialogVisible.value = false
+  uploadConflict.value = null
+  selectedUploadConflictCandidateId.value = null
 }
 
 function handleView(row) {
@@ -1475,8 +1617,7 @@ async function handleEdit(row) {
       fileName: '',
       content: '',
       versionNote: '',
-      currentVersion: row.version ? row.version.toString() : '1.0',
-      newVersion: ''
+      currentVersion: row.version ? row.version.toString() : '1.0'
     }
 
     const response = await api.documents.getContent(row.id)
@@ -1516,24 +1657,9 @@ async function handleSaveContent() {
       return
     }
 
-    // 验证版本号
-    if (editForm.value.newVersion) {
-      const versionRegex = /^[1-9]\d*$/
-      if (!versionRegex.test(editForm.value.newVersion)) {
-        toast.error('版本号必须是正整数，如：3；也可以留空自动递增')
-        return
-      }
-
-      if (Number(editForm.value.newVersion) <= Number(editForm.value.currentVersion)) {
-        toast.error(`新版本号必须大于当前版本 ${editForm.value.currentVersion}`)
-        return
-      }
-    }
-
     await api.documents.updateContent(editForm.value.id, {
       content: editForm.value.content,
-      versionNote: editForm.value.versionNote,
-      newVersion: editForm.value.newVersion || null
+      versionNote: editForm.value.versionNote
     })
 
     toast.success('保存成功')
@@ -1603,12 +1729,12 @@ async function handleViewVersions(row) {
     versionsDialogVisible.value = true
   } catch (error) {
     console.error('加载版本失败:', error)
-    toast.error('加载版本失败')
+    toast.error(documentErrorMessage(error, '加载版本失败'))
   }
 }
 
 async function handleRestoreVersion(row) {
-  if (!versionDocumentId.value) return
+  if (!versionDocumentId.value || row?.isCurrent || !canWrite.value) return
   try {
     await api.documents.restoreVersion(versionDocumentId.value, row.id)
     toast.success('版本恢复成功，已创建新的当前版本')
@@ -1616,7 +1742,56 @@ async function handleRestoreVersion(row) {
     await loadDocuments()
   } catch (error) {
     console.error('恢复版本失败:', error)
-    toast.error(error.response?.data?.message || '恢复版本失败')
+    toast.error(documentErrorMessage(error, '恢复版本失败'))
+  }
+}
+
+async function handleDeleteVersion(row) {
+  if (!versionDocumentId.value || row?.isCurrent || !canWrite.value) return
+  try {
+    await api.documents.deleteVersion(versionDocumentId.value, row.id)
+    toast.success('版本已移入回收站')
+    await Promise.all([handleViewVersions({ id: versionDocumentId.value }), loadVersionTrash(false)])
+  } catch (error) {
+    console.error('移入版本回收站失败:', error)
+    toast.error(documentErrorMessage(error, '移入版本回收站失败'))
+  }
+}
+
+async function loadVersionTrash(showDialog = true) {
+  if (!versionDocumentId.value) return
+  versionTrashLoading.value = true
+  try {
+    const response = await api.documents.versionsTrash(versionDocumentId.value)
+    const data = response.data?.data || response.data || []
+    versionTrash.value = Array.isArray(data) ? data : []
+    if (showDialog) versionTrashDialogVisible.value = true
+  } catch (error) {
+    console.error('加载版本回收站失败:', error)
+    toast.error(documentErrorMessage(error, '加载版本回收站失败'))
+    versionTrash.value = []
+  } finally {
+    versionTrashLoading.value = false
+  }
+}
+
+function openVersionTrash() {
+  loadVersionTrash(true)
+}
+
+async function handleRestoreVersionTrash(row) {
+  if (!versionDocumentId.value || !row?.id || !canWrite.value) return
+  try {
+    await api.documents.restoreVersionTrash(versionDocumentId.value, row.id)
+    toast.success('版本已恢复，已创建新的当前版本')
+    await Promise.all([
+      loadVersionTrash(false),
+      handleViewVersions({ id: versionDocumentId.value }),
+      loadDocuments()
+    ])
+  } catch (error) {
+    console.error('恢复版本回收站条目失败:', error)
+    toast.error(documentErrorMessage(error, '恢复版本失败'))
   }
 }
 
@@ -3095,4 +3270,72 @@ onMounted(() => {
   text-align: left;
   white-space: nowrap;
 }
+  .version-dialog-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+  }
+
+  .version-current-label {
+    color: #0052d9;
+    font-weight: 600;
+  }
+
+  .version-trash-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .version-trash-item {
+    display: grid;
+    grid-template-columns: 80px minmax(0, 1fr) 180px auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  .upload-conflict-suggestion {
+    margin: 12px 0;
+  }
+
+  .upload-conflict-candidates {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .upload-conflict-candidate {
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid #e7e7e7;
+    border-radius: 6px;
+  }
+
+  .upload-conflict-candidate.hash-match {
+    border-color: #ed7b2f;
+    background: #fff7ed;
+  }
+
+  .upload-conflict-candidate-body {
+    display: grid;
+    gap: 3px;
+    font-size: 13px;
+  }
+
+  .upload-conflict-hash-match {
+    color: #d54941;
+    font-weight: 600;
+  }
+
+  .upload-conflict-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
 </style>

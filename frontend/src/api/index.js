@@ -108,6 +108,9 @@ export default {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
     versions: (id) => api.get(`/documents/${id}/versions`),
+    versionsTrash: (id) => api.get(`/documents/${id}/versions/trash`),
+    deleteVersion: (id, versionId) => api.delete(`/documents/${id}/versions/${versionId}`),
+    restoreVersionTrash: (id, versionId) => api.post(`/documents/${id}/versions/${versionId}/trash/restore`),
     restoreVersion: (id, versionId, data = {}) => api.post(`/documents/${id}/versions/${versionId}/restore`, data),
     trash: () => api.get('/documents/trash'),
     restoreTrash: (id) => api.post(`/documents/trash/${id}/restore`),

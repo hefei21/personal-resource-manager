@@ -45,6 +45,13 @@
       </NativeInput>
     </div>
 
+    <div v-if="viewMode !== 'trash'" class="mobile-document-actions">
+      <NativeButton theme="primary" size="small" @click="openUploadDialog" :disabled="!canWrite">
+        上传文档
+      </NativeButton>
+      <input ref="uploadInput" type="file" class="mobile-upload-input" @change="handleMobileFileChange" />
+    </div>
+
     <!-- 批量操作栏（放在文档列表上方） -->
     
     <!-- 删除确认对话框 -->
@@ -56,6 +63,81 @@
       @confirm="handleBatchDelete"
       class="centered-dialog"
     />
+
+    <!-- 移动端最小上传对话框 -->
+    <NativeDialog
+      v-model="uploadDialogVisible"
+      title="上传文档"
+      @confirm="handleUpload"
+      :show-close="true"
+      :confirm-btn="{ content: '上传', loading: uploading, disabled: uploading || !canWrite }"
+      class="centered-dialog"
+    >
+      <div class="mobile-upload-form">
+        <NativeButton variant="outline" size="small" @click="openFilePicker" :disabled="uploading">
+          {{ uploadFiles[0]?.name || '选择文件' }}
+        </NativeButton>
+        <NativeInput v-model="uploadForm.title" placeholder="文档标题" :disabled="uploading" />
+        <NativeInput v-model="uploadForm.tags" placeholder="标签，用逗号分隔" :disabled="uploading" />
+        <NativeInput v-model="uploadForm.versionNote" placeholder="版本说明（可选）" :disabled="uploading" />
+      </div>
+    </NativeDialog>
+
+    <!-- 上传冲突对话框：两端使用同一组显式决策 -->
+    <NativeDialog
+      v-model="uploadConflictDialogVisible"
+      title="上传冲突"
+      :show-footer="false"
+      class="centered-dialog"
+    >
+      <NativeAlert theme="warning" title="检测到同名文档">
+        {{ uploadConflict?.message || '请选择处理方式，系统不会自动改名或合并。' }}
+      </NativeAlert>
+      <p class="upload-conflict-suggestion">
+        建议标题：<strong>{{ uploadConflict?.suggestedTitle || '-' }}</strong>
+      </p>
+      <div class="upload-conflict-candidates">
+        <label
+          v-for="candidate in uploadConflict?.candidates || []"
+          :key="candidate.id"
+          class="upload-conflict-candidate"
+          :class="{ 'hash-match': candidate.hashMatches }"
+        >
+          <input
+            v-model="selectedUploadConflictCandidateId"
+            type="radio"
+            name="mobile-upload-conflict-candidate"
+            :value="candidate.id"
+            :disabled="candidate.hashMatches || uploading"
+          />
+          <span class="upload-conflict-candidate-body">
+            <strong>{{ candidate.title }}</strong>
+            <span>分类：{{ candidate.categoryPath || '未分类' }}</span>
+            <span>当前版本：{{ candidate.currentVersion ?? '-' }}</span>
+            <span>更新时间：{{ formatDateTime(candidate.updatedAt) }}</span>
+            <span>内容大小：{{ formatFileSize(candidate.contentBytes) }}</span>
+            <span v-if="candidate.hashMatches" class="upload-conflict-hash-match">
+              hashMatches：是；内容相同，不能作为新版本
+            </span>
+            <span v-else>hashMatches：否</span>
+          </span>
+        </label>
+      </div>
+      <div class="upload-conflict-actions">
+        <NativeButton variant="outline" @click="cancelUploadConflict" :disabled="uploading">取消</NativeButton>
+        <NativeButton theme="primary" @click="retryUploadAsNewDocument" :disabled="!canWrite || uploading || !uploadConflict?.suggestedTitle">
+          使用建议标题另建
+        </NativeButton>
+        <NativeButton
+          theme="primary"
+          variant="outline"
+          @click="retryUploadAsCandidateVersion"
+          :disabled="!canWrite || uploading || !selectedUploadConflictCandidate || selectedUploadConflictCandidate.hashMatches"
+        >
+          选择候选作为新版本
+        </NativeButton>
+      </div>
+    </NativeDialog>
 
     <!-- 分类浏览模式（主分类：小图标风格，与子分类统一） -->
     <div v-if="viewMode === 'category' && !currentCategoryId" class="categories-section">
@@ -262,25 +344,55 @@
       <div class="native-dialog-container">
         <div class="native-dialog-header">
           <span>版本历史</span>
+          <NativeButton variant="outline" size="small" @click.stop="openVersionTrash">版本回收站</NativeButton>
           <span class="dialog-close" @click="versionsDialogVisible = false">×</span>
         </div>
         <div class="versions-list">
-          <div v-for="ver in versions" :key="ver.id" class="version-item" @click="previewVersion(ver)">
+          <div v-for="ver in versions" :key="ver.id" class="version-item">
             <div class="version-info">
               <div class="version-header">
                 <span class="version-num">v{{ ver.version }}</span>
+                <span v-if="ver.isCurrent" class="version-current-label">当前版本</span>
+                <span v-else class="version-history-label">历史版本</span>
                 <span class="version-date">{{ formatDate(ver.createdAt) }}</span>
               </div>
               <div class="version-note" v-if="ver.note">{{ ver.note }}</div>
             </div>
             <div class="version-actions">
-              <button class="version-preview-btn" @click.stop="previewVersion(ver)">预览</button>
-              <button class="version-preview-btn" @click.stop="requestRestoreVersion(ver)" :disabled="!canWrite">恢复</button>
+              <button class="version-preview-btn" @click.stop="handleDownloadVersion(ver)">下载</button>
+              <template v-if="!ver.isCurrent">
+                <button class="version-preview-btn" @click.stop="requestRestoreVersion(ver)" :disabled="!canWrite">恢复</button>
+                <button class="version-trash-btn" @click.stop="requestDeleteVersion(ver)" :disabled="!canWrite">移入版本回收站</button>
+              </template>
             </div>
           </div>
         </div>
       </div>
     </div>
+
+    <NativeDialog
+      v-model="versionTrashDialogVisible"
+      title="版本回收站"
+      :show-footer="false"
+      class="centered-dialog"
+    >
+      <div v-if="versionTrashLoading" class="loading-state"><NativeLoading size="small" /></div>
+      <div v-else-if="versionTrash.length === 0" class="empty-categories">
+        <span class="empty-text">版本回收站为空</span>
+      </div>
+      <div v-else class="version-trash-list">
+        <div v-for="row in versionTrash" :key="row.id" class="version-trash-item">
+          <div>
+            <strong>v{{ row.version }}</strong>
+            <span class="version-date">{{ formatDate(row.deletedAt || row.trashedAt) }}</span>
+            <div v-if="row.note" class="version-note">{{ row.note }}</div>
+          </div>
+          <NativeButton v-if="!row.isCurrent" theme="primary" size="small" @click="handleRestoreVersionTrash(row)" :disabled="!canWrite">
+            恢复
+          </NativeButton>
+        </div>
+      </div>
+    </NativeDialog>
 
     <NativeDialog
       v-model="restoreVersionConfirmVisible"
@@ -289,6 +401,15 @@
       class="centered-dialog"
     >
       <p>恢复会创建一个新的当前版本，不会覆盖已有历史。确定继续吗？</p>
+    </NativeDialog>
+
+    <NativeDialog
+      v-model="deleteVersionConfirmVisible"
+      title="移入版本回收站"
+      @confirm="confirmDeleteVersion"
+      class="centered-dialog"
+    >
+      <p>移入版本回收站后可在保护期内恢复，确定继续吗？</p>
     </NativeDialog>
 
     <NativeDialog
@@ -409,7 +530,7 @@ import mammoth from 'mammoth'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { usePermission } from '@/composables/usePermission'
-import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect } from '@/components/native'
+import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect, NativeAlert } from '@/components/native'
 import { useToast } from '@/composables/useToast'
 import {
   escapeHtml,
@@ -505,14 +626,16 @@ const actionItems = computed(() => {
 const uploadDialogVisible = ref(false)
 const uploadFiles = ref([])
 const uploading = ref(false)
+const uploadInput = ref(null)
+const uploadConflictDialogVisible = ref(false)
+const uploadConflict = ref(null)
+const selectedUploadConflictCandidateId = ref(null)
 const uploadForm = ref({
   title: '',
   tags: '',
-  categoryPath: ''
+  categoryPath: '',
+  versionNote: ''
 })
-const uploadAction = computed(() => '/api/documents/upload')
-const uploadHeaders = computed(() => ({}))
-
 // 批量编辑
 const batchEditDialogVisible = ref(false)
 const confirmBatchDeleteDialogVisible = ref(false)
@@ -524,10 +647,15 @@ const batchEditForm = ref({
 // 版本
 const versions = ref([])
 const versionsDialogVisible = ref(false)
+const versionTrash = ref([])
+const versionTrashLoading = ref(false)
+const versionTrashDialogVisible = ref(false)
 const trashDocuments = ref([])
 const trashLoading = ref(false)
 const restoreVersionConfirmVisible = ref(false)
 const pendingVersion = ref(null)
+const deleteVersionConfirmVisible = ref(false)
+const pendingVersionDelete = ref(null)
 const permanentDeleteConfirmVisible = ref(false)
 const pendingTrashDocument = ref(null)
 
@@ -576,6 +704,11 @@ const highlightedCode = computed(() => {
 const sanitizedPreviewContent = computed(() =>
   sanitizeRichHtml(previewContent.value)
 )
+
+const selectedUploadConflictCandidate = computed(() => {
+  const candidates = uploadConflict.value?.candidates || []
+  return candidates.find(candidate => String(candidate.id) === String(selectedUploadConflictCandidateId.value)) || null
+})
 
 // 创建分类
 const createCategoryDialogVisible = ref(false)
@@ -1070,7 +1203,7 @@ async function handleViewVersions(doc) {
     versions.value = response.data?.data || []
     versionsDialogVisible.value = true
   } catch (error) {
-    toast.error('加载版本失败')
+    toast.error(documentErrorMessage(error, '加载版本失败'))
   }
 }
 
@@ -1165,54 +1298,129 @@ async function handleRename(doc) {
 }
 
 // 上传
-async function handleUpload() {
-  if (uploadFiles.value.length === 0) {
-    toast.warning('请选择文件')
-    return
+function documentErrorMessage(error, fallback) {
+  const message = error?.response?.data?.message
+  return typeof message === 'string' && message.trim() ? message : fallback
+}
+
+function openUploadDialog() {
+  if (!canWrite.value) return
+  uploadConflictDialogVisible.value = false
+  uploadConflict.value = null
+  selectedUploadConflictCandidateId.value = null
+  uploadFiles.value = []
+  if (uploadInput.value) uploadInput.value.value = ''
+  const currentCategory = currentCategoryId.value
+    ? findCategoryById(categories.value, currentCategoryId.value)
+    : null
+  uploadForm.value = {
+    title: '',
+    tags: '',
+    categoryPath: currentCategory?.path || '',
+    versionNote: ''
   }
-  
+  uploadDialogVisible.value = true
+}
+
+function openFilePicker() {
+  uploadInput.value?.click()
+}
+
+function handleMobileFileChange(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  uploadFiles.value = [{ name: file.name, raw: file }]
+  if (!uploadForm.value.title) uploadForm.value.title = file.name.replace(/\.[^/.]+$/, '')
+}
+
+function openUploadConflict(error) {
+  const data = error?.response?.data || {}
+  const candidates = Array.isArray(data.candidates) ? data.candidates : []
+  uploadConflict.value = {
+    message: data.message || '请选择处理方式，系统不会自动改名或合并。',
+    suggestedTitle: data.suggestedTitle || '',
+    candidates
+  }
+  const firstEligible = candidates.find(candidate => !candidate.hashMatches)
+  selectedUploadConflictCandidateId.value = (firstEligible || candidates[0])?.id ?? null
+  uploadConflictDialogVisible.value = true
+}
+
+async function submitUpload({ resolution = null, title = uploadForm.value.title, targetDocumentId = null } = {}) {
+  if (uploading.value) return false
+  if (!canWrite.value || uploadFiles.value.length === 0) {
+    if (uploadFiles.value.length === 0) toast.warning('请选择文件')
+    return false
+  }
+
   uploading.value = true
   try {
     const formData = new FormData()
     formData.append('file', uploadFiles.value[0].raw)
-    formData.append('title', uploadForm.value.title || uploadFiles.value[0].name)
-    
+    formData.append('title', title || uploadFiles.value[0].name)
     if (uploadForm.value.categoryPath) {
       const pathParts = uploadForm.value.categoryPath.split('/')
       formData.append('category', pathParts[0])
-      if (pathParts.length > 1) {
-        formData.append('subcategory', pathParts.slice(1).join('/'))
-      }
+      if (pathParts.length > 1) formData.append('subcategory', pathParts.slice(1).join('/'))
     }
-    
-    if (uploadForm.value.tags) {
-      formData.append('tags', uploadForm.value.tags)
+    if (uploadForm.value.tags) formData.append('tags', uploadForm.value.tags)
+    if (uploadForm.value.versionNote) formData.append('versionNote', uploadForm.value.versionNote)
+    if (resolution === 'create') formData.append('resolution', 'create')
+    if (resolution === 'new_version') {
+      formData.append('resolution', 'new_version')
+      formData.append('targetDocumentId', String(targetDocumentId))
     }
-    
-    await api.documents.upload(formData)
-    toast.success('上传成功')
+
+    const response = await api.documents.upload(formData)
+    toast.success(response.data?.message || '上传成功')
     uploadDialogVisible.value = false
+    uploadConflictDialogVisible.value = false
+    uploadConflict.value = null
+    selectedUploadConflictCandidateId.value = null
     uploadFiles.value = []
-    uploadForm.value = { title: '', tags: '', categoryPath: '' }
-    loadDocuments()
-    loadCategories()
+    uploadForm.value = { title: '', tags: '', categoryPath: '', versionNote: '' }
+    await Promise.all([loadDocuments(), loadCategories()])
+    return true
   } catch (error) {
-    toast.error('上传失败')
+    if (!resolution && error?.response?.data?.code === 'DOCUMENT_UPLOAD_CONFLICT') {
+      openUploadConflict(error)
+    } else {
+      toast.error(documentErrorMessage(error, '上传失败'))
+    }
+    return false
   } finally {
     uploading.value = false
   }
 }
 
-function handleUploadSuccess() {
-  // 上传成功回调
+async function handleUpload() {
+  return submitUpload()
 }
 
-function handleUploadFail() {
-  toast.error('上传失败')
+async function retryUploadAsNewDocument() {
+  const suggestedTitle = uploadConflict.value?.suggestedTitle
+  if (!suggestedTitle) return
+  return submitUpload({ resolution: 'create', title: suggestedTitle })
+}
+
+async function retryUploadAsCandidateVersion() {
+  const candidate = selectedUploadConflictCandidate.value
+  if (!candidate || candidate.hashMatches) {
+    toast.warning('内容 hash 相同，不能作为新版本；可使用建议标题另建。')
+    return false
+  }
+  return submitUpload({ resolution: 'new_version', targetDocumentId: candidate.id })
+}
+
+function cancelUploadConflict() {
+  uploadConflictDialogVisible.value = false
+  uploadConflict.value = null
+  selectedUploadConflictCandidateId.value = null
 }
 
 // 恢复版本
 async function restoreVersion(ver) {
+  if (!currentDoc.value?.id || ver?.isCurrent || !canWrite.value) return false
   try {
     await api.documents.restoreVersion(currentDoc.value.id, ver.id)
     toast.success('版本恢复成功，已创建新的当前版本')
@@ -1220,22 +1428,78 @@ async function restoreVersion(ver) {
     await loadDocuments()
     return true
   } catch (error) {
-    toast.error(error.response?.data?.message || '恢复失败')
+    toast.error(documentErrorMessage(error, '恢复版本失败'))
     return false
   }
 }
 
 function requestRestoreVersion(ver) {
+  if (ver?.isCurrent || !canWrite.value) return
   pendingVersion.value = ver
   restoreVersionConfirmVisible.value = true
 }
 
 async function confirmRestoreVersion() {
-  if (!pendingVersion.value) return
-  const restored = await restoreVersion(pendingVersion.value)
-  if (restored) {
-    restoreVersionConfirmVisible.value = false
-    pendingVersion.value = null
+  const version = pendingVersion.value
+  if (!version) return
+  const restored = await restoreVersion(version)
+  if (!restored) return
+  restoreVersionConfirmVisible.value = false
+  pendingVersion.value = null
+}
+
+function requestDeleteVersion(ver) {
+  if (ver?.isCurrent || !canWrite.value) return
+  pendingVersionDelete.value = ver
+  deleteVersionConfirmVisible.value = true
+}
+
+async function confirmDeleteVersion() {
+  const version = pendingVersionDelete.value
+  if (!version || version.isCurrent || !currentDoc.value?.id || !canWrite.value) return
+  try {
+    await api.documents.deleteVersion(currentDoc.value.id, version.id)
+    toast.success('版本已移入回收站')
+    deleteVersionConfirmVisible.value = false
+    pendingVersionDelete.value = null
+    await Promise.all([handleViewVersions(currentDoc.value), loadVersionTrash(false)])
+  } catch (error) {
+    toast.error(documentErrorMessage(error, '移入版本回收站失败'))
+  }
+}
+
+async function loadVersionTrash(showDialog = true) {
+  if (!currentDoc.value?.id) return
+  versionTrashLoading.value = true
+  try {
+    const response = await api.documents.versionsTrash(currentDoc.value.id)
+    const data = response.data?.data || response.data || []
+    versionTrash.value = Array.isArray(data) ? data : []
+    if (showDialog) versionTrashDialogVisible.value = true
+  } catch (error) {
+    toast.error(documentErrorMessage(error, '加载版本回收站失败'))
+    versionTrash.value = []
+  } finally {
+    versionTrashLoading.value = false
+  }
+}
+
+function openVersionTrash() {
+  loadVersionTrash(true)
+}
+
+async function handleRestoreVersionTrash(row) {
+  if (!currentDoc.value?.id || !row?.id || !canWrite.value) return
+  try {
+    await api.documents.restoreVersionTrash(currentDoc.value.id, row.id)
+    toast.success('版本已恢复，已创建新的当前版本')
+    await Promise.all([
+      loadVersionTrash(false),
+      handleViewVersions(currentDoc.value),
+      loadDocuments()
+    ])
+  } catch (error) {
+    toast.error(documentErrorMessage(error, '恢复版本失败'))
   }
 }
 
@@ -1280,11 +1544,8 @@ async function confirmPermanentlyDelete() {
   }
 }
 
-// 预览版本
-function previewVersion(ver) {
-  // 简化处理：打开对应版本的文件
-  const url = authenticatedAssetUrl(`/api/documents/${currentDoc.value.id}/content?version=${ver.version}`)
-  window.open(url, '_blank')
+function handleDownloadVersion(ver) {
+  window.open(authenticatedAssetUrl(`/api/documents/download/version/${ver.id}`), '_blank')
 }
 
 // 工具函数
@@ -1343,6 +1604,12 @@ function formatDate(dateStr) {
   if (!dateStr) return ''
   const date = new Date(dateStr)
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
 
 function parseTags(tagsStr) {
@@ -2043,6 +2310,97 @@ watch(viewMode, (newMode) => {
   background: rgba(0,0,0,0.2);
   border-radius: 2px;
 }
+  .mobile-document-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin: -4px 0 12px;
+  }
+
+  .mobile-upload-input {
+    display: none;
+  }
+
+  .mobile-upload-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .version-current-label {
+    color: #0052d9;
+    font-weight: 600;
+  }
+
+  .version-history-label {
+    color: #777;
+  }
+
+  .version-trash-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: #c9353f;
+    background: transparent;
+    border: 1px solid #e34d59;
+    border-radius: 4px;
+  }
+
+  .version-trash-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .version-trash-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  .upload-conflict-suggestion {
+    margin: 10px 0;
+  }
+
+  .upload-conflict-candidates {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .upload-conflict-candidate {
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid #e7e7e7;
+    border-radius: 6px;
+  }
+
+  .upload-conflict-candidate.hash-match {
+    border-color: #ed7b2f;
+    background: #fff7ed;
+  }
+
+  .upload-conflict-candidate-body {
+    display: grid;
+    gap: 3px;
+    font-size: 12px;
+  }
+
+  .upload-conflict-hash-match {
+    color: #d54941;
+    font-weight: 600;
+  }
+
+  .upload-conflict-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 12px;
+  }
 </style>
 
 /* ==================== 全局样式：TDesign Dialog 兜底覆盖 ==================== */
