@@ -48,6 +48,22 @@ function runGit(args, options = {}) {
   )
 }
 
+const REPOSITORY_DIRTY = 'REPOSITORY_DIRTY'
+
+async function getRepositoryChangeCount(repositoryPath) {
+  const { stdout } = await runGit([
+    '-C',
+    repositoryPath,
+    'status',
+    '--porcelain=v1',
+    '-z',
+    '--untracked-files=all'
+  ])
+
+  if (!stdout) return 0
+  return stdout.split('\0').filter(Boolean).length
+}
+
 function sendRepositorySecurityError(res, error) {
   if (!(error instanceof RepositorySecurityError)) return false
   res.status(400).json({ message: error.message, code: error.code })
@@ -1106,6 +1122,58 @@ router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, 
   }
 })
 
+// 保留脏工作区并重新克隆。旧文件会作为独立仓库条目继续可见，不执行 reset/clean/stash。
+router.post('/:id/reclone', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const db = getDatabase()
+    const repo = db.prepare('SELECT * FROM code_repositories WHERE id = ?').get(req.params.id)
+
+    if (!repo) {
+      return res.status(404).json({ message: '仓库不存在' })
+    }
+    if (repo.type !== 'git') {
+      return res.status(410).json({
+        message: '仅 Git 仓库支持安全重克隆',
+        code: 'SVN_RETIRED'
+      })
+    }
+
+    const taskId = String(repo.id)
+    const activeTask = syncTasks.get(taskId)
+    if (activeTask?.status === 'syncing') {
+      return res.status(409).json({ message: '仓库同步任务正在运行' })
+    }
+
+    const repositoryPath = resolveManagedRepositoryPath(
+      CODE_BASE_PATH,
+      repo.local_path,
+      { mustExist: true }
+    )
+    const changedFileCount = await getRepositoryChangeCount(repositoryPath)
+    if (changedFileCount === 0) {
+      return res.status(409).json({
+        message: '仓库当前没有本地改动，请直接同步',
+        code: 'REPOSITORY_CLEAN'
+      })
+    }
+
+    syncTasks.set(taskId, {
+      id: taskId,
+      status: 'syncing',
+      progress: 0,
+      message: '准备安全重克隆...',
+      startTime: Date.now()
+    })
+
+    safelyRecloneRepository(repo, repositoryPath, taskId)
+    res.json({ message: '开始安全重克隆...', taskId })
+  } catch (error) {
+    if (sendRepositorySecurityError(res, error)) return
+    console.error('安全重克隆失败:', error)
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
 // 获取同步状态
 router.get('/:id/sync-status', authenticateToken, async (req, res) => {
   try {
@@ -1146,6 +1214,20 @@ async function updateRepository(id, url, localPath, name, taskId) {
       localPath,
       { mustExist: true }
     )
+
+    const changedFileCount = await getRepositoryChangeCount(repositoryPath)
+    if (changedFileCount > 0) {
+      if (task) {
+        task.status = 'failed'
+        task.code = REPOSITORY_DIRTY
+        task.changedFileCount = changedFileCount
+        task.message = `检测到 ${changedFileCount} 个本地改动，已停止同步以避免覆盖。可选择安全重克隆，旧文件会保留为独立备份。`
+        task.progress = 0
+      }
+      console.warn(`[仓库 ${name}] 检测到 ${changedFileCount} 个本地改动，停止同步`)
+      return
+    }
+
     await runGit(
       ['-C', repositoryPath, 'pull', '--ff-only'],
       { timeout: 300000 }
@@ -1184,6 +1266,94 @@ async function updateRepository(id, url, localPath, name, taskId) {
     }, 600000)
     cleanupTimer.unref?.()
   }
+}
+
+async function safelyRecloneRepository(repo, repositoryPath, taskId) {
+  const db = getDatabase()
+  const task = syncTasks.get(taskId)
+  const timestamp = Date.now()
+  const repositoryName = path.basename(repositoryPath)
+  const temporaryPath = resolveManagedRepositoryPath(
+    CODE_BASE_PATH,
+    path.join(CODE_BASE_PATH, `${repositoryName}_reclone_${timestamp}`)
+  )
+  const backupPath = resolveManagedRepositoryPath(
+    CODE_BASE_PATH,
+    path.join(CODE_BASE_PATH, `${repositoryName}_local_backup_${timestamp}`)
+  )
+  let backupRepositoryId = null
+  let originalMoved = false
+
+  try {
+    task.message = '正在克隆干净副本...'
+    task.progress = 10
+    await cloneGitWithProgress(repo.url, temporaryPath, task)
+
+    task.message = '正在保留本地改动...'
+    task.progress = 75
+    const backupResult = db.prepare(`
+      INSERT INTO code_repositories
+        (name, url, description, local_path, type, last_sync)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      `${repo.name}（同步前本地备份）`,
+      repo.url,
+      '安全重克隆时自动保留；包含当时未提交的本地改动。',
+      backupPath,
+      'git',
+      repo.last_sync
+    )
+    backupRepositoryId = backupResult.lastInsertRowid
+
+    fs.renameSync(repositoryPath, backupPath)
+    originalMoved = true
+    fs.renameSync(temporaryPath, repositoryPath)
+
+    try {
+      db.prepare('UPDATE code_repositories SET last_sync = CURRENT_TIMESTAMP WHERE id = ?').run(repo.id)
+      await fetchAndSaveLanguages(repo.id, repo.url)
+    } catch (metadataError) {
+      // 文件切换已经成功，元数据刷新失败不应触发会破坏两个有效副本的回滚。
+      console.warn(`[仓库 ${repo.name}] 重克隆后元数据刷新失败:`, metadataError.message)
+    }
+
+    task.status = 'completed'
+    task.message = '安全重克隆完成；旧的本地改动已保留为独立备份仓库'
+    task.progress = 100
+    task.backupRepositoryId = Number(backupRepositoryId)
+    console.log(`[仓库 ${repo.name}] 安全重克隆完成，备份仓库 ID: ${backupRepositoryId}`)
+  } catch (error) {
+    console.error(`[仓库 ${repo.name}] 安全重克隆失败:`, error.message)
+
+    try {
+      if (originalMoved && !fs.existsSync(repositoryPath) && fs.existsSync(backupPath)) {
+        fs.renameSync(backupPath, repositoryPath)
+        originalMoved = false
+      }
+    } catch (rollbackError) {
+      console.error(`[仓库 ${repo.name}] 恢复原仓库失败:`, rollbackError.message)
+    }
+
+    if (backupRepositoryId && !originalMoved) {
+      try {
+        db.prepare('DELETE FROM code_repositories WHERE id = ?').run(backupRepositoryId)
+      } catch (dbError) {
+        console.error('清理备份仓库记录失败:', dbError.message)
+      }
+    }
+    try {
+      if (fs.existsSync(temporaryPath)) {
+        fs.rmSync(temporaryPath, { recursive: true, force: true })
+      }
+    } catch {}
+
+    task.status = 'failed'
+    task.message = '安全重克隆失败，原仓库已尽量恢复: ' + error.message
+    task.progress = 0
+  }
+
+  const cleanupTimer = setTimeout(() => syncTasks.delete(taskId), 600000)
+  cleanupTimer.unref?.()
 }
 
 // 获取仓库详情 - 必须放在最后，避免拦截其他具体路由

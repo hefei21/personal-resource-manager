@@ -521,6 +521,17 @@ function startSyncPolling(repoId, taskId) {
         } else if (data.status === 'failed') {
           clearInterval(syncPollInterval)
           syncPollInterval = null
+          if (data.code === 'REPOSITORY_DIRTY') {
+            const confirmed = window.confirm(
+              `${data.message}\n\n是否立即安全重克隆？旧文件不会删除，并会作为“同步前本地备份”仓库保留。`
+            )
+            if (confirmed) {
+              const response = await api.code.reclone(repoId)
+              toast.success('开始安全重克隆...')
+              startSyncPolling(repoId, response.data?.taskId)
+              return
+            }
+          }
           toast.error(data.message || '同步失败')
         }
       }

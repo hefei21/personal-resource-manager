@@ -215,6 +215,7 @@ export default {
     getCommits: (id, limit) => api.get(`/code/${id}/commits`, { params: { limit } }),
     getCommitDetail: (id, hash) => api.get(`/code/${id}/commit/${hash}`),
     sync: (id) => api.post(`/code/${id}/sync`),
+    reclone: (id) => api.post(`/code/${id}/reclone`),
     getSyncStatus: (id) => api.get(`/code/${id}/sync-status`),
     getCloneStatus: (id) => api.get(`/code/${id}/clone-status`),
     getGithubInfo: (url) => api.get('/code/github-info', { params: { url } })
