@@ -16,11 +16,18 @@ import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
 import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
 import {
   appendDocumentVersion,
+  assertDocumentVersionNotTrashed,
   DocumentVersionError,
+  listDocumentVersions,
   normalizeDocumentVersionNote,
   restoreDocumentVersion,
   updateDocumentContent
 } from '../services/documentVersionService.js'
+import {
+  listDeletedDocumentVersions,
+  restoreDocumentVersionFromTrash,
+  softDeleteDocumentVersion
+} from '../services/documentVersionTrashService.js'
 import {
   DocumentConflictError,
   documentUploadConflict,
@@ -863,31 +870,18 @@ router.put('/:id/content', authenticateToken, requireWritePermission, async (req
 })
 
 // 获取文档版本
+router.get('/:id/versions/trash', authenticateToken, async (req, res) => {
+  try {
+    res.json({ data: listDeletedDocumentVersions(getDatabase(), req.params.id) })
+  } catch (error) {
+    console.error('获取文档版本回收列表失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '获取文档版本回收列表失败')
+  }
+})
+
 router.get('/:id/versions', authenticateToken, async (req, res) => {
   try {
-    const db = getDatabase()
-    const stmt = db.prepare(
-      `SELECT v.*, d.version AS current_version
-       FROM document_versions v
-       JOIN documents d ON d.id = v.document_id
-       WHERE v.document_id = ?
-       ORDER BY v.version DESC`
-    )
-    const rows = stmt.all(req.params.id)
-
-    // 转换为驼峰命名
-    const result = rows.map(row => ({
-      id: row.id,
-      documentId: row.document_id,
-      version: row.version,
-      filePath: documentOriginalName(row.original_name || row.file_path || `version-${row.version}`),
-      note: row.note,
-      createdAt: row.created_at,
-      isCurrent: Number.isFinite(Number(row.current_version)) &&
-        Number(row.version) === Number(row.current_version)
-    }))
-
-    res.json({ data: result })
+    res.json({ data: listDocumentVersions(getDatabase(), req.params.id) })
   } catch (error) {
     console.error('获取版本失败:', error)
     return sendDocumentError(res, error, '获取版本失败')
@@ -964,6 +958,7 @@ router.get('/download/version/:id', authenticateToken, async (req, res) => {
     if (!version) {
       return res.status(404).json({ message: '版本不存在' })
     }
+    assertDocumentVersionNotTrashed(db, version.id)
 
     const fileName = documentFileName(version)
     const { stream } = await getDocumentStorageRuntime().contentService.createReadStream(version)
@@ -1010,15 +1005,33 @@ router.delete('/trash/:id', authenticateToken, requireWritePermission, async (re
   }
 })
 
-// 删除文档
-router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
+router.delete('/:id/versions/:versionId', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const result = softDeleteDocument({ database: getDatabase(), id: req.params.id })
-    try { await cache.del(CacheKeys.DOC_TAGS) } catch {}
-    res.json({ message: '已移入回收站', purgeAfter: result.purgeAfter })
+    const result = softDeleteDocumentVersion({
+      database: getDatabase(),
+      id: req.params.id,
+      versionId: req.params.versionId
+    })
+    res.json({ message: '历史版本已移入回收保护', deletedAt: result.deletedAt, purgeAfter: result.purgeAfter })
   } catch (error) {
-    console.error('删除失败:', error?.code ?? error?.name)
-    return sendDocumentError(res, error, '服务器错误')
+    console.error('删除文档历史版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '删除文档历史版本失败')
+  }
+})
+
+router.post('/:id/versions/:versionId/trash/restore', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = await restoreDocumentVersionFromTrash({
+      database: getDatabase(),
+      runtime: getDocumentStorageRuntime(),
+      id: req.params.id,
+      versionId: req.params.versionId,
+      versionNote: req.body?.versionNote
+    })
+    res.json({ message: '历史版本恢复成功', version: result.version })
+  } catch (error) {
+    console.error('恢复回收文档版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error?.cause ?? error, '恢复回收文档版本失败')
   }
 })
 
@@ -1035,6 +1048,18 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, requireWriteP
   } catch (error) {
     console.error('恢复文档版本失败:', error?.code ?? error?.name)
     return sendDocumentError(res, error?.cause ?? error, '服务器错误')
+  }
+})
+
+// 删除文档
+router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = softDeleteDocument({ database: getDatabase(), id: req.params.id })
+    try { await cache.del(CacheKeys.DOC_TAGS) } catch {}
+    res.json({ message: '已移入回收站', purgeAfter: result.purgeAfter })
+  } catch (error) {
+    console.error('删除失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Readable } from 'node:stream'
 
 import { coordinateStorageCommit } from './storageCommitCoordinator.js'
+import { documentOriginalName } from './documentStorageRuntime.js'
 
 export class DocumentVersionError extends Error {
   constructor(code, message, options = {}) {
@@ -54,6 +55,24 @@ function currentDocument(database, id) {
   return row
 }
 
+function assertVersionDatabase(database) {
+  if (!database || typeof database.prepare !== 'function') {
+    fail('DOCUMENT_VERSION_DATABASE_INVALID', 'Document version database is invalid.')
+  }
+}
+
+export function assertDocumentVersionNotTrashed(database, rawVersionId) {
+  assertVersionDatabase(database)
+  const versionId = documentId(rawVersionId)
+  const trashed = database.prepare(`
+    SELECT 1
+    FROM resource_trash_entries
+    WHERE resource_type = 'document_version' AND resource_id = ?
+  `).get(versionId)
+  if (trashed) fail('DOCUMENT_VERSION_TRASHED', 'The document version is protected in trash.')
+  return versionId
+}
+
 function isSameHash(left, right) {
   return typeof left === 'string' && typeof right === 'string' && left.toLowerCase() === right.toLowerCase()
 }
@@ -70,6 +89,8 @@ function stagedValue(value) {
   }
   return Object.freeze({ token: value.token, sha256: value.sha256, bytes: value.bytes })
 }
+
+export const normalizeDocumentVersionStaged = stagedValue
 
 function discardStaged(runtime, staged) {
   if (!staged?.token || typeof runtime?.storageService?.discardStaged !== 'function') return
@@ -96,7 +117,16 @@ function nextVersion(database, id) {
   return next
 }
 
-async function commitVersionObject({ database, runtime, id, staged, versionNoteText, originalName, rejectIdentical = true } = {}) {
+async function commitVersionObject({
+  database,
+  runtime,
+  id,
+  staged,
+  versionNoteText,
+  originalName,
+  rejectIdentical = true,
+  onDatabaseWrite
+} = {}) {
   let result
   try {
     await coordinateStorageCommit({
@@ -132,7 +162,7 @@ async function commitVersionObject({ database, runtime, id, staged, versionNoteT
           bytes,
           versionNoteText ?? `版本 ${version}`
         )
-        result = Object.freeze({
+        const committed = Object.freeze({
           documentId: id,
           versionId: Number(inserted.lastInsertRowid),
           version,
@@ -140,6 +170,8 @@ async function commitVersionObject({ database, runtime, id, staged, versionNoteT
           sha256,
           bytes
         })
+        if (typeof onDatabaseWrite === 'function') onDatabaseWrite(committed)
+        result = committed
       }
     })
   } catch (error) {
@@ -147,6 +179,39 @@ async function commitVersionObject({ database, runtime, id, staged, versionNoteT
     throw error
   }
   return result
+}
+
+export async function commitDocumentVersionObject(options = {}) {
+  assertDependencies(options.database, options.runtime)
+  return commitVersionObject(options)
+}
+
+export function listDocumentVersions(database, rawId) {
+  assertVersionDatabase(database)
+  const id = documentId(rawId)
+  const rows = database.prepare(`
+    SELECT v.*, d.original_name, d.version AS current_version
+    FROM document_versions v
+    JOIN documents d ON d.id = v.document_id
+    WHERE v.document_id = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM resource_trash_entries t
+        WHERE t.resource_type = 'document_version' AND t.resource_id = v.id
+      )
+    ORDER BY v.version DESC
+  `).all(id)
+
+  return rows.map((row) => Object.freeze({
+    id: row.id,
+    documentId: row.document_id,
+    version: row.version,
+    filePath: documentOriginalName(row.original_name || row.file_path || `version-${row.version}`),
+    note: row.note,
+    createdAt: row.created_at,
+    isCurrent: Number.isFinite(Number(row.current_version)) &&
+      Number(row.version) === Number(row.current_version)
+  }))
 }
 
 export async function updateDocumentContent(options = {}) {
@@ -214,6 +279,7 @@ export async function restoreDocumentVersion({ database, runtime, id: rawId, ver
   if (Number.isFinite(sourceVersion) && Number.isFinite(currentVersion) && sourceVersion === currentVersion) {
     fail('DOCUMENT_VERSION_IS_CURRENT', 'The current document version cannot be restored.')
   }
+  assertDocumentVersionNotTrashed(database, versionId)
   const noteText = versionNote(rawVersionNote) ?? `恢复自版本 ${source.version}`
   const { stream } = await runtime.contentService.createReadStream(source)
   const stagedRaw = await runtime.storageService.stageFromStream(stream)

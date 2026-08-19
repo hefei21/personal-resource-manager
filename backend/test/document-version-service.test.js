@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { test } from 'node:test'
+import { CREATE_RESOURCE_TRASH_SQL } from '../src/config/resourceTrashSchema.js'
 import { CREATE_STORAGE_COMMIT_OPERATIONS_SQL } from '../src/services/storageCommitCoordinator.js'
 import { createDocumentStorageRuntime } from '../src/services/documentStorageRuntime.js'
 import {
@@ -29,6 +30,7 @@ function setup(directory) {
   const database = new Database(path.join(directory, 'app.db'))
   database.exec(CREATE_STORAGE_COMMIT_OPERATIONS_SQL)
   database.exec(`
+    ${CREATE_RESOURCE_TRASH_SQL};
     CREATE TABLE documents (
       id INTEGER PRIMARY KEY, title TEXT NOT NULL, category TEXT, subcategory TEXT,
       category_id INTEGER, tags TEXT, file_path TEXT, storage_key TEXT,
