@@ -9,16 +9,6 @@
         <!-- 顶部操作栏 -->
         <div class="toolbar">
           <NativeSpace direction="vertical" fill>
-            <!-- 视图切换独占一行 -->
-            <NativeSpace fill>
-              <NativeRadioGroup v-model="statusFilter" variant="default-filled" @change="handleStatusFilterChange">
-                <NativeRadio value="">全部</NativeRadio>
-                <NativeRadio value="published">已发布</NativeRadio>
-                <NativeRadio v-if="!isGuest" value="draft">草稿</NativeRadio>
-              </NativeRadioGroup>
-            </NativeSpace>
-            
-            <!-- 其他元素另起一行左对齐 -->
             <NativeSpace fill>
               <NativeInput
                 v-model="searchKeyword"
@@ -79,7 +69,6 @@
             <div class="post-main">
               <div class="post-title">
                 <NativeTag v-if="post.is_top" theme="warning" size="small" style="margin-right: 8px">置顶</NativeTag>
-                <NativeTag v-if="post.status === 'draft'" theme="default" size="small" style="margin-right: 8px">草稿</NativeTag>
                 <span class="title-text">{{ post.title }}</span>
               </div>
               <div class="post-meta">
@@ -186,18 +175,15 @@
             :previewTheme="previewTheme"
             :codeTheme="codeTheme"
             :toolbars="editorToolbars"
-            @onSave="handleAutoSave"
+            @onSave="handleSave"
             style="height: calc(100vh - 380px); min-height: 300px;"
           />
         </div>
 
         <div class="editor-footer">
           <NativeSpace>
-            <NativeButton variant="outline" @click="handleSaveDraft" :loading="saving">
-              保存草稿
-            </NativeButton>
-            <NativeButton theme="primary" @click="handlePublish" :loading="saving">
-              {{ editForm.status === 'published' ? '更新文章' : '发布文章' }}
+            <NativeButton theme="primary" @click="handleSave" :loading="saving">
+              保存
             </NativeButton>
           </NativeSpace>
           <NativeButton variant="text" @click="editDialogVisible = false">
@@ -313,7 +299,7 @@ import 'md-editor-v3/lib/style.css'
 import 'md-editor-v3/lib/preview.css'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
-import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeSpace, NativeRadioGroup, NativeRadio, NativeSelect, NativeTag, NativePopconfirm, NativePagination, NativeTagInput, NativeForm, NativeFormItem } from '@/components/native'
+import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeSpace, NativeSelect, NativeTag, NativePopconfirm, NativePagination, NativeTagInput, NativeForm, NativeFormItem } from '@/components/native'
 
 
 
@@ -338,7 +324,6 @@ const total = ref(0)
 const loading = ref(false)
 const pagination = ref({ current: 1, pageSize: 30 })
 const searchKeyword = ref('')
-const statusFilter = ref('')
 const categoryFilter = ref(null)
 const tagFilter = ref(null)
 
@@ -354,7 +339,6 @@ const editForm = ref({
   content: '',
   category_id: null,
   tags: [],
-  status: 'draft',
   is_top: false
 })
 const saving = ref(false)
@@ -393,7 +377,6 @@ async function loadPosts() {
       pageSize: pagination.value.pageSize
     }
     if (searchKeyword.value) params.keyword = searchKeyword.value
-    if (statusFilter.value) params.status = statusFilter.value
     if (categoryFilter.value) params.category_id = categoryFilter.value
     if (tagFilter.value) params.tag_id = tagFilter.value
 
@@ -428,12 +411,6 @@ async function loadTags() {
   }
 }
 
-// 状态筛选变化
-function handleStatusFilterChange() {
-  pagination.value.current = 1
-  loadPosts()
-}
-
 // 分页
 function handlePageChange() {
   loadPosts()
@@ -460,7 +437,6 @@ function handleCreate() {
     content: '',
     category_id: null,
     tags: [],
-    status: 'draft',
     is_top: false
   }
   editDialogVisible.value = true
@@ -477,7 +453,6 @@ async function handleEdit(post) {
       content: data.content || '',
       category_id: data.category_id,
       tags: data.tags || [],
-      status: data.status,
       is_top: data.is_top === 1
     }
     editDialogVisible.value = true
@@ -501,24 +476,8 @@ async function handlePreview(post) {
   }
 }
 
-// 编辑器工具栏保存按钮回调
-function handleAutoSave(content) {
-  // 调用保存草稿功能
-  handleSaveDraft()
-}
-
-// 保存草稿
-async function handleSaveDraft() {
-  await savePost('draft')
-}
-
-// 发布文章
-async function handlePublish() {
-  await savePost('published')
-}
-
 // 保存文章
-async function savePost(status) {
+async function handleSave() {
   if (!editForm.value.title || !editForm.value.title.trim()) {
     toast.warning('请输入文章标题')
     return
@@ -531,7 +490,6 @@ async function savePost(status) {
       content: editForm.value.content,
       category_id: editForm.value.category_id || null,
       tags: editForm.value.tags,
-      status: status,
       is_top: editForm.value.is_top
     }
 

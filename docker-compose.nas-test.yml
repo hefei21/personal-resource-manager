@@ -8,6 +8,7 @@ services:
     volumes:
       - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/db:/app/data/database
       - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/documents:/app/data/documents
+      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/storage:/app/data/storage
       - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/music:/app/data/music
       - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/books:/app/data/books
       - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/code:/app/data/code
@@ -19,6 +20,7 @@ services:
       DATA_PATH: /app/data
       DB_PATH: /app/data/database/app.db
       DOCUMENTS_PATH: /app/data/documents
+      STORAGE_PATH: /app/data/storage
       MUSIC_PATH: /app/data/music
       BOOKS_PATH: /app/data/books
       CODE_PATH: /app/data/code

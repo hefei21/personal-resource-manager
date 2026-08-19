@@ -1,16 +1,53 @@
 import express from 'express'
 import multer from 'multer'
 import path from 'path'
-import fs from 'fs'
-import bcrypt from 'bcryptjs'
+import { randomUUID } from 'node:crypto'
 import { getDatabase } from '../config/database.js'
-import { getStoragePath } from '../config/storage.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
-import { privateSpaceLimiter } from '../middlewares/security.js'
 import { cache, CacheKeys, CacheTTL } from '../utils/cache.js'
-import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION } from '../config/constants.js'
-import { collectPrivateSpaceInventory } from '../services/privateSpaceInventory.js'
+import {
+  categoryCompatibilityFields,
+  normalizeDocumentTags,
+  resolveDocumentCategoryInput
+} from '../services/documentDomainService.js'
+import { documentOriginalName, getDocumentStorageRuntime } from '../services/documentStorageRuntime.js'
+import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
+import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
+import {
+  appendDocumentVersion,
+  assertDocumentVersionNotTrashed,
+  DocumentVersionError,
+  listDocumentVersions,
+  normalizeDocumentVersionNote,
+  restoreDocumentVersion,
+  updateDocumentContent
+} from '../services/documentVersionService.js'
+import {
+  listDeletedDocumentVersions,
+  restoreDocumentVersionFromTrash,
+  softDeleteDocumentVersion
+} from '../services/documentVersionTrashService.js'
+import {
+  DocumentConflictError,
+  documentUploadConflict,
+  findDocumentUploadConflicts,
+  normalizeDocumentConflictResolution,
+  normalizeDocumentTitle,
+  selectDocumentConflictTarget
+} from '../services/documentConflictService.js'
+import {
+  listDeletedDocuments,
+  permanentlyDeleteDocument,
+  restoreDocumentFromTrash,
+  softDeleteDocument
+} from '../services/documentTrashService.js'
+import {
+  batchUpdateDocumentMetadata,
+  deleteDocumentCategoryTree,
+  renameDocumentCategory,
+  updateDocumentMetadata
+} from '../services/documentCategoryService.js'
 
 const router = express.Router()
 const DOCUMENT_EXTENSIONS = new Set([
@@ -19,25 +56,108 @@ const DOCUMENT_EXTENSIONS = new Set([
   '.png', '.gif', '.webp'
 ])
 
-// 配置文件上传
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, getStoragePath('uploads'))
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
-    cb(null, uniqueSuffix + path.extname(file.originalname))
-  }
-})
-
 const upload = multer({
-  storage,
+  storage: new DocumentUploadStorage(),
   limits: { fileSize: 50 * 1024 * 1024, files: 1 }, // 50MB
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase()
     cb(DOCUMENT_EXTENSIONS.has(ext) ? null : new Error('不支持的文件格式'), DOCUMENT_EXTENSIONS.has(ext))
   }
 })
+
+const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+
+function documentFileName(document) {
+  return documentOriginalName(document.original_name || document.file_path || document.title)
+}
+
+function documentExtension(document) {
+  return path.extname(documentFileName(document)).toLowerCase()
+}
+
+function contentDispositionFileName(fileName) {
+  return encodeURIComponent(fileName).replace(/['()*]/gu, (character) => (
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  ))
+}
+
+async function readDocumentBuffer(contentService, document, maximumBytes = MAX_DOCUMENT_BYTES) {
+  const metadata = await contentService.stat(document)
+  if (metadata.bytes > maximumBytes) {
+    const error = new Error('Document preview exceeds the allowed size.')
+    error.code = 'DOCUMENT_PREVIEW_TOO_LARGE'
+    throw error
+  }
+  const { stream } = await contentService.createReadStream(document)
+  const chunks = []
+  let bytes = 0
+  for await (const chunk of stream) {
+    bytes += chunk.length
+    if (bytes > maximumBytes) {
+      stream.destroy()
+      const error = new Error('Document preview exceeds the allowed size.')
+      error.code = 'DOCUMENT_PREVIEW_TOO_LARGE'
+      throw error
+    }
+    chunks.push(chunk)
+  }
+  return { metadata, content: Buffer.concat(chunks) }
+}
+
+function sendDocumentError(res, error, fallbackMessage) {
+  const statusByCode = {
+    DOCUMENT_UPLOAD_CONFLICT: 409,
+    DOCUMENT_CONFLICT_RESOLUTION_INVALID: 400,
+    DOCUMENT_CONFLICT_TARGET_INVALID: 400,
+    DOCUMENT_CONTENT_IDENTICAL: 409,
+    DOCUMENT_CATEGORY_ID_INVALID: 400,
+    DOCUMENT_CATEGORY_INVALID: 400,
+    DOCUMENT_CATEGORY_PATH_INVALID: 400,
+    DOCUMENT_CATEGORY_NOT_FOUND: 400,
+    DOCUMENT_TAGS_INVALID: 400,
+    DOCUMENT_CONTENT_REFERENCE_MISSING: 404,
+    DOCUMENT_CONTENT_MISSING: 404,
+    DOCUMENT_CONTENT_RANGE_INVALID: 416,
+    DOCUMENT_PREVIEW_TOO_LARGE: 413,
+    DOCUMENT_STORAGE_METADATA_INVALID: 409,
+    DOCUMENT_STORAGE_METADATA_INCOMPLETE: 409,
+    DOCUMENT_STORAGE_METADATA_MISMATCH: 409,
+    DOCUMENT_STORAGE_KIND_INVALID: 409,
+    DOCUMENT_CONTENT_INTEGRITY_FAILED: 409,
+    DOCUMENT_CONTENT_INVALID: 400,
+    DOCUMENT_ID_INVALID: 400,
+    DOCUMENT_VERSION_MANAGED: 400,
+    DOCUMENT_VERSION_INVALID: 400,
+    DOCUMENT_VERSION_NOT_GREATER: 409,
+    DOCUMENT_VERSION_NOTE_INVALID: 400,
+    DOCUMENT_VERSION_NOT_FOUND: 404,
+    DOCUMENT_VERSION_IS_CURRENT: 409,
+    DOCUMENT_VERSION_NOT_CURRENT: 409,
+    DOCUMENT_VERSION_TRASHED: 409,
+    DOCUMENT_VERSION_NOT_TRASHED: 409,
+    DOCUMENT_VERSION_PURGE_BLOCKED: 409,
+    DOCUMENT_NOT_FOUND: 404
+    , DOCUMENT_ALREADY_TRASHED: 409
+    , DOCUMENT_TRASH_NOT_FOUND: 404
+    , DOCUMENT_TRASH_PURGE_IN_PROGRESS: 409
+    , DOCUMENT_TRASH_LEGACY_MIGRATION_REQUIRED: 409
+    , DOCUMENT_CATEGORY_NAME_INVALID: 400
+    , DOCUMENT_CATEGORY_DUPLICATE: 409
+    , DOCUMENT_CATEGORY_PARENT_MISSING: 409
+    , DOCUMENT_TITLE_INVALID: 400
+    , DOCUMENT_IDS_INVALID: 400
+  }
+  const status = statusByCode[error?.code] ?? 500
+  const body = {
+    message: status === 500 ? fallbackMessage : error.message,
+    code: error?.code
+  }
+  if (error?.code === 'DOCUMENT_UPLOAD_CONFLICT') {
+    body.candidates = Array.isArray(error.details?.candidates) ? error.details.candidates : []
+    body.suggestedTitle = error.details?.suggestedTitle ?? null
+  }
+  return res.status(status).json(body)
+}
 
 // 创建分类
 router.post('/categories', authenticateToken, requireWritePermission, async (req, res) => {
@@ -200,145 +320,12 @@ router.get('/categories', authenticateToken, async (req, res) => {
   }
 })
 
-// 递归获取所有子分类ID及其信息
-function getAllSubcategories(db, parentId) {
-  const result = []
-  const stmt = db.prepare('SELECT id, name, path, parent_id, level FROM categories WHERE parent_id = ?')
-  const children = stmt.all(parentId)
-
-  for (const child of children) {
-    result.push({
-      id: child.id,
-      name: child.name,
-      path: child.path,
-      parentId: child.parent_id,
-      level: child.level
-    })
-    result.push(...getAllSubcategories(db, child.id))
-  }
-
-  return result
-}
-
-// 辅助函数：从分类path中提取category和subcategory
-function parseCategoryPath(path) {
-  const parts = path.split('/')
-  const category = parts[0]
-  const subcategory = parts.length > 1 ? parts.slice(1).join('/') : ''
-  return { category, subcategory }
-}
-
 // 删除分类
 router.delete('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const categoryId = req.params.id
-    const { deleteFiles } = req.query // 是否删除文件：'true' 或 'false'
-
-    // 检查分类是否存在
-    const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(categoryId)
-    if (!category) {
-      return res.status(404).json({ message: '分类不存在' })
-    }
-
-    // 获取当前分类及其所有子分类
-    const allCategories = [
-      {
-        id: category.id,
-        name: category.name,
-        path: category.path,
-        parentId: category.parent_id,
-        level: category.level
-      },
-      ...getAllSubcategories(db, categoryId)
-    ]
-
-    // 按层级从深到浅排序（先处理子分类，再处理父分类）
-    allCategories.sort((a, b) => b.level - a.level)
-
-    if (deleteFiles === 'true') {
-      // 删除文件模式：删除所有相关文档及其文件
-      for (const cat of allCategories) {
-        const { category: catName, subcategory: subcatPath } = parseCategoryPath(cat.path)
-
-        // 查找该分类下的文档（包括所有子分类下的文档）
-        let docStmt, documents
-        if (cat.level === 0) {
-          // 根分类：匹配 category = 分类名
-          docStmt = db.prepare('SELECT * FROM documents WHERE category = ?')
-          documents = docStmt.all(catName)
-        } else {
-          // 子分类：匹配 category = 根分类名 AND subcategory LIKE '子分类路径%'
-          docStmt = db.prepare('SELECT * FROM documents WHERE category = ? AND (subcategory = ? OR subcategory LIKE ?)')
-          documents = docStmt.all(catName, subcatPath, `${subcatPath}/%`)
-        }
-
-        // 删除物理文件和版本记录
-        for (const doc of documents) {
-          if (doc.file_path && fs.existsSync(doc.file_path)) {
-            fs.unlinkSync(doc.file_path)
-          }
-          const deleteVersionsStmt = db.prepare('DELETE FROM document_versions WHERE document_id = ?')
-          deleteVersionsStmt.run(doc.id)
-        }
-
-        // 删除文档记录
-        let deleteDocsStmt
-        if (cat.level === 0) {
-          deleteDocsStmt = db.prepare('DELETE FROM documents WHERE category = ?')
-          deleteDocsStmt.run(catName)
-        } else {
-          deleteDocsStmt = db.prepare('DELETE FROM documents WHERE category = ? AND (subcategory = ? OR subcategory LIKE ?)')
-          deleteDocsStmt.run(catName, subcatPath, `${subcatPath}/%`)
-        }
-      }
-    } else {
-      // 保留文件模式：将文件提升到父分类
-      for (const cat of allCategories) {
-        const { category: catName, subcategory: subcatPath } = parseCategoryPath(cat.path)
-
-        // 计算父分类路径
-        let newCategory = null
-        let newSubcategory = null
-
-        if (cat.parentId) {
-          // 有父分类，获取父分类信息
-          const parentCat = db.prepare('SELECT * FROM categories WHERE id = ?').get(cat.parentId)
-          if (parentCat) {
-            const { category: parentCatName, subcategory: parentSubcat } = parseCategoryPath(parentCat.path)
-            newCategory = parentCatName
-            newSubcategory = parentSubcat
-          }
-        }
-        // 如果没有父分类（根分类），则 newCategory 和 newSubcategory 都是 null
-
-        // 更新该分类下直接属于它的文档的分类信息（不包括子分类的文档）
-        let updateDocsStmt
-        if (cat.level === 0) {
-          // 根分类：更新 category = 根分类名 AND (subcategory IS NULL OR subcategory = '')
-          updateDocsStmt = db.prepare('UPDATE documents SET category = ?, subcategory = ? WHERE category = ? AND (subcategory IS NULL OR subcategory = \'\')')
-          updateDocsStmt.run(newCategory, newSubcategory || '', catName)
-        } else {
-          // 子分类：更新 category = 根分类名 AND subcategory = 子分类路径
-          updateDocsStmt = db.prepare('UPDATE documents SET category = ?, subcategory = ? WHERE category = ? AND subcategory = ?')
-          updateDocsStmt.run(newCategory, newSubcategory || '', catName, subcatPath)
-        }
-      }
-    }
-
-    // 删除所有分类（按层级从深到浅）
-    const deleteCategoryStmt = db.prepare('DELETE FROM categories WHERE id = ?')
-    for (const cat of allCategories) {
-      deleteCategoryStmt.run(cat.id)
-    }
-
-    // 清除分类缓存
-    await cache.del(CacheKeys.DOC_CATEGORIES)
-
-    res.json({
-      message: deleteFiles === 'true' ? '分类及相关文件已删除' : '分类已删除，文件已提升到父分类',
-      deletedCategories: allCategories.length
-    })
+    const result = deleteDocumentCategoryTree(getDatabase(), req.params.id)
+    try { await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    return res.json({ message: '分类已删除，文档已移到父分类或未分类', ...result })
   } catch (error) {
     console.error('删除分类失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -379,89 +366,9 @@ router.put('/categories/reorder', authenticateToken, requireWritePermission, asy
 // 更新分类名称
 router.put('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { name } = req.body
-    const categoryId = req.params.id
-
-    if (!name || !name.trim()) {
-      return res.status(400).json({ message: '分类名称不能为空' })
-    }
-
-    const db = getDatabase()
-
-    // 获取当前分类信息
-    const category = db.prepare('SELECT * FROM categories WHERE id = ?').get(categoryId)
-    if (!category) {
-      return res.status(404).json({ message: '分类不存在' })
-    }
-
-    const newName = name.trim()
-    const oldPath = category.path
-
-    // 检查同层级下是否已存在同名分类
-    const checkStmt = db.prepare('SELECT * FROM categories WHERE name = ? AND parent_id IS ? AND id != ?')
-    const existing = checkStmt.get(newName, category.parent_id || null, categoryId)
-    if (existing) {
-      return res.status(400).json({ message: '同级分类下已存在同名分类' })
-    }
-
-    // 计算新路径
-    let newPath
-    if (category.parent_id) {
-      // 子分类：从父分类路径构建新路径
-      const parentCat = db.prepare('SELECT path FROM categories WHERE id = ?').get(category.parent_id)
-      if (parentCat) {
-        newPath = parentCat.path + '/' + newName
-      } else {
-        newPath = newName
-      }
-    } else {
-      // 根分类：路径就是名称
-      newPath = newName
-    }
-
-    // 更新分类名称和路径
-    const updateStmt = db.prepare('UPDATE categories SET name = ?, path = ? WHERE id = ?')
-    updateStmt.run(newName, newPath, categoryId)
-
-    // 更新所有子分类的路径
-    const updateSubcategories = db.transaction(() => {
-      const childrenStmt = db.prepare('SELECT id, path FROM categories WHERE path LIKE ?')
-      const children = childrenStmt.all(`${oldPath}/%`)
-
-      for (const child of children) {
-        const newChildPath = child.path.replace(oldPath + '/', newPath + '/')
-        db.prepare('UPDATE categories SET path = ? WHERE id = ?').run(newChildPath, child.id)
-      }
-    })
-    updateSubcategories()
-
-    // 更新文档的分类信息
-    const { category: oldCatName, subcategory: oldSubcat } = parseCategoryPath(oldPath)
-    const { category: newCatName, subcategory: newSubcat } = parseCategoryPath(newPath)
-
-    // 更新文档的 category 和 subcategory
-    if (category.level === 0) {
-      // 根分类：更新所有以旧名称为 category 的文档
-      const updateDocsCategory = db.prepare('UPDATE documents SET category = ? WHERE category = ?')
-      updateDocsCategory.run(newName, oldCatName)
-
-      // 更新子分类路径前缀
-      const updateDocsSubcategory = db.prepare('UPDATE documents SET subcategory = ? WHERE subcategory LIKE ?')
-      updateDocsSubcategory.run(newName + '/%', oldCatName + '/%')
-    } else {
-      // 子分类：更新匹配旧路径的文档
-      const updateDocs = db.prepare('UPDATE documents SET category = ?, subcategory = ? WHERE category = ? AND subcategory = ?')
-      updateDocs.run(newCatName, newSubcat, oldCatName, oldSubcat)
-
-      // 更新子分类路径前缀
-      const updateChildDocs = db.prepare('UPDATE documents SET subcategory = ? WHERE subcategory LIKE ?')
-      updateChildDocs.run(newSubcat + '/%', oldSubcat + '/%')
-    }
-
-    // 清除分类缓存
-    await cache.del(CacheKeys.DOC_CATEGORIES)
-
-    res.json({ message: '更新成功', newPath })
+    const renamed = renameDocumentCategory(getDatabase(), req.params.id, req.body.name)
+    try { await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    return res.json({ message: '更新成功', newPath: renamed.newPath })
   } catch (error) {
     console.error('更新分类名称失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -597,7 +504,9 @@ router.get('/', authenticateToken, async (req, res) => {
     const { keyword, category, subcategory, tags, startDate, endDate, sortBy, sortOrder, includeSubcategories, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
     const db = getDatabase()
 
-    let sql = 'SELECT * FROM documents WHERE 1=1'
+    let sql = `SELECT * FROM documents d WHERE NOT EXISTS (
+      SELECT 1 FROM resource_trash_entries t WHERE t.resource_type = 'document' AND t.resource_id = d.id
+    )`
     const params = []
 
     if (keyword) {
@@ -666,9 +575,9 @@ router.get('/', authenticateToken, async (req, res) => {
     const rows = stmt.all(...params)
 
     // 辅助函数：获取文件扩展名
-    const getFileExtension = (filePath) => {
-      if (!filePath) return ''
-      const parts = filePath.split('.')
+    const getFileExtension = (fileName) => {
+      if (!fileName) return ''
+      const parts = fileName.split('.')
       return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : ''
     }
 
@@ -689,9 +598,8 @@ router.get('/', authenticateToken, async (req, res) => {
 
     // 转换为驼峰命名
     let result = rows.map(row => {
-      const filePath = row.file_path
-      const size = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0
-      const fileExtension = getFileExtension(filePath)
+      const displayName = documentFileName(row)
+      const fileExtension = getFileExtension(displayName)
 
       return {
         id: row.id,
@@ -699,10 +607,10 @@ router.get('/', authenticateToken, async (req, res) => {
         category: row.category,
         subcategory: row.subcategory,
         tags: row.tags,
-        filePath: row.file_path,
+        filePath: displayName,
         fileType: fileExtension,
         version: row.version,
-        size: size,
+        size: Number.isSafeInteger(row.content_bytes) ? row.content_bytes : 0,
         createdAt: convertToUTC8(row.created_at),
         updatedAt: convertToUTC8(row.updated_at)
       }
@@ -748,64 +656,116 @@ router.get('/', authenticateToken, async (req, res) => {
 
 // 上传文档
 router.post('/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
+  let stagedToken = req.file?.stagingToken
   try {
-    console.log('文档上传请求:', {
-      body: req.body,
-      file: req.file,
-      headers: req.headers
-    })
-
-    let { title, category, subcategory, tags, versionNote } = req.body
-    const filePath = req.file.path
-
-    console.log('上传的文件路径:', filePath)
-    console.log('文件名:', req.file.filename)
-    console.log('存储目录:', getStoragePath('uploads'))
-    console.log('文档信息:', { title, category, subcategory, tags, versionNote })
-
-    const db = getDatabase()
-
-    // 检查重名并自动添加后缀
-    let finalTitle = title
-    let suffix = 1
-    let unique = false
-
-    while (!unique) {
-      const checkStmt = db.prepare(
-        'SELECT * FROM documents WHERE title = ? AND category = ? AND subcategory = ?'
-      )
-      const existing = checkStmt.get(finalTitle, category || null, subcategory || null)
-      if (!existing) {
-        unique = true
-      } else {
-        finalTitle = `${title} (${suffix})`
-        suffix++
-      }
+    if (!req.file?.stagingToken) return res.status(400).json({ message: '请选择文件' })
+    const title = normalizeDocumentTitle(req.body.title)
+    const resolution = normalizeDocumentConflictResolution(req.body.resolution)
+    if (Object.prototype.hasOwnProperty.call(req.body, 'newVersion') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'version')) {
+      throw new DocumentVersionError('DOCUMENT_VERSION_MANAGED', 'Document version numbers are managed by the system.')
     }
 
-    const stmt = db.prepare(
-      `INSERT INTO documents (title, category, subcategory, tags, file_path) VALUES (?, ?, ?, ?, ?)`
-    )
-    const result = stmt.run(finalTitle, category, subcategory || '', tags, filePath)
+    const db = getDatabase()
+    const category = resolveDocumentCategoryInput(db, {
+      categoryId: req.body.categoryId,
+      category: req.body.category,
+      subcategory: req.body.subcategory
+    })
+    const compatibility = categoryCompatibilityFields(category)
+    const normalizedTags = normalizeDocumentTags(req.body.tags)
+    const originalName = documentOriginalName(req.file.originalName)
+    const initialVersionNote = normalizeDocumentVersionNote(req.body.versionNote)
+    const conflicts = findDocumentUploadConflicts(db, {
+      title,
+      category,
+      contentSha256: req.file.contentSha256
+    })
 
-    // 创建版本记录
-    const versionStmt = db.prepare(
-      `INSERT INTO document_versions (document_id, version, file_path, note) VALUES (?, ?, ?, ?)`
-    )
-    versionStmt.run(result.lastInsertRowid, 1.0, filePath, versionNote || '初始版本')
+    if (resolution === 'new_version') {
+      const target = selectDocumentConflictTarget(conflicts, req.body.targetDocumentId)
+      if (target.hashMatches) {
+        throw new DocumentConflictError(
+          'DOCUMENT_CONTENT_IDENTICAL',
+          'Document content is identical to the current version.'
+        )
+      }
+      const runtime = getDocumentStorageRuntime()
+      const result = await appendDocumentVersion({
+        database: db,
+        runtime,
+        id: target.id,
+        staged: {
+          token: req.file.stagingToken,
+          sha256: req.file.contentSha256,
+          bytes: req.file.contentBytes
+        },
+        versionNote: initialVersionNote
+      })
+      stagedToken = null
+      return res.json({
+        id: target.id,
+        title: target.title,
+        version: result.version,
+        resolution: 'new_version',
+        message: '上传成功'
+      })
+    }
 
-    console.log('文档上传成功，ID:', result.lastInsertRowid)
-    console.log('保存到数据库的路径:', filePath)
-    console.log('最终标题:', finalTitle)
+    const conflict = conflicts.length > 0
+      ? documentUploadConflict({ database: db, title, category, contentSha256: req.file.contentSha256 })
+      : null
+    if (conflict) throw conflict
+
+    let documentId
+    const runtime = getDocumentStorageRuntime()
+    await coordinateStorageCommit({
+      database: db,
+      storageService: runtime.storageService,
+      idempotencyKey: `document-upload:${randomUUID()}`,
+      stagingToken: stagedToken,
+      kind: 'documents',
+      expectedSha256: req.file.contentSha256,
+      expectedBytes: req.file.contentBytes,
+      writeDatabase: ({ storageKey, sha256, bytes }) => {
+        const result = db.prepare(`
+          INSERT INTO documents
+            (title, category, subcategory, category_id, tags, file_path, storage_key,
+             content_sha256, content_bytes, original_name, version)
+          VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, 1.0)
+        `).run(
+          title,
+          compatibility.category,
+          compatibility.subcategory,
+          category?.id ?? null,
+          normalizedTags.serialized,
+          storageKey,
+          sha256,
+          bytes,
+          originalName
+        )
+        documentId = Number(result.lastInsertRowid)
+        db.prepare(`
+          INSERT INTO document_versions
+            (document_id, version, file_path, storage_key, content_sha256, content_bytes, note)
+          VALUES (?, 1, NULL, ?, ?, ?, ?)
+        `).run(documentId, storageKey, sha256, bytes, initialVersionNote || '初始版本')
+      }
+    })
+    stagedToken = null
 
     // 清除标签缓存（可能添加了新标签）
-    await cache.del(CacheKeys.DOC_TAGS)
+    try { await cache.del(CacheKeys.DOC_TAGS) } catch (error) {
+      console.warn('文档标签缓存清理失败:', error?.code ?? error?.name)
+    }
 
-    res.json({ id: result.lastInsertRowid, title: finalTitle, message: '上传成功' })
+    res.json({ id: documentId, title, resolution: 'create', message: '上传成功' })
   } catch (error) {
-    console.error('文档上传错误:', error)
-    console.error('错误堆栈:', error.stack)
-    res.status(500).json({ message: '上传失败', error: error.message })
+    if (stagedToken) {
+      try { getDocumentStorageRuntime().storageService.discardStaged(stagedToken) } catch {}
+    }
+    console.error('文档上传错误:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '上传失败')
   }
 })
 
@@ -821,20 +781,11 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '文档不存在' })
     }
 
-    const filePath = document.file_path
-    console.log('尝试读取文件:', filePath)
-    console.log('文件是否存在:', fs.existsSync(filePath))
-
-    // 获取文件大小
-    const fileSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0
-
-    if (!fs.existsSync(filePath)) {
-      console.error('文件不存在:', filePath)
-      return res.status(404).json({ message: '文件不存在' })
-    }
+    const fileName = documentFileName(document)
+    const { metadata, content } = await readDocumentBuffer(getDocumentStorageRuntime().contentService, document)
 
     // 检查文件扩展名
-    const ext = path.extname(filePath).toLowerCase()
+    const ext = documentExtension(document)
     const textFormats = ['.txt', '.md', '.json', '.xml', '.html', '.css', '.js', '.ts', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.go', '.rs', '.sql', '.sh', '.bat', '.yml', '.yaml', '.csv', '.log']
     const binaryFormats = ['.pdf', '.zip', '.rar', '.7z', '.tar', '.gz']
     const officeFormats = ['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']
@@ -848,41 +799,37 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
 
     if (officeFormats.includes(ext)) {
       // Office文件：返回base64编码
-      const content = fs.readFileSync(filePath)
       const base64 = content.toString('base64')
       res.json({
         content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
+        fileName,
+        fileSize: metadata.bytes,
         isBase64: true
       })
     } else if (binaryFormats.includes(ext)) {
       // 二进制文件：返回 base64 编码的数据用于前端预览
-      const content = fs.readFileSync(filePath)
       const base64 = content.toString('base64')
       res.json({
         content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
+        fileName,
+        fileSize: metadata.bytes,
         isBase64: true
       })
     } else if (textFormats.includes(ext)) {
       // 文本文件：直接返回内容
-      const content = fs.readFileSync(filePath, 'utf-8')
       res.json({
-        content,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
+        content: content.toString('utf8'),
+        fileName,
+        fileSize: metadata.bytes,
         isBase64: false
       })
     } else if (imageFormats.includes(ext)) {
       // 图片文件：返回 base64 编码
-      const content = fs.readFileSync(filePath)
       const base64 = content.toString('base64')
       res.json({
         content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
+        fileName,
+        fileSize: metadata.bytes,
         isBase64: true
       })
     } else {
@@ -896,135 +843,57 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: '认证失败' })
     }
-    console.error('获取文档内容失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('获取文档内容失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 
 // 更新文档内容
 router.put('/:id/content', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { content, versionNote, newVersion } = req.body
-    if (!content) {
-      return res.status(400).json({ message: '内容不能为空' })
+    const body = req.body ?? {}
+    const update = {
+      database: getDatabase(),
+      runtime: getDocumentStorageRuntime(),
+      id: req.params.id,
+      content: body.content,
+      versionNote: body.versionNote
     }
-
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    if (!document) {
-      return res.status(404).json({ message: '文档不存在' })
-    }
-
-    const filePath = document.file_path
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    // 确定新版本号
-    let finalVersion
-    if (newVersion) {
-      // 验证版本号格式
-      const versionRegex = /^\d+(\.\d+)*$/
-      if (!versionRegex.test(newVersion)) {
-        return res.status(400).json({ message: '版本号格式不正确' })
-      }
-
-      // 验证版本号是否大于当前版本
-      const currentVersion = document.version || '1.0'
-      if (!isVersionGreater(newVersion, currentVersion.toString())) {
-        return res.status(400).json({ message: `新版本号必须大于当前版本 ${currentVersion}` })
-      }
-
-      finalVersion = newVersion
-    } else {
-      // 自动递增版本号（小版本+1）
-      const currentVersion = document.version || 1
-      finalVersion = (parseFloat(currentVersion) + 0.1).toFixed(1)
-    }
-
-    // 备份当前版本
-    const backupStmt = db.prepare(
-      `INSERT INTO document_versions (document_id, version, file_path, note) VALUES (?, ?, ?, ?)`
-    )
-    backupStmt.run(req.params.id, finalVersion, filePath, versionNote || `版本 ${finalVersion}`)
-
-    // 写入新内容
-    fs.writeFileSync(filePath, content, 'utf-8')
-
-    // 更新文档版本号
-    const updateStmt = db.prepare(
-      `UPDATE documents SET version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
-    updateStmt.run(finalVersion, req.params.id)
-
-    res.json({ message: '保存成功', version: finalVersion })
+    if (Object.prototype.hasOwnProperty.call(body, 'newVersion')) update.newVersion = body.newVersion
+    if (Object.prototype.hasOwnProperty.call(body, 'version')) update.version = body.version
+    const result = await updateDocumentContent(update)
+    res.json({ message: '保存成功', version: result.version })
   } catch (error) {
-    console.error('更新文档内容失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('更新文档内容失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error?.cause ?? error, '服务器错误')
   }
 })
 
-// 辅助函数：比较版本号
-function isVersionGreater(newVersion, currentVersion) {
-  const newParts = newVersion.split('.').map(Number)
-  const currentParts = currentVersion.toString().split('.').map(Number)
-
-  const maxLen = Math.max(newParts.length, currentParts.length)
-
-  for (let i = 0; i < maxLen; i++) {
-    const newPart = newParts[i] || 0
-    const currentPart = currentParts[i] || 0
-
-    if (newPart > currentPart) return true
-    if (newPart < currentPart) return false
-  }
-
-  return false // 版本号相等
-}
-
 // 获取文档版本
+router.get('/:id/versions/trash', authenticateToken, async (req, res) => {
+  try {
+    res.json({ data: listDeletedDocumentVersions(getDatabase(), req.params.id) })
+  } catch (error) {
+    console.error('获取文档版本回收列表失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '获取文档版本回收列表失败')
+  }
+})
+
 router.get('/:id/versions', authenticateToken, async (req, res) => {
   try {
-    const db = getDatabase()
-    const stmt = db.prepare(
-      'SELECT * FROM document_versions WHERE document_id = ? ORDER BY version DESC'
-    )
-    const rows = stmt.all(req.params.id)
-
-    // 转换为驼峰命名
-    const result = rows.map(row => ({
-      id: row.id,
-      documentId: row.document_id,
-      version: row.version,
-      filePath: row.file_path,
-      note: row.note,
-      createdAt: row.created_at
-    }))
-
-    res.json({ data: result })
+    res.json({ data: listDocumentVersions(getDatabase(), req.params.id) })
   } catch (error) {
     console.error('获取版本失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '获取版本失败')
   }
 })
 
 // 更新文档
 router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { title, category, subcategory, tags } = req.body
-    const db = getDatabase()
-
-    const stmt = db.prepare(
-      `UPDATE documents SET title = ?, category = ?, subcategory = ?, tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
-    stmt.run(title, category, subcategory || '', tags, req.params.id)
-
-    // 清除标签缓存（可能修改了标签）
-    await cache.del(CacheKeys.DOC_TAGS)
-
-    res.json({ message: '更新成功' })
+    const result = updateDocumentMetadata(getDatabase(), req.params.id, req.body)
+    try { await cache.del(CacheKeys.DOC_TAGS); await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    return res.json({ message: '更新成功', categoryId: result.categoryId, tags: result.tags })
   } catch (error) {
     console.error('更新失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -1034,37 +903,9 @@ router.put('/:id', authenticateToken, requireWritePermission, async (req, res) =
 // 批量更新文档
 router.put('/batch/update', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { ids, category, subcategory, tags } = req.body
-    if (!ids || !Array.isArray(ids) || ids.length === 0) {
-      return res.status(400).json({ message: '请选择要更新的文档' })
-    }
-
-    const db = getDatabase()
-    const placeholders = ids.map(() => '?').join(',')
-
-    let sql = 'UPDATE documents SET updated_at = CURRENT_TIMESTAMP'
-    const params = []
-
-    if (category !== undefined) {
-      sql += ', category = ?'
-      params.push(category)
-    }
-    if (subcategory !== undefined) {
-      sql += ', subcategory = ?'
-      params.push(subcategory || '')
-    }
-    if (tags !== undefined) {
-      sql += ', tags = ?'
-      params.push(tags)
-    }
-
-    sql += ` WHERE id IN (${placeholders})`
-    params.push(...ids)
-
-    const stmt = db.prepare(sql)
-    stmt.run(...params)
-
-    res.json({ message: '批量更新成功', count: ids.length })
+    const result = batchUpdateDocumentMetadata(getDatabase(), req.body.ids, req.body)
+    try { await cache.del(CacheKeys.DOC_TAGS); await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    return res.json({ message: '批量更新成功', count: result.count, categoryId: result.categoryId })
   } catch (error) {
     console.error('批量更新失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -1083,27 +924,22 @@ router.get('/download/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '文档不存在' })
     }
 
-    const filePath = document.file_path
-    console.log('尝试下载文件:', filePath)
-    console.log('文件是否存在:', fs.existsSync(filePath))
-    console.log('当前工作目录:', process.cwd())
-    console.log('上传目录配置:', getStoragePath('uploads'))
-
-    if (!fs.existsSync(filePath)) {
-      console.error('文件不存在:', filePath)
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const fileName = path.basename(filePath)
+    const fileName = documentFileName(document)
+    const { stream } = await getDocumentStorageRuntime().contentService.createReadStream(document)
     res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
-    res.sendFile(filePath)
+    res.setHeader('Content-Disposition', `attachment; filename="download"; filename*=UTF-8''${contentDispositionFileName(fileName)}`)
+    stream.on('error', (error) => {
+      console.error('下载流失败:', error?.code ?? error?.name)
+      if (!res.headersSent) sendDocumentError(res, error, '服务器错误')
+      else res.destroy(error)
+    })
+    stream.pipe(res)
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({ message: '认证失败' })
     }
-    console.error('下载失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('下载失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 
@@ -1111,263 +947,119 @@ router.get('/download/:id', authenticateToken, async (req, res) => {
 router.get('/download/version/:id', authenticateToken, async (req, res) => {
   try {
     const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM document_versions WHERE id = ?')
+    const stmt = db.prepare(`
+      SELECT v.*, d.original_name, d.title
+      FROM document_versions v
+      JOIN documents d ON d.id = v.document_id
+      WHERE v.id = ?
+    `)
     const version = stmt.get(req.params.id)
 
     if (!version) {
       return res.status(404).json({ message: '版本不存在' })
     }
+    assertDocumentVersionNotTrashed(db, version.id)
 
-    const filePath = version.file_path
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const fileName = path.basename(filePath)
+    const fileName = documentFileName(version)
+    const { stream } = await getDocumentStorageRuntime().contentService.createReadStream(version)
     res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
-    res.sendFile(filePath)
+    res.setHeader('Content-Disposition', `attachment; filename="download"; filename*=UTF-8''${contentDispositionFileName(fileName)}`)
+    stream.on('error', (error) => {
+      console.error('版本下载流失败:', error?.code ?? error?.name)
+      if (!res.headersSent) sendDocumentError(res, error, '服务器错误')
+      else res.destroy(error)
+    })
+    stream.pipe(res)
   } catch (error) {
-    console.error('下载版本失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('下载版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
+  }
+})
+
+router.get('/trash', authenticateToken, async (req, res) => {
+  try { res.json({ data: listDeletedDocuments(getDatabase()) }) } catch (error) {
+    console.error('获取文档回收站失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
+  }
+})
+
+router.post('/trash/:id/restore', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = restoreDocumentFromTrash({ database: getDatabase(), id: req.params.id })
+    res.json({ message: '恢复成功', categoryId: result.categoryId })
+  } catch (error) {
+    console.error('恢复文档失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
+  }
+})
+
+router.delete('/trash/:id', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = await permanentlyDeleteDocument({
+      database: getDatabase(), storageService: getDocumentStorageRuntime().storageService, id: req.params.id
+    })
+    res.json({ message: '永久删除成功', purgedObjects: result.purgedObjects })
+  } catch (error) {
+    console.error('永久删除文档失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
+  }
+})
+
+router.delete('/:id/versions/:versionId', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = softDeleteDocumentVersion({
+      database: getDatabase(),
+      id: req.params.id,
+      versionId: req.params.versionId
+    })
+    res.json({ message: '历史版本已移入回收保护', deletedAt: result.deletedAt, purgeAfter: result.purgeAfter })
+  } catch (error) {
+    console.error('删除文档历史版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '删除文档历史版本失败')
+  }
+})
+
+router.post('/:id/versions/:versionId/trash/restore', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = await restoreDocumentVersionFromTrash({
+      database: getDatabase(),
+      runtime: getDocumentStorageRuntime(),
+      id: req.params.id,
+      versionId: req.params.versionId,
+      versionNote: req.body?.versionNote
+    })
+    res.json({ message: '历史版本恢复成功', version: result.version })
+  } catch (error) {
+    console.error('恢复回收文档版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error?.cause ?? error, '恢复回收文档版本失败')
+  }
+})
+
+router.post('/:id/versions/:versionId/restore', authenticateToken, requireWritePermission, async (req, res) => {
+  try {
+    const result = await restoreDocumentVersion({
+      database: getDatabase(),
+      runtime: getDocumentStorageRuntime(),
+      id: req.params.id,
+      versionId: req.params.versionId,
+      versionNote: req.body?.versionNote
+    })
+    res.json({ message: '恢复成功', version: result.version })
+  } catch (error) {
+    console.error('恢复文档版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error?.cause ?? error, '服务器错误')
   }
 })
 
 // 删除文档
-router.delete('/:id', authenticateToken, async (req, res) => {
+router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    console.log('删除文档，ID:', req.params.id)
-    console.log('数据库中的文档记录:', document)
-    console.log('文件路径:', document?.file_path)
-
-    if (document && document.file_path && fs.existsSync(document.file_path)) {
-      console.log('删除文件:', document.file_path)
-      fs.unlinkSync(document.file_path)
-    } else if (document && document.file_path) {
-      console.error('文件不存在，无法删除:', document.file_path)
-    }
-
-    const deleteStmt = db.prepare('DELETE FROM documents WHERE id = ?')
-    deleteStmt.run(req.params.id)
-
-    const deleteVersionsStmt = db.prepare('DELETE FROM document_versions WHERE document_id = ?')
-    deleteVersionsStmt.run(req.params.id)
-
-    // 清除标签缓存（可能删除了带标签的文档）
-    await cache.del(CacheKeys.DOC_TAGS)
-
-    res.json({ message: '删除成功' })
+    const result = softDeleteDocument({ database: getDatabase(), id: req.params.id })
+    try { await cache.del(CacheKeys.DOC_TAGS) } catch {}
+    res.json({ message: '已移入回收站', purgeAfter: result.purgeAfter })
   } catch (error) {
-    console.error('删除失败:', error)
-    console.error('错误堆栈:', error.stack)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
-// 私密空间
-
-// 私密空间密码验证（路径使用中性命名，避免被网关拦截）
-router.post('/docs/special/verify', authenticateToken, privateSpaceLimiter, async (req, res) => {
-  try {
-    const { password } = req.body
-    if (!password) {
-      return res.status(400).json({ message: '请输入密码' })
-    }
-
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT password FROM private_settings WHERE id = 1')
-    const settings = stmt.get()
-
-    if (!settings) {
-      return res.status(500).json({ message: '私密空间未初始化' })
-    }
-
-    const isValid = bcrypt.compareSync(password, settings.password)
-
-    if (isValid) {
-      res.json({ success: true })
-    } else {
-      res.status(400).json({ message: '密码错误', code: 'PASSWORD_INCORRECT' })
-    }
-  } catch (error) {
-    console.error('验证密码失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
-const privateSpaceFrozen = (req, res) => res.status(410).json({
-  message: '私密空间已冻结，等待数据迁移',
-  code: 'PRIVATE_SPACE_FROZEN'
-})
-
-// 仅统计记录和受管文件状态，不读取标题、路径或文件内容。
-router.get('/docs/special/inventory', authenticateToken, (req, res) => {
-  try {
-    const inventory = collectPrivateSpaceInventory(getDatabase(), getStoragePath('uploads'))
-    res.json({ data: inventory })
-  } catch (error) {
-    console.error('私密空间盘点失败:', error)
-    res.status(500).json({ message: '盘点失败' })
-  }
-})
-
-// 私密空间已进入只读迁移期，禁止改密。
-router.post('/docs/special/update-auth', authenticateToken, async (req, res) => {
-  privateSpaceFrozen(req, res)
-})
-
-// 获取私密文件列表（路径使用中性命名）
-router.get('/docs/special/list', authenticateToken, async (req, res) => {
-  try {
-    const { keyword, page = 1, pageSize = 30 } = req.query
-    const db = getDatabase()
-
-    let sql = 'SELECT * FROM private_documents WHERE 1=1'
-    const params = []
-
-    if (keyword) {
-      sql += ' AND title LIKE ?'
-      params.push(`%${keyword}%`)
-    }
-
-    sql += ' ORDER BY updated_at DESC'
-
-    const stmt = db.prepare(sql)
-    const rows = stmt.all(...params)
-
-    // 转换为驼峰命名并转换时区
-    const result = rows.map(row => ({
-      id: row.id,
-      title: row.title,
-      filePath: row.file_path,
-      size: row.size || 0,
-      createdAt: convertToUTC8(row.created_at),
-      updatedAt: convertToUTC8(row.updated_at)
-    }))
-
-    // 分页
-    const total = result.length
-    const pageNum = parseInt(page) || PAGINATION.DEFAULT_PAGE
-    const pageSizeNum = parseInt(pageSize) || PAGINATION.DEFAULT_PAGE_SIZE
-    const startIndex = (pageNum - 1) * pageSizeNum
-    const paginatedResult = result.slice(startIndex, startIndex + pageSizeNum)
-
-    res.json({ data: paginatedResult, total })
-  } catch (error) {
-    console.error('获取私密文件列表失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
-// 上传私密文件（路径避免敏感词）
-router.post('/secure/upload', authenticateToken, requireWritePermission, privateSpaceFrozen)
-
-// 下载私密文件（路径避免敏感词）
-router.get('/secure/download/:id', authenticateToken, requireWritePermission, async (req, res) => {
-  try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    if (!document) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const filePath = document.file_path
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const fileName = path.basename(filePath)
-    res.setHeader('Content-Type', 'application/octet-stream')
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
-    res.sendFile(filePath)
-  } catch (error) {
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ message: '认证失败' })
-    }
-    console.error('下载私密文件失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
-
-// 删除私密文件（路径避免敏感词）
-router.delete('/secure/files/:id', authenticateToken, requireWritePermission, privateSpaceFrozen)
-
-// 获取私密文件内容用于预览（路径使用中性命名）
-router.get('/docs/special/view/:id', authenticateToken, requireWritePermission, async (req, res) => {
-  try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM private_documents WHERE id = ?')
-    const document = stmt.get(req.params.id)
-
-    if (!document) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const filePath = document.file_path
-    const fileSize = document.size || 0
-
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ message: '文件不存在' })
-    }
-
-    const ext = path.extname(filePath).toLowerCase()
-    const textFormats = ['.txt', '.md', '.json', '.xml', '.html', '.css', '.js', '.ts', '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.go', '.rs', '.sql', '.sh', '.bat', '.yml', '.yaml', '.csv', '.log']
-    const binaryFormats = ['.pdf', '.zip', '.rar', '.7z', '.tar', '.gz']
-    const officeFormats = ['.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx']
-    const imageFormats = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg']
-
-    if (officeFormats.includes(ext)) {
-      const content = fs.readFileSync(filePath)
-      const base64 = content.toString('base64')
-      res.json({
-        content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
-        isBase64: true
-      })
-    } else if (binaryFormats.includes(ext)) {
-      const content = fs.readFileSync(filePath)
-      const base64 = content.toString('base64')
-      res.json({
-        content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
-        isBase64: true
-      })
-    } else if (textFormats.includes(ext)) {
-      const content = fs.readFileSync(filePath, 'utf-8')
-      res.json({
-        content,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
-        isBase64: false
-      })
-    } else if (imageFormats.includes(ext)) {
-      const content = fs.readFileSync(filePath)
-      const base64 = content.toString('base64')
-      res.json({
-        content: base64,
-        fileName: path.basename(filePath),
-        fileSize: fileSize,
-        isBase64: true
-      })
-    } else {
-      return res.status(400).json({
-        message: '不支持的文件格式'
-      })
-    }
-  } catch (error) {
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ message: '认证失败' })
-    }
-    console.error('获取私密文件内容失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    console.error('删除失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 

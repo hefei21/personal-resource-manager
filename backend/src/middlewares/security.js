@@ -70,22 +70,6 @@ export const loginLimiter = rateLimit({
 })
 
 /**
- * 私密空间密码验证限制（严格）
- * 防止暴力破解私密空间密码
- */
-export const privateSpaceLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5分钟
-  max: 10, // 最多10次尝试（提升用户体验）
-  message: {
-    message: '密码验证次数过多，请5分钟后再试',
-    retryAfter: '5 minutes'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) => getClientIP(req)
-})
-
-/**
  * 写操作速率限制（中等）
  * 管理员才有的权限，正常使用不会触发
  */

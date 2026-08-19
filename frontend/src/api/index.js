@@ -95,7 +95,7 @@ export default {
     categoryTree: () => api.get('/documents/categories/tree'),
     createCategory: (data) => api.post('/documents/categories', data),
     updateCategory: (id, data) => api.put(`/documents/categories/${id}`, data),
-    deleteCategory: (id, deleteFiles = false) => api.delete(`/documents/categories/${id}`, { params: { deleteFiles } }),
+    deleteCategory: (id) => api.delete(`/documents/categories/${id}`),
     reorderCategories: (data) => api.put('/documents/categories/reorder', data),
     checkDuplicate: (params) => api.get('/documents/check-duplicate', { params }),
     tags: () => api.get('/documents/tags'),
@@ -108,17 +108,15 @@ export default {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
     versions: (id) => api.get(`/documents/${id}/versions`),
+    versionsTrash: (id) => api.get(`/documents/${id}/versions/trash`),
+    deleteVersion: (id, versionId) => api.delete(`/documents/${id}/versions/${versionId}`),
+    restoreVersionTrash: (id, versionId) => api.post(`/documents/${id}/versions/${versionId}/trash/restore`),
+    restoreVersion: (id, versionId, data = {}) => api.post(`/documents/${id}/versions/${versionId}/restore`, data),
+    trash: () => api.get('/documents/trash'),
+    restoreTrash: (id) => api.post(`/documents/trash/${id}/restore`),
+    permanentlyDeleteTrash: (id) => api.delete(`/documents/trash/${id}`),
     getContent: (id) => api.get(`/documents/${id}/content`),
-    updateContent: (id, data) => api.put(`/documents/${id}/content`, data),
-    // 私密空间 API（路径使用中性命名，避免被网关拦截）
-    verifyPrivatePassword: (data) => api.post('/documents/docs/special/verify', data),
-    changePrivatePassword: (data) => api.post('/documents/docs/special/update-auth', data),
-    listPrivate: (params) => api.get('/documents/docs/special/list', { params }),
-    uploadPrivate: (formData) => api.post('/documents/docs/special/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    }),
-    deletePrivate: (id) => api.delete(`/documents/docs/special/list/${id}`),
-    getPrivateContent: (id) => api.get(`/documents/docs/special/view/${id}`)
+    updateContent: (id, data) => api.put(`/documents/${id}/content`, data)
   },
   music: {
     list: (params) => api.get('/music', { params }),
@@ -129,6 +127,9 @@ export default {
     update: (id, data) => api.put(`/music/${id}`, data),
     delete: (id) => api.delete(`/music/${id}`),
     batchDelete: (data) => api.post('/music/batch-delete', data),
+    trash: () => api.get('/music/trash'),
+    restoreTrash: (id) => api.post(`/music/trash/${id}/restore`),
+    permanentlyDeleteTrash: (id) => api.delete(`/music/trash/${id}/permanent`),
     // 去重
     getDuplicates: () => api.get('/music/duplicates'),
     removeDuplicates: () => api.post('/music/remove-duplicates'),
@@ -192,6 +193,9 @@ export default {
     update: (id, data) => api.put(`/ebooks/${id}`, data),
     delete: (id) => api.delete(`/ebooks/${id}`),
     batchDelete: (data) => api.post('/ebooks/batch-delete', data),
+    trash: () => api.get('/ebooks/trash'),
+    restoreTrash: (id) => api.post(`/ebooks/trash/${id}/restore`),
+    permanentlyDeleteTrash: (id) => api.delete(`/ebooks/trash/${id}/permanent`),
     getContent: (id) => api.get(`/ebooks/${id}/content`),
     // 虚拟滚动：分页获取章节内容
     getChapters: (id, start, count) => api.get(`/ebooks/${id}/chapters`, { params: { start, count } }),
@@ -211,6 +215,7 @@ export default {
     getCommits: (id, limit) => api.get(`/code/${id}/commits`, { params: { limit } }),
     getCommitDetail: (id, hash) => api.get(`/code/${id}/commit/${hash}`),
     sync: (id) => api.post(`/code/${id}/sync`),
+    reclone: (id) => api.post(`/code/${id}/reclone`),
     getSyncStatus: (id) => api.get(`/code/${id}/sync-status`),
     getCloneStatus: (id) => api.get(`/code/${id}/clone-status`),
     getGithubInfo: (url) => api.get('/code/github-info', { params: { url } })

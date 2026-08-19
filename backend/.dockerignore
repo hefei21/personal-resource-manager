@@ -1,5 +1,6 @@
 node_modules
 npm-debug.log*
+*.log
 .env
 .env.*
 !.env.example
@@ -9,7 +10,14 @@ data
 *.db-shm
 *.db-wal
 logs
+test/
+.test-runtime/
+coverage/
+.nyc_output/
+.cache/
+tmp/
+temp/
+Dockerfile.lite
 .git
 .gitignore
 .codex
-

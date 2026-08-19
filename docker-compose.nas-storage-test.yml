@@ -1,0 +1,21 @@
+services:
+  storage-test:
+    image: ${STORAGE_TEST_IMAGE:?Set an immutable backend image tag}
+    restart: "no"
+    command:
+      - node
+      - --test
+      - test/fixtures/storage-nas-probe.js
+    environment:
+      NODE_ENV: test
+      STORAGE_NAS_TEST_ROOT: /test-data
+    network_mode: none
+    read_only: true
+    volumes:
+      - ${STORAGE_NAS_TEST_PATH:?Set a new empty NAS test directory}:/test-data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

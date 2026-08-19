@@ -16,10 +16,10 @@ router.use(authenticateToken, requireOwner)
 // 获取文章列表
 router.get('/posts', async (req, res) => {
   try {
-    const { status, category_id, tag_id, keyword, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
+    const { category_id, tag_id, keyword, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
 
     // 尝试从缓存获取
-    const cacheKey = `blog:posts:${status || 'all'}:${category_id || 'all'}:${tag_id || 'all'}:${keyword || 'all'}:${page}:${pageSize}`
+    const cacheKey = `blog:posts:${category_id || 'all'}:${tag_id || 'all'}:${keyword || 'all'}:${page}:${pageSize}`
     const cached = await cache.get(cacheKey)
     if (cached) {
       return res.json(cached)
@@ -30,7 +30,13 @@ router.get('/posts', async (req, res) => {
     
     let sql = `
       SELECT 
-        p.*,
+        p.id,
+        p.title,
+        p.content,
+        p.category_id,
+        p.is_top,
+        p.created_at,
+        p.updated_at,
         c.name as category_name,
         GROUP_CONCAT(t.name) as tags,
         GROUP_CONCAT(t.color) as tag_colors
@@ -41,11 +47,6 @@ router.get('/posts', async (req, res) => {
       WHERE 1=1
     `
     const params = []
-
-    if (status) {
-      sql += ` AND p.status = ?`
-      params.push(status)
-    }
 
     if (category_id) {
       sql += ` AND p.category_id = ?`
@@ -74,10 +75,6 @@ router.get('/posts', async (req, res) => {
       countSql += ` LEFT JOIN blog_post_tags pt ON p.id = pt.post_id`
     }
     countSql += ` WHERE 1=1`
-    if (status) {
-      countSql += ` AND p.status = ?`
-      countParams.push(status)
-    }
     if (category_id) {
       countSql += ` AND p.category_id = ?`
       countParams.push(category_id)
@@ -146,7 +143,13 @@ router.get('/posts/:id', async (req, res) => {
 
     const post = db.prepare(`
       SELECT 
-        p.*,
+        p.id,
+        p.title,
+        p.content,
+        p.category_id,
+        p.is_top,
+        p.created_at,
+        p.updated_at,
         c.name as category_name,
         GROUP_CONCAT(t.id) as tag_ids,
         GROUP_CONCAT(t.name) as tags,
@@ -190,7 +193,7 @@ router.get('/posts/:id', async (req, res) => {
 router.post('/posts', async (req, res) => {
   try {
     const db = getDatabase()
-    const { title, content, category_id, tags, status = 'draft', is_top = false } = req.body
+    const { title, content, category_id, tags, is_top = false } = req.body
 
     if (!title || !title.trim()) {
       return res.status(400).json({ success: false, message: '标题不能为空' })
@@ -198,10 +201,10 @@ router.post('/posts', async (req, res) => {
 
     // 插入文章
     const stmt = db.prepare(`
-      INSERT INTO blog_posts (title, content, category_id, status, is_top)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO blog_posts (title, content, category_id, is_top)
+      VALUES (?, ?, ?, ?)
     `)
-    const result = stmt.run(title.trim(), content || '', category_id || null, status, is_top ? 1 : 0)
+    const result = stmt.run(title.trim(), content || '', category_id || null, is_top ? 1 : 0)
 
     const postId = result.lastInsertRowid
 
@@ -243,7 +246,7 @@ router.put('/posts/:id', async (req, res) => {
   try {
     const db = getDatabase()
     const { id } = req.params
-    const { title, content, category_id, tags, status, is_top } = req.body
+    const { title, content, category_id, tags, is_top } = req.body
 
     // 检查文章是否存在
     const existing = db.prepare('SELECT id FROM blog_posts WHERE id = ?').get(id)
@@ -269,10 +272,6 @@ router.put('/posts/:id', async (req, res) => {
     if (category_id !== undefined) {
       updateFields.push('category_id = ?')
       params.push(category_id || null)
-    }
-    if (status !== undefined) {
-      updateFields.push('status = ?')
-      params.push(status)
     }
     if (is_top !== undefined) {
       updateFields.push('is_top = ?')

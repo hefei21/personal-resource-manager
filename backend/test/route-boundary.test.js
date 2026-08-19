@@ -19,7 +19,9 @@ test('all production resource modules are owner-only at the mount boundary', () 
     '/api/search',
     '/api/book-search',
     '/api/todos',
-    '/api/blog'
+    '/api/blog',
+    '/api/storage-consistency',
+    '/api/private-space-migration'
   ]
 
   for (const route of ownerModules) {

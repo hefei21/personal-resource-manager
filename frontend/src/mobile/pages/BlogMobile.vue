@@ -1,12 +1,5 @@
 <template>
   <div class="mobile-blog">
-    <!-- 状态筛选标签 -->
-    <div class="status-tabs">
-      <div class="tab-item" :class="{ active: statusFilter === '' }" @click="switchStatus('')">全部</div>
-      <div class="tab-item" :class="{ active: statusFilter === 'published' }" @click="switchStatus('published')">已发布</div>
-      <div v-if="!isGuest" class="tab-item" :class="{ active: statusFilter === 'draft' }" @click="switchStatus('draft')">草稿</div>
-    </div>
-
     <!-- 搜索栏 -->
     <div class="search-section">
       <div class="search-bar">
@@ -34,7 +27,6 @@
           <div class="post-header">
             <div class="post-badges">
               <span v-if="post.is_top" class="badge badge-top">置顶</span>
-              <span v-if="post.status === 'draft'" class="badge badge-draft">草稿</span>
             </div>
             <h3 class="post-title">{{ post.title }}</h3>
           </div>
@@ -186,14 +178,13 @@
           :toolbars="mobileToolbars" 
           :preview="false" 
           editorClass="mobile-md-editor"
-          @onSave="handleEditorSave"
+          @onSave="handleSave"
         />
       </div>
       <div class="editor-toolbar">
         <div class="toolbar-left"><span class="word-count">{{ contentLength }} 字</span></div>
         <div class="toolbar-right">
-          <button class="btn-save-draft" @click="handleSaveDraft" :disabled="saving">存草稿</button>
-          <button class="btn-publish" @click="handlePublish" :disabled="saving">{{ editForm.status === 'published' ? '更新' : '发布' }}</button>
+          <button class="btn-save" @click="handleSave" :disabled="saving">保存</button>
         </div>
       </div>
       <!-- 编辑器选项抽屉 -->
@@ -247,7 +238,6 @@ const page = ref(1)
 const pageSize = 20
 const hasMore = ref(true)
 const searchKeyword = ref('')
-const statusFilter = ref('')
 const categoryFilter = ref(null)
 const tagFilter = ref(null)
 
@@ -257,7 +247,7 @@ const tags = ref([])
 const editorVisible = ref(false)
 const showEditorOptions = ref(false)
 const editingPost = ref(null)
-const editForm = ref({ title: '', content: '', category_id: null, tags: [], status: 'draft', is_top: false })
+const editForm = ref({ title: '', content: '', category_id: null, tags: [], is_top: false })
 const tagInput = ref('')
 const saving = ref(false)
 
@@ -292,7 +282,6 @@ async function loadPosts(reset = false) {
   try {
     const params = { page: page.value, pageSize: pageSize }
     if (searchKeyword.value) params.keyword = searchKeyword.value
-    if (statusFilter.value) params.status = statusFilter.value
     if (categoryFilter.value) params.category_id = categoryFilter.value
     if (tagFilter.value) params.tag_id = tagFilter.value
     const response = await api.blog.getPosts(params)
@@ -316,8 +305,6 @@ async function loadMore() {
   try { await loadPosts() } finally { loadingMore.value = false }
 }
 
-function switchStatus(status) { statusFilter.value = status; loadPosts(true) }
-
 async function loadCategories() {
   try { categories.value = (await api.blog.getAllCategories()).data.data || [] } catch (e) { console.error('加载分类失败:', e) }
 }
@@ -331,7 +318,7 @@ function resetFilters() { categoryFilter.value = null; tagFilter.value = null; s
 
 function handleCreate() {
   editingPost.value = null
-  editForm.value = { title: '', content: '', category_id: null, tags: [], status: 'draft', is_top: false }
+  editForm.value = { title: '', content: '', category_id: null, tags: [], is_top: false }
   tagInput.value = ''
   editorVisible.value = true
 }
@@ -340,7 +327,7 @@ async function handleEdit(post) {
   try {
     const data = (await api.blog.getPost(post.id)).data.data
     editingPost.value = data
-    editForm.value = { title: data.title, content: data.content || '', category_id: data.category_id, tags: data.tags || [], status: data.status, is_top: data.is_top === 1 }
+    editForm.value = { title: data.title, content: data.content || '', category_id: data.category_id, tags: data.tags || [], is_top: data.is_top === 1 }
     tagInput.value = (data.tags || []).join(', ')
     editorVisible.value = true
   } catch (error) {
@@ -353,20 +340,12 @@ function closeEditor() {
   else editorVisible.value = false
 }
 
-async function handleSaveDraft() { await savePost('draft') }
-async function handlePublish() { await savePost('published') }
-
-// 编辑器工具栏保存按钮回调
-function handleEditorSave() {
-  handleSaveDraft()
-}
-
-async function savePost(status) {
+async function handleSave() {
   if (!editForm.value.title?.trim()) { toast.warning('请输入文章标题'); return }
   const tags = tagInput.value.split(/[,，]/).map(t => t.trim()).filter(t => t)
   saving.value = true
   try {
-    const data = { title: editForm.value.title.trim(), content: editForm.value.content, category_id: editForm.value.category_id || null, tags: tags, status: status, is_top: editForm.value.is_top }
+    const data = { title: editForm.value.title.trim(), content: editForm.value.content, category_id: editForm.value.category_id || null, tags: tags, is_top: editForm.value.is_top }
     if (editingPost.value) { await api.blog.updatePost(editingPost.value.id, data); toast.success('更新成功') }
     else { await api.blog.createPost(data); toast.success('创建成功') }
     editorVisible.value = false
@@ -450,10 +429,6 @@ onMounted(() => { loadPosts(true); loadCategories(); loadTags() })
 
 <style scoped>
 .mobile-blog { padding: 12px; padding-bottom: 100px; min-height: 100vh; background: #f5f7fa; }
-.status-tabs { display: flex; gap: 8px; margin-bottom: 12px; overflow-x: auto; padding-bottom: 4px; }
-.status-tabs::-webkit-scrollbar { display: none; }
-.tab-item { flex-shrink: 0; padding: 8px 16px; border-radius: 20px; font-size: 14px; color: #666; background: #fff; border: 1px solid #e8e8e8; transition: all 0.2s; cursor: pointer; }
-.tab-item.active { background: #0052d9; color: #fff; border-color: #0052d9; }
 .search-section { display: flex; gap: 8px; margin-bottom: 16px; }
 .search-bar { flex: 1; display: flex; align-items: center; background: #fff; border-radius: 24px; padding: 0 16px; border: 1px solid #e8e8e8; }
 .search-bar input { flex: 1; border: none; background: none; padding: 12px 8px; font-size: 14px; outline: none; }
@@ -475,7 +450,6 @@ onMounted(() => { loadPosts(true); loadCategories(); loadTags() })
 .post-badges { display: flex; gap: 6px; margin-bottom: 8px; }
 .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
 .badge-top { background: #fff7e6; color: #fa8c16; }
-.badge-draft { background: #f5f5f5; color: #999; }
 .post-title { font-size: 16px; font-weight: 600; color: #333; line-height: 1.4; margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .post-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .meta-item { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #888; }
@@ -551,8 +525,7 @@ onMounted(() => { loadPosts(true); loadCategories(); loadTags() })
 .editor-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-top: 1px solid #f0f0f0; background: #fff; }
 .word-count { font-size: 13px; color: #999; }
 .toolbar-right { display: flex; gap: 8px; }
-.btn-save-draft { padding: 8px 16px; background: #f5f7fa; color: #666; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
-.btn-publish { padding: 8px 20px; background: #0052d9; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+.btn-save { padding: 8px 20px; background: #0052d9; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
 .options-drawer { background: #fff; border-radius: 16px 16px 0 0; max-height: 70vh; display: flex; flex-direction: column; animation: slideUp 0.3s ease; }
 .form-item { margin-bottom: 20px; }
 .form-item label { display: block; font-size: 14px; font-weight: 500; color: #333; margin-bottom: 8px; }

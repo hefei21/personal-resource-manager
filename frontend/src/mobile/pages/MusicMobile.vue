@@ -29,6 +29,9 @@
       <button class="filter-btn" @click="showFilterDrawer = true">
         <NativeIcon name="filter" />
       </button>
+      <button v-if="!isGuest" class="filter-btn" @click="openTrash" title="回收站">
+        <NativeIcon name="delete" />
+      </button>
     </div>
 
     <!-- 批量操作栏（顶部固定） -->
@@ -45,9 +48,9 @@
           <NativeIcon name="add" size="18" />
           <span>添加</span>
         </button>
-        <button class="action-btn-icon danger" @click="batchDelete" title="删除">
+        <button class="action-btn-icon danger" @click="batchDelete" :title="currentPlaylist ? '从歌单移除' : '移入回收站'">
           <NativeIcon name="delete" size="18" />
-          <span>删除</span>
+          <span>{{ currentPlaylist ? '移除' : '回收' }}</span>
         </button>
         <button class="action-btn-icon" @click="exitBatchMode" title="完成">
           <NativeIcon name="check" size="18" />
@@ -179,7 +182,7 @@
             <NativeIcon name="edit" /> 编辑
           </div>
           <div class="sheet-item delete" @click="confirmDelete(currentSong)">
-            <NativeIcon name="delete" /> {{ currentPlaylist ? '从歌单移除' : '删除' }}
+            <NativeIcon name="delete" /> {{ currentPlaylist ? '从歌单移除' : '移入回收站' }}
           </div>
         </div>
         <div class="sheet-cancel" @click="closeActionMenu">取消</div>
@@ -229,21 +232,49 @@
     <!-- 删除确认弹窗 -->
     <div v-if="deleteConfirmVisible" class="modal-overlay" @click.self="deleteConfirmVisible = false">
       <div class="modal-container small">
-        <div class="modal-header">{{ currentPlaylist ? '从歌单移除' : '确认删除' }}</div>
+        <div class="modal-header">{{ currentPlaylist ? '从歌单移除' : '移入回收站' }}</div>
         <div class="modal-body">
           <p v-if="currentPlaylist">
             确定要从歌单「{{ currentPlaylist.name }}」中移除歌曲「{{ songToDelete?.title }}」吗？
           </p>
-          <p v-else>确定要删除歌曲「{{ songToDelete?.title }}」吗？</p>
+          <p v-else>确定要将歌曲「{{ songToDelete?.title }}」移入回收站吗？</p>
           <p :class="currentPlaylist ? 'info-text' : 'warning-text'">
-            {{ currentPlaylist ? '歌曲文件不会被删除，仍可在"全部"中找到' : '删除后无法恢复' }}
+            {{ currentPlaylist ? '歌曲文件不会被删除，仍可在"全部"中找到' : '默认保留 30 天，可在回收站恢复' }}
           </p>
         </div>
         <div class="modal-footer">
           <button class="btn-secondary" @click="deleteConfirmVisible = false">取消</button>
           <button :class="currentPlaylist ? 'btn-primary' : 'btn-danger'" @click="doDelete">
-            {{ currentPlaylist ? '移除' : '删除' }}
+            {{ currentPlaylist ? '移除' : '移入' }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showTrash" class="modal-overlay" @click.self="showTrash = false">
+      <div class="modal-container trash-modal">
+        <div class="modal-header trash-modal-header">
+          <span>音乐回收站</span>
+          <button class="close-btn" @click="showTrash = false"><NativeIcon name="close" /></button>
+        </div>
+        <div class="modal-body trash-body">
+          <p class="trash-retention-hint">默认保留 30 天；永久删除后不可恢复。</p>
+          <div v-if="trashLoading" class="trash-empty">加载中...</div>
+          <div v-else-if="trashMusic.length === 0" class="trash-empty">回收站为空</div>
+          <div v-else class="trash-list">
+            <div v-for="song in trashMusic" :key="song.id" class="trash-item">
+              <div class="trash-item-info">
+                <strong>{{ song.title }}</strong>
+                <span>{{ song.artist || '未知艺术家' }}</span>
+                <small>移入：{{ formatTrashDate(song.deletedAt) }}</small>
+                <small>保护期至：{{ formatTrashDate(song.purgeAfter) }}</small>
+              </div>
+              <div class="trash-item-actions">
+                <button class="btn-primary" @click="restoreTrash(song.id)">恢复</button>
+                <button class="btn-danger" @click="permanentlyDeleteTrash(song.id)">永久删除</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -348,6 +379,9 @@ const editForm = ref({ id: null, title: '', artist: '', album: '' })
 // 删除
 const deleteConfirmVisible = ref(false)
 const songToDelete = ref(null)
+const showTrash = ref(false)
+const trashMusic = ref([])
+const trashLoading = ref(false)
 
 // 创建歌单
 const showCreatePlaylist = ref(false)
@@ -667,7 +701,7 @@ const batchDelete = async () => {
   const isInPlaylist = !!currentPlaylist.value
   const confirmMsg = isInPlaylist 
     ? `确定要从歌单「${currentPlaylist.value.name}」中移除选中的 ${selectedSongs.value.length} 首歌曲吗？\n（歌曲文件不会被删除）`
-    : `确定要彻底删除选中的 ${selectedSongs.value.length} 首歌曲吗？\n（此操作不可恢复）`
+    : `确定要将选中的 ${selectedSongs.value.length} 首歌曲移入回收站吗？\n（默认保留 30 天，可恢复）`
   
   if (!confirm(confirmMsg)) return
 
@@ -682,9 +716,12 @@ const batchDelete = async () => {
       await api.music.batchRemoveSongsFromPlaylist(currentPlaylist.value.id, idsToDelete)
       toast.success('已从歌单中移除')
     } else {
-      // 彻底删除歌曲
+      // 移入回收站
       await api.music.batchDelete({ ids: idsToDelete })
-      toast.success('删除成功')
+      toast.success('已移入回收站')
+      window.dispatchEvent(new CustomEvent('remove-music', {
+        detail: { songIds: idsToDelete }
+      }))
     }
     
     // 立即从本地列表移除被删除的项，实现即时刷新
@@ -696,8 +733,8 @@ const batchDelete = async () => {
     // 恢复滚动位置
     restoreScrollPosition(scrollPos)
   } catch (error) {
-    console.error('批量删除失败:', error)
-    toast.error(isInPlaylist ? '从歌单移除失败' : '删除失败')
+    console.error('批量处理音乐失败:', error)
+    toast.error(error.response?.data?.message || (isInPlaylist ? '从歌单移除失败' : '移入回收站失败'))
   }
 }
 
@@ -799,9 +836,12 @@ const doDelete = async () => {
       await api.music.removeSongFromPlaylist(currentPlaylist.value.id, deletedId)
       toast.success('已从歌单中移除')
     } else {
-      // 彻底删除歌曲
+      // 移入回收站
       await api.music.delete(deletedId)
-      toast.success('删除成功')
+      toast.success('已移入回收站')
+      window.dispatchEvent(new CustomEvent('remove-music', {
+        detail: { songId: deletedId }
+      }))
     }
     
     // 立即从本地列表移除被删除的项，实现即时刷新
@@ -813,8 +853,60 @@ const doDelete = async () => {
     // 恢复滚动位置
     restoreScrollPosition(scrollPos)
   } catch (error) {
-    console.error('删除失败:', error)
-    toast.error(error.message || '删除失败')
+    console.error('处理音乐失败:', error)
+    toast.error(error.response?.data?.message || (currentPlaylist.value ? '从歌单移除失败' : '移入回收站失败'))
+  }
+}
+
+const formatTrashDate = (value) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN')
+}
+
+const loadTrashMusic = async () => {
+  trashLoading.value = true
+  try {
+    const response = await api.music.trash()
+    trashMusic.value = response.data.data || []
+  } catch (error) {
+    toast.error(error.response?.data?.message || '加载音乐回收站失败')
+  } finally {
+    trashLoading.value = false
+  }
+}
+
+const openTrash = async () => {
+  showTrash.value = true
+  await loadTrashMusic()
+}
+
+const refreshMusicSurfaces = async () => {
+  await Promise.all([loadMusic(), loadFilterOptions(), loadPlaylists()])
+}
+
+const restoreTrash = async (id) => {
+  try {
+    await api.music.restoreTrash(id)
+    toast.success('音乐已恢复')
+    await Promise.all([loadTrashMusic(), refreshMusicSurfaces()])
+  } catch (error) {
+    toast.error(error.response?.data?.message || '恢复音乐失败')
+  }
+}
+
+const permanentlyDeleteTrash = async (id) => {
+  if (!confirm('永久删除不可恢复，确定继续吗？')) return
+  try {
+    await api.music.permanentlyDeleteTrash(id)
+    toast.success('音乐已永久删除')
+    await Promise.all([loadTrashMusic(), refreshMusicSurfaces()])
+  } catch (error) {
+    const code = error.response?.data?.code
+    const message = code === 'MUSIC_TRASH_LEGACY_MIGRATION_REQUIRED'
+      ? '该音乐仍使用旧存储，完成存储迁移后才能永久删除'
+      : (error.response?.data?.message || '永久删除音乐失败')
+    toast.error(message)
   }
 }
 
@@ -1571,6 +1663,71 @@ onUnmounted(() => {
 
 .modal-container.small {
   max-width: 320px;
+}
+
+.trash-modal {
+  max-width: 520px;
+}
+
+.trash-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.trash-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.trash-retention-hint {
+  margin: 0 0 14px;
+  color: #666;
+  font-size: 13px;
+}
+
+.trash-empty {
+  padding: 32px 0;
+  color: #999;
+  text-align: center;
+}
+
+.trash-list,
+.trash-item-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.trash-list {
+  gap: 12px;
+}
+
+.trash-item {
+  padding: 14px;
+  border: 1px solid #eee;
+  border-radius: 10px;
+}
+
+.trash-item-info {
+  gap: 4px;
+}
+
+.trash-item-info span,
+.trash-item-info small {
+  color: #777;
+}
+
+.trash-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.trash-item-actions button {
+  flex: 1;
+  padding: 9px;
+  border: none;
+  border-radius: 7px;
 }
 
 @keyframes scaleIn {

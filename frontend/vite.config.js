@@ -54,8 +54,6 @@ export default defineConfig({
         manualChunks: {
           // Vue 核心
           'vue-vendor': ['vue', 'vue-router', 'pinia'],
-          // TDesign UI 库
-          'tdesign': ['tdesign-vue-next'],
           // 代码高亮
           'highlight': ['highlight.js'],
           // Markdown 编辑器

@@ -45,6 +45,7 @@ import {
 import authRoutes from './routes/auth.js'
 import demoRoutes from './routes/demo.js'
 import documentsRoutes from './routes/documents.js'
+import privateSpaceRetiredRoutes from './routes/privateSpaceRetired.js'
 import musicRoutes from './routes/music.js'
 import booksRoutes from './routes/books.js'
 import codeRoutes from './routes/code.js'
@@ -55,6 +56,8 @@ import searchRoutes from './routes/search.js'
 import bookSearchRoutes from './routes/bookSearch.js'
 import todosRoutes from './routes/todos.js'
 import blogRoutes from './routes/blog.js'
+import storageConsistencyRoutes from './routes/storageConsistency.js'
+import privateSpaceMigrationRoutes from './routes/privateSpaceMigration.js'
 import { getDatabase } from './config/database.js'
 import { authenticateToken, requireOwner } from './middlewares/auth.js'
 import { accessLogger, queryLogs, getLogStats, initLogger } from './services/logger.js'
@@ -245,9 +248,7 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
       code: db.prepare('SELECT COUNT(*) as count FROM code_repositories').get()?.count || 0,
       bookmarks: db.prepare('SELECT COUNT(*) as count FROM bookmarks').get()?.count || 0,
       blog: {
-        total: db.prepare('SELECT COUNT(*) as count FROM blog_posts').get()?.count || 0,
-        published: db.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'published'").get()?.count || 0,
-        draft: db.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'draft'").get()?.count || 0
+        total: db.prepare('SELECT COUNT(*) as count FROM blog_posts').get()?.count || 0
       },
       anime: isGuest ? {
         // 游客：过滤已隐藏的动漫
@@ -282,7 +283,7 @@ app.use('/api/auth', authRoutes)
 
 // API 路由（authenticateToken 中间件会自动设置数据库上下文）
 const ownerOnly = [authenticateToken, requireOwner]
-app.use('/api/documents', ...ownerOnly, documentsRoutes)
+app.use('/api/documents', ...ownerOnly, privateSpaceRetiredRoutes, documentsRoutes)
 app.use('/api/music', ...ownerOnly, musicRoutes)
 app.use('/api/ebooks', ...ownerOnly, booksRoutes)
 app.use('/api/code', ...ownerOnly, codeRoutes)
@@ -293,6 +294,8 @@ app.use('/api/search', ...ownerOnly, searchRoutes)
 app.use('/api/book-search', ...ownerOnly, bookSearchRoutes)
 app.use('/api/todos', ...ownerOnly, todosRoutes)
 app.use('/api/blog', ...ownerOnly, blogRoutes)
+app.use('/api/storage-consistency', ...ownerOnly, storageConsistencyRoutes)
+app.use('/api/private-space-migration', ...ownerOnly, privateSpaceMigrationRoutes)
 
 // 管理员访问日志接口
 app.get('/api/admin/logs', authenticateToken, requireOwner, (req, res) => {

@@ -1,0 +1,663 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
+import {
+  computeMigrationChecksum,
+  createMigrationPlan,
+  createMigrationRegistry,
+  defineMigration,
+  MigrationPlanError,
+  registerMigration
+} from '../src/config/migrationPlan.js'
+
+const source = (name) => `-- migration ${name}\nCREATE TABLE ${name} (id INTEGER);\n`
+const definition = (id) => ({ id, source: source(id) })
+
+function tableShape(overrides = {}) {
+  return {
+    strict: false,
+    withoutRowid: false,
+    columns: [
+      { name: 'id', type: 'INTEGER', notNull: false, defaultValue: null, primaryKeyPosition: 1 },
+      { name: 'title', type: 'TEXT', notNull: true, defaultValue: "'ready'", primaryKeyPosition: 0 }
+    ],
+    foreignKeys: [],
+    uniqueConstraints: [],
+    ...overrides
+  }
+}
+
+const DUMMY_DDL_HASH = 'a'.repeat(64)
+
+function legacyProof(shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = [], triggers = []) {
+  return { shape, createTableSqlSha256, indexes, triggers }
+}
+
+function keyedLegacyProof(proofKey, shape, createTableSqlSha256 = DUMMY_DDL_HASH, indexes = [], triggers = []) {
+  return { proofKey, shape, createTableSqlSha256, indexes, triggers }
+}
+
+function tableTransition(overrides = {}) {
+  return {
+    kind: 'table-transition',
+    table: 'items',
+    target: tableShape(),
+    legacy: [legacyProof(tableShape({ strict: true }))],
+    ...overrides
+  }
+}
+
+function targetProof(overrides = {}) {
+  return {
+    createTableSqlSha256: DUMMY_DDL_HASH,
+    indexes: [],
+    triggers: [],
+    externalDependencies: {
+      inboundForeignKeys: 'none',
+      schemaSqlReferences: 'none'
+    },
+    ...overrides
+  }
+}
+
+function foreignKey(overrides = {}) {
+  return {
+    columns: ['title'],
+    referencedTable: 'labels',
+    referencedColumns: [null],
+    onUpdate: 'NO ACTION',
+    onDelete: 'CASCADE',
+    ...overrides
+  }
+}
+
+function uniqueConstraint(overrides = {}) {
+  return {
+    columns: [{ name: 'title', collation: 'BINARY', descending: false }],
+    ...overrides
+  }
+}
+
+function errorCode(action) {
+  return thrownError(action).code
+}
+
+function thrownError(action) {
+  try {
+    action()
+  } catch (error) {
+    assert.ok(error instanceof MigrationPlanError)
+    return error
+  }
+  assert.fail('Expected migration plan action to throw.')
+}
+
+test('sorts registered migration IDs deterministically and exposes only metadata', () => {
+  const registry = createMigrationRegistry([
+    definition('0002_add_index'),
+    definition('0001_initial'),
+    definition('0010_finalize')
+  ])
+  const plan = createMigrationPlan(registry)
+
+  assert.deepEqual(plan.registered.map(({ id }) => id), [
+    '0001_initial',
+    '0002_add_index',
+    '0010_finalize'
+  ])
+  assert.ok(plan.registered.every((migration) => !('source' in migration)))
+  assert.doesNotMatch(JSON.stringify(plan), /CREATE TABLE/)
+  assert.equal(plan.targetVersion, '0010_finalize')
+})
+
+test('rejects invalid and duplicate migration IDs', () => {
+  assert.equal(errorCode(() => createMigrationRegistry([definition('1_initial')])), 'MIGRATION_ID_INVALID')
+  assert.equal(errorCode(() => createMigrationRegistry([definition('0001_INITIAL')])), 'MIGRATION_ID_INVALID')
+  assert.equal(
+    errorCode(() => createMigrationRegistry([definition('0001_initial'), definition('0001_initial')])),
+    'MIGRATION_ID_DUPLICATE'
+  )
+})
+
+test('computes a repeatable SHA-256 checksum from exact source text', () => {
+  const first = computeMigrationChecksum('SELECT 1;\nSELECT 2;\n')
+  const second = computeMigrationChecksum('SELECT 1;\nSELECT 2;\n')
+  const crlf = computeMigrationChecksum('SELECT 1;\r\nSELECT 2;\r\n')
+  const cr = computeMigrationChecksum('SELECT 1;\rSELECT 2;\r')
+  const differentContent = computeMigrationChecksum('SELECT 1;\nSELECT 3;\n')
+
+  assert.equal(first, second)
+  assert.equal(first, crlf)
+  assert.equal(first, cr)
+  assert.notEqual(first, differentContent)
+  assert.equal(defineMigration({ id: '0001_initial', source: 'SELECT 1;' }).checksum, computeMigrationChecksum('SELECT 1;'))
+  assert.equal(
+    errorCode(() => defineMigration({ id: '0001_initial', source: 'SELECT 1;', checksum: '0'.repeat(64) })),
+    'MIGRATION_CHECKSUM_MISMATCH'
+  )
+})
+
+test('keeps the checksum of a migration without compatibility unchanged', () => {
+  assert.equal(
+    defineMigration({ id: '0001_initial', source: 'SELECT 1;' }).checksum,
+    '17db4fd369edb9244b9f91d9aeed145c3d04ad8ba6e95d06247f07a63527d11a'
+  )
+})
+
+test('keeps the fixed checksum of the existing 0036 migration unchanged', () => {
+  assert.equal(
+    applicationMigrationRegistry.migrations.find(({ id }) => id === '0036_documents_version_real').checksum,
+    '975dc324631964f044d22df18e3ec49e71be3e65fe6fc2d49c1089244460c5f8'
+  )
+})
+
+test('includes normalized target proof in the checksum and keeps it immutable', () => {
+  const base = tableTransition()
+  const withoutProof = defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: base })
+  const withProof = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: { ...base, targetProof: targetProof({ createTableSqlSha256: 'b'.repeat(64) }) }
+  })
+  const reordered = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: {
+      targetProof: targetProof({ createTableSqlSha256: ` ${'B'.repeat(64)} ` }),
+      legacy: [...base.legacy].reverse(),
+      target: base.target,
+      table: base.table,
+      kind: base.kind
+    }
+  })
+
+  assert.notEqual(withProof.checksum, withoutProof.checksum)
+  assert.equal(withProof.checksum, reordered.checksum)
+  assert.ok(Object.isFrozen(withProof.compatibility.targetProof))
+  assert.ok(Object.isFrozen(withProof.compatibility.targetProof.externalDependencies))
+})
+
+test('normalizes, freezes, and hashes keyed source variants deterministically', () => {
+  const compatibility = tableTransition({
+    legacy: [
+      keyedLegacyProof('legacy-b', tableShape({ withoutRowid: true }), 'b'.repeat(64)),
+      keyedLegacyProof('legacy-a', tableShape({ strict: true }), 'a'.repeat(64))
+    ]
+  })
+  const input = [
+    { proofKey: 'legacy-b', source: 'SELECT 2;\r\n' },
+    { proofKey: 'legacy-a', source: 'SELECT 1;\r\n' }
+  ]
+  const migration = defineMigration({ id: '0001_initial', sourceVariants: input, compatibility })
+  const reversed = defineMigration({
+    id: '0001_initial',
+    sourceVariants: [...input].reverse(),
+    compatibility: { ...compatibility, legacy: [...compatibility.legacy].reverse() }
+  })
+
+  assert.equal(migration.checksum, reversed.checksum)
+  assert.deepEqual(migration.sourceVariants, [
+    { proofKey: 'legacy-a', source: 'SELECT 1;\n' },
+    { proofKey: 'legacy-b', source: 'SELECT 2;\n' }
+  ])
+  assert.ok(Object.isFrozen(migration))
+  assert.ok(Object.isFrozen(migration.sourceVariants))
+  assert.ok(migration.sourceVariants.every(Object.isFrozen))
+  assert.notEqual(
+    migration.checksum,
+    defineMigration({
+      id: '0001_initial',
+      sourceVariants: [{ proofKey: 'legacy-a', source: 'SELECT 3;' }, input[0]],
+      compatibility
+    }).checksum
+  )
+
+  input[0].source = 'changed'
+  compatibility.legacy[0].proofKey = 'changed'
+  assert.equal(migration.sourceVariants[1].source, 'SELECT 2;\n')
+  assert.equal(migration.compatibility.legacy[1].proofKey, 'legacy-b')
+
+  const plan = createMigrationPlan(createMigrationRegistry([migration]))
+  const serialized = JSON.stringify(plan)
+  assert.doesNotMatch(serialized, /SELECT [12]|legacy-[ab]/u)
+  assert.ok(plan.pending[0].compatibility.legacy.every((proof) => !('proofKey' in proof)))
+})
+
+test('redacts target proof and all legacy proof fingerprints from the public plan', () => {
+  const secretHash = 'f'.repeat(64)
+  const migration = defineMigration({
+    id: '0001_initial',
+    sourceVariants: [{ proofKey: 'secret-proof-key', source: 'SELECT 1;' }],
+    compatibility: tableTransition({
+      targetProof: targetProof({
+        createTableSqlSha256: secretHash,
+        indexes: [{ name: 'secret_target_index', createIndexSqlSha256: secretHash }],
+        triggers: [{ name: 'secret_target_trigger', createTriggerSqlSha256: secretHash }]
+      }),
+      legacy: [keyedLegacyProof('secret-proof-key', tableShape({ strict: true }), secretHash, [
+        { name: 'secret_legacy_index', createIndexSqlSha256: secretHash }
+      ], [
+        { name: 'secret_legacy_trigger', createTriggerSqlSha256: secretHash }
+      ])]
+    })
+  })
+  const plan = createMigrationPlan(createMigrationRegistry([migration]))
+  const serialized = JSON.stringify(plan)
+
+  assert.doesNotMatch(serialized, /targetProof|secret-proof-key|secret_target|secret_legacy/i)
+  assert.doesNotMatch(serialized, new RegExp(secretHash, 'i'))
+  assert.deepEqual(plan.pending[0].compatibility, {
+    kind: 'table-transition',
+    table: 'items',
+    target: migration.compatibility.target,
+    legacy: [{ shape: migration.compatibility.legacy[0].shape }]
+  })
+})
+
+test('rejects malformed, ambiguous, or incomplete source variant definitions', () => {
+  const first = keyedLegacyProof('legacy-a', tableShape({ strict: true }), 'a'.repeat(64))
+  const second = keyedLegacyProof('legacy-b', tableShape({ withoutRowid: true }), 'b'.repeat(64))
+  const compatibility = tableTransition({ legacy: [first, second] })
+  const valid = [
+    { proofKey: 'legacy-a', source: 'SELECT 1;' },
+    { proofKey: 'legacy-b', source: 'SELECT 2;' }
+  ]
+  const invalidDefinitions = [
+    { id: '0001_initial', source: 'SELECT 1;', sourceVariants: valid, compatibility },
+    { id: '0001_initial', compatibility },
+    { id: '0001_initial', sourceVariants: [], compatibility },
+    { id: '0001_initial', sourceVariants: [valid[0]], compatibility },
+    { id: '0001_initial', sourceVariants: [valid[0], valid[0]], compatibility },
+    { id: '0001_initial', sourceVariants: [valid[0], { proofKey: 'orphan', source: 'SELECT 2;' }], compatibility },
+    { id: '0001_initial', sourceVariants: [{ ...valid[0], extra: true }, valid[1]], compatibility },
+    { id: '0001_initial', sourceVariants: [{ proofKey: 'UPPER', source: 'SELECT 1;' }, valid[1]], compatibility },
+    { id: '0001_initial', sourceVariants: [{ proofKey: 'legacy-a', source: ' ' }, valid[1]], compatibility },
+    { id: '0001_initial', sourceVariants: valid, compatibility: tableTransition() },
+    { id: '0001_initial', sourceVariants: valid, compatibility: { kind: 'column', table: 'items', column: { name: 'title', type: 'TEXT', notNull: false, defaultValue: null } } },
+    { id: '0001_initial', sourceVariants: valid, compatibility, unsupported: true },
+    { id: '0001_initial', source: 'SELECT 1;', compatibility, unsupported: true }
+  ]
+  for (const definition of invalidDefinitions) {
+    assert.throws(() => defineMigration(definition), MigrationPlanError)
+  }
+
+  assert.throws(
+    () => defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: tableTransition({ legacy: [first, second] })
+    }),
+    MigrationPlanError
+  )
+})
+
+test('normalizes and freezes a column compatibility condition', () => {
+  const input = {
+    kind: 'column',
+    table: 'items',
+    column: {
+      name: 'title',
+      type: ' varchar ( 255 ) ',
+      notNull: true,
+      defaultValue: " 'ready' "
+    }
+  }
+  const migration = defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: input })
+
+  assert.deepEqual(migration.compatibility, {
+    kind: 'column',
+    table: 'items',
+    column: {
+      name: 'title',
+      type: 'VARCHAR(255)',
+      notNull: true,
+      defaultValue: "'ready'"
+    }
+  })
+  assert.ok(Object.isFrozen(migration))
+  assert.ok(Object.isFrozen(migration.compatibility))
+  assert.ok(Object.isFrozen(migration.compatibility.column))
+
+  input.table = 'changed'
+  input.column.type = 'INTEGER'
+  input.column.defaultValue = 'changed'
+  assert.equal(migration.compatibility.table, 'items')
+  assert.equal(migration.compatibility.column.type, 'VARCHAR(255)')
+  assert.equal(migration.compatibility.column.defaultValue, "'ready'")
+
+  const plan = createMigrationPlan(createMigrationRegistry([migration]))
+  assert.deepEqual(plan.pending[0].compatibility, migration.compatibility)
+  assert.ok(Object.isFrozen(plan.pending[0].compatibility))
+})
+
+test('includes normalized compatibility content in the checksum', () => {
+  const base = {
+    kind: 'column',
+    table: 'items',
+    column: { name: 'title', type: 'TEXT', notNull: false, defaultValue: null }
+  }
+  const checksum = defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: base }).checksum
+  const reordered = {
+    column: { defaultValue: null, notNull: false, type: ' text ', name: 'title' },
+    table: 'items',
+    kind: 'column'
+  }
+  assert.equal(
+    defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: reordered }).checksum,
+    checksum
+  )
+
+  for (const change of [
+    { table: 'other', column: base.column },
+    { table: base.table, column: { ...base.column, name: 'summary' } },
+    { table: base.table, column: { ...base.column, type: 'INTEGER' } },
+    { table: base.table, column: { ...base.column, notNull: true } },
+    { table: base.table, column: { ...base.column, defaultValue: '0' } }
+  ]) {
+    assert.notEqual(
+      defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: { kind: 'column', ...change } }).checksum,
+      checksum
+    )
+  }
+})
+
+test('includes normalized table-transition shape, flags, and legacy alternatives in the checksum', () => {
+  const base = tableTransition()
+  const checksum = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: base
+  }).checksum
+  const migration = defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility: base })
+
+  assert.ok(Object.isFrozen(migration.compatibility))
+  assert.ok(Object.isFrozen(migration.compatibility.target))
+  assert.ok(Object.isFrozen(migration.compatibility.target.columns))
+  assert.ok(Object.isFrozen(migration.compatibility.target.foreignKeys))
+  assert.ok(Object.isFrozen(migration.compatibility.target.uniqueConstraints))
+  assert.ok(migration.compatibility.target.uniqueConstraints.every((constraint) => (
+    Object.isFrozen(constraint) &&
+    Object.isFrozen(constraint.columns) &&
+    constraint.columns.every(Object.isFrozen)
+  )))
+  assert.ok(migration.compatibility.target.foreignKeys.every((foreignKey) => {
+    return Object.isFrozen(foreignKey) &&
+      Object.isFrozen(foreignKey.columns) &&
+      Object.isFrozen(foreignKey.referencedColumns)
+  }))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0]))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape.columns))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].shape.uniqueConstraints))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].indexes))
+  assert.ok(migration.compatibility.legacy[0].indexes.every(Object.isFrozen))
+  assert.ok(Object.isFrozen(migration.compatibility.legacy[0].triggers))
+  assert.ok(migration.compatibility.legacy[0].triggers.every(Object.isFrozen))
+
+  const changes = [
+    {
+      ...base,
+      target: tableShape({ columns: [base.target.columns[1], base.target.columns[0]] })
+    },
+    {
+      ...base,
+      target: tableShape({ strict: true }),
+      legacy: [legacyProof(tableShape({ withoutRowid: true }))]
+    },
+    { ...base, target: tableShape({ withoutRowid: true }) },
+    {
+      ...base,
+      legacy: [legacyProof(tableShape({
+        columns: base.target.columns.map((column) =>
+          column.name === 'title' ? { ...column, defaultValue: '0' } : column
+        )
+      }))]
+    },
+    {
+      ...base,
+      target: tableShape({
+        foreignKeys: [foreignKey()]
+      })
+    },
+    {
+      ...base,
+      target: tableShape({
+        uniqueConstraints: [uniqueConstraint()]
+      })
+    },
+    {
+      ...base,
+      legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [
+        { name: 'items_idx', createIndexSqlSha256: 'b'.repeat(64) }
+      ])]
+    },
+    {
+      ...base,
+      legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [], [
+        { name: 'items_hook', createTriggerSqlSha256: 'b'.repeat(64) }
+      ])]
+    }
+  ]
+
+  for (const compatibility of changes) {
+    assert.notEqual(
+      defineMigration({ id: '0001_initial', source: 'SELECT 1;', compatibility }).checksum,
+      checksum
+    )
+  }
+
+  const fingerprintChanged = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: {
+      ...base,
+      legacy: [legacyProof(tableShape({ strict: true }), 'b'.repeat(64))]
+    }
+  }).checksum
+  assert.notEqual(fingerprintChanged, checksum)
+
+  const alternatives = [
+    legacyProof(tableShape({ strict: true }), 'c'.repeat(64)),
+    legacyProof(tableShape({ strict: true }), 'b'.repeat(64)),
+    legacyProof(tableShape({ withoutRowid: true }), 'd'.repeat(64))
+  ]
+  const forward = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: { ...base, legacy: alternatives }
+  }).checksum
+  const reverse = defineMigration({
+    id: '0001_initial',
+    source: 'SELECT 1;',
+    compatibility: { ...base, legacy: [...alternatives].reverse() }
+  }).checksum
+  assert.equal(forward, reverse)
+
+  const indexReordered = [
+    { name: 'z_idx', createIndexSqlSha256: 'd'.repeat(64) },
+    { name: 'a_idx', createIndexSqlSha256: 'c'.repeat(64) }
+  ]
+  assert.equal(
+    defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: { ...base, legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, indexReordered)] }
+    }).checksum,
+    defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: {
+        ...base,
+        legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [...indexReordered].reverse())]
+      }
+    }).checksum
+  )
+
+  const triggerReordered = [
+    { name: 'z_hook', createTriggerSqlSha256: 'd'.repeat(64) },
+    { name: 'a_hook', createTriggerSqlSha256: 'c'.repeat(64) }
+  ]
+  assert.equal(
+    defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: { ...base, legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [], triggerReordered)] }
+    }).checksum,
+    defineMigration({
+      id: '0001_initial',
+      source: 'SELECT 1;',
+      compatibility: {
+        ...base,
+        legacy: [legacyProof(tableShape({ strict: true }), DUMMY_DDL_HASH, [], [...triggerReordered].reverse())]
+      }
+    }).checksum
+  )
+})
+
+test('registerMigration returns a new immutable registry', () => {
+  const initial = createMigrationRegistry([definition('0001_initial')])
+  const extended = registerMigration(initial, definition('0002_add_index'))
+
+  assert.deepEqual(extended.migrations.map(({ id }) => id), ['0001_initial', '0002_add_index'])
+  assert.deepEqual(initial.migrations.map(({ id }) => id), ['0001_initial'])
+})
+
+test('plans all applied migrations and a partially applied registry', () => {
+  const registry = createMigrationRegistry([
+    definition('0001_initial'),
+    definition('0002_add_index'),
+    definition('0003_finalize')
+  ])
+  const plan = createMigrationPlan(registry, [
+    { id: '0001_initial', checksum: registry.migrations[0].checksum },
+    { id: '0002_add_index', checksum: registry.migrations[1].checksum }
+  ])
+
+  assert.deepEqual(plan.applied.map(({ id }) => id), ['0001_initial', '0002_add_index'])
+  assert.deepEqual(plan.pending.map(({ id }) => id), ['0003_finalize'])
+  assert.deepEqual(plan.unknownHistory, [])
+})
+
+test('returns an empty pending list when every target migration is applied', () => {
+  const registry = createMigrationRegistry([definition('0001_initial'), definition('0002_add_index')])
+  const plan = createMigrationPlan(registry, registry.migrations.map(({ id, checksum }) => ({ id, checksum })))
+
+  assert.deepEqual(plan.applied.map(({ id }) => id), ['0001_initial', '0002_add_index'])
+  assert.deepEqual(plan.pending, [])
+})
+
+test('supports a target version that truncates the pending plan', () => {
+  const registry = createMigrationRegistry([
+    definition('0001_initial'),
+    definition('0002_add_index'),
+    definition('0003_finalize')
+  ])
+  const plan = createMigrationPlan(registry, [], { targetVersion: '0002_add_index' })
+
+  assert.equal(plan.targetVersion, '0002_add_index')
+  assert.deepEqual(plan.pending.map(({ id }) => id), ['0001_initial', '0002_add_index'])
+  assert.deepEqual(plan.deferred.map(({ id }) => id), ['0003_finalize'])
+})
+
+test('blocks a non-contiguous applied history and reports both sides of the gap', () => {
+  const registry = createMigrationRegistry([
+    definition('0001_initial'),
+    definition('0002_add_index'),
+    definition('0003_finalize')
+  ])
+  const error = thrownError(() =>
+    createMigrationPlan(registry, [
+      { id: '0001_initial', checksum: registry.migrations[0].checksum },
+      { id: '0003_finalize', checksum: registry.migrations[2].checksum }
+    ])
+  )
+
+  assert.equal(error.code, 'MIGRATION_HISTORY_GAP')
+  assert.deepEqual(error.details.missingIds, ['0002_add_index'])
+  assert.deepEqual(error.details.subsequentAppliedIds, ['0003_finalize'])
+})
+
+test('blocks a target that is behind any applied registered migration', () => {
+  const registry = createMigrationRegistry([
+    definition('0001_initial'),
+    definition('0002_add_index'),
+    definition('0003_finalize')
+  ])
+  const appliedRecords = registry.migrations.map(({ id, checksum }) => ({ id, checksum }))
+  const error = thrownError(() =>
+    createMigrationPlan(registry, appliedRecords, { targetVersion: '0002_add_index' })
+  )
+
+  assert.equal(error.code, 'MIGRATION_TARGET_BEHIND_APPLIED')
+  assert.deepEqual(error.details.appliedIds, ['0003_finalize'])
+})
+
+test('rejects checksum drift in an applied record', () => {
+  const registry = createMigrationRegistry([definition('0001_initial')])
+  assert.equal(
+    errorCode(() => createMigrationPlan(registry, [{ id: '0001_initial', checksum: '0'.repeat(64) }])),
+    'MIGRATION_CHECKSUM_DRIFT'
+  )
+})
+
+test('rejects duplicate, failed, and running application records', () => {
+  const registry = createMigrationRegistry([definition('0001_initial')])
+  const checksum = registry.migrations[0].checksum
+
+  assert.equal(
+    errorCode(() =>
+      createMigrationPlan(registry, [
+        { id: '0001_initial', checksum },
+        { id: '0001_initial', checksum }
+      ])
+    ),
+    'MIGRATION_RECORD_DUPLICATE'
+  )
+  assert.equal(
+    errorCode(() => createMigrationPlan(registry, [{ id: '0001_initial', checksum, status: 'failed' }])),
+    'MIGRATION_RECORD_BLOCKED'
+  )
+  assert.equal(
+    errorCode(() => createMigrationPlan(registry, [{ id: '0001_initial', checksum, status: 'running' }])),
+    'MIGRATION_RECORD_BLOCKED'
+  )
+})
+
+test('retains unknown history records without treating them as pending migrations', () => {
+  const registry = createMigrationRegistry([definition('0001_initial')])
+  const unknown = { id: '9999_retired', checksum: 'a'.repeat(64), status: 'applied' }
+  const plan = createMigrationPlan(registry, [unknown])
+
+  assert.deepEqual(plan.pending.map(({ id }) => id), ['0001_initial'])
+  assert.deepEqual(plan.unknownHistory, [unknown])
+})
+
+test('blocks unknown failed and running history records', () => {
+  const registry = createMigrationRegistry([definition('0001_initial')])
+  for (const status of ['failed', 'running']) {
+    assert.equal(
+      errorCode(() =>
+        createMigrationPlan(registry, [{ id: '9999_retired', checksum: 'a'.repeat(64), status }])
+      ),
+      'MIGRATION_RECORD_BLOCKED'
+    )
+  }
+})
+
+test('rejects an unknown target and malformed application records', () => {
+  const registry = createMigrationRegistry([definition('0001_initial')])
+
+  assert.equal(
+    errorCode(() => createMigrationPlan(registry, [], { targetVersion: '0002_missing' })),
+    'MIGRATION_TARGET_UNKNOWN'
+  )
+  assert.equal(
+    errorCode(() => createMigrationPlan(registry, [{ id: '0001_initial', checksum: 'not-a-checksum' }])),
+    'MIGRATION_CHECKSUM_INVALID'
+  )
+  assert.equal(
+    errorCode(() => createMigrationPlan(registry, [{ id: '0001_initial', checksum: registry.migrations[0].checksum, status: 'unknown' }])),
+    'MIGRATION_RECORD_STATUS_INVALID'
+  )
+})

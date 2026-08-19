@@ -63,6 +63,11 @@ jobs:
           file: ./${{ matrix.component }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          cache-from: |
+            type=gha,scope=${{ matrix.component }}-amd64
+            type=gha,scope=${{ matrix.component }}-arm64
+            type=gha,scope=baseline-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=baseline-${{ matrix.component }}
           tags: |
             ghcr.io/${{ github.repository }}-${{ matrix.component }}:${{ steps.tag.outputs.value }}
             ghcr.io/${{ github.repository }}-${{ matrix.component }}:sha-${{ github.sha }}

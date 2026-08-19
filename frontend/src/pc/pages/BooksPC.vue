@@ -7,7 +7,7 @@
     <!-- 搜索栏和排序 -->
     <NativeCard>
       <!-- 第一行：搜索和视图切换 -->
-      <div class="search-sort-row">
+      <div v-if="!showTrash" class="search-sort-row">
         <div class="search-controls">
           <NativeInput
             v-model="searchKeyword"
@@ -70,7 +70,7 @@
       <!-- 第二行：查找资源或返回按钮 -->
       <div class="action-row">
         <NativeButton
-          v-if="!currentCategoryId"
+          v-if="!currentCategoryId && !showTrash"
           theme="warning"
           variant="outline"
           @click="showBookSearch = true"
@@ -81,15 +81,67 @@
         </NativeButton>
 
         <!-- 返回按钮 -->
-        <NativeButton v-if="currentCategoryId" @click="backToRoot">
+        <NativeButton v-if="currentCategoryId && !showTrash" @click="backToRoot">
           <template #icon><NativeIcon name="arrow-left" /></template>
           返回
+        </NativeButton>
+        <NativeButton
+          :theme="showTrash ? 'primary' : 'default'"
+          variant="outline"
+          @click="toggleTrash"
+        >
+          <template #icon><NativeIcon name="trash" /></template>
+          {{ showTrash ? '返回书库' : '回收站' }}
         </NativeButton>
       </div>
     </NativeCard>
 
+    <!-- 电子书回收站 -->
+    <NativeCard v-if="showTrash" class="books-trash-view">
+      <h3 class="section-title">电子书回收站</h3>
+      <p class="trash-retention-hint">普通删除会移入回收站，默认保留 30 天；永久删除不可恢复。</p>
+      <div v-if="trashLoading" class="content-loading">
+        <NativeLoading size="small" />
+      </div>
+      <NativeTable
+        v-else-if="trashBooks.length > 0"
+        :data-source="trashBooks"
+        :columns="trashColumns"
+        row-key="id"
+        hover
+      >
+        <template #cell-originalCategoryName="{ row }">
+          {{ row.originalCategoryName || '未分类' }}
+        </template>
+        <template #cell-deletedAt="{ row }">
+          {{ formatDate(row.deletedAt) }}
+        </template>
+        <template #cell-purgeAfter="{ row }">
+          {{ formatDate(row.purgeAfter) }}
+        </template>
+        <template #cell-operation="{ row }">
+          <NativeSpace :size="8">
+            <NativePopconfirm content="恢复后优先返回原分类，确定恢复吗？" @confirm="handleRestoreTrash(row.id)">
+              <template #trigger>
+                <NativeButton theme="primary" size="small" :disabled="isGuest">恢复</NativeButton>
+              </template>
+            </NativePopconfirm>
+            <NativePopconfirm theme="danger" content="永久删除不可恢复，确定继续吗？" @confirm="handlePermanentlyDeleteTrash(row.id)">
+              <template #trigger>
+                <NativeButton theme="danger" variant="outline" size="small" :disabled="isGuest">永久删除</NativeButton>
+              </template>
+            </NativePopconfirm>
+          </NativeSpace>
+        </template>
+      </NativeTable>
+      <div v-else class="empty-state-inline">
+        <NativeIcon name="trash" size="48" />
+        <p>回收站为空</p>
+      </div>
+    </NativeCard>
+
     <!-- 分类浏览 -->
-    <NativeCard v-if="!currentCategoryId" class="category-view">
+    <NativeCard v-if="!currentCategoryId && !showTrash" class="category-view">
       <!-- 加载状态 - 骨架屏 -->
       <div v-if="categoriesLoading" class="categories-skeleton">
         <div v-for="i in 4" :key="i" class="skeleton-card">
@@ -151,7 +203,7 @@
     </NativeCard>
 
     <!-- 书籍列表（列表视图） -->
-    <NativeCard v-if="books.length > 0 && viewMode === 'list'" class="books-list">
+    <NativeCard v-if="!showTrash && books.length > 0 && viewMode === 'list'" class="books-list">
       <h3 v-if="currentCategoryId" class="section-title">
         {{ currentCategoryName }} - 书籍列表
       </h3>
@@ -161,11 +213,11 @@
 
       <!-- 批量操作栏 -->
       <div v-if="selectedRowKeys.length > 0" class="batch-actions-bar">
-        <NativePopconfirm content="确定删除选中的书籍吗？" @confirm="handleBatchDelete">
+        <NativePopconfirm content="确定将选中的书籍移入回收站吗？" @confirm="handleBatchDelete">
           <template #trigger>
             <NativeButton theme="danger" variant="outline" size="small" :disabled="isGuest">
               <template #icon><NativeIcon name="trash" /></template>
-              批量删除 ({{ selectedRowKeys.length }})
+              批量移入回收站 ({{ selectedRowKeys.length }})
             </NativeButton>
           </template>
         </NativePopconfirm>
@@ -214,12 +266,12 @@
               <NativeIcon name="download" size="14" /> 下载
             </NativeButton>
             <NativePopconfirm
-              content="确定删除吗？"
+              content="确定将这本书移入回收站吗？"
               @confirm="handleDelete(row.id)"
             >
               <template #trigger>
                 <NativeButton theme="danger" variant="outline" size="small" iconSize="1em" :disabled="isGuest">
-                  <NativeIcon name="trash" size="14" /> 删除
+                  <NativeIcon name="trash" size="14" /> 移入回收站
                 </NativeButton>
               </template>
             </NativePopconfirm>
@@ -229,7 +281,7 @@
     </NativeCard>
 
     <!-- 书籍封面视图 loading 骨架屏 -->
-    <NativeCard v-if="loading && viewMode === 'cover'" class="books-cover-view">
+    <NativeCard v-if="!showTrash && loading && viewMode === 'cover'" class="books-cover-view">
       <h3 class="section-title">加载中...</h3>
       <div class="books-skeleton-grid">
         <div v-for="i in 8" :key="i" class="book-skeleton-card">
@@ -241,7 +293,7 @@
     </NativeCard>
 
     <!-- 书籍封面视图 -->
-    <NativeCard v-else-if="books.length > 0 && viewMode === 'cover'" class="books-cover-view">
+    <NativeCard v-else-if="!showTrash && books.length > 0 && viewMode === 'cover'" class="books-cover-view">
       <h3 v-if="currentCategoryId" class="section-title">
         {{ currentCategoryName }} - 书籍列表
       </h3>
@@ -286,7 +338,7 @@
             </NativeButton>
             <div class="book-delete-wrapper" @click.stop>
               <NativePopconfirm
-                content="确定删除吗？"
+                content="确定将这本书移入回收站吗？"
                 @confirm="handleDelete(book.id)"
               >
                 <template #trigger>
@@ -302,12 +354,12 @@
     </NativeCard>
 
     <!-- 空状态 -->
-    <NativeCard v-if="books.length === 0 && !loading && currentCategoryId" class="empty-state">
+    <NativeCard v-if="!showTrash && books.length === 0 && !loading && currentCategoryId" class="empty-state">
       <NativeIcon name="book" size="64" />
       <p>当前分类下暂无书籍</p>
       <NativeButton theme="primary" @click="handleUpload" :disabled="isGuest">上传第一本书</NativeButton>
     </NativeCard>
-    <NativeCard v-else-if="books.length === 0 && !loading && !currentCategoryId && categories.length > 0" class="empty-state">
+    <NativeCard v-else-if="!showTrash && books.length === 0 && !loading && !currentCategoryId && categories.length > 0" class="empty-state">
       <NativeIcon name="book" size="64" />
       <p>暂无书籍</p>
       <NativeButton theme="primary" @click="handleUpload" :disabled="isGuest">上传第一本书</NativeButton>
@@ -347,9 +399,11 @@
       title="上传书籍"
       @confirm="handleUploadConfirm"
       width="600px"
-      :confirm-btn="{ content: uploading ? '上传中...' : '确定', loading: uploading }"
-      :close-on-overlay-click="!uploading"
-      :close-btn="!uploading"
+      :confirm-text="uploading ? '上传中...' : (parsingMetadata ? '解析中...' : '确定')"
+      :confirm-loading="uploading"
+      :confirm-disabled="uploading || parsingMetadata"
+      :close-on-overlay-click="!uploading && !parsingMetadata"
+      :close-btn="!uploading && !parsingMetadata"
       class="upload-book-dialog"
     >
       <NativeForm :model="uploadForm" :rules="uploadRules">
@@ -622,6 +676,9 @@ const sortBy = ref('last_read_at')
 const sortOrder = ref('desc')
 const selectedRowKeys = ref([])
 const viewMode = ref('cover') // 'list' 或 'cover'
+const showTrash = ref(false)
+const trashBooks = ref([])
+const trashLoading = ref(false)
 
 // 分类相关
 const createCategoryDialogVisible = ref(false)
@@ -638,7 +695,7 @@ const uploadDialogVisible = ref(false)
 const parsingMetadata = ref(false)
 const uploadProgress = ref(0) // 上传进度百分比
 const uploading = ref(false) // 上传中状态
-const uploadedFilePath = ref(null) // 分片上传后的文件路径
+const stagedUpload = ref(null) // 分片上传后的 opaque 暂存契约
 const uploadForm = ref({
   file: [],
   title: '',
@@ -688,6 +745,15 @@ const columns = [
   { key: 'progress', title: '阅读进度', width: 150 },
   { key: 'lastReadAt', title: '最近阅读', width: 180 },
   { key: 'operation', title: '操作', width: 280 }
+]
+
+const trashColumns = [
+  { key: 'title', title: '书名', minWidth: 200 },
+  { key: 'author', title: '作者', minWidth: 120 },
+  { key: 'originalCategoryName', title: '原分类', minWidth: 140 },
+  { key: 'deletedAt', title: '移入时间', width: 180 },
+  { key: 'purgeAfter', title: '保护期至', width: 180 },
+  { key: 'operation', title: '操作', width: 220 }
 ]
 
 // 计算当前章节内容
@@ -768,6 +834,56 @@ async function loadBooks() {
     toast.error('加载书籍失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadTrashBooks() {
+  trashLoading.value = true
+  try {
+    const response = await api.books.trash()
+    trashBooks.value = response.data?.data || []
+  } catch (error) {
+    console.error('加载电子书回收站失败:', error)
+    toast.error(error.response?.data?.message || '加载回收站失败')
+    trashBooks.value = []
+  } finally {
+    trashLoading.value = false
+  }
+}
+
+async function toggleTrash() {
+  if (showTrash.value) {
+    showTrash.value = false
+    await Promise.all([loadCategories(), loadBooks()])
+    return
+  }
+
+  currentCategoryId.value = null
+  currentCategoryName.value = ''
+  selectedRowKeys.value = []
+  showTrash.value = true
+  await loadTrashBooks()
+}
+
+async function handleRestoreTrash(id) {
+  try {
+    await api.books.restoreTrash(id)
+    toast.success('书籍已恢复')
+    await Promise.all([loadTrashBooks(), loadCategories(), loadBooks()])
+  } catch (error) {
+    console.error('恢复电子书失败:', error)
+    toast.error(error.response?.data?.message || '恢复电子书失败')
+  }
+}
+
+async function handlePermanentlyDeleteTrash(id) {
+  try {
+    await api.books.permanentlyDeleteTrash(id)
+    toast.success('书籍已永久删除')
+    await loadTrashBooks()
+  } catch (error) {
+    console.error('永久删除电子书失败:', error)
+    toast.error(error.response?.data?.message || '永久删除电子书失败')
   }
 }
 
@@ -895,12 +1011,13 @@ function handleUpload() {
     description: '',
     categoryId: currentCategoryId.value || null
   }
-  uploadedFilePath.value = null // 重置已上传文件路径
+  stagedUpload.value = null
   uploadDialogVisible.value = true
 }
 
 function onFileChange(files) {
   if (files.length > 0) {
+    stagedUpload.value = null
     const fileName = files[0].name
     const file = files[0]
     const ext = fileName.split('.').pop().toLowerCase()
@@ -935,17 +1052,14 @@ async function parseBookMetadata(file) {
     // 大于100MB使用分片上传
     if (fileSize > 100) {
       console.log(`📦 文件较大(${fileSize.toFixed(2)}MB)，使用分片上传解析元数据`)
-      const result = await uploadFileInChunks(fileToParse, true)
-      console.log('📥 分片上传返回结果:', result)
-      if (result && result.filePath) {
-        uploadedFilePath.value = result.filePath
-        // 检查是否有元数据（title、author等字段直接在result中）
-        if (result.title || result.author || result.publisher) {
-          fillMetadata(result)
-          toast.success('书籍信息已自动填充')
-        } else {
-          console.log('⚠️ 分片上传返回的元数据为空')
-        }
+      const result = await uploadFileInChunks(fileToParse)
+      stagedUpload.value = getStagedUpload(result)
+      // 检查是否有元数据（title、author等字段直接在result中）
+      if (result.title || result.author || result.publisher) {
+        fillMetadata(result)
+        toast.success('书籍信息已自动填充')
+      } else {
+        console.log('⚠️ 分片上传返回的元数据为空')
       }
     } else {
       // 小文件直接上传
@@ -990,7 +1104,7 @@ function fillMetadata(metadata) {
 }
 
 // 分片上传文件
-async function uploadFileInChunks(file, isMetadataOnly = false) {
+async function uploadFileInChunks(file) {
   const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB per chunk
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
   const fileId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -1040,6 +1154,7 @@ async function uploadFileInChunks(file, isMetadataOnly = false) {
 }
 
 async function handleUploadConfirm() {
+  if (uploading.value || parsingMetadata.value) return
   try {
     if (!uploadForm.value.file || uploadForm.value.file.length === 0) {
       toast.error('请选择文件')
@@ -1069,12 +1184,11 @@ async function handleUploadConfirm() {
     const startTime = Date.now()
     let response
 
-    // 如果已经有上传的文件路径（分片上传已解析过元数据）
-    if (uploadedFilePath.value) {
-      console.log('📁 使用已上传的文件路径')
-      // 直接调用上传接口，传递文件路径
+    // 如果已经完成分片上传（例如大 EPUB 元数据解析），复用 opaque 暂存契约
+    if (stagedUpload.value) {
+      console.log('📦 使用已暂存的内容对象')
       response = await api.books.uploadWithPath({
-        filePath: uploadedFilePath.value,
+        ...stagedUpload.value,
         title: uploadForm.value.title.trim(),
         author: uploadForm.value.author || '',
         year: uploadForm.value.year || '',
@@ -1089,18 +1203,16 @@ async function handleUploadConfirm() {
       uploadProgress.value = 50 // 显示处理中状态
 
       const result = await uploadFileInChunks(fileToUpload)
-      if (result && result.filePath) {
-        response = await api.books.uploadWithPath({
-          filePath: result.filePath,
-          title: uploadForm.value.title.trim(),
-          author: uploadForm.value.author || '',
-          year: uploadForm.value.year || '',
-          publisher: uploadForm.value.publisher || '',
-          isbn: uploadForm.value.isbn || '',
-          description: uploadForm.value.description || '',
-          categoryId: uploadForm.value.categoryId || null
-        })
-      }
+      response = await api.books.uploadWithPath({
+        ...getStagedUpload(result),
+        title: uploadForm.value.title.trim(),
+        author: uploadForm.value.author || '',
+        year: uploadForm.value.year || '',
+        publisher: uploadForm.value.publisher || '',
+        isbn: uploadForm.value.isbn || '',
+        description: uploadForm.value.description || '',
+        categoryId: uploadForm.value.categoryId || null
+      })
       uploadProgress.value = 100
     } else {
       // 小文件直接上传
@@ -1138,7 +1250,7 @@ async function handleUploadConfirm() {
 
     toast.success('上传成功')
     uploadDialogVisible.value = false
-    uploadedFilePath.value = null // 重置已上传文件路径
+    stagedUpload.value = null
     await Promise.all([loadCategories(), loadBooks()])
   } catch (error) {
     console.error('上传失败:', error)
@@ -1180,10 +1292,10 @@ async function handleEditBookConfirm() {
 async function handleDelete(id) {
   try {
     await api.books.delete(id)
-    toast.success('删除成功')
+    toast.success('已移入回收站')
     await Promise.all([loadCategories(), loadBooks()])
   } catch (error) {
-    toast.error('删除失败')
+    toast.error(error.response?.data?.message || '移入回收站失败')
   }
 }
 
@@ -1196,13 +1308,12 @@ async function handleBatchDelete() {
 
   try {
     await api.books.batchDelete({ ids: selectedRowKeys.value })
-    toast.success('批量删除成功')
+    toast.success('已批量移入回收站')
     selectedRowKeys.value = []
-    loadCategories()
-    loadBooks()
+    await Promise.all([loadCategories(), loadBooks()])
   } catch (error) {
     console.error('批量删除失败:', error)
-    toast.error('批量删除失败')
+    toast.error(error.response?.data?.message || '批量移入回收站失败')
   }
 }
 
@@ -1218,7 +1329,6 @@ async function handleRead(row) {
       书名: row.title,
       ID: row.id,
       文件类型: row.fileType,
-      文件路径: row.filePath,
       用户身份: isGuest.value ? '游客' : '管理员'
     })
 
@@ -1609,16 +1719,16 @@ function setupLinkClickHandler(readerContent) {
       e.preventDefault()
       
       // 分离文件名和锚点
-      const [filePath, anchor] = href.split('#')
-      console.log('📖 章节链接跳转:', { filePath, anchor })
+      const [chapterPath, anchor] = href.split('#')
+      console.log('📖 章节链接跳转:', { chapterPath, anchor })
       
       // 在当前书籍章节中查找匹配的章节
       const chapterIndex = bookChapters.value.findIndex(ch => {
         if (!ch.href) return false
         // 匹配文件名或完整路径
         const chFileName = ch.href.split('/').pop()
-        const targetFileName = filePath.split('/').pop()
-        return chFileName === targetFileName || ch.href === filePath
+        const targetFileName = chapterPath.split('/').pop()
+        return chFileName === targetFileName || ch.href === chapterPath
       })
       
       if (chapterIndex !== -1) {
@@ -1641,7 +1751,7 @@ function setupLinkClickHandler(readerContent) {
           }
         })
       } else {
-        console.warn('⚠️ 未找到目标章节:', filePath)
+        console.warn('⚠️ 未找到目标章节:', chapterPath)
       }
       return
     }
@@ -2031,6 +2141,28 @@ function handleBeforeUnload() {
   }
 }
 
+function getStagedUpload(result) {
+  const staged = {
+    stagingToken: result?.stagingToken,
+    contentSha256: result?.contentSha256,
+    contentBytes: result?.contentBytes,
+    originalName: result?.originalName
+  }
+  const contentSha256 = String(staged.contentSha256 || '').toLowerCase()
+
+  if (!staged.stagingToken || !/^[a-f0-9]{64}$/.test(contentSha256) ||
+      !Number.isSafeInteger(Number(staged.contentBytes)) || Number(staged.contentBytes) < 0 || !staged.originalName) {
+    throw new Error('分片上传未返回完整的暂存文件契约')
+  }
+
+  return {
+    ...staged,
+    contentSha256,
+    contentBytes: Number(staged.contentBytes),
+    originalName: String(staged.originalName)
+  }
+}
+
 // 处理标签页切换
 function handleVisibilityChange() {
   // 只在进度加载完成且不在恢复过程中才保存（避免保存错误位置）
@@ -2349,6 +2481,34 @@ onUnmounted(() => {
 
 .books-list {
   margin-top: 16px;
+}
+
+.books-trash-view {
+  margin-top: 16px;
+}
+
+.trash-retention-hint {
+  margin: -4px 0 16px;
+  color: #666;
+  font-size: 13px;
+}
+
+.empty-state-inline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  color: #999;
+  gap: 12px;
+}
+
+.empty-state-inline .native-icon {
+  color: #d0d0d0;
+}
+
+.empty-state-inline p {
+  margin: 0;
 }
 
 /* 批量操作栏 */

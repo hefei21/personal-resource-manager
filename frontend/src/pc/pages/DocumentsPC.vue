@@ -15,19 +15,19 @@
           <NativeRadio value="list">
             <NativeIcon name="list-dashes" size="14" /> 列表视图
           </NativeRadio>
-          <NativeRadio value="private">
-            <NativeIcon name="lock" size="14" /> 私密空间
+          <NativeRadio value="trash">
+            <NativeIcon name="trash" size="14" /> 回收站
           </NativeRadio>
         </NativeRadioGroup>
       </div>
       
       <!-- 搜索和排序另起一行 -->
-      <div class="toolbar-row toolbar-row-second">
+      <div v-if="viewMode !== 'trash'" class="toolbar-row toolbar-row-second">
         <!-- 左侧：搜索和高级搜索 -->
         <div class="toolbar-left">
           <NativeInput
             v-model="searchKeyword"
-            :placeholder="viewMode === 'private' ? '搜索私密文件...' : '搜索文档...'"
+            placeholder="搜索文档..."
             clearable
             @clear="handleSearch"
             @enter="handleSearch"
@@ -80,9 +80,9 @@
       </div>
 
       <!-- 高级搜索面板 -->
-      <div v-if="advancedSearchVisible" class="advanced-search-panel">
+      <div v-if="advancedSearchVisible && viewMode !== 'trash'" class="advanced-search-panel">
         <NativeSpace>
-          <NativeFormItem v-if="viewMode !== 'private'" label="标签" style="margin: 0;">
+          <NativeFormItem label="标签" style="margin: 0;">
             <NativeSelect
               v-model="selectedTags"
               placeholder="选择标签"
@@ -161,7 +161,7 @@
         </NativeAlert>
         <!-- 创建子分类按钮和返回按钮 -->
         <div class="category-actions-bar" v-if="!isGuest">
-          <NativeButton theme="primary" @click="handleUpload" :disabled="isGuest">
+          <NativeButton theme="primary" @click="handleUpload" :disabled="!canWrite">
             <template #icon><NativeIcon name="plus" size="14" /></template>
             上传文档
           </NativeButton>
@@ -223,7 +223,46 @@
     </NativeCard>
 
     <!-- 文档列表 -->
-    <NativeCard v-if="documents.length > 0" class="documents-list">
+    <NativeCard v-if="viewMode === 'trash'" class="documents-list">
+      <h3 class="section-title">文档回收站</h3>
+      <NativeAlert theme="info" title="删除的文档默认保留 30 天">
+        恢复会优先放回原分类；永久删除不可撤销。
+      </NativeAlert>
+      <div v-if="trashLoading" class="content-loading">
+        <NativeLoading size="small" />
+      </div>
+      <NativeTable v-else-if="trashDocuments.length > 0" :dataSource="trashDocuments" :columns="trashColumns" rowKey="id" hover>
+        <template #cell-originalPath="{ row }">
+          <span>{{ row.originalPath || '未分类' }}</span>
+        </template>
+        <template #cell-deletedAt="{ row }">
+          <span>{{ formatDateTime(row.deletedAt) }}</span>
+        </template>
+        <template #cell-purgeAfter="{ row }">
+          <span>{{ formatDateTime(row.purgeAfter) }}</span>
+        </template>
+        <template #cell-operation="{ row }">
+          <NativeSpace>
+            <NativePopconfirm content="恢复后将优先返回原分类，确定恢复吗？" @confirm="handleRestoreTrash(row.id)">
+              <template #trigger>
+                <NativeButton theme="primary" size="small" :disabled="!canWrite">恢复</NativeButton>
+              </template>
+            </NativePopconfirm>
+            <NativePopconfirm content="永久删除将同时清理该文档的历史版本，且不可恢复。确定继续吗？" @confirm="handlePermanentlyDeleteTrash(row.id)">
+              <template #trigger>
+                <NativeButton theme="danger" variant="outline" size="small" :disabled="!canWrite">永久删除</NativeButton>
+              </template>
+            </NativePopconfirm>
+          </NativeSpace>
+        </template>
+      </NativeTable>
+      <div v-else class="empty-state-inline">
+        <NativeIcon name="trash" size="48" />
+        <p>回收站为空</p>
+      </div>
+    </NativeCard>
+
+    <NativeCard v-if="viewMode !== 'trash' && documents.length > 0" class="documents-list">
       <h3 v-if="viewMode === 'category' && currentCategoryId" class="section-title">
         {{ currentCategoryPath }} - 文档列表
       </h3>
@@ -261,7 +300,7 @@
         @sortChange="handleSortChange"
       >
         <template #cell-version="{ row }">
-          <span>{{ row.version ? (row.version.toString().includes('.') ? row.version : `${row.version}.0`) : '1.0' }}</span>
+          <span>v{{ row.version }}</span>
         </template>
         <template #cell-type="{ row }">
           <span>{{ getFileExtension(row.filePath || '') }}</span>
@@ -305,12 +344,12 @@
       </div>
     </NativeCard>
 
-    <!-- 空状态（私密空间不显示）- 仅在加载完成且无数据时显示 -->
-    <NativeCard v-if="documents.length === 0 && !loading && !currentCategoryId && viewMode !== 'private' && viewMode !== 'category'" class="empty-state">
+    <!-- 空状态 - 仅在加载完成且无数据时显示 -->
+    <NativeCard v-if="documents.length === 0 && !loading && !currentCategoryId && viewMode !== 'category'" class="empty-state">
       <NativeIcon name="file" size="64" />
       <p>暂无文档</p>
     </NativeCard>
-    <NativeCard v-else-if="documents.length === 0 && !loading && currentCategoryId && viewMode !== 'private'" class="empty-state">
+    <NativeCard v-else-if="documents.length === 0 && !loading && currentCategoryId" class="empty-state">
       <NativeIcon name="file" size="64" />
       <p>当前分类下暂无文档</p>
       <NativeButton theme="primary" @click="handleUpload">上传第一个文档</NativeButton>
@@ -374,18 +413,10 @@
         </p>
         <p class="delete-info">
           <NativeIcon name="info" style="color: #0052d9; margin-right: 8px;" />
-          此操作将同时删除该分类下的所有子分类
+          此操作将同时删除该分类下的所有子分类，但不会删除文档、版本或文件。
         </p>
         <NativeDivider />
-        <p class="delete-question">请选择如何处理分类下的文件：</p>
-        <NativeRadioGroup v-model="deleteCategoryFileOption">
-          <NativeRadio value="keep">
-            保留文件（文件将提升到父分类，若删除根分类则移至「所有文档」）
-          </NativeRadio>
-          <NativeRadio value="delete">
-            同时删除文件（文件将被永久删除，无法恢复）
-          </NativeRadio>
-        </NativeRadioGroup>
+        <p class="delete-question">文档将移到该分类的父分类；删除一级分类时，文档将变为未分类并继续显示在“全部文档”。</p>
       </div>
     </NativeDialog>
 
@@ -417,7 +448,8 @@
       @dragover.prevent
       @dragleave.prevent="handleDialogDragLeave"
       @drop.prevent="handleFileDrop"
-      :confirm-btn="{ content: '上传', loading: uploading, disabled: uploading }"
+      :confirm-loading="uploading"
+      :confirm-disabled="uploading || !canWrite"
       :close-btn="!uploading"
     >
       <NativeForm :modelValue="uploadForm" :rules="uploadRules">
@@ -460,6 +492,62 @@
       </NativeForm>
     </NativeDialog>
 
+    <!-- 上传冲突对话框：必须由用户明确选择另建、新版本或取消 -->
+    <NativeDialog
+      v-model="uploadConflictDialogVisible"
+      title="上传冲突"
+      width="760px"
+      :show-footer="false"
+    >
+      <NativeAlert theme="warning" title="检测到同名文档">
+        {{ uploadConflict?.message || '请选择处理方式，系统不会自动改名或合并。' }}
+      </NativeAlert>
+      <p class="upload-conflict-suggestion">
+        建议标题：<strong>{{ uploadConflict?.suggestedTitle || '-' }}</strong>
+      </p>
+      <div class="upload-conflict-candidates">
+        <label
+          v-for="candidate in uploadConflict?.candidates || []"
+          :key="candidate.id"
+          class="upload-conflict-candidate"
+          :class="{ 'hash-match': candidate.hashMatches }"
+        >
+          <input
+            v-model="selectedUploadConflictCandidateId"
+            type="radio"
+            name="pc-upload-conflict-candidate"
+            :value="candidate.id"
+            :disabled="candidate.hashMatches || uploading"
+          />
+          <span class="upload-conflict-candidate-body">
+            <strong>{{ candidate.title }}</strong>
+            <span>分类：{{ candidate.categoryPath || '未分类' }}</span>
+            <span>当前版本：{{ candidate.currentVersion ?? '-' }}</span>
+            <span>更新时间：{{ formatDateTime(candidate.updatedAt) }}</span>
+            <span>内容大小：{{ formatFileSize(candidate.contentBytes) }}</span>
+            <span v-if="candidate.hashMatches" class="upload-conflict-hash-match">
+              hashMatches：是；内容相同，不能作为新版本
+            </span>
+            <span v-else>hashMatches：否</span>
+          </span>
+        </label>
+      </div>
+      <div class="upload-conflict-actions">
+        <NativeButton variant="outline" @click="cancelUploadConflict" :disabled="uploading">取消</NativeButton>
+        <NativeButton theme="primary" @click="retryUploadAsNewDocument" :disabled="!canWrite || uploading || !uploadConflict?.suggestedTitle">
+          使用建议标题另建
+        </NativeButton>
+        <NativeButton
+          theme="primary"
+          variant="outline"
+          @click="retryUploadAsCandidateVersion"
+          :disabled="!canWrite || uploading || !selectedUploadConflictCandidate || selectedUploadConflictCandidate.hashMatches"
+        >
+          选择候选作为新版本
+        </NativeButton>
+      </div>
+    </NativeDialog>
+
     <!-- 版本对话框 -->
     <NativeDialog
       v-model="versionsDialogVisible"
@@ -467,16 +555,64 @@
       width="800px"
       :show-footer="false"
     >
+      <div class="version-dialog-toolbar">
+        <NativeButton variant="outline" size="small" @click="openVersionTrash">
+          版本回收站
+        </NativeButton>
+      </div>
       <NativeTable :dataSource="versions" :columns="versionColumns" rowKey="id">
         <template #cell-version="{ row }">
           <span>{{ row.version ? (row.version.toString().includes('.') ? row.version : `${row.version}.0`) : '1.0' }}</span>
         </template>
+        <template #cell-isCurrent="{ row }">
+          <span v-if="row.isCurrent" class="version-current-label">当前版本</span>
+          <span v-else>历史版本</span>
+        </template>
         <template #cell-operation="{ row }">
-          <NativeButton theme="primary" size="small" @click="handleDownloadVersion(row)">
-            <NativeIcon name="download" /> 下载
-          </NativeButton>
+          <NativeSpace>
+            <NativeButton theme="primary" size="small" @click="handleDownloadVersion(row)">
+              <NativeIcon name="download" /> 下载
+            </NativeButton>
+            <template v-if="!row.isCurrent">
+              <NativePopconfirm content="恢复此版本会创建一个新的当前版本，不会覆盖历史。确定恢复吗？" @confirm="handleRestoreVersion(row)">
+              <template #trigger>
+                <NativeButton theme="default" variant="outline" size="small" :disabled="!canWrite">恢复此版本</NativeButton>
+              </template>
+              </NativePopconfirm>
+              <NativePopconfirm content="移入版本回收站后可在保护期内恢复，确定继续吗？" @confirm="handleDeleteVersion(row)">
+                <template #trigger>
+                  <NativeButton theme="danger" variant="outline" size="small" :disabled="!canWrite">移入版本回收站</NativeButton>
+                </template>
+              </NativePopconfirm>
+            </template>
+          </NativeSpace>
         </template>
       </NativeTable>
+    </NativeDialog>
+
+    <!-- 版本回收列表 -->
+    <NativeDialog
+      v-model="versionTrashDialogVisible"
+      title="版本回收站"
+      width="700px"
+      :show-footer="false"
+    >
+      <div v-if="versionTrashLoading" class="content-loading">
+        <NativeLoading size="small" />
+      </div>
+      <div v-else-if="versionTrash.length === 0" class="empty-state-inline">
+        <p>版本回收站为空</p>
+      </div>
+      <div v-else class="version-trash-list">
+        <div v-for="row in versionTrash" :key="row.id" class="version-trash-item">
+          <span>v{{ row.version }}</span>
+          <span>{{ row.note || '无说明' }}</span>
+          <span>{{ formatDateTime(row.deletedAt || row.trashedAt) }}</span>
+          <NativeButton v-if="!row.isCurrent" size="small" theme="primary" @click="handleRestoreVersionTrash(row)" :disabled="!canWrite">
+            恢复
+          </NativeButton>
+        </div>
+      </div>
     </NativeDialog>
 
     <!-- 编辑对话框 -->
@@ -493,13 +629,6 @@
         <NativeForm layout="inline" style="margin-bottom: 16px;">
           <NativeFormItem label="当前版本">
             <NativeInput :modelValue="editForm.currentVersion" disabled style="width: 100px" />
-          </NativeFormItem>
-          <NativeFormItem label="新版本号" name="newVersion">
-            <NativeInput
-              v-model="editForm.newVersion"
-              placeholder="如: 1.1.2"
-              style="width: 120px"
-            />
           </NativeFormItem>
           <NativeFormItem label="版本说明">
             <NativeInput
@@ -595,14 +724,6 @@
           <div class="word-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
-        <!-- Excel HTML 预览 -->
-        <div v-else-if="previewType === 'excel-html'" class="excel-html-preview">
-          <div class="office-toolbar">
-            <NativeButton size="small" theme="default" @click="handleDownloadPreviewFile">下载文件</NativeButton>
-          </div>
-          <div class="excel-content" v-html="sanitizedPreviewContent"></div>
-        </div>
-
         <!-- Office 文档预览 -->
         <div v-else-if="previewType === 'office'" class="office-preview">
           <NativeIcon :name="getOfficeIconName(previewLanguage)" size="64" />
@@ -625,182 +746,6 @@
       </div>
     </NativeDialog>
 
-    <!-- 私密空间密码验证对话框 -->
-    <NativeDialog
-      v-model="privatePasswordDialogVisible"
-      title="私密空间 - 密码验证"
-      width="400px"
-      :close-on-overlay-click="false"
-      :close-on-esc-keydown="false"
-      @confirm="handlePrivatePasswordConfirm"
-      @cancel="handlePrivatePasswordCancel"
-      @close="handlePrivatePasswordCancel"
-    >
-      <NativeForm autocomplete="off">
-        <NativeFormItem label="密码">
-          <NativeInput
-            ref="privatePasswordInputRef"
-            v-model="privatePasswordInput"
-            type="password"
-            placeholder="请输入私密空间密码"
-            autocomplete="one-time-code"
-            name="private-space-token"
-            data-lpignore="true"
-            @enter="handlePrivatePasswordConfirm"
-          />
-        </NativeFormItem>
-      </NativeForm>
-      <p v-if="privatePasswordError" style="color: #e34d59; font-size: 12px;">{{ privatePasswordError }}</p>
-    </NativeDialog>
-
-    <!-- 私密空间修改密码对话框 -->
-    <NativeDialog
-      v-model="privateChangePasswordDialogVisible"
-      header="修改私密空间密码"
-      width="400px"
-      @confirm="handleChangePrivatePasswordConfirm"
-    >
-      <NativeForm autocomplete="off">
-        <NativeFormItem label="当前密码">
-          <NativeInput
-            v-model="privateOldPassword"
-            type="password"
-            placeholder="请输入当前密码"
-            autocomplete="one-time-code"
-            name="private-old-token"
-            data-lpignore="true"
-          />
-        </NativeFormItem>
-        <NativeFormItem label="新密码">
-          <NativeInput
-            v-model="privateNewPassword"
-            type="password"
-            placeholder="请输入新密码"
-            autocomplete="one-time-code"
-            name="private-new-token"
-            data-lpignore="true"
-          />
-        </NativeFormItem>
-        <NativeFormItem label="确认新密码">
-          <NativeInput
-            v-model="privateConfirmPassword"
-            type="password"
-            placeholder="请再次输入新密码"
-            autocomplete="one-time-code"
-            name="private-confirm-token"
-            data-lpignore="true"
-          />
-        </NativeFormItem>
-      </NativeForm>
-    </NativeDialog>
-
-    <!-- 私密空间上传对话框 -->
-    <NativeDialog
-      v-model="privateUploadDialogVisible"
-      title="上传私密文件"
-      width="500px"
-      @confirm="handlePrivateUploadConfirm"
-    >
-      <NativeForm :modelValue="privateUploadForm">
-        <NativeFormItem label="文件" required>
-          <NativeUpload
-            v-model="privateUploadForm.file"
-            drag
-            accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.gif,.bmp"
-            :multiple="false"
-            :autoUpload="false"
-            @change="onPrivateFileChange"
-          />
-        </NativeFormItem>
-        <NativeFormItem label="标题" required>
-          <NativeInput v-model="privateUploadForm.title" placeholder="文件标题" />
-        </NativeFormItem>
-      </NativeForm>
-    </NativeDialog>
-
-    <!-- 私密空间视图 -->
-    <NativeCard v-if="viewMode === 'private' && privateAccessGranted" class="private-space-view">
-      <div class="private-header">
-        <h3>私密文件列表</h3>
-        <NativeSpace>
-          <NativeButton theme="primary" @click="handlePrivateUpload" :disabled="isGuest">
-            <template #icon><NativeIcon name="upload" /></template>
-            上传文件
-          </NativeButton>
-          <NativeButton theme="default" @click="openChangePrivatePassword" :disabled="isGuest">
-            <template #icon><NativeIcon name="lock" /></template>
-            修改密码
-          </NativeButton>
-        </NativeSpace>
-      </div>
-
-      <!-- 批量操作栏 -->
-      <div v-if="privateSelectedRowKeys.length > 0" class="batch-actions-bar">
-        <NativePopconfirm
-          content="确定删除选中的文件吗？"
-          @confirm="handlePrivateBatchDelete"
-        >
-          <template #trigger>
-            <NativeButton theme="danger" variant="outline" size="small">
-              <template #icon><NativeIcon name="trash" /></template>
-              批量删除 ({{ privateSelectedRowKeys.length }})
-            </NativeButton>
-          </template>
-        </NativePopconfirm>
-        <span class="batch-actions-hint">已选择 {{ privateSelectedRowKeys.length }} 项</span>
-      </div>
-
-      <!-- 私密文件列表 -->
-      <NativeTable
-        :dataSource="privateDocuments"
-        :columns="privateColumns"
-        :loading="privateLoading"
-        rowKey="id"
-        hover
-        selectable
-        :selectedKeys="privateSelectedRowKeys"
-        :allRowKeys="allPrivateDocumentIds"
-        @selectionChange="handlePrivateSelectChange"
-      >
-        <template #cell-type="{ row }">
-          <span>{{ getFileExtension(row.filePath || '') }}</span>
-        </template>
-        <template #cell-size="{ row }">
-          <span>{{ formatFileSize(row.size || 0) }}</span>
-        </template>
-        <template #cell-operation="{ row }">
-          <NativeSpace>
-            <NativeButton theme="primary" variant="outline" size="small" iconSize="1.2em" @click="handlePrivateView(row)">
-              <template #icon><NativeIcon name="eye" /></template>预览
-            </NativeButton>
-            <NativeButton theme="default" variant="outline" size="small" iconSize="1.2em" @click="handlePrivateDownload(row)">
-              <template #icon><NativeIcon name="download" /></template>下载
-            </NativeButton>
-            <NativePopconfirm
-              content="确定删除吗？"
-              @confirm="handlePrivateDelete(row.id)"
-            >
-              <template #trigger>
-                <NativeButton theme="danger" variant="outline" size="small" iconSize="1.2em">
-                  <template #icon><NativeIcon name="trash" /></template>删除
-                </NativeButton>
-              </template>
-            </NativePopconfirm>
-          </NativeSpace>
-        </template>
-      </NativeTable>
-
-      <!-- 私密空间分页 -->
-      <div class="pagination-wrapper" v-if="viewMode === 'private' && privateTotal > 0">
-        <NativePagination
-          v-model:current="privatePagination.current"
-          v-model:pageSize="privatePagination.pageSize"
-          :total="privateTotal"
-          @change="handlePrivatePageChange"
-        />
-      </div>
-    </NativeCard>
-
   </div>
 </template>
 
@@ -811,7 +756,6 @@ import { authenticatedAssetUrl } from '@/utils/authentication'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mammoth from 'mammoth'
-import * as XLSX from 'xlsx'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
 import {
@@ -881,12 +825,20 @@ const documents = ref([])
 const total = ref(0)
 const pagination = ref({ current: 1, pageSize: 30 })
 const versions = ref([])
+const versionDocumentId = ref(null)
+const versionTrash = ref([])
+const versionTrashLoading = ref(false)
+const versionTrashDialogVisible = ref(false)
+const trashDocuments = ref([])
+const trashLoading = ref(false)
 const uploadDialogVisible = ref(false)
+const uploadConflictDialogVisible = ref(false)
+const uploadConflict = ref(null)
+const selectedUploadConflictCandidateId = ref(null)
 const versionsDialogVisible = ref(false)
 const createCategoryDialogVisible = ref(false)
 const deleteCategoryDialogVisible = ref(false)
 const deleteCategoryData = ref(null)
-const deleteCategoryFileOption = ref('keep') // 'keep' 或 'delete'
 const renameCategoryDialogVisible = ref(false)
 const renameCategoryData = ref(null)
 const renameCategoryName = ref('')
@@ -961,7 +913,6 @@ const editForm = ref({
   content: '',
   versionNote: '',
   currentVersion: '1.0',
-  newVersion: ''
 })
 
 const editDialogVisible = ref(false)
@@ -971,6 +922,11 @@ const uploadRules = {
   title: [{ required: true, message: '请输入标题', type: 'error' }],
   file: [{ required: true, message: '请选择文件', type: 'error' }]
 }
+
+const selectedUploadConflictCandidate = computed(() => {
+  const candidates = uploadConflict.value?.candidates || []
+  return candidates.find(candidate => String(candidate.id) === String(selectedUploadConflictCandidateId.value)) || null
+})
 
 // 排序相关状态
 const sortBy = ref('updated_at')
@@ -1013,28 +969,6 @@ const batchEditForm = ref({
   category: '',
   subcategory: '',
   tags: ''
-})
-
-// 私密空间相关状态
-const privatePasswordDialogVisible = ref(false)
-const privatePasswordInput = ref('')
-const privatePasswordInputRef = ref(null)
-const privatePasswordError = ref('')
-const privateAccessGranted = ref(false)
-const privateChangePasswordDialogVisible = ref(false)
-const privateOldPassword = ref('')
-const privateNewPassword = ref('')
-const privateConfirmPassword = ref('')
-const privateDocuments = ref([])
-const privateTotal = ref(0)
-const privatePagination = ref({ current: 1, pageSize: 30 })
-const privateLoading = ref(false)
-const privateSelectedRowKeys = ref([])
-const allPrivateDocumentIds = ref([])  // 所有私密文件ID（用于跨页全选）
-const privateUploadDialogVisible = ref(false)
-const privateUploadForm = ref({
-  file: [],
-  title: ''
 })
 
 // 高级搜索相关
@@ -1240,20 +1174,20 @@ const columns = computed(() => [
   { key: 'operation', title: '操作', width: 200, align: 'left', headerAlign: 'left' }
 ])
 
-// 私密空间表格列（无版本控制）
-const privateColumns = [
-  { key: 'title', dataIndex: 'title', title: '标题', minWidth: 200 },
-  { key: 'type', dataIndex: 'filePath', title: '类型', width: 100 },
-  { key: 'size', dataIndex: 'size', title: '大小', width: 100 },
-  { key: 'updatedAt', dataIndex: 'updatedAt', title: '更新时间', width: 180 },
-  { key: 'operation', title: '操作', width: 160, align: 'left', headerAlign: 'left' }
-]
-
 const versionColumns = [
   { key: 'version', dataIndex: 'version', title: '版本号', width: 100 },
+  { key: 'isCurrent', dataIndex: 'isCurrent', title: '状态', width: 100 },
   { key: 'note', dataIndex: 'note', title: '说明' },
   { key: 'createdAt', dataIndex: 'createdAt', title: '创建时间', width: 180 },
-  { key: 'operation', title: '操作', width: 150 }
+  { key: 'operation', title: '操作', width: 420 }
+]
+
+const trashColumns = [
+  { key: 'title', dataIndex: 'title', title: '标题', minWidth: 200 },
+  { key: 'originalPath', dataIndex: 'originalPath', title: '原分类', minWidth: 160 },
+  { key: 'deletedAt', dataIndex: 'deletedAt', title: '删除时间', width: 180 },
+  { key: 'purgeAfter', dataIndex: 'purgeAfter', title: '保护期至', width: 180 },
+  { key: 'operation', title: '操作', width: 220 }
 ]
 
 const lineCount = computed(() => {
@@ -1376,103 +1310,17 @@ function handleViewModeChange() {
   categoryPath.value = []
   documents.value = []
 
-  // 处理私密空间 - 每次进入都要重新验证密码
-  if (viewMode.value === 'private') {
-    // 游客无权访问私密空间
-    if (isGuest.value) {
-      toast.warning('游客无权访问私密空间')
-      viewMode.value = 'category'  // 重置为分类浏览模式
-      loadDocuments()  // 重新加载文档列表
-      return
-    }
-    
-    // 重置授权状态
-    privateAccessGranted.value = false
-    // 显示密码验证对话框
-    privatePasswordDialogVisible.value = true
-    privatePasswordInput.value = ''
-    privatePasswordError.value = ''
-    // 自动聚焦密码输入框
-    nextTick(() => {
-      privatePasswordInputRef.value?.focus()
-    })
+  if (viewMode.value === 'trash') {
+    loadTrashDocuments()
   } else {
     loadDocuments()
-  }
-}
-
-// 私密空间密码验证
-async function handlePrivatePasswordConfirm() {
-  try {
-    const response = await api.documents.verifyPrivatePassword({ password: privatePasswordInput.value })
-    if (response.data?.success) {
-      privateAccessGranted.value = true
-      privatePasswordDialogVisible.value = false
-      privatePasswordInput.value = ''
-      privatePasswordError.value = ''
-      loadPrivateDocuments()
-    } else {
-      privatePasswordError.value = '密码错误'
-      privatePasswordInput.value = ''
-    }
-  } catch (error) {
-    console.error('密码验证失败:', error)
-    privatePasswordError.value = error.response?.data?.message || '密码验证失败'
-    privatePasswordInput.value = ''
-  }
-}
-
-// 私密空间密码验证取消
-function handlePrivatePasswordCancel() {
-  // 关闭对话框并回到分类浏览视图
-  privatePasswordDialogVisible.value = false
-  privatePasswordInput.value = ''
-  privatePasswordError.value = ''
-  viewMode.value = 'category'
-  loadDocuments()
-}
-
-// 打开修改密码对话框
-function openChangePrivatePassword() {
-  privateOldPassword.value = ''
-  privateNewPassword.value = ''
-  privateConfirmPassword.value = ''
-  privateChangePasswordDialogVisible.value = true
-}
-
-// 修改私密空间密码
-async function handleChangePrivatePasswordConfirm() {
-  if (!privateOldPassword.value || !privateNewPassword.value || !privateConfirmPassword.value) {
-    toast.warning('请填写所有字段')
-    return
-  }
-  if (privateNewPassword.value !== privateConfirmPassword.value) {
-    toast.error('两次输入的新密码不一致')
-    return
-  }
-
-  try {
-    await api.documents.changePrivatePassword({
-      oldPassword: privateOldPassword.value,
-      newPassword: privateNewPassword.value
-    })
-    toast.success('密码修改成功')
-    privateChangePasswordDialogVisible.value = false
-  } catch (error) {
-    console.error('修改密码失败:', error)
-    toast.error(error.response?.data?.message || '修改密码失败')
   }
 }
 
 // 统一搜索处理
 function handleSearch() {
-  if (viewMode.value === 'private') {
-    privatePagination.value.current = 1
-    loadPrivateDocuments()
-  } else {
-    pagination.value.current = 1
-    loadDocuments()
-  }
+  pagination.value.current = 1
+  loadDocuments()
 }
 
 // 分页处理
@@ -1490,132 +1338,6 @@ function handlePageSizeChange() {
   const scrollContainer = document.querySelector('.scrollable-content')
   if (scrollContainer) {
     scrollContainer.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-}
-
-function handlePrivatePageChange() {
-  loadPrivateDocuments()
-  const scrollContainer = document.querySelector('.scrollable-content')
-  if (scrollContainer) {
-    scrollContainer.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-}
-
-function handlePrivatePageSizeChange() {
-  privatePagination.value.current = 1
-  loadPrivateDocuments()
-  const scrollContainer = document.querySelector('.scrollable-content')
-  if (scrollContainer) {
-    scrollContainer.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-}
-
-// 加载私密文件列表
-async function loadPrivateDocuments() {
-  privateLoading.value = true
-  try {
-    const params = {
-      page: privatePagination.value.current,
-      pageSize: privatePagination.value.pageSize
-    }
-    if (searchKeyword.value) {
-      params.keyword = searchKeyword.value
-    }
-    // 同时获取分页数据和所有私密文件ID（用于跨页全选）
-    const [response, allIdsResponse] = await Promise.all([
-      api.documents.listPrivate(params),
-      api.documents.listPrivate({ ...params, page: 1, pageSize: 10000 })  // 获取所有ID
-    ])
-    privateDocuments.value = response.data?.data || []
-    privateTotal.value = response.data?.total || 0
-    // 存储所有私密文件ID用于跨页全选
-    const allData = allIdsResponse.data?.data || []
-    allPrivateDocumentIds.value = (Array.isArray(allData) ? allData : []).map(doc => doc.id)
-  } catch (error) {
-    console.error('加载私密文件失败:', error)
-    toast.error('加载私密文件失败')
-    privateDocuments.value = []
-    privateTotal.value = 0
-  } finally {
-    privateLoading.value = false
-  }
-}
-
-// 私密文件上传
-function handlePrivateUpload() {
-  privateUploadForm.value = { file: [], title: '' }
-  privateUploadDialogVisible.value = true
-}
-
-function onPrivateFileChange(files) {
-  if (files.length > 0) {
-    const fileName = files[0].name
-    privateUploadForm.value.title = fileName.replace(/\.[^/.]+$/, '')
-  }
-}
-
-async function handlePrivateUploadConfirm() {
-  try {
-    if (!privateUploadForm.value.file || privateUploadForm.value.file.length === 0) {
-      toast.error('请选择文件')
-      return
-    }
-
-    const file = privateUploadForm.value.file[0]
-    const formData = new FormData()
-    const fileToUpload = file.raw || file.originFileObj || file
-    formData.append('file', fileToUpload)
-    formData.append('title', privateUploadForm.value.title)
-
-    await api.documents.uploadPrivate(formData)
-    toast.success('上传成功')
-    privateUploadDialogVisible.value = false
-    loadPrivateDocuments()
-  } catch (error) {
-    console.error('上传失败:', error)
-    toast.error(error.response?.data?.message || '上传失败')
-  }
-}
-
-// 私密文件操作
-function handlePrivateView(row) {
-  // 复用现有的预览功能
-  loadPreviewContent({ ...row, isPrivate: true })
-}
-
-function handlePrivateDownload(row) {
-  window.open(authenticatedAssetUrl(`/api/documents/secure/download/${row.id}`), '_blank')
-}
-
-async function handlePrivateDelete(id) {
-  try {
-    await api.documents.deletePrivate(id)
-    toast.success('删除成功')
-    loadPrivateDocuments()
-  } catch (error) {
-    console.error('删除失败:', error)
-    toast.error('删除失败')
-  }
-}
-
-function handlePrivateSelectChange(selectedKeys) {
-  privateSelectedRowKeys.value = selectedKeys
-}
-
-async function handlePrivateBatchDelete() {
-  if (privateSelectedRowKeys.value.length === 0) {
-    toast.warning('请选择要删除的文件')
-    return
-  }
-
-  try {
-    await Promise.all(privateSelectedRowKeys.value.map(id => api.documents.deletePrivate(id)))
-    toast.success('批量删除成功')
-    privateSelectedRowKeys.value = []
-    loadPrivateDocuments()
-  } catch (error) {
-    console.error('批量删除失败:', error)
-    toast.error('批量删除失败')
   }
 }
 
@@ -1679,7 +1401,6 @@ async function handleCreateCategoryConfirm() {
 
 function handleDeleteCategory(category) {
   deleteCategoryData.value = category
-  deleteCategoryFileOption.value = 'keep' // 默认保留文件
   deleteCategoryDialogVisible.value = true
 }
 
@@ -1687,10 +1408,9 @@ async function handleDeleteCategoryConfirm() {
   try {
     if (!deleteCategoryData.value) return
 
-    const deleteFiles = deleteCategoryFileOption.value === 'delete'
-    await api.documents.deleteCategory(deleteCategoryData.value.id, deleteFiles)
+    await api.documents.deleteCategory(deleteCategoryData.value.id)
 
-    toast.success(deleteFiles ? '分类及相关文件已删除' : '分类已删除，文件已提升到父分类')
+    toast.success('分类已删除，文档已移到父分类或未分类')
     deleteCategoryDialogVisible.value = false
     deleteCategoryData.value = null
 
@@ -1739,6 +1459,10 @@ async function handleRenameCategoryConfirm() {
 }
 
 function handleUpload() {
+  if (!canWrite.value) return
+  uploadConflictDialogVisible.value = false
+  uploadConflict.value = null
+  selectedUploadConflictCandidateId.value = null
   uploadForm.value = {
     file: [],
     title: '',
@@ -1769,56 +1493,93 @@ function onFileChange(files) {
   }
 }
 
-async function handleUploadConfirm() {
+function documentErrorMessage(error, fallback) {
+  const message = error?.response?.data?.message
+  return typeof message === 'string' && message.trim() ? message : fallback
+}
+
+function openUploadConflict(error) {
+  const data = error?.response?.data || {}
+  const candidates = Array.isArray(data.candidates) ? data.candidates : []
+  uploadConflict.value = {
+    message: data.message || '请选择处理方式，系统不会自动改名或合并。',
+    suggestedTitle: data.suggestedTitle || '',
+    candidates
+  }
+  const firstEligible = candidates.find(candidate => !candidate.hashMatches)
+  selectedUploadConflictCandidateId.value = (firstEligible || candidates[0])?.id ?? null
+  uploadConflictDialogVisible.value = true
+}
+
+async function submitUpload({ resolution = null, title = uploadForm.value.title, targetDocumentId = null } = {}) {
+  if (uploading.value) return false
+  if (!canWrite.value || !uploadForm.value.file || uploadForm.value.file.length === 0) {
+    if (!uploadForm.value.file || uploadForm.value.file.length === 0) toast.error('请选择文件')
+    return false
+  }
+
+  uploading.value = true
   try {
-    if (!uploadForm.value.file || uploadForm.value.file.length === 0) {
-      toast.error('请选择文件')
-      return
-    }
-
-    console.log('上传文件信息:', uploadForm.value.file)
     const file = uploadForm.value.file[0]
-    console.log('文件对象:', file)
-    console.log('文件原始数据:', file.raw)
-    console.log('文件URL:', file.url)
-    console.log('文件名称:', file.name)
-
-    // 开始上传，设置loading状态
-    uploading.value = true
-
     const formData = new FormData()
     const fileToUpload = file.raw || file.originFileObj || file
     formData.append('file', fileToUpload)
-    formData.append('title', uploadForm.value.title)
+    formData.append('title', title)
     formData.append('category', uploadForm.value.category)
     formData.append('subcategory', uploadForm.value.subcategory)
     formData.append('tags', uploadForm.value.tags)
     formData.append('versionNote', uploadForm.value.versionNote)
-
-    console.log('准备上传的FormData:', formData)
-    const response = await api.documents.upload(formData)
-    console.log('上传响应:', response)
-
-    // 如果标题被修改了（重名自动添加后缀），提示用户
-    if (response.data?.title && response.data.title !== uploadForm.value.title) {
-      toast.warning(`文件名已重命名为：${response.data.title}`)
-    } else {
-      toast.success('上传成功')
+    if (resolution === 'create') formData.append('resolution', 'create')
+    if (resolution === 'new_version') {
+      formData.append('resolution', 'new_version')
+      formData.append('targetDocumentId', String(targetDocumentId))
     }
 
+    const response = await api.documents.upload(formData)
+    toast.success(response.data?.message || '上传成功')
     uploadDialogVisible.value = false
-    // 清除文件数量缓存，以便悬停时重新加载
+    uploadConflictDialogVisible.value = false
+    uploadConflict.value = null
+    selectedUploadConflictCandidateId.value = null
     categoryFileCount.value = {}
-    loadCategories()
-    loadAllTags()
-    loadDocuments()
+    await Promise.all([loadCategories(), loadAllTags(), loadDocuments()])
+    return true
   } catch (error) {
-    console.error('上传错误:', error)
-    console.error('错误详情:', error.response?.data)
-    toast.error(error.response?.data?.message || '上传失败')
+    if (!resolution && error?.response?.data?.code === 'DOCUMENT_UPLOAD_CONFLICT') {
+      openUploadConflict(error)
+    } else {
+      console.error('上传错误:', error)
+      toast.error(documentErrorMessage(error, '上传失败'))
+    }
+    return false
   } finally {
     uploading.value = false
   }
+}
+
+async function handleUploadConfirm() {
+  return submitUpload()
+}
+
+async function retryUploadAsNewDocument() {
+  const suggestedTitle = uploadConflict.value?.suggestedTitle
+  if (!suggestedTitle) return
+  return submitUpload({ resolution: 'create', title: suggestedTitle })
+}
+
+async function retryUploadAsCandidateVersion() {
+  const candidate = selectedUploadConflictCandidate.value
+  if (!candidate || candidate.hashMatches) {
+    toast.warning('内容 hash 相同，不能作为新版本；可使用建议标题另建。')
+    return false
+  }
+  return submitUpload({ resolution: 'new_version', targetDocumentId: candidate.id })
+}
+
+function cancelUploadConflict() {
+  uploadConflictDialogVisible.value = false
+  uploadConflict.value = null
+  selectedUploadConflictCandidateId.value = null
 }
 
 function handleView(row) {
@@ -1857,8 +1618,7 @@ async function handleEdit(row) {
       fileName: '',
       content: '',
       versionNote: '',
-      currentVersion: row.version ? row.version.toString() : '1.0',
-      newVersion: ''
+      currentVersion: row.version ? row.version.toString() : '1.0'
     }
 
     const response = await api.documents.getContent(row.id)
@@ -1898,25 +1658,9 @@ async function handleSaveContent() {
       return
     }
 
-    // 验证版本号
-    if (editForm.value.newVersion) {
-      const versionRegex = /^\d+(\.\d+)*$/
-      if (!versionRegex.test(editForm.value.newVersion)) {
-        toast.error('版本号格式不正确，请使用数字和点号，如: 1.1.2')
-        return
-      }
-
-      // 比较版本号
-      if (!isVersionGreater(editForm.value.newVersion, editForm.value.currentVersion)) {
-        toast.error(`新版本号必须大于当前版本 ${editForm.value.currentVersion}`)
-        return
-      }
-    }
-
     await api.documents.updateContent(editForm.value.id, {
       content: editForm.value.content,
-      versionNote: editForm.value.versionNote,
-      newVersion: editForm.value.newVersion || null
+      versionNote: editForm.value.versionNote
     })
 
     toast.success('保存成功')
@@ -1926,24 +1670,6 @@ async function handleSaveContent() {
     console.error('保存失败:', error)
     toast.error(error.response?.data?.message || '保存失败')
   }
-}
-
-// 比较版本号函数：判断 newVersion 是否大于 currentVersion
-function isVersionGreater(newVersion, currentVersion) {
-  const newParts = newVersion.split('.').map(Number)
-  const currentParts = currentVersion.split('.').map(Number)
-
-  const maxLen = Math.max(newParts.length, currentParts.length)
-
-  for (let i = 0; i < maxLen; i++) {
-    const newPart = newParts[i] || 0
-    const currentPart = currentParts[i] || 0
-
-    if (newPart > currentPart) return true
-    if (newPart < currentPart) return false
-  }
-
-  return false // 版本号相等
 }
 
 function getFileExtension(fileName) {
@@ -1996,6 +1722,7 @@ async function handleDelete(id) {
 
 async function handleViewVersions(row) {
   try {
+    versionDocumentId.value = row.id
     const response = await api.documents.versions(row.id)
     console.log('版本响应:', response)
     const data = response.data?.data || response.data || []
@@ -2003,8 +1730,112 @@ async function handleViewVersions(row) {
     versionsDialogVisible.value = true
   } catch (error) {
     console.error('加载版本失败:', error)
-    toast.error('加载版本失败')
+    toast.error(documentErrorMessage(error, '加载版本失败'))
   }
+}
+
+async function handleRestoreVersion(row) {
+  if (!versionDocumentId.value || row?.isCurrent || !canWrite.value) return
+  try {
+    await api.documents.restoreVersion(versionDocumentId.value, row.id)
+    toast.success('版本恢复成功，已创建新的当前版本')
+    versionsDialogVisible.value = false
+    await loadDocuments()
+  } catch (error) {
+    console.error('恢复版本失败:', error)
+    toast.error(documentErrorMessage(error, '恢复版本失败'))
+  }
+}
+
+async function handleDeleteVersion(row) {
+  if (!versionDocumentId.value || row?.isCurrent || !canWrite.value) return
+  try {
+    await api.documents.deleteVersion(versionDocumentId.value, row.id)
+    toast.success('版本已移入回收站')
+    await Promise.all([handleViewVersions({ id: versionDocumentId.value }), loadVersionTrash(false)])
+  } catch (error) {
+    console.error('移入版本回收站失败:', error)
+    toast.error(documentErrorMessage(error, '移入版本回收站失败'))
+  }
+}
+
+async function loadVersionTrash(showDialog = true) {
+  if (!versionDocumentId.value) return
+  versionTrashLoading.value = true
+  try {
+    const response = await api.documents.versionsTrash(versionDocumentId.value)
+    const data = response.data?.data || response.data || []
+    versionTrash.value = Array.isArray(data) ? data : []
+    if (showDialog) versionTrashDialogVisible.value = true
+  } catch (error) {
+    console.error('加载版本回收站失败:', error)
+    toast.error(documentErrorMessage(error, '加载版本回收站失败'))
+    versionTrash.value = []
+  } finally {
+    versionTrashLoading.value = false
+  }
+}
+
+function openVersionTrash() {
+  loadVersionTrash(true)
+}
+
+async function handleRestoreVersionTrash(row) {
+  if (!versionDocumentId.value || !row?.id || !canWrite.value) return
+  try {
+    await api.documents.restoreVersionTrash(versionDocumentId.value, row.id)
+    toast.success('版本已恢复，已创建新的当前版本')
+    await Promise.all([
+      loadVersionTrash(false),
+      handleViewVersions({ id: versionDocumentId.value }),
+      loadDocuments()
+    ])
+  } catch (error) {
+    console.error('恢复版本回收站条目失败:', error)
+    toast.error(documentErrorMessage(error, '恢复版本失败'))
+  }
+}
+
+async function loadTrashDocuments() {
+  trashLoading.value = true
+  try {
+    const response = await api.documents.trash()
+    trashDocuments.value = response.data?.data || []
+  } catch (error) {
+    console.error('加载回收站失败:', error)
+    toast.error('加载回收站失败')
+    trashDocuments.value = []
+  } finally {
+    trashLoading.value = false
+  }
+}
+
+async function handleRestoreTrash(id) {
+  try {
+    await api.documents.restoreTrash(id)
+    toast.success('文档已恢复')
+    await Promise.all([loadTrashDocuments(), loadCategories()])
+  } catch (error) {
+    console.error('恢复文档失败:', error)
+    toast.error(error.response?.data?.message || '恢复文档失败')
+  }
+}
+
+async function handlePermanentlyDeleteTrash(id) {
+  try {
+    await api.documents.permanentlyDeleteTrash(id)
+    toast.success('文档已永久删除')
+    await loadTrashDocuments()
+  } catch (error) {
+    console.error('永久删除文档失败:', error)
+    toast.error(error.response?.data?.message || '永久删除文档失败')
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
 
 async function loadPreviewContent(row) {
@@ -2019,10 +1850,16 @@ async function loadPreviewContent(row) {
     totalPages.value = 0
     pdfDoc.value = null
 
-    // 根据是否为私密文件调用不同的 API
-    const response = row.isPrivate
-      ? await api.documents.getPrivateContent(row.id)
-      : await api.documents.getContent(row.id)
+    const listedExt = row.filePath?.split('.').pop()?.toLowerCase()
+    if (listedExt === 'xls' || listedExt === 'xlsx') {
+      previewType.value = 'office'
+      previewLanguage.value = 'excel'
+      previewFileSize.value = row.size || 0
+      previewLoading.value = false
+      return
+    }
+
+    const response = await api.documents.getContent(row.id)
     console.log('预览内容响应:', response)
 
     const data = response.data || {}
@@ -2101,6 +1938,12 @@ function base64ToUint8Array(base64) {
 
 // 加载Office文档内容
 async function loadOfficeContent(base64Content, ext) {
+  if (ext !== 'docx') {
+    previewType.value = 'office'
+    previewLoading.value = false
+    return
+  }
+
   try {
     // 将base64转换为ArrayBuffer
     const binaryString = atob(base64Content)
@@ -2110,26 +1953,11 @@ async function loadOfficeContent(base64Content, ext) {
     }
     const arrayBuffer = bytes.buffer
 
-    if (ext === 'docx') {
-      // Word文档预览
-      const result = await mammoth.convertToHtml({ arrayBuffer })
-      previewContent.value = result.value
-      previewType.value = 'word-html'
-      previewLoading.value = false
-    } else if (ext === 'xlsx' || ext === 'xls') {
-      // Excel文档预览
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-      const firstSheetName = workbook.SheetNames[0]
-      const worksheet = workbook.Sheets[firstSheetName]
-      const html = XLSX.utils.sheet_to_html(worksheet, { editable: false })
-      previewContent.value = html
-      previewType.value = 'excel-html'
-      previewLoading.value = false
-    } else {
-      // 其他Office格式暂不支持预览
-      previewType.value = 'office'
-      previewLoading.value = false
-    }
+    // Word文档预览
+    const result = await mammoth.convertToHtml({ arrayBuffer })
+    previewContent.value = result.value
+    previewType.value = 'word-html'
+    previewLoading.value = false
   } catch (error) {
     console.error('加载Office文档内容失败:', error)
     previewType.value = 'office'
@@ -2505,6 +2333,16 @@ onMounted(() => {
 <style scoped>
 .documents {
   padding: 0;
+}
+
+.empty-state-inline {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: #888;
 }
 
 /* 上传进度显示 */
@@ -3003,8 +2841,7 @@ onMounted(() => {
 .empty-state .native-button,
 .office-preview .native-button,
 .unsupported-preview .native-button,
-.word-html-preview .native-button,
-.excel-html-preview .native-button {
+.word-html-preview .native-button {
   height: 28px !important;
   min-height: 28px !important;
   padding: 0 16px !important;
@@ -3305,46 +3142,6 @@ onMounted(() => {
   padding: 8px 12px;
 }
 
-/* Excel HTML 预览 */
-.excel-html-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: 70vh;
-  overflow-y: auto;
-}
-
-.excel-content {
-  padding: 20px;
-  background: #fff;
-  border-radius: 0 0 8px 8px;
-  min-height: 400px;
-  overflow-x: auto;
-}
-
-.excel-content :deep(table) {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.excel-content :deep(table td),
-.excel-content :deep(table th) {
-  border: 1px solid #dfe2e5;
-  padding: 8px 12px;
-  text-align: left;
-}
-
-.excel-content :deep(table th) {
-  background: #f6f8fa;
-  font-weight: 600;
-  color: #333;
-}
-
-.excel-content :deep(table tr:hover td) {
-  background: #f0f3ff;
-}
-
 .preview-footer {
   display: flex;
   justify-content: space-between;
@@ -3446,36 +3243,10 @@ onMounted(() => {
   overflow-y: auto;
 }
 
-/* 私密空间样式 */
-.private-space-view {
-  margin-top: 16px;
-}
-
 /* 视图切换按钮图标大小调整 */
 :deep(.native-radio-button .native-icon) {
   width: 16px;
   height: 16px;
-}
-
-.private-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  gap: 24px;
-}
-
-.private-header :deep(.native-space) {
-  gap: 12px;
-}
-
-.private-header h3 {
-  font-size: 18px;
-  color: #333;
-  margin: 0;
-  padding-bottom: 8px;
-  border-bottom: 2px solid #e34d59;
-  white-space: nowrap;
 }
 
 /* NativeTable 样式 */
@@ -3500,4 +3271,72 @@ onMounted(() => {
   text-align: left;
   white-space: nowrap;
 }
+  .version-dialog-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 12px;
+  }
+
+  .version-current-label {
+    color: #0052d9;
+    font-weight: 600;
+  }
+
+  .version-trash-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .version-trash-item {
+    display: grid;
+    grid-template-columns: 80px minmax(0, 1fr) 180px auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  .upload-conflict-suggestion {
+    margin: 12px 0;
+  }
+
+  .upload-conflict-candidates {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .upload-conflict-candidate {
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid #e7e7e7;
+    border-radius: 6px;
+  }
+
+  .upload-conflict-candidate.hash-match {
+    border-color: #ed7b2f;
+    background: #fff7ed;
+  }
+
+  .upload-conflict-candidate-body {
+    display: grid;
+    gap: 3px;
+    font-size: 13px;
+  }
+
+  .upload-conflict-hash-match {
+    color: #d54941;
+    font-weight: 600;
+  }
+
+  .upload-conflict-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
 </style>

@@ -1,0 +1,132 @@
+name: Container build check
+
+on:
+  push:
+    branches:
+      - "codex/**"
+    paths:
+      - "backend/Dockerfile"
+      - "backend/.dockerignore"
+      - "backend/package.json"
+      - "backend/package-lock.json"
+      - "backend/src/**"
+      - "frontend/Dockerfile"
+      - "frontend/.dockerignore"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/src/**"
+      - "frontend/nginx.conf"
+      - "frontend/vite.config.js"
+      - ".github/workflows/baseline-images.yml"
+      - ".github/workflows/container-build-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-build-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.component }} (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+          - backend
+          - frontend
+        platform:
+          - linux/amd64
+          - linux/arm64
+        include:
+          - platform: linux/amd64
+            platform_slug: amd64
+          - platform: linux/arm64
+            platform_slug: arm64
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build without publishing
+        uses: docker/build-push-action@v7
+        with:
+          context: ./${{ matrix.component }}
+          file: ./${{ matrix.component }}/Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: local/stage2-${{ matrix.component }}:${{ matrix.platform_slug }}
+          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.platform_slug }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.platform_slug }}
+
+      - name: Check backend runtime contents
+        if: matrix.component == 'backend'
+        shell: bash
+        run: |
+          image="local/stage2-backend:${{ matrix.platform_slug }}"
+          docker run --rm --entrypoint sh "$image" -c '
+            set -eu
+            command -v node >/dev/null
+            command -v git >/dev/null
+            command -v ffmpeg >/dev/null
+            command -v ffprobe >/dev/null
+            command -v update-ca-certificates >/dev/null
+            test -s /etc/ssl/certs/ca-certificates.crt
+            ! command -v python3 >/dev/null
+            ! command -v make >/dev/null
+            ! command -v g++ >/dev/null
+            ! command -v svn >/dev/null
+            ! command -v sqlite3 >/dev/null
+            test -d /app/src
+            test ! -e /app/test
+            test ! -e /app/.test-runtime
+            test -f /app/migrate-access-logs.js
+            node --check /app/migrate-access-logs.js
+            DATA_PATH=/app/data DB_PATH=/app/data/database/app.db \
+              node -e "import(process.argv[1]).then(m => { if (typeof m.migrate !== process.argv[2]) process.exit(1) })" /app/migrate-access-logs.js function
+            node --check /app/src/index.js
+            GIT_TERMINAL_PROMPT=0 timeout 60 \
+              git -c http.sslVerify=true ls-remote --exit-code \
+              https://github.com/hefei21/personal-resource-manager.git HEAD >/dev/null
+          '
+
+      - name: Check frontend runtime contents
+        if: matrix.component == 'frontend'
+        shell: bash
+        run: |
+          image="local/stage2-frontend:${{ matrix.platform_slug }}"
+          docker run --rm --add-host backend:127.0.0.1 --entrypoint sh "$image" -c '
+            set -eu
+            nginx -t
+            test -f /usr/share/nginx/html/index.html
+            test ! -e /app/src
+            test ! -e /app/node_modules
+          '
+
+      - name: Record candidate image metrics
+        shell: bash
+        run: |
+          image="local/stage2-${{ matrix.component }}:${{ matrix.platform_slug }}"
+          unpacked_bytes="$(docker image inspect --format '{{.Size}}' "$image")"
+          layer_count="$(docker image inspect --format '{{len .RootFS.Layers}}' "$image")"
+          compressed_save_bytes="$(docker save "$image" | gzip -c | wc -c | tr -d ' ')"
+          echo "::notice title=Container image metrics::component=${{ matrix.component }}, platform=${{ matrix.platform }}, runtime_bytes=${unpacked_bytes}, compressed_save_bytes=${compressed_save_bytes}, layers=${layer_count}"
+          {
+            echo "### ${{ matrix.component }} / ${{ matrix.platform }}"
+            echo
+            echo "- Runtime image bytes: ${unpacked_bytes}"
+            echo "- Compressed docker-save bytes (pre-publish transfer estimate): ${compressed_save_bytes}"
+            echo "- Runtime layer count: ${layer_count}"
+            echo "- Published GHCR pull bytes and NAS incremental update time remain release/NAS acceptance measurements."
+          } >> "$GITHUB_STEP_SUMMARY"

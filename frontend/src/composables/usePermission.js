@@ -41,8 +41,7 @@ export function usePermission() {
       'deleteCategory',
       'createCategory',
       'reorderCategory',
-      'changePassword',
-      'privateSpace'
+      'changePassword'
     ]
 
     if (isGuest.value && guestForbiddenActions.some(act => action.includes(act))) {
