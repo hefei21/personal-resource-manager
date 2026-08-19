@@ -32,7 +32,6 @@ RUN apt-get update \
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY src ./src
-COPY migrations ./migrations
 
 # 创建必要的目录
 RUN mkdir -p data/database data/documents data/music data/code data/uploads data/logs

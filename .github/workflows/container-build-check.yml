@@ -10,7 +10,6 @@ on:
       - "backend/package.json"
       - "backend/package-lock.json"
       - "backend/src/**"
-      - "backend/migrations/**"
       - "frontend/Dockerfile"
       - "frontend/.dockerignore"
       - "frontend/package.json"
@@ -86,7 +85,6 @@ jobs:
             ! command -v svn >/dev/null
             ! command -v sqlite3 >/dev/null
             test -d /app/src
-            test -d /app/migrations
             test ! -e /app/test
             test ! -e /app/.test-runtime
             test ! -e /app/migrate-access-logs.js
@@ -98,7 +96,7 @@ jobs:
         shell: bash
         run: |
           image="local/stage2-frontend:${{ matrix.platform_slug }}"
-          docker run --rm --entrypoint sh "$image" -c '
+          docker run --rm --add-host backend:127.0.0.1 --entrypoint sh "$image" -c '
             set -eu
             nginx -t
             test -f /usr/share/nginx/html/index.html
