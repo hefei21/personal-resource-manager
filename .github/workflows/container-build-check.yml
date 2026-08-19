@@ -88,7 +88,9 @@ jobs:
             test -d /app/src
             test ! -e /app/test
             test ! -e /app/.test-runtime
-            test ! -e /app/migrate-access-logs.js
+            test -f /app/migrate-access-logs.js
+            node --check /app/migrate-access-logs.js
+            node -e "import(\"/app/migrate-access-logs.js\").then(m => { if (typeof m.migrate !== \"function\") process.exit(1) })"
             node --check /app/src/index.js
           '
 

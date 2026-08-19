@@ -31,6 +31,7 @@ RUN apt-get update \
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
+COPY migrate-access-logs.js ./
 COPY src ./src
 
 # 创建必要的目录

@@ -17,7 +17,6 @@ coverage/
 .cache/
 tmp/
 temp/
-migrate-access-logs.js
 Dockerfile.lite
 .git
 .gitignore
