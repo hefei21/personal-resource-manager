@@ -31,6 +31,7 @@ jobs:
   build:
     name: ${{ matrix.component }} (${{ matrix.platform }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -111,6 +112,7 @@ jobs:
           unpacked_bytes="$(docker image inspect --format '{{.Size}}' "$image")"
           layer_count="$(docker image inspect --format '{{len .RootFS.Layers}}' "$image")"
           compressed_save_bytes="$(docker save "$image" | gzip -c | wc -c | tr -d ' ')"
+          echo "::notice title=Container image metrics::component=${{ matrix.component }}, platform=${{ matrix.platform }}, runtime_bytes=${unpacked_bytes}, compressed_save_bytes=${compressed_save_bytes}, layers=${layer_count}"
           {
             echo "### ${{ matrix.component }} / ${{ matrix.platform }}"
             echo
