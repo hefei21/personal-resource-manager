@@ -633,14 +633,6 @@
           <div class="word-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
-        <!-- Excel HTML 预览 -->
-        <div v-else-if="previewType === 'excel-html'" class="excel-html-preview">
-          <div class="office-toolbar">
-            <NativeButton size="small" theme="default" @click="handleDownloadPreviewFile">下载文件</NativeButton>
-          </div>
-          <div class="excel-content" v-html="sanitizedPreviewContent"></div>
-        </div>
-
         <!-- Office 文档预览 -->
         <div v-else-if="previewType === 'office'" class="office-preview">
           <NativeIcon :name="getOfficeIconName(previewLanguage)" size="64" />
@@ -673,7 +665,6 @@ import { authenticatedAssetUrl } from '@/utils/authentication'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mammoth from 'mammoth'
-import * as XLSX from 'xlsx'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
 import {
@@ -1683,6 +1674,15 @@ async function loadPreviewContent(row) {
     totalPages.value = 0
     pdfDoc.value = null
 
+    const listedExt = row.filePath?.split('.').pop()?.toLowerCase()
+    if (listedExt === 'xls' || listedExt === 'xlsx') {
+      previewType.value = 'office'
+      previewLanguage.value = 'excel'
+      previewFileSize.value = row.size || 0
+      previewLoading.value = false
+      return
+    }
+
     const response = await api.documents.getContent(row.id)
     console.log('预览内容响应:', response)
 
@@ -1762,6 +1762,12 @@ function base64ToUint8Array(base64) {
 
 // 加载Office文档内容
 async function loadOfficeContent(base64Content, ext) {
+  if (ext !== 'docx') {
+    previewType.value = 'office'
+    previewLoading.value = false
+    return
+  }
+
   try {
     // 将base64转换为ArrayBuffer
     const binaryString = atob(base64Content)
@@ -1771,26 +1777,11 @@ async function loadOfficeContent(base64Content, ext) {
     }
     const arrayBuffer = bytes.buffer
 
-    if (ext === 'docx') {
-      // Word文档预览
-      const result = await mammoth.convertToHtml({ arrayBuffer })
-      previewContent.value = result.value
-      previewType.value = 'word-html'
-      previewLoading.value = false
-    } else if (ext === 'xlsx' || ext === 'xls') {
-      // Excel文档预览
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-      const firstSheetName = workbook.SheetNames[0]
-      const worksheet = workbook.Sheets[firstSheetName]
-      const html = XLSX.utils.sheet_to_html(worksheet, { editable: false })
-      previewContent.value = html
-      previewType.value = 'excel-html'
-      previewLoading.value = false
-    } else {
-      // 其他Office格式暂不支持预览
-      previewType.value = 'office'
-      previewLoading.value = false
-    }
+    // Word文档预览
+    const result = await mammoth.convertToHtml({ arrayBuffer })
+    previewContent.value = result.value
+    previewType.value = 'word-html'
+    previewLoading.value = false
   } catch (error) {
     console.error('加载Office文档内容失败:', error)
     previewType.value = 'office'
@@ -2674,8 +2665,7 @@ onMounted(() => {
 .empty-state .native-button,
 .office-preview .native-button,
 .unsupported-preview .native-button,
-.word-html-preview .native-button,
-.excel-html-preview .native-button {
+.word-html-preview .native-button {
   height: 28px !important;
   min-height: 28px !important;
   padding: 0 16px !important;
@@ -2974,46 +2964,6 @@ onMounted(() => {
 .word-content :deep(table td) {
   border: 1px solid #dfe2e5;
   padding: 8px 12px;
-}
-
-/* Excel HTML 预览 */
-.excel-html-preview {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: 70vh;
-  overflow-y: auto;
-}
-
-.excel-content {
-  padding: 20px;
-  background: #fff;
-  border-radius: 0 0 8px 8px;
-  min-height: 400px;
-  overflow-x: auto;
-}
-
-.excel-content :deep(table) {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.excel-content :deep(table td),
-.excel-content :deep(table th) {
-  border: 1px solid #dfe2e5;
-  padding: 8px 12px;
-  text-align: left;
-}
-
-.excel-content :deep(table th) {
-  background: #f6f8fa;
-  font-weight: 600;
-  color: #333;
-}
-
-.excel-content :deep(table tr:hover td) {
-  background: #f0f3ff;
 }
 
 .preview-footer {

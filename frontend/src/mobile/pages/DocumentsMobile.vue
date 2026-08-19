@@ -369,11 +369,6 @@
           <div class="office-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
-        <!-- Excel HTML预览 -->
-        <div v-else-if="previewType === 'excel-html'" class="excel-html-preview">
-          <div class="office-content" v-html="sanitizedPreviewContent"></div>
-        </div>
-
         <!-- Office文档不支持预览提示 -->
         <div v-else-if="previewType === 'office'" class="office-preview">
           <NativeIcon :name="getOfficeIconName(previewLanguage)" size="48" />
@@ -411,7 +406,6 @@ import 'md-editor-v3/lib/style.css'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mammoth from 'mammoth'
-import * as XLSX from 'xlsx'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { usePermission } from '@/composables/usePermission'
@@ -770,29 +764,22 @@ function base64ToUint8Array(base64) {
 
 // 加载Office文档内容
 async function loadOfficeContent(base64Content, ext) {
+  if (ext !== 'docx') {
+    previewType.value = 'office'
+    previewLoading.value = false
+    return
+  }
+
   try {
     const binaryString = atob(base64Content)
     const bytes = new Uint8Array(binaryString.length)
     for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i)
     const arrayBuffer = bytes.buffer
 
-    if (ext === 'docx') {
-      const result = await mammoth.convertToHtml({ arrayBuffer })
-      previewContent.value = result.value
-      previewType.value = 'word-html'
-      previewLoading.value = false
-    } else if (ext === 'xlsx' || ext === 'xls') {
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' })
-      const firstSheetName = workbook.SheetNames[0]
-      const worksheet = workbook.Sheets[firstSheetName]
-      const html = XLSX.utils.sheet_to_html(worksheet, { editable: false })
-      previewContent.value = html
-      previewType.value = 'excel-html'
-      previewLoading.value = false
-    } else {
-      previewType.value = 'office'
-      previewLoading.value = false
-    }
+    const result = await mammoth.convertToHtml({ arrayBuffer })
+    previewContent.value = result.value
+    previewType.value = 'word-html'
+    previewLoading.value = false
   } catch (error) {
     console.error('加载Office文档失败:', error)
     previewType.value = 'office'
@@ -875,6 +862,19 @@ async function previewDocument(doc) {
       previewImageUrl.value = authenticatedAssetUrl(`/api/documents/${doc.id}/content`)
       imagePreviewVisible.value = true
       previewingDocIds.value.delete(doc.id)
+      return
+    }
+
+    if (ext === 'xls' || ext === 'xlsx') {
+      currentDoc.value = doc
+      previewingDocIds.value.delete(doc.id)
+      previewDialogVisible.value = true
+      previewLoading.value = false
+      previewContent.value = ''
+      previewFileName.value = doc.title || getFileNameWithExt(doc)
+      previewDocumentId.value = doc.id
+      previewType.value = 'office'
+      previewLanguage.value = 'excel'
       return
     }
 
