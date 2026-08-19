@@ -38,6 +38,12 @@ import {
   MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES,
   MUSIC_STORAGE_TARGET_SHAPE
 } from './musicStorageSchema.js'
+import {
+  CREATE_TASK_SCHEMA_SQL,
+  CREATE_TASK_TABLE_SQL,
+  TASK_KNOWN_INDEXES,
+  TASK_TARGET_SHAPE
+} from './taskSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -1963,6 +1969,23 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           triggers: []
         }
       ]
+    }
+  },
+  {
+    id: '0054_persistent_tasks',
+    source: CREATE_TASK_SCHEMA_SQL,
+    compatibility: {
+      kind: 'table-transition',
+      table: 'tasks',
+      target: TASK_TARGET_SHAPE,
+      targetProof: {
+        createTableSqlSha256: sha256(CREATE_TASK_TABLE_SQL),
+        indexes: TASK_KNOWN_INDEXES,
+        triggers: [],
+        externalDependencies: { inboundForeignKeys: 'none', schemaSqlReferences: 'none' }
+      },
+      missingTable: 'create',
+      legacy: []
     }
   }
 ])
