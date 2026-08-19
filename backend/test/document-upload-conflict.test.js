@@ -148,12 +148,17 @@ test('legacy rows with no category id do not create cross-category conflicts', n
 test('route source exposes the frozen upload and version contracts', () => {
   const directory = path.dirname(fileURLToPath(import.meta.url))
   const source = fs.readFileSync(path.join(directory, '..', 'src', 'routes', 'documents.js'), 'utf8')
+  const versionService = fs.readFileSync(
+    path.join(directory, '..', 'src', 'services', 'documentVersionService.js'),
+    'utf8'
+  )
   const upload = source.slice(source.indexOf("router.post('/upload'"), source.indexOf("router.get('/:id/content'"))
   assert.match(source, /DOCUMENT_UPLOAD_CONFLICT/u)
   assert.match(upload, /resolution === 'new_version'/u)
   assert.match(upload, /targetDocumentId/u)
   assert.doesNotMatch(upload, /finalTitle|suffix\s*=|自动添加后缀/u)
-  assert.match(source, /isCurrent:/u)
+  assert.match(source, /listDocumentVersions\(getDatabase\(\), req\.params\.id\)/u)
+  assert.match(versionService, /isCurrent:/u)
   assert.match(source, /DOCUMENT_VERSION_MANAGED/u)
   assert.match(source, /DOCUMENT_VERSION_IS_CURRENT/u)
 })
