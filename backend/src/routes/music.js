@@ -22,6 +22,16 @@ import { hashMusicFile, musicContentType, parseMusicRange } from '../services/mu
 import { registerTaskProcessor } from '../services/taskRuntime.js'
 import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
 import {
+  createMusicMetadataTaskProcessor,
+  enqueueMusicMetadataTask,
+  MUSIC_METADATA_EXECUTION_CLASS,
+  MUSIC_METADATA_PARSER_VERSION,
+  MUSIC_METADATA_PROCESSOR_VERSION,
+  MUSIC_METADATA_SUBJECT_TYPE,
+  MUSIC_METADATA_TASK_TYPE,
+  projectMusicMetadataTask
+} from '../services/musicMetadataTaskProcessor.js'
+import {
   createMusicLyricsTaskProcessor,
   MUSIC_LYRICS_EXECUTION_CLASS,
   MUSIC_LYRICS_PROCESSOR_VERSION,
@@ -60,7 +70,7 @@ const cancelledUploads = new Set()
 const uploadProgress = new Map()
 
 // 定期清理过期的取消标记（避免内存泄漏）
-setInterval(() => {
+const uploadCleanupTimer = setInterval(() => {
   // 清理 10 分钟前的取消标记（保留足够时间让正在进行的请求检测到）
   if (cancelledUploads.size > 100) {
     cancelledUploads.clear()
@@ -85,6 +95,7 @@ setInterval(() => {
     }
   }
 }, 10 * 60 * 1000)
+uploadCleanupTimer.unref?.()
 
 // 中文拼音排序（使用 Intl.Collator）
 // 使用 JavaScript 内置的 Intl.Collator 实现中文拼音排序
@@ -114,7 +125,7 @@ function parseFlacVorbisComments(buffer) {
     const metadata = { title: null, artist: null, album: null }
 
     // 遍历 metadata blocks
-    while (offset < buffer.length) {
+    while (offset + 4 <= buffer.length) {
       // 读取 block header（4字节）
       const isLast = (buffer[offset] & 0x80) !== 0
       const blockType = buffer[offset] & 0x7F
@@ -166,8 +177,9 @@ function parseFlacVorbisComments(buffer) {
 
     return metadata
   } catch (error) {
-    console.log('[轻量解析] FLAC Vorbis 解析失败:', error.message)
-    return null
+    const failure = new Error('Lightweight music metadata parsing failed.')
+    failure.code = 'MUSIC_METADATA_LIGHTWEIGHT_PARSE_FAILED'
+    throw failure
   }
 }
 
@@ -176,7 +188,7 @@ function parseMp3Id3Tags(buffer) {
   try {
     // 检查 ID3v2 标签
     if (buffer.length < 10 || buffer.slice(0, 3).toString('ascii') !== 'ID3') {
-      return null
+      return { title: null, artist: null, album: null }
     }
 
     const metadata = { title: null, artist: null, album: null }
@@ -230,8 +242,9 @@ function parseMp3Id3Tags(buffer) {
 
     return metadata
   } catch (error) {
-    console.log('[轻量解析] MP3 ID3 解析失败:', error.message)
-    return null
+    const failure = new Error('Lightweight music metadata parsing failed.')
+    failure.code = 'MUSIC_METADATA_LIGHTWEIGHT_PARSE_FAILED'
+    throw failure
   }
 }
 
@@ -239,9 +252,15 @@ function parseMp3Id3Tags(buffer) {
 function parseMetadataLightweight(filePath, originalName) {
   try {
     const ext = path.extname(originalName).toLowerCase()
-    const buffer = fs.readFileSync(filePath, { start: 0, end: 65535 }) // 只读取前 64KB
-    
-    console.log('[轻量解析] 尝试解析:', originalName)
+    const handle = fs.openSync(filePath, 'r')
+    let buffer
+    try {
+      const prefix = Buffer.allocUnsafe(64 * 1024)
+      const bytesRead = fs.readSync(handle, prefix, 0, prefix.length, 0)
+      buffer = prefix.subarray(0, bytesRead)
+    } finally {
+      fs.closeSync(handle)
+    }
     
     if (ext === '.flac') {
       return parseFlacVorbisComments(buffer)
@@ -251,8 +270,9 @@ function parseMetadataLightweight(filePath, originalName) {
     
     return null
   } catch (error) {
-    console.log('[轻量解析] 解析失败:', error.message)
-    return null
+    const failure = new Error('Lightweight music metadata source could not be read.')
+    failure.code = 'MUSIC_METADATA_LIGHTWEIGHT_PARSE_FAILED'
+    throw failure
   }
 }
 
@@ -284,119 +304,281 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage, limits: { fileSize: MUSIC_UPLOAD_POLICY.maxChunkBytes, files: 1 } })
 
-// 解析音乐元数据（三层降级策略）
-async function parseMusicMetadata(filePath, originalName) {
-  const ext = path.extname(originalName).toLowerCase()
-  const baseName = path.basename(originalName, ext)
+// 解析音乐元数据（三层降级策略）。解析器只返回安全字段；原始标签和异常正文
+// 不进入日志、响应或持久任务。
+export async function parseMusicMetadata(filePath, originalName, { signal } = {}) {
+  const ext = path.extname(String(originalName || '')).toLowerCase()
+  const fallback = fallbackMusicMetadata(originalName)
+  let probeFailure = null
 
-  // 默认值从文件名推断
-  let title = baseName
-  let artist = ''
-  let album = ''
-  let duration = 0
-  let coverImage = null
-
-  // 第一层：尝试使用 FFprobe（最可靠，需要 FFmpeg）
+  // 第一层：尝试使用 FFprobe（最可靠，需要 FFmpeg）。
   try {
-    console.log('[元数据解析] 第一层：尝试 FFprobe...')
     const { stdout } = await execFileAsync(
       'ffprobe', ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
-      { maxBuffer: 50 * 1024 * 1024, timeout: 10000 }
+      { maxBuffer: 50 * 1024 * 1024, timeout: 10_000, signal }
     )
 
     const probeData = JSON.parse(stdout)
     const format = probeData.format || {}
     const tags = format.tags || {}
+    const metadata = {
+      title: tags.title || tags.TITLE || fallback.title,
+      artist: tags.artist || tags.ARTIST || tags.album_artist || tags.ALBUM_ARTIST || tags.artists || null,
+      album: tags.album || tags.ALBUM || null,
+      duration: format.duration ? Math.round(Number.parseFloat(format.duration)) : 0,
+      coverImage: null
+    }
 
-    console.log('[FFprobe] 解析成功')
-    console.log('[FFprobe] 格式:', format.format_long_name || format.format_name)
-    console.log('[FFprobe] 标签:', JSON.stringify(tags))
-
-    // 提取基本信息
-    title = tags.title || tags.TITLE || title
-    artist = tags.artist || tags.ARTIST || tags.album_artist || tags.ALBUM_ARTIST || tags.artists || artist
-    album = tags.album || tags.ALBUM || album
-    duration = format.duration ? Math.round(parseFloat(format.duration)) : duration
-
-    // 提取封面图片
-    const videoStream = probeData.streams?.find(s => 
+    const videoStream = probeData.streams?.find(s =>
       s.codec_type === 'video' && s.disposition?.attached_pic === 1
     )
-    
     if (videoStream) {
-      console.log('[FFprobe] 提取封面中...')
       try {
         const { stdout: coverData } = await execFileAsync(
           'ffmpeg', ['-v', 'quiet', '-i', filePath, '-an', '-vcodec', 'copy', '-f', 'image2pipe', '-'],
-          { 
+          {
             encoding: 'buffer',
             maxBuffer: 10 * 1024 * 1024,
-            timeout: 5000
+            timeout: 5_000,
+            signal
           }
         )
-        
         const mimeType = videoStream.codec_name === 'png' ? 'image/png' : 'image/jpeg'
         const rawCoverImage = `data:${mimeType};base64,${coverData.toString('base64')}`
-        
-        // 压缩封面图片
-        coverImage = await compressBase64Image(rawCoverImage, { maxWidth: 500, maxHeight: 500, quality: 85 })
-        console.log('[FFprobe] 封面提取成功，原始大小:', coverData.length, '字节')
-      } catch (coverError) {
-        console.log('[FFprobe] 封面提取失败:', coverError.message)
+        metadata.coverImage = await compressBase64Image(rawCoverImage, {
+          maxWidth: 500,
+          maxHeight: 500,
+          quality: 85
+        })
+      } catch {
+        // A missing cover is a partial metadata result, not an upload failure.
       }
     }
 
-    console.log(`[FFprobe] 最终结果: ${title} - ${artist} (${duration}s)${coverImage ? ' [有封面]' : ''}`)
-    
-    // FFprobe 成功，直接返回
     const stats = fs.statSync(filePath)
+    const normalized = { ...fallback, ...metadata, fileSize: stats.size, fileType: ext.replace('.', '') }
     return {
-      title,
-      artist,
-      album,
-      duration,
-      fileSize: stats.size,
-      fileType: ext.replace('.', ''),
-      coverImage
+      ...normalized,
+      status: musicMetadataStatusForValues(normalized),
+      errorCode: null,
+      needsReparse: false
     }
   } catch (error) {
-    console.log(`[FFprobe] 失败: ${error.message}`)
+    probeFailure = error
   }
 
-  // 第二层：轻量级纯 JS 解析（无需外部依赖）
-  console.log('[元数据解析] 第二层：尝试轻量级解析...')
-  const lightweightMetadata = parseMetadataLightweight(filePath, originalName)
-  
-  if (lightweightMetadata) {
-    console.log('[轻量解析] 成功:', lightweightMetadata)
-    
-    // 使用轻量级解析的结果
-    title = lightweightMetadata.title || title
-    artist = lightweightMetadata.artist || artist
-    album = lightweightMetadata.album || album
-    
-    console.log(`[轻量解析] 最终结果: ${title} - ${artist}`)
-  } else {
-    console.log('[轻量解析] 失败，使用文件名作为默认值')
+  // 第二层：轻量级纯 JS 解析（无需外部依赖）。标签缺失仍是可用的 partial
+  // 结果；只有轻量解析本身异常时才把错误交给持久任务恢复。
+  let lightweightMetadata
+  try {
+    lightweightMetadata = parseMetadataLightweight(filePath, originalName)
+  } catch (error) {
+    const failure = new Error('Music metadata parsers failed.')
+    failure.code = probeFailure?.code === 'ETIMEDOUT' || probeFailure?.killed
+      ? 'MUSIC_METADATA_PARSE_TIMEOUT'
+      : 'MUSIC_METADATA_PARSE_FAILED'
+    throw failure
   }
 
-  // 第三层：降级到文件名（已在初始化时设置）
+  if (lightweightMetadata === null) {
+    const failure = new Error('Music metadata parsers failed.')
+    failure.code = probeFailure?.code === 'ETIMEDOUT' || probeFailure?.killed
+      ? 'MUSIC_METADATA_PARSE_TIMEOUT'
+      : 'MUSIC_METADATA_PARSE_FAILED'
+    throw failure
+  }
 
-  // 获取文件大小
   const stats = fs.statSync(filePath)
-  const fileSize = stats.size
+  const normalized = {
+    ...fallback,
+    title: lightweightMetadata.title || fallback.title,
+    artist: lightweightMetadata.artist || null,
+    album: lightweightMetadata.album || null,
+    duration: 0,
+    coverImage: null,
+    fileSize: stats.size,
+    fileType: ext.replace('.', '')
+  }
+  return {
+    ...normalized,
+    status: 'partial',
+    errorCode: null,
+    needsReparse: false
+  }
+}
 
-  console.log(`[元数据解析] 最终: ${title} - ${artist} (${duration}s)`)
+const MUSIC_METADATA_PUBLIC_ERROR_CODES = new Set([
+  'MUSIC_METADATA_MUSIC_NOT_FOUND',
+  'MUSIC_METADATA_SOURCE_MISSING',
+  'MUSIC_METADATA_SOURCE_INVALID',
+  'MUSIC_METADATA_CONTENT_HASH_MISSING',
+  'MUSIC_METADATA_CONTENT_CHANGED',
+  'MUSIC_METADATA_NO_FIELDS',
+  'MUSIC_METADATA_PARSE_FAILED',
+  'MUSIC_METADATA_PARSE_TIMEOUT',
+  'MUSIC_METADATA_INPUT_INVALID',
+  'MUSIC_METADATA_DATABASE_UNAVAILABLE',
+  'MUSIC_METADATA_CANCELLED',
+  'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+])
+const MUSIC_METADATA_STATUS_SET = new Set(['ready', 'pending', 'partial', 'failed'])
 
+function metadataValuePresent(value) {
+  return value !== null && value !== undefined && String(value).trim() !== ''
+}
+
+function fallbackMusicMetadata(originalName) {
+  const fileName = path.basename(String(originalName || '').replace(/\\/gu, '/'))
+  const title = path.basename(fileName, path.extname(fileName)).normalize('NFKC').trim() || '未命名音乐'
   return {
     title,
-    artist,
-    album,
-    duration,
-    fileSize,
-    fileType: ext.replace('.', ''),
-    coverImage
+    artist: null,
+    album: null,
+    duration: 0,
+    coverImage: null
   }
+}
+
+function musicMetadataStatusForValues(metadata) {
+  return ['title', 'artist', 'album'].every(field => metadataValuePresent(metadata?.[field])) &&
+    Number(metadata?.duration) > 0
+    ? 'ready'
+    : 'partial'
+}
+
+function initialMusicMetadataState(metadataState) {
+  return Object.freeze({
+    status: metadataState.status === 'pending' ? 'failed' : metadataState.status,
+    errorCode: metadataState.errorCode ?? null,
+    parserVersion: MUSIC_METADATA_PARSER_VERSION
+  })
+}
+
+function persistedMusicRecoveryState(music) {
+  const status = publicMusicMetadataStatus(music?.metadata_status)
+  if (status !== 'failed') return Object.freeze({ status, errorCode: music?.metadata_error_code ?? null })
+  return Object.freeze({
+    status: 'pending',
+    errorCode: publicMusicMetadataErrorCode(music?.metadata_error_code) || 'MUSIC_METADATA_PARSE_FAILED'
+  })
+}
+
+function stableMusicMetadataErrorCode(error) {
+  const code = String(error?.code || '')
+  return MUSIC_METADATA_PUBLIC_ERROR_CODES.has(code) ? code : 'MUSIC_METADATA_PARSE_FAILED'
+}
+
+function publicMusicMetadataErrorCode(value) {
+  if (value === null || value === undefined || value === '') return null
+  return stableMusicMetadataErrorCode({ code: value })
+}
+
+function publicMusicMetadataStatus(value) {
+  return MUSIC_METADATA_STATUS_SET.has(value) ? value : 'ready'
+}
+
+async function bestEffortMusicMetadata(filePath, originalName) {
+  const fallback = fallbackMusicMetadata(originalName)
+  try {
+    const parsed = await parseMusicMetadata(filePath, originalName)
+    const metadata = {
+      ...fallback,
+      title: parsed.title || fallback.title,
+      artist: parsed.artist || null,
+      album: parsed.album || null,
+      duration: parsed.duration || 0,
+      coverImage: parsed.coverImage || null,
+      fileSize: parsed.fileSize ?? null,
+      fileType: parsed.fileType || path.extname(String(originalName || '')).replace(/^\./u, '').toLowerCase()
+    }
+    return Object.freeze({
+      metadata,
+      status: musicMetadataStatusForValues(metadata),
+      errorCode: null,
+      needsReparse: false
+    })
+  } catch (error) {
+    return Object.freeze({
+      metadata: {
+        ...fallback,
+        fileSize: null,
+        fileType: path.extname(String(originalName || '')).replace(/^\./u, '').toLowerCase()
+      },
+      status: 'pending',
+      errorCode: stableMusicMetadataErrorCode(error),
+      needsReparse: true
+    })
+  }
+}
+
+function persistMusicMetadataState(database, musicId, status, errorCode = null) {
+  const normalizedCode = errorCode === null ? null : stableMusicMetadataErrorCode({ code: errorCode })
+  database.prepare(`
+    UPDATE music
+       SET metadata_status = ?,
+           metadata_error_code = ?,
+           metadata_parser_version = ?,
+           metadata_updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+  `).run(status, normalizedCode, MUSIC_METADATA_PARSER_VERSION, musicId)
+}
+
+function runMusicMetadataTransaction(database, callback) {
+  const transaction = database.transaction(callback)
+  return typeof transaction.immediate === 'function' ? transaction.immediate() : transaction()
+}
+
+export function completeMusicMetadataUpload({
+  database,
+  musicId,
+  originalName,
+  contentSha256,
+  metadataState = { status: 'ready', errorCode: null }
+}) {
+  const extension = path.extname(String(originalName || '')).toLowerCase()
+  if (!MUSIC_UPLOAD_POLICY.extensions.includes(extension)) {
+    return Object.freeze({ metadataStatus: 'ready', metadataErrorCode: null, metadataTask: null })
+  }
+
+  let status = metadataState.status
+  let errorCode = metadataState.errorCode ?? null
+  let metadataTask = null
+  let activeConflict = false
+  if (status === 'pending') {
+    try {
+      const outcome = runMusicMetadataTransaction(database, () => {
+        persistMusicMetadataState(database, musicId, status, errorCode)
+        const queued = enqueueMusicMetadataTask(database, musicId, contentSha256)
+        const projected = projectMusicMetadataTask(queued.task)
+        if (!projected) {
+          const error = new Error('Music metadata task projection failed.')
+          error.code = 'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+          throw error
+        }
+        return { ...queued, task: projected }
+      })
+      metadataTask = outcome.task
+      activeConflict = outcome.activeConflict === true
+    } catch {
+      status = 'failed'
+      errorCode = 'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+      try { persistMusicMetadataState(database, musicId, status, errorCode) } catch {}
+    }
+  } else {
+    try {
+      persistMusicMetadataState(database, musicId, status, errorCode)
+    } catch {
+      status = 'failed'
+      errorCode = 'MUSIC_METADATA_DATABASE_UNAVAILABLE'
+    }
+  }
+
+  return Object.freeze({
+    metadataStatus: publicMusicMetadataStatus(status),
+    metadataErrorCode: publicMusicMetadataErrorCode(errorCode),
+    metadataTask,
+    activeConflict
+  })
 }
 
 function isRegularFile(filePath) {
@@ -430,7 +612,8 @@ function musicUploadIdempotencyKey(fileId) {
 function existingMusicUpload(database, operation) {
   if (!operation?.storageKey) return null
   const music = database.prepare(`
-    SELECT id, title, artist, album, storage_key, content_sha256, content_bytes
+    SELECT id, title, artist, album, original_name, metadata_status, metadata_error_code,
+           storage_key, content_sha256, content_bytes
       FROM music
      WHERE storage_key = ?
      LIMIT 1
@@ -441,12 +624,20 @@ function existingMusicUpload(database, operation) {
       title: music.title,
       artist: music.artist,
       album: music.album,
-      message: '上传成功'
+      message: '上传成功',
+      metadataStatus: publicMusicMetadataStatus(music.metadata_status),
+      metadataErrorCode: publicMusicMetadataErrorCode(music.metadata_error_code)
     }),
     reference: Object.freeze({
       storage_key: music.storage_key,
       content_sha256: music.content_sha256,
       content_bytes: music.content_bytes
+    }),
+    recovery: Object.freeze({
+      id: music.id,
+      originalName: music.original_name,
+      contentSha256: music.content_sha256,
+      metadataState: persistedMusicRecoveryState(music)
     })
   }) : null
 }
@@ -475,6 +666,30 @@ function sendMusicRouteError(res, error) {
     return res.status(400).json({ code, message: '请求无效' })
   }
   return res.status(500).json({ code: code || 'MUSIC_OPERATION_FAILED', message: '服务器错误' })
+}
+
+function sendMusicMetadataRouteError(res, error) {
+  const code = stableMusicMetadataErrorCode(error)
+  if (code === 'MUSIC_METADATA_INPUT_INVALID') {
+    return res.status(400).json({ code, message: '请求无效' })
+  }
+  if (code === 'MUSIC_METADATA_MUSIC_NOT_FOUND' || code === 'MUSIC_METADATA_SOURCE_MISSING') {
+    return res.status(404).json({ code, message: '资源不存在' })
+  }
+  if (code === 'MUSIC_METADATA_CONTENT_HASH_MISSING' || code === 'MUSIC_METADATA_CONTENT_CHANGED') {
+    return res.status(409).json({ code, message: '资源状态冲突' })
+  }
+  console.error('音乐元数据任务失败:', code)
+  return res.status(500).json({ code, message: '服务器错误' })
+}
+
+function activeMusic(database, id) {
+  return database.prepare(`
+    SELECT m.* FROM music m WHERE m.id = ? AND NOT EXISTS (
+      SELECT 1 FROM resource_trash_entries t
+      WHERE t.resource_type = 'music' AND t.resource_id = m.id
+    )
+  `).get(id)
 }
 
 async function invalidateMusicCaches() {
@@ -619,10 +834,22 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
       const existing = existingMusicUpload(db, operation)
       if (!existing) return res.status(500).json({ message: '上传状态异常' })
       await verifyMusicUploadContent(runtime, existing.reference)
+      const recovery = completeMusicMetadataUpload({
+        database: db,
+        musicId: existing.recovery.id,
+        originalName: existing.recovery.originalName,
+        contentSha256: existing.recovery.contentSha256,
+        metadataState: existing.recovery.metadataState
+      })
       clearMusicUploadInputs(fileId, totalChunks, mergedPath)
       uploadProgress.delete(fileId)
       cancelledUploads.delete(fileId)
-      return res.json(existing.response)
+      return res.json({
+        ...existing.response,
+        metadataStatus: recovery.metadataStatus,
+        metadataErrorCode: recovery.metadataErrorCode,
+        metadataTask: recovery.metadataTask
+      })
     }
 
     // A cancelled upload without a commit ledger is no longer retryable.
@@ -732,7 +959,9 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
         })
       }
 
-      const metadata = await parseMusicMetadata(sourcePath, fileName)
+      const metadataAttempt = await bestEffortMusicMetadata(sourcePath, fileName)
+      const metadata = metadataAttempt.metadata
+      const initialMetadataState = initialMusicMetadataState(metadataAttempt)
       if (!staged) {
         staged = await runtime.storageService.stageFromStream(fs.createReadStream(sourcePath))
       }
@@ -749,7 +978,10 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
           duration: metadata.duration,
           originalName: fileName,
           fileType: metadata.fileType,
-          coverImage: metadata.coverImage
+          coverImage: metadata.coverImage,
+          metadataStatus: initialMetadataState.status,
+          metadataErrorCode: initialMetadataState.errorCode,
+          metadataParserVersion: initialMetadataState.parserVersion
         }
       })
       await verifyMusicUploadContent(runtime, {
@@ -758,12 +990,23 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
         content_bytes: committed.bytes
       })
 
+      const metadataResult = completeMusicMetadataUpload({
+        database: db,
+        musicId: committed.id,
+        originalName: fileName,
+        contentSha256: committed.sha256,
+        metadataState: metadataAttempt
+      })
+
       const response = {
         id: committed.id,
         title: committed.title,
         artist: metadata.artist,
         album: metadata.album,
-        message: '上传成功'
+        message: '上传成功',
+        metadataStatus: metadataResult.metadataStatus,
+        metadataErrorCode: metadataResult.metadataErrorCode,
+        metadataTask: metadataResult.metadataTask
       }
       clearMusicUploadInputs(fileId, totalChunks, mergedPath)
       uploadProgress.delete(fileId)
@@ -1031,6 +1274,8 @@ router.get('/', authenticateToken, async (req, res) => {
     if (columnNames.includes('duration')) selectFields.push('duration')
     if (columnNames.includes('file_size')) selectFields.push('file_size')
     if (columnNames.includes('file_type')) selectFields.push('file_type')
+    if (columnNames.includes('metadata_status')) selectFields.push('metadata_status')
+    if (columnNames.includes('metadata_error_code')) selectFields.push('metadata_error_code')
     // 添加 has_cover 标志位（封面是否存在）
     if (columnNames.includes('cover_image')) {
       selectFields.push("CASE WHEN cover_image IS NOT NULL AND cover_image != '' THEN 1 ELSE 0 END as has_cover")
@@ -1100,6 +1345,8 @@ router.get('/', authenticateToken, async (req, res) => {
     // 转换时间
     const musicList = rows.map(row => ({
       ...row,
+      metadataStatus: publicMusicMetadataStatus(row.metadata_status),
+      metadataErrorCode: publicMusicMetadataErrorCode(row.metadata_error_code),
       created_at: convertToUTC8(row.created_at),
       updated_at: convertToUTC8(row.updated_at)
     }))
@@ -1202,59 +1449,52 @@ router.get('/albums', authenticateToken, async (req, res) => {
   }
 })
 
-// 重新解析音乐元数据
+// 手动触发音乐元数据重解析；解析在持久任务运行时中异步执行。
 router.post('/:id/reparse', authenticateToken, requireWritePermission, async (req, res) => {
-  try {
-    const db = getDatabase()
-    const music = db.prepare('SELECT * FROM music WHERE id = ?').get(req.params.id)
+  const musicId = Number(req.params.id)
+  if (!Number.isSafeInteger(musicId) || musicId <= 0) {
+    return sendMusicMetadataRouteError(res, { code: 'MUSIC_METADATA_INPUT_INVALID' })
+  }
 
-    if (!music) {
-      return res.status(404).json({ message: '音乐不存在' })
+  try {
+    const database = getDatabase()
+    const music = activeMusic(database, musicId)
+    if (!music) return sendMusicMetadataRouteError(res, { code: 'MUSIC_METADATA_MUSIC_NOT_FOUND' })
+
+    const contentSha256 = String(music.content_sha256 || '').toLowerCase()
+    if (!/^[a-f0-9]{64}$/u.test(contentSha256)) {
+      return sendMusicMetadataRouteError(res, { code: 'MUSIC_METADATA_CONTENT_HASH_MISSING' })
     }
 
-    const contentService = getResourceStorageRuntime().contentServiceFor('music')
-    const verified = await contentService.resolveVerifiedFilePath(music)
-    const originalName = music.original_name || `${music.title || 'music'}.${music.file_type || 'mp3'}`
-    console.log(`[元数据] 重新解析音乐内容: ${verified.source}`)
+    let outcome
+    try {
+      outcome = runMusicMetadataTransaction(database, () => {
+        persistMusicMetadataState(database, musicId, 'pending', null)
+        const queued = enqueueMusicMetadataTask(database, musicId, contentSha256)
+        const projected = projectMusicMetadataTask(queued.task)
+        if (!projected) {
+          const error = new Error('Music metadata task projection failed.')
+          error.code = 'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+          throw error
+        }
+        return { ...queued, task: projected }
+      })
+    } catch (error) {
+      try { persistMusicMetadataState(database, musicId, 'failed', 'MUSIC_METADATA_TASK_ENQUEUE_FAILED') } catch {}
+      throw Object.assign(new Error('Music metadata task enqueue failed.', { cause: error }), {
+        code: 'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+      })
+    }
 
-    // 重新解析元数据
-    const metadata = await parseMusicMetadata(verified.filePath, originalName)
-
-    // 更新数据库
-    const stmt = db.prepare(`
-      UPDATE music SET 
-        title = ?, 
-        artist = ?, 
-        album = ?, 
-        duration = ?,
-        cover_image = ?,
-        updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ?
-    `)
-    stmt.run(
-      metadata.title,
-      metadata.artist,
-      metadata.album,
-      metadata.duration,
-      metadata.coverImage,
-      req.params.id
-    )
-
-    console.log(`[元数据] 重新解析成功: ${metadata.title} - ${metadata.artist}`)
-
-    res.json({
-      message: '重新解析成功',
-      metadata: {
-        title: metadata.title,
-        artist: metadata.artist,
-        album: metadata.album,
-        duration: metadata.duration,
-        hasCover: !!metadata.coverImage
-      }
+    res.setHeader('Cache-Control', 'no-store')
+    return res.status(outcome.activeConflict ? 409 : 202).json({
+      data: outcome.task,
+      task: outcome.task,
+      created: outcome.created,
+      activeConflict: outcome.activeConflict
     })
   } catch (error) {
-    console.error('重新解析失败:', error?.code || error?.name || 'UNKNOWN')
-    sendMusicRouteError(res, error)
+    return sendMusicMetadataRouteError(res, error)
   }
 })
 
@@ -2804,6 +3044,22 @@ router.get('/:id/cover', authenticateToken, async (req, res) => {
     res.status(500).json({ message: '服务器错误' })
   }
 })
+
+async function verifiedMusicPath(music) {
+  return (await getResourceStorageRuntime().contentServiceFor('music').resolveVerifiedFilePath(music)).filePath
+}
+
+const musicMetadataTaskProcessor = createMusicMetadataTaskProcessor({
+  databaseProvider: getDatabase,
+  resolveMusicPath: verifiedMusicPath,
+  parseMetadata: parseMusicMetadata
+})
+registerTaskProcessor(
+  MUSIC_METADATA_TASK_TYPE,
+  MUSIC_METADATA_PROCESSOR_VERSION,
+  MUSIC_METADATA_EXECUTION_CLASS,
+  musicMetadataTaskProcessor
+)
 
 const musicLyricsTaskProcessor = createMusicLyricsTaskProcessor({
   searchLyricsFromSources
