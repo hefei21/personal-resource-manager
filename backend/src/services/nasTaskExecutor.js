@@ -20,7 +20,8 @@ const TASK_PROGRESS_REJECTED = 'TASK_PROGRESS_REJECTED'
 
 export const NAS_TASK_EXECUTOR_ERROR_CODES = Object.freeze({
   PROCESSOR_FAILED: 'TASK_PROCESSOR_FAILED',
-  HEARTBEAT_FAILED: 'TASK_HEARTBEAT_FAILED'
+  HEARTBEAT_FAILED: 'TASK_HEARTBEAT_FAILED',
+  CANCEL_CONFLICT: 'TASK_CANCEL_CONFLICT'
 })
 
 export class NasTaskExecutorError extends Error {
@@ -55,6 +56,14 @@ function normalizeInteger(value, fieldName, { min = 0, max = Number.MAX_SAFE_INT
 
 function normalizeDuration(value, fieldName, { allowZero = false } = {}) {
   return normalizeInteger(value, fieldName, { min: allowZero ? 0 : 1, max: MAX_DURATION_MS })
+}
+
+function normalizeTaskId(value) {
+  if (typeof value === 'string' && /^[1-9]\d*$/u.test(value)) value = Number(value)
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail('NAS_EXECUTOR_TASK_ID_INVALID', 'Task id is invalid.')
+  }
+  return value
 }
 
 function normalizeOwner(value) {
@@ -241,7 +250,8 @@ export class NasTaskExecutor {
       fail('NAS_EXECUTOR_INPUT_INVALID', 'Executor options contain unsupported fields.')
     }
     this.store = options.store ?? options.taskStore
-    if (!this.store || typeof this.store.leaseNext !== 'function' ||
+    if (!this.store || typeof this.store.getById !== 'function' || typeof this.store.cancel !== 'function' ||
+      typeof this.store.leaseNext !== 'function' ||
       typeof this.store.markRunning !== 'function' || typeof this.store.heartbeat !== 'function' ||
       typeof this.store.updateProgress !== 'function' ||
       typeof this.store.succeed !== 'function' || typeof this.store.fail !== 'function' ||
@@ -370,6 +380,32 @@ export class NasTaskExecutor {
 
   poll() {
     return this.runOnce()
+  }
+
+  async cancelTask(value) {
+    const id = normalizeTaskId(value)
+    const record = this._active.get(id)
+    if (record && !record.settled) {
+      if (record.cancelled) {
+        fail(NAS_TASK_EXECUTOR_ERROR_CODES.CANCEL_CONFLICT, 'Task has already been cancelled.')
+      }
+      return this._cancelActiveRecord(record)
+    }
+
+    const task = await Promise.resolve(this.store.getById(id))
+    if (!task) fail('TASK_NOT_FOUND', 'Task was not found.')
+    if (task.status === 'pending') return Promise.resolve(this.store.cancel(id))
+    if (task.status !== 'leased' && task.status !== 'running') {
+      fail(NAS_TASK_EXECUTOR_ERROR_CODES.CANCEL_CONFLICT, 'Task cannot be cancelled in its current state.')
+    }
+    if (typeof task.leaseOwner !== 'string' || typeof task.leaseToken !== 'string') {
+      fail(NAS_TASK_EXECUTOR_ERROR_CODES.CANCEL_CONFLICT, 'Task lease credentials are unavailable.')
+    }
+    return Promise.resolve(this.store.cancel({
+      id,
+      owner: task.leaseOwner,
+      token: task.leaseToken
+    }))
   }
 
   runOnce() {
@@ -582,12 +618,66 @@ export class NasTaskExecutor {
     })
   }
 
+  _leaseCredentials(record) {
+    return {
+      owner: typeof record.task.leaseOwner === 'string' ? record.task.leaseOwner : this.owner,
+      token: record.task.leaseToken
+    }
+  }
+
+  async _waitForCancellation(record) {
+    if (!record.cancellationPending || !record.cancellationPromise) return record.cancelled
+    try {
+      await record.cancellationPromise
+    } catch {
+      // The caller receives the cancellation error; the handler may continue normally.
+    }
+    return record.cancelled
+  }
+
+  async _cancelActiveRecord(record) {
+    if (record.cancellationPromise) return record.cancellationPromise
+    const credentials = this._leaseCredentials(record)
+    record.cancellationPending = true
+    let operation
+    try {
+      operation = this.store.cancel({
+        id: record.task.id,
+        owner: credentials.owner,
+        token: credentials.token
+      })
+    } catch (error) {
+      record.cancellationPending = false
+      throw error
+    }
+    record.cancellationPromise = Promise.resolve(operation)
+    try {
+      const cancelled = await record.cancellationPromise
+      record.cancelled = true
+      record.outcome = 'cancelled'
+      record.progressAllowed = false
+      record.allowTerminalWrite = false
+      this._stopHeartbeat(record)
+      record.controller.abort()
+      return cancelled
+    } catch (error) {
+      record.cancellationPending = false
+      record.cancellationPromise = null
+      throw error
+    }
+  }
+
   async _executeRecord(record) {
     try {
       let result
       try {
         result = await record.handler(this._contextFor(record))
       } catch (error) {
+        if (record.cancellationPending) await this._waitForCancellation(record)
+        if (record.cancelled) {
+          record.outcome = 'cancelled'
+          return
+        }
         if (record.progressError) {
           record.outcome = 'abandoned'
           throw record.progressError
@@ -600,6 +690,11 @@ export class NasTaskExecutor {
         }
         return
       }
+      if (record.cancellationPending) await this._waitForCancellation(record)
+      if (record.cancelled) {
+        record.outcome = 'cancelled'
+        return
+      }
       if (record.progressError) {
         record.outcome = 'abandoned'
         throw record.progressError
@@ -609,10 +704,11 @@ export class NasTaskExecutor {
         return
       }
       try {
+        const credentials = this._leaseCredentials(record)
         await this.store.succeed({
           id: record.task.id,
-          owner: this.owner,
-          token: record.task.leaseToken,
+          owner: credentials.owner,
+          token: credentials.token,
           result: result === undefined ? null : result
         })
         record.outcome = 'succeeded'
@@ -636,10 +732,11 @@ export class NasTaskExecutor {
       }
     }
     try {
+      const credentials = this._leaseCredentials(record)
       const failure = {
         id: record.task.id,
-        owner: this.owner,
-        token: record.task.leaseToken,
+        owner: credentials.owner,
+        token: credentials.token,
         errorCode: error instanceof TaskProcessorError
           ? error.code
           : NAS_TASK_EXECUTOR_ERROR_CODES.PROCESSOR_FAILED,
@@ -682,11 +779,14 @@ export class NasTaskExecutor {
   }
 
   _controlledHeartbeat(record) {
-    if (record.settled || record.heartbeatStopped || !record.allowTerminalWrite) return Promise.resolve(null)
+    if (record.settled || record.heartbeatStopped || record.cancelled || record.cancellationPending || !record.allowTerminalWrite) {
+      return Promise.resolve(null)
+    }
+    const credentials = this._leaseCredentials(record)
     return Promise.resolve(this.store.heartbeat({
       id: record.task.id,
-      owner: this.owner,
-      token: record.task.leaseToken,
+      owner: credentials.owner,
+      token: credentials.token,
       leaseDurationMs: this.leaseDurationMs
     })).catch((error) => {
       record.heartbeatFailed = true
@@ -698,17 +798,18 @@ export class NasTaskExecutor {
   }
 
   async _controlledProgress(record, value) {
-    if (record.settled || !record.progressAllowed || !record.allowTerminalWrite) {
+    if (record.settled || record.cancelled || record.cancellationPending || !record.progressAllowed || !record.allowTerminalWrite) {
       throw new NasTaskExecutorError(
         TASK_PROGRESS_REJECTED,
         'Task progress updates are no longer allowed.'
       )
     }
     try {
+      const credentials = this._leaseCredentials(record)
       return await this.store.updateProgress({
         id: record.task.id,
-        owner: this.owner,
-        token: record.task.leaseToken,
+        owner: credentials.owner,
+        token: credentials.token,
         progress: value
       })
     } catch (error) {

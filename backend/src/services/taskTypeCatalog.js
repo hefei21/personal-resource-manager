@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 const TASK_STATUS_SET = new Set([
   'pending',
   'leased',
@@ -10,8 +12,10 @@ const TASK_STATUS_SET = new Set([
 const IDENTIFIER_PATTERN = /^[1-9]\d*$/u
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
 const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
+const HASH_PATTERN = /^[a-f0-9]{64}$/iu
 const MAX_COUNTER = 1_000_000_000
 const MAX_MUSIC_IDS = 500
+const MAX_SUBJECT_VERSION_LENGTH = 128
 
 const CODE_REPOSITORY_TASK_TYPES = Object.freeze([
   'code.repository.clone',
@@ -65,6 +69,22 @@ function safeProgress(value) {
 
 function safeStatus(value) {
   return typeof value === 'string' && TASK_STATUS_SET.has(value) ? value : null
+}
+
+function safeSubjectVersionId(value) {
+  if (value === null || value === undefined) return null
+  if (Number.isSafeInteger(value) && value >= 0) return String(value)
+  if (typeof value !== 'string') return null
+  const normalized = value.normalize('NFKC').trim()
+  return normalized && normalized.length <= MAX_SUBJECT_VERSION_LENGTH &&
+    !/[\u0000-\u001f\u007f]/u.test(normalized)
+    ? normalized
+    : null
+}
+
+function safeContentHash(value) {
+  if (value === null || value === undefined) return null
+  return typeof value === 'string' && HASH_PATTERN.test(value) ? value.toLowerCase() : null
 }
 
 function safeErrorCode(value) {
@@ -138,6 +158,36 @@ function projectEbookCoverInput(input) {
   if (!isPlainObject(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input, 'bookId')) return null
   const bookId = safePositiveInteger(input.bookId)
   return bookId === null ? null : Object.freeze({ bookId })
+}
+
+function cloneCodeRepositoryInput(input) {
+  const projected = projectCodeRepositoryInput(input)
+  return projected === null ? null : Object.freeze({ repoId: projected.repoId })
+}
+
+function cloneMusicLyricsInput(input) {
+  const projected = projectMusicLyricsInput(input)
+  return projected === null
+    ? null
+    : Object.freeze({
+        musicIds: Object.freeze([...projected.musicIds]),
+        force: projected.force
+      })
+}
+
+function cloneEmptyInput(input) {
+  const projected = projectEmptyInput(input)
+  return projected === null ? null : Object.freeze({})
+}
+
+function cloneAnimeRefreshInput(input) {
+  const projected = projectAnimeRefreshInput(input)
+  return projected === null ? null : Object.freeze({ animeId: projected.animeId })
+}
+
+function cloneEbookCoverInput(input) {
+  const projected = projectEbookCoverInput(input)
+  return projected === null ? null : Object.freeze({ bookId: projected.bookId })
 }
 
 function projectCodeRepositoryResult(result, allowedMessages, allowBackupRepositoryId) {
@@ -220,16 +270,28 @@ function projectEbookCoverResult(result) {
   return Object.freeze(projected)
 }
 
-function createDefinition({ taskType, executionClass, subjectType, subjectId, mutexTaskTypes, projectInput, projectResult }) {
+function createDefinition({
+  taskType,
+  executionClass,
+  subjectType,
+  subjectId,
+  subjectInputField,
+  mutexTaskTypes,
+  projectInput,
+  cloneInput,
+  projectResult
+}) {
   return Object.freeze({
     taskType,
     processorVersion: 'v1',
     executionClass,
     subjectType,
     subjectId,
+    subjectInputField: subjectInputField ?? null,
     mutexTaskTypes: Object.freeze([...mutexTaskTypes]),
     retryableFrom: Object.freeze(['failed']),
     projectInput,
+    cloneInput,
     projectResult
   })
 }
@@ -239,7 +301,9 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     taskType: 'code.repository.clone',
     executionClass: 'network',
     subjectType: 'code-repository',
+    subjectInputField: 'repoId',
     projectInput: projectCodeRepositoryInput,
+    cloneInput: cloneCodeRepositoryInput,
     projectResult: projectCodeCloneResult,
     mutexTaskTypes: CODE_REPOSITORY_TASK_TYPES
   }),
@@ -247,7 +311,9 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     taskType: 'code.repository.sync',
     executionClass: 'network',
     subjectType: 'code-repository',
+    subjectInputField: 'repoId',
     projectInput: projectCodeRepositoryInput,
+    cloneInput: cloneCodeRepositoryInput,
     projectResult: projectCodeSyncResult,
     mutexTaskTypes: CODE_REPOSITORY_TASK_TYPES
   }),
@@ -255,7 +321,9 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     taskType: 'code.repository.reclone',
     executionClass: 'network',
     subjectType: 'code-repository',
+    subjectInputField: 'repoId',
     projectInput: projectCodeRepositoryInput,
+    cloneInput: cloneCodeRepositoryInput,
     projectResult: projectCodeRecloneResult,
     mutexTaskTypes: CODE_REPOSITORY_TASK_TYPES
   }),
@@ -265,6 +333,7 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     subjectType: 'music-library',
     subjectId: 'owner',
     projectInput: projectMusicLyricsInput,
+    cloneInput: cloneMusicLyricsInput,
     projectResult: projectMusicLyricsResult,
     mutexTaskTypes: ['music.lyrics.batch']
   }),
@@ -274,6 +343,7 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     subjectType: 'game-library',
     subjectId: 'owner',
     projectInput: projectEmptyInput,
+    cloneInput: cloneEmptyInput,
     projectResult: projectSteamSyncResult,
     mutexTaskTypes: ['games.steam.sync']
   }),
@@ -281,7 +351,9 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     taskType: 'anime.bangumi.refresh',
     executionClass: 'network',
     subjectType: 'anime',
+    subjectInputField: 'animeId',
     projectInput: projectAnimeRefreshInput,
+    cloneInput: cloneAnimeRefreshInput,
     projectResult: projectBangumiRefreshResult,
     mutexTaskTypes: ['anime.bangumi.refresh']
   }),
@@ -289,7 +361,9 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     taskType: 'ebook.cover.generate',
     executionClass: 'cpu',
     subjectType: 'ebook',
+    subjectInputField: 'bookId',
     projectInput: projectEbookCoverInput,
+    cloneInput: cloneEbookCoverInput,
     projectResult: projectEbookCoverResult,
     mutexTaskTypes: ['ebook.cover.generate']
   })
@@ -340,4 +414,51 @@ export function projectTask(task) {
 export function projectTasks(tasks) {
   if (!Array.isArray(tasks)) return Object.freeze([])
   return Object.freeze(tasks.map(projectTask).filter((task) => task !== null))
+}
+
+export function createTaskRetrySpec(task) {
+  if (!isPlainObject(task)) return null
+  const definition = getTaskTypeDefinition(task.taskType)
+  if (!definition || !definition.retryableFrom.includes(task.status)) return null
+  if (task.processorVersion !== definition.processorVersion ||
+    task.executionClass !== definition.executionClass ||
+    task.subjectType !== definition.subjectType) return null
+
+  const subject = projectSubject(definition, task)
+  const subjectVersionId = safeSubjectVersionId(task.subjectVersionId)
+  if (subject === null || subjectVersionId === null) return null
+
+  const hasContentHash = Object.hasOwn(task, 'subjectContentHash')
+  const hasSha256 = Object.hasOwn(task, 'subjectContentSha256')
+  const contentHash = safeContentHash(task.subjectContentHash ?? task.subjectContentSha256)
+  if ((hasContentHash && task.subjectContentHash !== null && task.subjectContentHash !== undefined && contentHash === null) ||
+    (hasSha256 && task.subjectContentSha256 !== null && task.subjectContentSha256 !== undefined && contentHash === null)) return null
+  if (hasContentHash && hasSha256 && task.subjectContentHash !== null && task.subjectContentHash !== undefined &&
+    task.subjectContentSha256 !== null && task.subjectContentSha256 !== undefined &&
+    safeContentHash(task.subjectContentHash) !== safeContentHash(task.subjectContentSha256)) return null
+
+  const input = definition.cloneInput(task.input)
+  if (input === null) return null
+  if (definition.subjectInputField !== null &&
+    String(input[definition.subjectInputField]) !== subject.id) return null
+
+  let runIdentity
+  try {
+    runIdentity = randomUUID()
+  } catch {
+    return null
+  }
+
+  return Object.freeze({
+    identity: Object.freeze({
+      taskType: definition.taskType,
+      processorVersion: definition.processorVersion,
+      subjectType: subject.type,
+      subjectId: subject.id,
+      subjectVersionId: runIdentity
+    }),
+    executionClass: definition.executionClass,
+    input,
+    mutexTaskTypes: definition.mutexTaskTypes
+  })
 }

@@ -5,7 +5,9 @@ import {
   getTaskById as defaultGetTaskById,
   listTasks as defaultListTasks
 } from '../services/taskStore.js'
+import { getTaskRuntime as defaultGetTaskRuntime } from '../services/taskRuntime.js'
 import {
+  createTaskRetrySpec,
   getTaskTypeDefinition,
   KNOWN_TASK_TYPES,
   projectTask,
@@ -15,6 +17,10 @@ import {
 export const TASK_QUERY_INVALID_CODE = 'TASK_QUERY_INVALID'
 export const TASK_NOT_FOUND_CODE = 'TASK_NOT_FOUND'
 export const TASK_QUERY_FAILED_CODE = 'TASK_QUERY_FAILED'
+export const TASK_CANCEL_CONFLICT_CODE = 'TASK_CANCEL_CONFLICT'
+export const TASK_CANCEL_FAILED_CODE = 'TASK_CANCEL_FAILED'
+export const TASK_RETRY_CONFLICT_CODE = 'TASK_RETRY_CONFLICT'
+export const TASK_RETRY_FAILED_CODE = 'TASK_RETRY_FAILED'
 export const DEFAULT_TASK_PAGE_SIZE = 50
 export const MAX_TASK_PAGE_SIZE = 100
 export const MAX_TASK_OFFSET = 1_000_000_000
@@ -30,6 +36,31 @@ const ALLOWED_QUERY_KEYS = new Set([
 ])
 const STATUS_SET = new Set(TASK_CENTER_STATUSES)
 const KNOWN_TASK_TYPE_SET = new Set(KNOWN_TASK_TYPES)
+const CANCELLABLE_STATUS_SET = new Set(['pending', 'leased', 'running'])
+const ACTION_NOT_FOUND_ERROR_CODES = new Set(['TASK_NOT_FOUND', 'TASK_ID_INVALID', 'NAS_EXECUTOR_TASK_ID_INVALID'])
+const ACTION_CONFLICT_ERROR_CODES = new Set([
+  'TASK_INVALID_STATE',
+  'TASK_STATE_CONFLICT',
+  'TASK_LEASE_MISMATCH',
+  'TASK_LEASE_EXPIRED',
+  'TASK_ERROR_LEASE_EXPIRED',
+  'TASK_LEASE_CREDENTIALS_INVALID',
+  'TASK_IDEMPOTENCY_CONFLICT',
+  'TASK_EXCLUSIVE_TASK_TYPES_INVALID',
+  'TASK_INPUT_INVALID',
+  'TASK_STORE_INPUT_INVALID',
+  'TASK_IDENTITY_INVALID',
+  'TASK_PROCESSOR_IDENTITY_INVALID',
+  'TASK_SUBJECT_ID_INVALID',
+  'TASK_SUBJECT_VERSION_INVALID',
+  'TASK_EXECUTION_CLASS_INVALID',
+  'TASK_NUMBER_INVALID',
+  'TASK_TIMESTAMP_INVALID',
+  'TASK_JSON_INVALID',
+  'TASK_STORE_DATA_INVALID',
+  TASK_CANCEL_CONFLICT_CODE,
+  TASK_RETRY_CONFLICT_CODE
+])
 
 async function defaultDatabaseProvider(req) {
   const { getDatabase } = await import('../config/database.js')
@@ -171,6 +202,38 @@ function sendQueryFailure(res) {
   return res.status(500).json({ code: TASK_QUERY_FAILED_CODE })
 }
 
+function sendActionConflict(res, code) {
+  return res.status(409).json({ code })
+}
+
+function sendActionFailure(res, code) {
+  return res.status(500).json({ code })
+}
+
+function sendActionError(res, error, { conflictCode, failureCode }) {
+  if (ACTION_NOT_FOUND_ERROR_CODES.has(error?.code)) return sendNotFound(res)
+  if (ACTION_CONFLICT_ERROR_CODES.has(error?.code)) return sendActionConflict(res, conflictCode)
+  return sendActionFailure(res, failureCode)
+}
+
+function resolveActionRuntime(taskRuntime, getTaskRuntime) {
+  const runtime = taskRuntime ?? getTaskRuntime()
+  if (!runtime || typeof runtime.getStore !== 'function') {
+    const error = new Error('Task runtime is invalid.')
+    error.code = 'TASK_RUNTIME_INVALID'
+    throw error
+  }
+  return runtime
+}
+
+function safeProjectTask(task) {
+  try {
+    return projectTask(task)
+  } catch {
+    return null
+  }
+}
+
 function normalizeTaskIdParam(value) {
   if (typeof value !== 'string' || !/^[1-9]\d*$/u.test(value)) return null
   const id = Number(value)
@@ -181,7 +244,9 @@ export function createTasksRouter({
   databaseProvider = defaultDatabaseProvider,
   listTasks = defaultListTasks,
   countTasks = defaultCountTasks,
-  getTaskById = defaultGetTaskById
+  getTaskById = defaultGetTaskById,
+  getTaskRuntime = defaultGetTaskRuntime,
+  taskRuntime = null
 } = {}) {
   const router = express.Router()
 
@@ -216,6 +281,82 @@ export function createTasksRouter({
     } catch (error) {
       if (error?.code === TASK_QUERY_INVALID_CODE) return sendQueryError(res)
       return sendQueryFailure(res)
+    }
+  })
+
+  router.post('/:id/cancel', async (req, res) => {
+    const id = normalizeTaskIdParam(req.params.id)
+    if (id === null) return sendNotFound(res)
+
+    try {
+      const runtime = resolveActionRuntime(taskRuntime, getTaskRuntime)
+      const store = runtime.getStore()
+      if (!store || typeof store.getById !== 'function' || typeof runtime.cancelTask !== 'function') {
+        const error = new Error('Task runtime action contract is invalid.')
+        error.code = 'TASK_RUNTIME_INVALID'
+        throw error
+      }
+      const current = await Promise.resolve(store.getById(id))
+      const currentProjection = safeProjectTask(current)
+      if (currentProjection === null || currentProjection.id !== id) return sendNotFound(res)
+      if (!CANCELLABLE_STATUS_SET.has(current.status)) {
+        return sendActionConflict(res, TASK_CANCEL_CONFLICT_CODE)
+      }
+
+      const cancelled = await Promise.resolve(runtime.cancelTask(id))
+      const data = safeProjectTask(cancelled)
+      if (!data || data.status !== 'cancelled') return sendActionFailure(res, TASK_CANCEL_FAILED_CODE)
+      return res.json({ data })
+    } catch (error) {
+      return sendActionError(res, error, {
+        conflictCode: TASK_CANCEL_CONFLICT_CODE,
+        failureCode: TASK_CANCEL_FAILED_CODE
+      })
+    }
+  })
+
+  router.post('/:id/retry', async (req, res) => {
+    const id = normalizeTaskIdParam(req.params.id)
+    if (id === null) return sendNotFound(res)
+
+    try {
+      const runtime = resolveActionRuntime(taskRuntime, getTaskRuntime)
+      const store = runtime.getStore()
+      if (!store || typeof store.getById !== 'function' || typeof store.enqueueExclusiveRun !== 'function') {
+        const error = new Error('Task runtime retry contract is invalid.')
+        error.code = 'TASK_RUNTIME_INVALID'
+        throw error
+      }
+      const current = await Promise.resolve(store.getById(id))
+      const currentProjection = safeProjectTask(current)
+      if (currentProjection === null || currentProjection.id !== id) return sendNotFound(res)
+      if (current.status !== 'failed') return sendActionConflict(res, TASK_RETRY_CONFLICT_CODE)
+
+      let spec
+      try {
+        spec = createTaskRetrySpec(current)
+      } catch {
+        return sendActionConflict(res, TASK_RETRY_CONFLICT_CODE)
+      }
+      if (spec === null) return sendActionConflict(res, TASK_RETRY_CONFLICT_CODE)
+
+      const outcome = await Promise.resolve(store.enqueueExclusiveRun({
+        identity: spec.identity,
+        input: spec.input,
+        executionClass: spec.executionClass
+      }, { mutexTaskTypes: spec.mutexTaskTypes }))
+      if (!outcome || outcome.activeConflict === true || outcome.outcome === 'active-conflict' || outcome.created !== true) {
+        return sendActionConflict(res, TASK_RETRY_CONFLICT_CODE)
+      }
+
+      const data = safeProjectTask(outcome.task)
+      if (!data) return sendActionFailure(res, TASK_RETRY_FAILED_CODE)
+      return res.status(202).json({ data })
+    } catch (error) {
+      return sendActionError(res, error, {
+        conflictCode: TASK_RETRY_CONFLICT_CODE,
+        failureCode: TASK_RETRY_FAILED_CODE
+      })
     }
   })
 

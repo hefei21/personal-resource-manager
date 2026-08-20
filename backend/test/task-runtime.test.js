@@ -15,7 +15,7 @@ function fakeDatabase() {
 }
 
 function runtimeDependencies() {
-  const calls = { store: 0, executor: 0, starts: 0, stops: 0, registry: null }
+  const calls = { store: 0, executor: 0, starts: 0, stops: 0, registry: null, cancelled: null }
   const store = Object.freeze({ name: 'task-store-capability' })
   const executor = {
     state: 'idle',
@@ -29,6 +29,10 @@ function runtimeDependencies() {
       calls.stops += 1
       this.state = 'stopped'
       return Promise.resolve({ status: 'stopped', drained: true, timedOut: false, active: 0 })
+    },
+    cancelTask(id) {
+      calls.cancelled = id
+      return Promise.resolve({ id, status: 'cancelled' })
     }
   }
   return {
@@ -79,6 +83,8 @@ test('TaskRuntime freezes registration, starts only with a database, and drains 
   assert.equal(dependencies.calls.starts, 1)
   assert.equal(runtime.getStore(), dependencies.store)
   assert.equal(runtime.getExecutor(), dependencies.executor)
+  assert.deepEqual(await runtime.cancelTask(17), { id: 17, status: 'cancelled' })
+  assert.equal(dependencies.calls.cancelled, 17)
   assert.equal(typeof dependencies.calls.registry.register, 'undefined')
   assert.equal(runtime.status().state, 'running')
   assert.equal(runtime.status().registeredProcessorCount, 1)
@@ -105,6 +111,7 @@ test('TaskRuntime freezes registration, starts only with a database, and drains 
   })
   assert.throws(() => runtime.getStore(), { code: 'TASK_RUNTIME_NOT_RUNNING' })
   assert.throws(() => runtime.getExecutor(), { code: 'TASK_RUNTIME_NOT_RUNNING' })
+  assert.throws(() => runtime.cancelTask(17), { code: 'TASK_RUNTIME_NOT_RUNNING' })
 })
 
 test('empty TaskRuntime registry starts without claiming unknown or GPU work', async () => {
@@ -125,7 +132,8 @@ test('TaskRuntime cleans up a partially started executor and validates start opt
     storeFactory: () => Object.freeze({}),
     executorFactory: () => ({
       start() { throw new Error('start failed') },
-      stop() { stops += 1; return Promise.resolve({ drained: true, timedOut: false, active: 0 }) }
+      stop() { stops += 1; return Promise.resolve({ drained: true, timedOut: false, active: 0 }) },
+      cancelTask() { return Promise.resolve(null) }
     })
   })
   assert.throws(
@@ -148,7 +156,8 @@ test('task runtime exposes no database through status and index starts after ini
       state: 'idle',
       activeCount: 0,
       start() { this.state = 'running' },
-      stop() { this.state = 'stopped'; return Promise.resolve({ drained: true, timedOut: false, active: 0 }) }
+      stop() { this.state = 'stopped'; return Promise.resolve({ drained: true, timedOut: false, active: 0 }) },
+      cancelTask() { return Promise.resolve(null) }
     })
   })
   runtime.start(fakeDatabase())

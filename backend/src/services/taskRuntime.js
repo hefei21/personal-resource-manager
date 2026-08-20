@@ -172,7 +172,8 @@ export class TaskRuntime {
         registry: frozenRegistry,
         owner: this.#owner
       })
-      if (!executor || typeof executor.start !== 'function' || typeof executor.stop !== 'function') {
+      if (!executor || typeof executor.start !== 'function' || typeof executor.stop !== 'function' ||
+        typeof executor.cancelTask !== 'function') {
         fail('TASK_RUNTIME_EXECUTOR_INVALID', 'Task runtime executor is invalid.')
       }
       this.#store = store
@@ -233,6 +234,13 @@ export class TaskRuntime {
       fail('TASK_RUNTIME_NOT_RUNNING', 'Task runtime is not running.')
     }
     return this.#executor
+  }
+
+  cancelTask(id) {
+    if (this.#state !== 'running' || !this.#executor) {
+      fail('TASK_RUNTIME_NOT_RUNNING', 'Task runtime is not running.')
+    }
+    return this.#executor.cancelTask(id)
   }
 
   status() {

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 import { CREATE_TASK_SCHEMA_SQL } from '../src/config/taskSchema.js'
 import {
+  createTaskRetrySpec,
   KNOWN_TASK_TYPES,
   projectTask,
   TASK_TYPE_CATALOG
@@ -17,7 +18,7 @@ import {
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 
 const { createTasksRouter } = await import('../src/routes/tasks.js')
-const { countTasks, listTasks } = await import('../src/services/taskStore.js')
+const { countTasks, createTaskStore, listTasks } = await import('../src/services/taskStore.js')
 
 const require = createRequire(import.meta.url)
 let Database
@@ -82,7 +83,7 @@ function ownerOnly(req, res, next) {
   next()
 }
 
-async function withServer({ listTasks: list, countTasks: count, getTaskById } = {}, callback) {
+async function withServer({ listTasks: list, countTasks: count, getTaskById, getTaskRuntime, taskRuntime } = {}, callback) {
   const app = express()
   app.use(express.json())
   app.use(
@@ -93,7 +94,9 @@ async function withServer({ listTasks: list, countTasks: count, getTaskById } = 
       databaseProvider: () => ({ taskDatabase: true }),
       ...(list ? { listTasks: list } : {}),
       ...(count ? { countTasks: count } : {}),
-      ...(getTaskById ? { getTaskById } : {})
+      ...(getTaskById ? { getTaskById } : {}),
+      ...(getTaskRuntime ? { getTaskRuntime } : {}),
+      ...(taskRuntime ? { taskRuntime } : {})
     })
   )
   const server = http.createServer(app)
@@ -110,6 +113,70 @@ async function withServer({ listTasks: list, countTasks: count, getTaskById } = 
 
 function ownerHeaders() {
   return { 'x-test-role': 'owner' }
+}
+
+function actionTaskFixture(overrides = {}) {
+  return taskFixture({
+    id: 1,
+    taskType: 'code.repository.clone',
+    processorVersion: 'v1',
+    subjectType: 'code-repository',
+    subjectId: '7',
+    subjectVersionId: 'old-run',
+    subjectContentHash: null,
+    status: 'pending',
+    executionClass: 'network',
+    input: { repoId: '7', path: 'C:\\secret', token: 'secret-token' },
+    result: null,
+    ...overrides
+  })
+}
+
+function actionRuntime(tasks, { enqueueResult } = {}) {
+  const records = new Map(tasks.map((task) => [task.id, task]))
+  const calls = { cancel: [], enqueue: [] }
+  const store = {
+    getById(id) {
+      return records.get(id) ?? null
+    },
+    enqueueExclusiveRun(input, options) {
+      calls.enqueue.push({ input, options })
+      if (typeof enqueueResult === 'function') return enqueueResult(input, options)
+      return {
+        created: true,
+        outcome: 'created',
+        task: actionTaskFixture({
+          id: 99,
+          status: 'pending',
+          subjectType: input.identity.subjectType,
+          subjectId: input.identity.subjectId,
+          subjectVersionId: input.identity.subjectVersionId,
+          input: input.input,
+          executionClass: input.executionClass,
+          leaseToken: null,
+          leaseOwner: null,
+          errorCode: null,
+          errorSummary: null
+        })
+      }
+    }
+  }
+  return {
+    calls,
+    runtime: {
+      getStore() {
+        return store
+      },
+      cancelTask(id) {
+        calls.cancel.push(id)
+        const task = records.get(id)
+        task.status = 'cancelled'
+        task.leaseToken = null
+        task.leaseOwner = null
+        return { ...task }
+      }
+    }
+  }
 }
 
 test('tasks route is mounted behind the shared ownerOnly boundary', () => {
@@ -216,6 +283,224 @@ test('task detail hides nonexistent and unknown task types', async () => {
     assert.deepEqual(await unknown.json(), { code: 'TASK_NOT_FOUND' })
     assert.deepEqual(await missing.json(), { code: 'TASK_NOT_FOUND' })
   })
+})
+
+test('task cancel route delegates to the runtime and returns only a safe projection', async () => {
+  const pending = actionRuntime([actionTaskFixture({ status: 'pending' })])
+  await withServer({ taskRuntime: pending.runtime }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/tasks/1/cancel`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.data.status, 'cancelled')
+    assert.equal(Object.hasOwn(body.data, 'leaseToken'), false)
+    assert.equal(Object.hasOwn(body.data, 'errorSummary'), false)
+    assert.equal(JSON.stringify(body).includes('secret-token'), false)
+    assert.equal(JSON.stringify(body).includes('C:\\secret'), false)
+  })
+  assert.deepEqual(pending.calls.cancel, [1])
+})
+
+test('task cancel route maps missing, malformed, and terminal tasks to stable responses', async () => {
+  const terminal = actionRuntime([actionTaskFixture({ id: 1, status: 'succeeded' })])
+  await withServer({ taskRuntime: terminal.runtime }, async (baseUrl) => {
+    const terminalResponse = await fetch(`${baseUrl}/api/tasks/1/cancel`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    const repeatedResponse = await fetch(`${baseUrl}/api/tasks/1/cancel`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    const missingResponse = await fetch(`${baseUrl}/api/tasks/999/cancel`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    const invalidResponse = await fetch(`${baseUrl}/api/tasks/not-an-id/cancel`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    assert.equal(terminalResponse.status, 409)
+    assert.equal(repeatedResponse.status, 409)
+    assert.deepEqual(await terminalResponse.json(), { code: 'TASK_CANCEL_CONFLICT' })
+    assert.deepEqual(await repeatedResponse.json(), { code: 'TASK_CANCEL_CONFLICT' })
+    assert.equal(missingResponse.status, 404)
+    assert.equal(invalidResponse.status, 404)
+  })
+  assert.deepEqual(terminal.calls.cancel, [])
+})
+
+test('failed retry creates a fresh run identity with catalog-safe input and projection', async () => {
+  const failed = actionRuntime([actionTaskFixture({
+    status: 'failed',
+    errorCode: 'TASK_PROCESSOR_FAILED',
+    errorSummary: 'secret failure at C:\\private\\source.txt',
+    input: { repoId: '7' }
+  })])
+  await withServer({ taskRuntime: failed.runtime }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/tasks/1/retry`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    assert.equal(response.status, 202)
+    const body = await response.json()
+    assert.equal(body.data.status, 'pending')
+    assert.deepEqual(body.data.subject, { type: 'code-repository', id: '7' })
+    assert.equal(Object.hasOwn(body.data, 'leaseToken'), false)
+    assert.equal(Object.hasOwn(body.data, 'errorSummary'), false)
+    assert.equal(JSON.stringify(body).includes('secret-token'), false)
+    assert.equal(JSON.stringify(body).includes('private'), false)
+  })
+
+  assert.equal(failed.calls.enqueue.length, 1)
+  const [{ input, options }] = failed.calls.enqueue
+  assert.equal(input.identity.taskType, 'code.repository.clone')
+  assert.equal(input.identity.processorVersion, 'v1')
+  assert.equal(input.identity.subjectType, 'code-repository')
+  assert.equal(input.identity.subjectId, '7')
+  assert.notEqual(input.identity.subjectVersionId, 'old-run')
+  assert.match(input.identity.subjectVersionId, /^[0-9a-f-]{36}$/u)
+  assert.equal(input.executionClass, 'network')
+  assert.deepEqual(input.input, { repoId: '7' })
+  assert.deepEqual(options.mutexTaskTypes, [
+    'code.repository.clone',
+    'code.repository.sync',
+    'code.repository.reclone'
+  ])
+  assert.equal(Object.hasOwn(input, 'idempotencyKey'), false)
+  assert.equal(Object.hasOwn(input, 'subjectContentHash'), false)
+})
+
+test('retry rejects non-failed, active-conflict, and malformed-input tasks without enqueueing', async () => {
+  const active = actionRuntime([actionTaskFixture({ status: 'running' })])
+  await withServer({ taskRuntime: active.runtime }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/tasks/1/retry`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    assert.equal(response.status, 409)
+    assert.deepEqual(await response.json(), { code: 'TASK_RETRY_CONFLICT' })
+  })
+  assert.equal(active.calls.enqueue.length, 0)
+
+  const conflict = actionRuntime([actionTaskFixture({ status: 'failed' })], {
+    enqueueResult: () => ({ created: false, outcome: 'active-conflict', activeConflict: true, task: null })
+  })
+  await withServer({ taskRuntime: conflict.runtime }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/tasks/1/retry`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    assert.equal(response.status, 409)
+    assert.deepEqual(await response.json(), { code: 'TASK_RETRY_CONFLICT' })
+  })
+
+  const malformed = actionRuntime([actionTaskFixture({ status: 'failed', input: { repoId: '7', path: 'must-not-copy' } })])
+  await withServer({ taskRuntime: malformed.runtime }, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/tasks/1/retry`, {
+      method: 'POST',
+      headers: ownerHeaders()
+    })
+    assert.equal(response.status, 409)
+    assert.deepEqual(await response.json(), { code: 'TASK_RETRY_CONFLICT' })
+  })
+  assert.equal(malformed.calls.enqueue.length, 0)
+})
+
+test('catalog retry clone validates complete identity and copies music ids by value', () => {
+  const musicIds = [7, 8]
+  const task = taskFixture({
+    id: 11,
+    taskType: 'music.lyrics.batch',
+    processorVersion: 'v1',
+    executionClass: 'network',
+    subjectType: 'music-library',
+    subjectId: 'owner',
+    subjectVersionId: 'old-music-run',
+    subjectContentHash: null,
+    status: 'failed',
+    input: { musicIds, force: true }
+  })
+  const spec = createTaskRetrySpec(task)
+  assert.ok(spec)
+  assert.deepEqual(spec.input, { musicIds: [7, 8], force: true })
+  assert.notEqual(spec.input.musicIds, musicIds)
+  assert.notEqual(spec.identity.subjectVersionId, 'old-music-run')
+  assert.equal(spec.identity.subjectType, 'music-library')
+  assert.equal(spec.identity.subjectId, 'owner')
+  assert.equal(createTaskRetrySpec({ ...task, subjectVersionId: null }), null)
+  assert.equal(createTaskRetrySpec({ ...task, subjectType: 'not-music' }), null)
+  assert.equal(createTaskRetrySpec({ ...task, input: { musicIds, force: true, path: '/secret' } }), null)
+
+  const mismatchedRepository = actionTaskFixture({
+    status: 'failed',
+    subjectId: '7',
+    input: { repoId: '8' }
+  })
+  assert.equal(createTaskRetrySpec(mismatchedRepository), null)
+})
+
+test('SQLite retry creates a fresh identity and enforces all Git mutex task types', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    database.exec(CREATE_TASK_SCHEMA_SQL)
+    const store = createTaskStore({ database, now: '2026-08-20T04:00:00.000Z' })
+    const mutexTaskTypes = TASK_TYPE_CATALOG['code.repository.clone'].mutexTaskTypes
+    const failedInput = {
+      taskType: 'code.repository.clone',
+      processorVersion: 'v1',
+      subjectType: 'code-repository',
+      subjectId: '700',
+      subjectVersionId: 'old-run',
+      subjectContentSha256: 'a'.repeat(64),
+      executionClass: 'network',
+      input: { repoId: '700' },
+      maxAttempts: 1
+    }
+    const original = store.enqueueExclusiveRun(failedInput, { mutexTaskTypes }).task
+    const lease = store.leaseNext({ owner: 'retry-test-worker', leaseDurationMs: 5000, executionClass: 'network' })
+    store.markRunning({ id: original.id, owner: 'retry-test-worker', token: lease.leaseToken })
+    const failed = store.fail({
+      id: original.id,
+      owner: 'retry-test-worker',
+      token: lease.leaseToken,
+      errorCode: 'TASK_PROCESSOR_FAILED',
+      errorSummary: 'redacted failure'
+    }).task
+    assert.equal(failed.status, 'failed')
+
+    const spec = createTaskRetrySpec(failed)
+    assert.ok(spec)
+    const retry = store.enqueueExclusiveRun({
+      identity: spec.identity,
+      input: spec.input,
+      executionClass: spec.executionClass
+    }, { mutexTaskTypes: spec.mutexTaskTypes })
+    assert.equal(retry.created, true)
+    assert.notEqual(retry.task.id, failed.id)
+    assert.notEqual(retry.task.idempotencyKey, failed.idempotencyKey)
+    assert.notEqual(retry.task.subjectVersionId, failed.subjectVersionId)
+    assert.deepEqual(retry.task.input, failed.input)
+
+    for (const taskType of ['code.repository.sync', 'code.repository.reclone']) {
+      const conflict = store.enqueueExclusiveRun({
+        taskType,
+        processorVersion: 'v1',
+        subjectType: 'code-repository',
+        subjectId: '700',
+        subjectVersionId: `conflict-${taskType}`,
+        executionClass: 'network',
+        input: { repoId: '700' }
+      }, { mutexTaskTypes })
+      assert.equal(conflict.created, false)
+      assert.equal(conflict.activeConflict, true)
+      assert.equal(conflict.task.id, retry.task.id)
+    }
+  } finally {
+    database.close()
+  }
 })
 
 test('catalog exposes explicit safe projections for every Stage 3 task type', () => {

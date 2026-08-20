@@ -108,6 +108,7 @@ class FakeTaskStore {
     this.progresses = []
     this.successes = []
     this.failures = []
+    this.cancellations = []
     this.running = []
     this.recoveries = []
   }
@@ -126,6 +127,7 @@ class FakeTaskStore {
       supported.has(`${candidate.taskType}\u001f${candidate.processorVersion}\u001f${candidate.executionClass}`))
     if (!task) return null
     task.status = 'leased'
+    task.leaseOwner = options.owner
     task.attemptCount += 1
     return Object.freeze({ ...task })
   }
@@ -135,6 +137,34 @@ class FakeTaskStore {
     assert.ok(task)
     task.status = 'running'
     this.running.push(task.id)
+    return Object.freeze({ ...task })
+  }
+
+  getById(id) {
+    const task = this.get(id)
+    return task ? Object.freeze({ ...task }) : null
+  }
+
+  cancel(taskOrOptions) {
+    const options = typeof taskOrOptions === 'number' ? { id: taskOrOptions } : taskOrOptions
+    const task = this.tasks.find((candidate) => candidate.id === options.id)
+    assert.ok(task)
+    if (task.status === 'pending') {
+      assert.equal(Object.hasOwn(options, 'owner'), false)
+      assert.equal(Object.hasOwn(options, 'token'), false)
+    } else {
+      if (task.status !== 'leased' && task.status !== 'running') {
+        const error = new Error('invalid task state')
+        error.code = 'TASK_INVALID_STATE'
+        throw error
+      }
+      assert.equal(options.owner, task.leaseOwner)
+      assert.equal(options.token, task.leaseToken)
+    }
+    task.status = 'cancelled'
+    task.leaseToken = null
+    task.leaseOwner = null
+    this.cancellations.push({ ...options })
     return Object.freeze({ ...task })
   }
 
@@ -154,6 +184,7 @@ class FakeTaskStore {
   succeed(options) {
     const task = this.tasks.find((candidate) => candidate.id === options.id)
     assert.ok(task)
+    assert.equal(task.status, 'running')
     task.status = 'succeeded'
     this.successes.push({ ...options })
     return Object.freeze({ ...task })
@@ -162,6 +193,7 @@ class FakeTaskStore {
   fail(options) {
     const task = this.tasks.find((candidate) => candidate.id === options.id)
     assert.ok(task)
+    assert.equal(task.status, 'running')
     task.status = options.retryAt && task.attemptCount < task.maxAttempts ? 'pending' : 'failed'
     this.failures.push({ ...options })
     return Object.freeze({ ...task })
@@ -648,6 +680,127 @@ test('NAS executor surfaces progress store failures and rejects progress after s
   await round
   await stopPromise
   await assert.rejects(() => context.progress(75), /no longer allowed/u)
+})
+
+test('NAS executor cancels pending tasks without lease credentials', async () => {
+  const store = new FakeTaskStore([makeFakeTask(40, 'disk')])
+  const executor = createNasTaskExecutor({
+    store,
+    registry: createTaskProcessorRegistry(),
+    owner: 'nas-cancel-pending',
+    quotas: { cpu: 0, disk: 0, network: 0 },
+    timers: new ManualTimers()
+  })
+
+  const cancelled = await executor.cancelTask(40)
+  assert.equal(cancelled.status, 'cancelled')
+  assert.deepEqual(store.cancellations, [{ id: 40 }])
+  await executor.stop({ timeoutMs: 0 })
+})
+
+test('NAS executor writes SQLite cancellation before abort and suppresses terminal writes', async () => {
+  const store = new FakeTaskStore([makeFakeTask(41, 'disk')])
+  const events = []
+  const originalCancel = store.cancel.bind(store)
+  store.cancel = (options) => {
+    events.push('sqlite-cancel')
+    return originalCancel(options)
+  }
+  let context
+  let releaseHandler
+  const handlerPending = new Promise((resolve) => { releaseHandler = resolve })
+  const registry = createTaskProcessorRegistry({ processors: [{
+    taskType: 'task.disk',
+    processorVersion: 'disk-v1',
+    executionClass: 'disk',
+    handler: async (received) => {
+      context = received
+      received.signal.addEventListener('abort', () => events.push('abort'), { once: true })
+      await handlerPending
+      return { shouldNotBeWritten: true }
+    }
+  }] })
+  const executor = createNasTaskExecutor({
+    store,
+    registry,
+    owner: 'nas-cancel-active',
+    quotas: { cpu: 0, disk: 1, network: 0 },
+    timers: new ManualTimers()
+  })
+
+  const round = executor.runOnce()
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(store.get(41).status, 'running')
+  assert.ok(context)
+
+  const cancelled = await executor.cancelTask(41)
+  assert.equal(cancelled.status, 'cancelled')
+  assert.deepEqual(events, ['sqlite-cancel', 'abort'])
+  await assert.rejects(() => context.progress(50), /no longer allowed/u)
+
+  releaseHandler()
+  await round
+  assert.equal(store.get(41).status, 'cancelled')
+  assert.equal(store.successes.length, 0)
+  assert.equal(store.failures.length, 0)
+  await executor.stop({ timeoutMs: 0 })
+})
+
+test('NAS executor cancels an orphan lease using the current store credentials', async () => {
+  const task = makeFakeTask(42, 'disk')
+  task.status = 'running'
+  task.leaseOwner = 'other-worker'
+  task.leaseToken = 'orphan-token'
+  const store = new FakeTaskStore([task])
+  const executor = createNasTaskExecutor({
+    store,
+    registry: createTaskProcessorRegistry(),
+    owner: 'nas-orphan-cancel',
+    quotas: { cpu: 0, disk: 0, network: 0 },
+    timers: new ManualTimers()
+  })
+
+  const cancelled = await executor.cancelTask(42)
+  assert.equal(cancelled.status, 'cancelled')
+  assert.deepEqual(store.cancellations, [{ id: 42, owner: 'other-worker', token: 'orphan-token' }])
+  assert.equal(JSON.stringify(cancelled).includes('orphan-token'), false)
+  await executor.stop({ timeoutMs: 0 })
+})
+
+test('NAS executor preserves the natural terminal winner and rejects repeated terminal cancellation', async () => {
+  const store = new FakeTaskStore([makeFakeTask(43, 'disk')])
+  let releaseHandler
+  const handlerPending = new Promise((resolve) => { releaseHandler = resolve })
+  const executor = createNasTaskExecutor({
+    store,
+    registry: createTaskProcessorRegistry({ processors: [{
+      taskType: 'task.disk',
+      processorVersion: 'disk-v1',
+      executionClass: 'disk',
+      handler: async () => {
+        await handlerPending
+        return { natural: true }
+      }
+    }] }),
+    owner: 'nas-cancel-race',
+    quotas: { cpu: 0, disk: 1, network: 0 },
+    timers: new ManualTimers()
+  })
+
+  const round = executor.runOnce()
+  await Promise.resolve()
+  await Promise.resolve()
+  releaseHandler()
+  await round
+  assert.equal(store.get(43).status, 'succeeded')
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(
+      () => executor.cancelTask(43),
+      (error) => error.code === 'TASK_CANCEL_CONFLICT'
+    )
+  }
+  await executor.stop({ timeoutMs: 0 })
 })
 
 test('NAS executor stop drains before deadline and timeout leaves lease recovery in charge', async () => {
