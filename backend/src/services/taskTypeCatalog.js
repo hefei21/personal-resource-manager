@@ -8,6 +8,7 @@ const TASK_STATUS_SET = new Set([
   'failed',
   'cancelled'
 ])
+const METADATA_STATUS_SET = new Set(['ready', 'pending', 'partial', 'failed'])
 
 const IDENTIFIER_PATTERN = /^[1-9]\d*$/u
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
@@ -91,6 +92,10 @@ function safeErrorCode(value) {
   return typeof value === 'string' && ERROR_CODE_PATTERN.test(value) ? value : null
 }
 
+function safeMetadataStatus(value) {
+  return typeof value === 'string' && METADATA_STATUS_SET.has(value) ? value : null
+}
+
 function safeTimestamp(value) {
   return value === null || value === undefined
     ? null
@@ -160,6 +165,20 @@ function projectEbookCoverInput(input) {
   return bookId === null ? null : Object.freeze({ bookId })
 }
 
+function projectSingleResourceInput(input, field) {
+  if (!isPlainObject(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input, field)) return null
+  const resourceId = safePositiveInteger(input[field])
+  return resourceId === null ? null : Object.freeze({ [field]: resourceId })
+}
+
+function projectEbookMetadataInput(input) {
+  return projectSingleResourceInput(input, 'bookId')
+}
+
+function projectMusicMetadataInput(input) {
+  return projectSingleResourceInput(input, 'musicId')
+}
+
 function cloneCodeRepositoryInput(input) {
   const projected = projectCodeRepositoryInput(input)
   return projected === null ? null : Object.freeze({ repoId: projected.repoId })
@@ -188,6 +207,19 @@ function cloneAnimeRefreshInput(input) {
 function cloneEbookCoverInput(input) {
   const projected = projectEbookCoverInput(input)
   return projected === null ? null : Object.freeze({ bookId: projected.bookId })
+}
+
+function cloneSingleResourceInput(input, field, projectInput) {
+  const projected = projectInput(input)
+  return projected === null ? null : Object.freeze({ [field]: projected[field] })
+}
+
+function cloneEbookMetadataInput(input) {
+  return cloneSingleResourceInput(input, 'bookId', projectEbookMetadataInput)
+}
+
+function cloneMusicMetadataInput(input) {
+  return cloneSingleResourceInput(input, 'musicId', projectMusicMetadataInput)
 }
 
 function projectCodeRepositoryResult(result, allowedMessages, allowBackupRepositoryId) {
@@ -268,6 +300,28 @@ function projectEbookCoverResult(result) {
   if (bookId !== null) projected.bookId = bookId
   if (generated !== null) projected.generated = generated
   return Object.freeze(projected)
+}
+
+function projectMetadataReparseResult(result, resourceIdField) {
+  if (!isPlainObject(result)) return null
+  const resourceId = safePositiveInteger(result[resourceIdField])
+  const updatedFields = safeCounter(result.updatedFields)
+  const metadataStatus = safeMetadataStatus(result.metadataStatus)
+  if (resourceId === null && updatedFields === null && metadataStatus === null) return null
+
+  const projected = {}
+  if (resourceId !== null) projected[resourceIdField] = resourceId
+  if (updatedFields !== null) projected.updatedFields = updatedFields
+  if (metadataStatus !== null) projected.metadataStatus = metadataStatus
+  return Object.freeze(projected)
+}
+
+function projectEbookMetadataResult(result) {
+  return projectMetadataReparseResult(result, 'bookId')
+}
+
+function projectMusicMetadataResult(result) {
+  return projectMetadataReparseResult(result, 'musicId')
 }
 
 function createDefinition({
@@ -366,6 +420,26 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     cloneInput: cloneEbookCoverInput,
     projectResult: projectEbookCoverResult,
     mutexTaskTypes: ['ebook.cover.generate']
+  }),
+  'ebook.metadata.reparse': createDefinition({
+    taskType: 'ebook.metadata.reparse',
+    executionClass: 'cpu',
+    subjectType: 'ebook',
+    subjectInputField: 'bookId',
+    projectInput: projectEbookMetadataInput,
+    cloneInput: cloneEbookMetadataInput,
+    projectResult: projectEbookMetadataResult,
+    mutexTaskTypes: ['ebook.metadata.reparse']
+  }),
+  'music.metadata.reparse': createDefinition({
+    taskType: 'music.metadata.reparse',
+    executionClass: 'cpu',
+    subjectType: 'music',
+    subjectInputField: 'musicId',
+    projectInput: projectMusicMetadataInput,
+    cloneInput: cloneMusicMetadataInput,
+    projectResult: projectMusicMetadataResult,
+    mutexTaskTypes: ['music.metadata.reparse']
   })
 })
 
@@ -394,6 +468,13 @@ export function projectTask(task) {
   if (id === null || status === null) return null
   const subject = projectSubject(definition, task)
   if (subject === null) return null
+  const input = definition.projectInput(task.input)
+  if (definition.subjectInputField !== null && input !== null &&
+    String(input[definition.subjectInputField]) !== subject.id) return null
+  const result = definition.projectResult(task.result)
+  if (definition.subjectInputField !== null && result !== null &&
+    Object.hasOwn(result, definition.subjectInputField) &&
+    String(result[definition.subjectInputField]) !== subject.id) return null
 
   return Object.freeze({
     id,
@@ -406,8 +487,8 @@ export function projectTask(task) {
     subject,
     timestamps: projectTimestamps(task),
     errorCode: safeErrorCode(task.errorCode),
-    input: definition.projectInput(task.input),
-    result: definition.projectResult(task.result)
+    input,
+    result
   })
 }
 
