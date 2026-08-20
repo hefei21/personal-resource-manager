@@ -1,12 +1,24 @@
 import express from 'express'
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
-import { execFile, spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
-import { promisify } from 'util'
+import { randomUUID } from 'node:crypto'
 import axios from 'axios'
 import { cache, CacheTTL } from '../utils/cache.js'
+import {
+  deriveTaskIdempotencyKey,
+  enqueueExclusiveRun,
+  getTaskById,
+  getTaskByIdempotencyKey
+} from '../services/taskStore.js'
+import {
+  CODE_REPOSITORY_EXECUTION_CLASS,
+  CODE_REPOSITORY_PROCESSOR_VERSION,
+  CODE_REPOSITORY_SUBJECT_TYPE,
+  CODE_REPOSITORY_TASK_TYPES,
+  createGitRunner
+} from '../services/codeRepositoryTaskProcessor.js'
 import {
   normalizeCommitLimit,
   RepositorySecurityError,
@@ -17,7 +29,7 @@ import {
 } from '../services/repositorySecurity.js'
 
 const router = express.Router()
-const execFileAsync = promisify(execFile)
+const runGit = createGitRunner()
 
 // 代码存储目录
 const CODE_BASE_PATH = process.env.CODE_PATH || path.join(process.env.DATA_PATH || '/data', 'code')
@@ -25,43 +37,6 @@ const CODE_BASE_PATH = process.env.CODE_PATH || path.join(process.env.DATA_PATH 
 // 确保代码目录存在
 if (!fs.existsSync(CODE_BASE_PATH)) {
   fs.mkdirSync(CODE_BASE_PATH, { recursive: true })
-}
-
-const SAFE_GIT_CONFIG = [
-  '-c', 'protocol.file.allow=never',
-  '-c', 'protocol.ext.allow=never'
-]
-
-function runGit(args, options = {}) {
-  return execFileAsync(
-    'git',
-    [...SAFE_GIT_CONFIG, ...args],
-    {
-      timeout: options.timeout || 30000,
-      maxBuffer: options.maxBuffer || 1024 * 1024,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0'
-      }
-    }
-  )
-}
-
-const REPOSITORY_DIRTY = 'REPOSITORY_DIRTY'
-
-async function getRepositoryChangeCount(repositoryPath) {
-  const { stdout } = await runGit([
-    '-C',
-    repositoryPath,
-    'status',
-    '--porcelain=v1',
-    '-z',
-    '--untracked-files=all'
-  ])
-
-  if (!stdout) return 0
-  return stdout.split('\0').filter(Boolean).length
 }
 
 function sendRepositorySecurityError(res, error) {
@@ -222,8 +197,72 @@ function formatSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
+function normalizeRepositoryTaskVersionId(value, fallback) {
+  if (value === undefined || value === null) return fallback
+  if (typeof value !== 'string') {
+    const error = new Error('Idempotency-Key 无效')
+    error.code = 'TASK_IDEMPOTENCY_KEY_INVALID'
+    throw error
+  }
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || normalized.length > 128 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    const error = new Error('Idempotency-Key 无效')
+    error.code = 'TASK_IDEMPOTENCY_KEY_INVALID'
+    throw error
+  }
+  return normalized
+}
+
+function repositoryTaskVersionId(req, fallback) {
+  return normalizeRepositoryTaskVersionId(req.get('Idempotency-Key'), fallback)
+}
+
+function enqueueRepositoryTask(database, {
+  taskType,
+  repositoryId,
+  subjectVersionId
+}) {
+  return enqueueExclusiveRun(database, {
+    taskType,
+    processorVersion: CODE_REPOSITORY_PROCESSOR_VERSION,
+    subjectType: CODE_REPOSITORY_SUBJECT_TYPE,
+    subjectId: String(repositoryId),
+    subjectVersionId,
+    input: { repoId: String(repositoryId) },
+    executionClass: CODE_REPOSITORY_EXECUTION_CLASS
+  }, { taskTypes: CODE_REPOSITORY_TASK_TYPES })
+}
+
+function findIdempotentRepositoryTask(database, taskType, repositoryId, subjectVersionId) {
+  if (!subjectVersionId) return null
+  const idempotencyKey = deriveTaskIdempotencyKey({
+    taskType,
+    processorVersion: CODE_REPOSITORY_PROCESSOR_VERSION,
+    subjectType: CODE_REPOSITORY_SUBJECT_TYPE,
+    subjectId: String(repositoryId),
+    subjectVersionId
+  })
+  return getTaskByIdempotencyKey(database, idempotencyKey)
+}
+
+function sendEnqueuedRepositoryTask(res, outcome, messages) {
+  if (outcome.activeConflict) {
+    return res.status(409).json({
+      message: '仓库任务正在运行',
+      taskId: outcome.task.id
+    })
+  }
+  const message = outcome.task.status === 'succeeded'
+    ? messages.completed
+    : messages.pending
+  return res.json({
+    message,
+    taskId: outcome.task.id
+  })
+}
+
 // 创建代码仓库（克隆）
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { name, url, description, type = 'git' } = req.body
     const db = getDatabase()
@@ -238,12 +277,28 @@ router.post('/', authenticateToken, async (req, res) => {
       })
     }
     const safeRemoteUrl = validateGitRemoteUrl(url)
+    const requestedVersionId = repositoryTaskVersionId(req, null)
 
     // 检查是否已存在
     const existing = db.prepare(
       'SELECT id FROM code_repositories WHERE url = ?'
     ).get(safeRemoteUrl)
     if (existing) {
+      const existingTask = findIdempotentRepositoryTask(
+        db,
+        'code.repository.clone',
+        existing.id,
+        requestedVersionId
+      )
+      if (existingTask) {
+        return res.json({
+          id: existing.id,
+          taskId: existingTask.id,
+          message: existingTask.status === 'succeeded'
+            ? '仓库已添加且克隆完成'
+            : '仓库添加请求已受理'
+        })
+      }
       return res.status(400).json({ message: '该仓库URL已存在' })
     }
 
@@ -266,36 +321,93 @@ router.post('/', authenticateToken, async (req, res) => {
       'git'
     )
 
-    // 异步克隆仓库
-    cloneRepository(
-      result.lastInsertRowid,
-      safeRemoteUrl,
-      localPath,
-      name
-    )
-
-    res.json({ 
-      id: result.lastInsertRowid, 
+    const subjectVersionId = requestedVersionId || `create-${result.lastInsertRowid}`
+    let outcome
+    try {
+      outcome = enqueueRepositoryTask(db, {
+        taskType: 'code.repository.clone',
+        repositoryId: result.lastInsertRowid,
+        subjectVersionId
+      })
+    } catch (error) {
+      db.prepare('DELETE FROM code_repositories WHERE id = ?').run(result.lastInsertRowid)
+      throw error
+    }
+    if (outcome.activeConflict) {
+      return res.status(409).json({
+        message: '仓库任务正在运行',
+        taskId: outcome.task.id
+      })
+    }
+    return res.json({
+      id: result.lastInsertRowid,
+      taskId: outcome.task.id,
       message: '仓库添加成功，正在后台克隆...'
     })
   } catch (error) {
+    if (error?.code === 'TASK_IDEMPOTENCY_KEY_INVALID') {
+      return res.status(400).json({ message: error.message, code: error.code })
+    }
     if (sendRepositorySecurityError(res, error)) return
     console.error('创建代码仓库失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
 })
 
-// 克隆任务管理器
-const cloneTasks = new Map()
-const syncTasks = new Map() // 同步任务进度跟踪
+function latestRepositoryTask(database, repositoryId, taskTypes) {
+  const row = database.prepare(`
+    SELECT id
+      FROM tasks
+     WHERE subject_type = ?
+       AND subject_id = ?
+       AND task_type IN (${taskTypes.map(() => '?').join(', ')})
+     ORDER BY id DESC
+     LIMIT 1
+  `).get(CODE_REPOSITORY_SUBJECT_TYPE, String(repositoryId), ...taskTypes)
+  return row ? getTaskById(database, row.id) : null
+}
+
+function publicRepositoryTaskStatus(task, kind) {
+  if (!task) return null
+  const result = task.result && typeof task.result === 'object' && !Array.isArray(task.result)
+    ? task.result
+    : {}
+  const active = task.status === 'pending' || task.status === 'leased' || task.status === 'running'
+  const status = active
+    ? kind === 'clone' ? 'cloning' : 'syncing'
+    : task.status === 'succeeded'
+      ? 'completed'
+      : 'failed'
+  const defaultMessage = active
+    ? kind === 'clone' ? '正在克隆...' : '正在同步...'
+    : status === 'completed'
+      ? kind === 'clone' ? '克隆完成' : '同步完成'
+      : task.status === 'cancelled'
+        ? '任务已取消'
+        : task.errorSummary || (kind === 'clone' ? '克隆失败' : '同步失败')
+  const publicTask = {
+    id: task.id,
+    taskId: task.id,
+    status,
+    progress: task.progress,
+    message: result.message || defaultMessage,
+    startTime: Date.parse(task.startedAt || task.createdAt)
+  }
+  if (task.errorCode) publicTask.code = task.errorCode
+  if (Number.isSafeInteger(result.backupRepositoryId)) {
+    publicTask.backupRepositoryId = result.backupRepositoryId
+  }
+  return publicTask
+}
 
 // 获取克隆任务状态
 router.get('/:id/clone-status', authenticateToken, (req, res) => {
-  const task = cloneTasks.get(req.params.id)
-  if (!task) {
+  const task = latestRepositoryTask(getDatabase(), req.params.id, ['code.repository.clone'])
+  const publicTask = publicRepositoryTaskStatus(task, 'clone')
+  if (!publicTask) {
     return res.json({ status: 'unknown', message: '无克隆任务' })
   }
-  res.json({ data: task })
+  return res.json({ data: publicTask })
 })
 
 // 从GitHub API获取仓库描述
@@ -393,141 +505,6 @@ router.get('/github-info', authenticateToken, async (req, res) => {
     res.status(500).json({ message: '获取GitHub信息失败' })
   }
 })
-
-// 克隆仓库的异步函数（带进度）
-async function cloneRepository(id, url, localPath, name) {
-  const db = getDatabase()
-  const managedPath = resolveManagedRepositoryPath(CODE_BASE_PATH, localPath)
-  
-  const task = {
-    id: String(id),
-    status: 'cloning',
-    progress: 0,
-    message: '准备克隆...',
-    startTime: Date.now()
-  }
-  cloneTasks.set(String(id), task)
-  
-  try {
-    console.log(`[仓库 ${name}] 开始克隆`)
-    await cloneGitWithProgress(url, managedPath, task)
-    
-    // 更新同步时间
-    db.prepare('UPDATE code_repositories SET last_sync = CURRENT_TIMESTAMP WHERE id = ?').run(id)
-    
-    // 获取并保存语言统计（如果是GitHub仓库）
-    await fetchAndSaveLanguages(id, url)
-    
-    task.status = 'completed'
-    task.message = '克隆完成'
-    task.progress = 100
-    console.log(`[仓库 ${name}] 克隆完成`)
-  } catch (error) {
-    console.error(`[仓库 ${name}] 克隆失败:`, error.message)
-    task.status = 'failed'
-    task.message = '克隆失败: ' + error.message
-    // 克隆失败，清理目录
-    try {
-      fs.rmSync(managedPath, { recursive: true, force: true })
-    } catch (e) {}
-    // 标记为失败状态
-    try {
-      db.prepare("UPDATE code_repositories SET description = description || ' [克隆失败]' WHERE id = ?").run(id)
-    } catch (dbError) {
-      console.error('更新失败状态失败:', dbError.message)
-    }
-  }
-  
-  // 10分钟后清理任务记录
-  const cleanupTimer = setTimeout(() => {
-    cloneTasks.delete(String(id))
-  }, 600000)
-  cleanupTimer.unref?.()
-}
-
-// Git 克隆带进度
-function cloneGitWithProgress(url, localPath, task) {
-  return new Promise((resolve, reject) => {
-    const args = [
-      ...SAFE_GIT_CONFIG,
-      'clone',
-      '--progress',
-      '--depth',
-      '50',
-      url,
-      localPath
-    ]
-    const proc = spawn('git', args, {
-      windowsHide: true,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0'
-      }
-    })
-    let settled = false
-
-    const finish = (callback) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      callback()
-    }
-    
-    task.message = '正在连接服务器...'
-    
-    proc.stderr.on('data', (data) => {
-      const output = data.toString()
-      
-      // 解析 git progress 输出
-      if (output.includes('remote: Enumerating objects')) {
-        task.message = '正在枚举对象...'
-      } else if (output.includes('remote: Counting objects')) {
-        const match = output.match(/Counting objects:\s*(\d+)%/)
-        if (match) {
-          task.progress = Math.round(parseInt(match[1]) * 0.3) // 30% 用于 counting
-          task.message = `正在计数对象... ${match[1]}%`
-        }
-      } else if (output.includes('remote: Compressing objects')) {
-        const match = output.match(/Compressing objects:\s*(\d+)%/)
-        if (match) {
-          task.progress = 30 + Math.round(parseInt(match[1]) * 0.2) // 20% 用于 compressing
-          task.message = `正在压缩对象... ${match[1]}%`
-        }
-      } else if (output.includes('Receiving objects')) {
-        const match = output.match(/Receiving objects:\s*(\d+)%/)
-        if (match) {
-          task.progress = 50 + Math.round(parseInt(match[1]) * 0.4) // 40% 用于 receiving
-          task.message = `正在接收对象... ${match[1]}%`
-        }
-      } else if (output.includes('Resolving deltas')) {
-        const match = output.match(/Resolving deltas:\s*(\d+)%/)
-        if (match) {
-          task.progress = 90 + Math.round(parseInt(match[1]) * 0.1) // 10% 用于 resolving
-          task.message = `正在解析 deltas... ${match[1]}%`
-        }
-      }
-    })
-    
-    proc.on('close', (code) => {
-      if (code === 0) {
-        finish(resolve)
-      } else {
-        finish(() => reject(new Error(`Git clone 失败，退出码: ${code}`)))
-      }
-    })
-    
-    proc.on('error', (err) => {
-      finish(() => reject(err))
-    })
-    
-    // 5分钟超时
-    const timeout = setTimeout(() => {
-      proc.kill()
-      finish(() => reject(new Error('克隆超时')))
-    }, 300000)
-    timeout.unref?.()
-  })
-}
 
 // 删除代码仓库
 router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
@@ -1071,7 +1048,7 @@ function parseGitChangedFiles(output) {
 router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
-    const repo = db.prepare('SELECT * FROM code_repositories WHERE id = ?').get(req.params.id)
+    const repo = db.prepare('SELECT id, type FROM code_repositories WHERE id = ?').get(req.params.id)
     
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
@@ -1083,39 +1060,20 @@ router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, 
       })
     }
 
-    const repositoryPath = resolveManagedRepositoryPath(
-      CODE_BASE_PATH,
-      repo.local_path
-    )
-
-    // 初始化同步任务状态
-    const taskId = String(repo.id)
-    syncTasks.set(taskId, {
-      id: taskId,
-      status: 'syncing',
-      message: '准备同步...',
-      progress: 0,
-      startTime: Date.now()
+    const subjectVersionId = repositoryTaskVersionId(req, randomUUID())
+    const outcome = enqueueRepositoryTask(db, {
+      taskType: 'code.repository.sync',
+      repositoryId: repo.id,
+      subjectVersionId
     })
-
-    if (!fs.existsSync(repositoryPath)) {
-      // 如果目录不存在，重新克隆
-      syncTasks.get(taskId).message = '目录不存在，开始重新克隆...'
-      cloneRepository(repo.id, repo.url, repositoryPath, repo.name)
-      return res.json({ message: '开始重新克隆仓库...', taskId })
-    }
-
-    // 异步更新仓库
-    updateRepository(
-      repo.id,
-      repo.url,
-      repositoryPath,
-      repo.name,
-      taskId
-    )
-
-    res.json({ message: '开始同步仓库...', taskId })
+    return sendEnqueuedRepositoryTask(res, outcome, {
+      pending: '开始同步仓库...',
+      completed: '同步已完成'
+    })
   } catch (error) {
+    if (error?.code === 'TASK_IDEMPOTENCY_KEY_INVALID') {
+      return res.status(400).json({ message: error.message, code: error.code })
+    }
     if (sendRepositorySecurityError(res, error)) return
     console.error('同步仓库失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -1126,7 +1084,7 @@ router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, 
 router.post('/:id/reclone', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
-    const repo = db.prepare('SELECT * FROM code_repositories WHERE id = ?').get(req.params.id)
+    const repo = db.prepare('SELECT id, type FROM code_repositories WHERE id = ?').get(req.params.id)
 
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
@@ -1138,36 +1096,20 @@ router.post('/:id/reclone', authenticateToken, requireWritePermission, async (re
       })
     }
 
-    const taskId = String(repo.id)
-    const activeTask = syncTasks.get(taskId)
-    if (activeTask?.status === 'syncing') {
-      return res.status(409).json({ message: '仓库同步任务正在运行' })
-    }
-
-    const repositoryPath = resolveManagedRepositoryPath(
-      CODE_BASE_PATH,
-      repo.local_path,
-      { mustExist: true }
-    )
-    const changedFileCount = await getRepositoryChangeCount(repositoryPath)
-    if (changedFileCount === 0) {
-      return res.status(409).json({
-        message: '仓库当前没有本地改动，请直接同步',
-        code: 'REPOSITORY_CLEAN'
-      })
-    }
-
-    syncTasks.set(taskId, {
-      id: taskId,
-      status: 'syncing',
-      progress: 0,
-      message: '准备安全重克隆...',
-      startTime: Date.now()
+    const subjectVersionId = repositoryTaskVersionId(req, randomUUID())
+    const outcome = enqueueRepositoryTask(db, {
+      taskType: 'code.repository.reclone',
+      repositoryId: repo.id,
+      subjectVersionId
     })
-
-    safelyRecloneRepository(repo, repositoryPath, taskId)
-    res.json({ message: '开始安全重克隆...', taskId })
+    return sendEnqueuedRepositoryTask(res, outcome, {
+      pending: '开始安全重克隆...',
+      completed: '安全重克隆已完成'
+    })
   } catch (error) {
+    if (error?.code === 'TASK_IDEMPOTENCY_KEY_INVALID') {
+      return res.status(400).json({ message: error.message, code: error.code })
+    }
     if (sendRepositorySecurityError(res, error)) return
     console.error('安全重克隆失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -1175,186 +1117,25 @@ router.post('/:id/reclone', authenticateToken, requireWritePermission, async (re
 })
 
 // 获取同步状态
-router.get('/:id/sync-status', authenticateToken, async (req, res) => {
+router.get('/:id/sync-status', authenticateToken, (req, res) => {
   try {
-    const taskId = String(req.params.id)
-    const task = syncTasks.get(taskId)
-    
-    if (!task) {
-      return res.json({ 
-        data: { 
-          status: 'idle', 
-          message: '无同步任务' 
-        } 
-      })
-    }
-    
-    res.json({ data: task })
+    const task = latestRepositoryTask(
+      getDatabase(),
+      req.params.id,
+      ['code.repository.sync', 'code.repository.reclone']
+    )
+    const publicTask = publicRepositoryTaskStatus(task, 'sync')
+    return res.json({
+      data: publicTask || {
+        status: 'idle',
+        message: '无同步任务'
+      }
+    })
   } catch (error) {
     console.error('获取同步状态失败:', error)
     res.status(500).json({ message: '服务器错误' })
   }
 })
-
-// 更新仓库的异步函数（带进度跟踪）
-async function updateRepository(id, url, localPath, name, taskId) {
-  const db = getDatabase()
-  const task = syncTasks.get(taskId)
-  
-  try {
-    console.log(`[仓库 ${name}] 开始同步`)
-    
-    if (task) {
-      task.message = '正在同步...'
-      task.progress = 30
-    }
-    
-    const repositoryPath = resolveManagedRepositoryPath(
-      CODE_BASE_PATH,
-      localPath,
-      { mustExist: true }
-    )
-
-    const changedFileCount = await getRepositoryChangeCount(repositoryPath)
-    if (changedFileCount > 0) {
-      if (task) {
-        task.status = 'failed'
-        task.code = REPOSITORY_DIRTY
-        task.changedFileCount = changedFileCount
-        task.message = `检测到 ${changedFileCount} 个本地改动，已停止同步以避免覆盖。可选择安全重克隆，旧文件会保留为独立备份。`
-        task.progress = 0
-      }
-      console.warn(`[仓库 ${name}] 检测到 ${changedFileCount} 个本地改动，停止同步`)
-      return
-    }
-
-    await runGit(
-      ['-C', repositoryPath, 'pull', '--ff-only'],
-      { timeout: 300000 }
-    )
-    
-    if (task) {
-      task.message = '同步完成，更新数据库...'
-      task.progress = 80
-    }
-    
-    db.prepare('UPDATE code_repositories SET last_sync = CURRENT_TIMESTAMP WHERE id = ?').run(id)
-    
-    // 获取并保存语言统计（如果是GitHub仓库）
-    await fetchAndSaveLanguages(id, url)
-    
-    console.log(`[仓库 ${name}] 同步完成`)
-    
-    if (task) {
-      task.status = 'completed'
-      task.message = '同步完成'
-      task.progress = 100
-    }
-  } catch (error) {
-    console.error(`[仓库 ${name}] 同步失败:`, error.message)
-    if (task) {
-      task.status = 'failed'
-      task.message = '同步失败: ' + error.message
-      task.progress = 0
-    }
-  }
-  
-  // 10分钟后清理任务记录
-  if (task) {
-    const cleanupTimer = setTimeout(() => {
-      syncTasks.delete(taskId)
-    }, 600000)
-    cleanupTimer.unref?.()
-  }
-}
-
-async function safelyRecloneRepository(repo, repositoryPath, taskId) {
-  const db = getDatabase()
-  const task = syncTasks.get(taskId)
-  const timestamp = Date.now()
-  const repositoryName = path.basename(repositoryPath)
-  const temporaryPath = resolveManagedRepositoryPath(
-    CODE_BASE_PATH,
-    path.join(CODE_BASE_PATH, `${repositoryName}_reclone_${timestamp}`)
-  )
-  const backupPath = resolveManagedRepositoryPath(
-    CODE_BASE_PATH,
-    path.join(CODE_BASE_PATH, `${repositoryName}_local_backup_${timestamp}`)
-  )
-  let backupRepositoryId = null
-  let originalMoved = false
-
-  try {
-    task.message = '正在克隆干净副本...'
-    task.progress = 10
-    await cloneGitWithProgress(repo.url, temporaryPath, task)
-
-    task.message = '正在保留本地改动...'
-    task.progress = 75
-    const backupResult = db.prepare(`
-      INSERT INTO code_repositories
-        (name, url, description, local_path, type, last_sync)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      `${repo.name}（同步前本地备份）`,
-      repo.url,
-      '安全重克隆时自动保留；包含当时未提交的本地改动。',
-      backupPath,
-      'git',
-      repo.last_sync
-    )
-    backupRepositoryId = backupResult.lastInsertRowid
-
-    fs.renameSync(repositoryPath, backupPath)
-    originalMoved = true
-    fs.renameSync(temporaryPath, repositoryPath)
-
-    try {
-      db.prepare('UPDATE code_repositories SET last_sync = CURRENT_TIMESTAMP WHERE id = ?').run(repo.id)
-      await fetchAndSaveLanguages(repo.id, repo.url)
-    } catch (metadataError) {
-      // 文件切换已经成功，元数据刷新失败不应触发会破坏两个有效副本的回滚。
-      console.warn(`[仓库 ${repo.name}] 重克隆后元数据刷新失败:`, metadataError.message)
-    }
-
-    task.status = 'completed'
-    task.message = '安全重克隆完成；旧的本地改动已保留为独立备份仓库'
-    task.progress = 100
-    task.backupRepositoryId = Number(backupRepositoryId)
-    console.log(`[仓库 ${repo.name}] 安全重克隆完成，备份仓库 ID: ${backupRepositoryId}`)
-  } catch (error) {
-    console.error(`[仓库 ${repo.name}] 安全重克隆失败:`, error.message)
-
-    try {
-      if (originalMoved && !fs.existsSync(repositoryPath) && fs.existsSync(backupPath)) {
-        fs.renameSync(backupPath, repositoryPath)
-        originalMoved = false
-      }
-    } catch (rollbackError) {
-      console.error(`[仓库 ${repo.name}] 恢复原仓库失败:`, rollbackError.message)
-    }
-
-    if (backupRepositoryId && !originalMoved) {
-      try {
-        db.prepare('DELETE FROM code_repositories WHERE id = ?').run(backupRepositoryId)
-      } catch (dbError) {
-        console.error('清理备份仓库记录失败:', dbError.message)
-      }
-    }
-    try {
-      if (fs.existsSync(temporaryPath)) {
-        fs.rmSync(temporaryPath, { recursive: true, force: true })
-      }
-    } catch {}
-
-    task.status = 'failed'
-    task.message = '安全重克隆失败，原仓库已尽量恢复: ' + error.message
-    task.progress = 0
-  }
-
-  const cleanupTimer = setTimeout(() => syncTasks.delete(taskId), 600000)
-  cleanupTimer.unref?.()
-}
 
 // 获取仓库详情 - 必须放在最后，避免拦截其他具体路由
 router.get('/:id', authenticateToken, async (req, res) => {
@@ -1390,47 +1171,5 @@ router.get('/:id', authenticateToken, async (req, res) => {
     res.status(500).json({ message: '服务器错误' })
   }
 })
-
-// 获取并保存语言统计
-async function fetchAndSaveLanguages(repoId, repoUrl) {
-  try {
-    // 检查是否是GitHub仓库
-    const githubMatch = repoUrl.match(/github\.com\/([^\/]+)\/([^\/\.]+)/)
-    if (!githubMatch) return
-    
-    const [, owner, repo] = githubMatch
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/languages`
-    
-    console.log(`[仓库] 获取语言统计: ${owner}/${repo}`)
-    
-    const response = await axios.get(apiUrl, {
-      timeout: 10000,
-      headers: {
-        'Accept': 'application/vnd.github.v3+json'
-      }
-    })
-    
-    const langData = response.data
-    const total = Object.values(langData).reduce((sum, val) => sum + val, 0)
-    
-    if (total > 0) {
-      const languages = Object.entries(langData)
-        .map(([lang, bytes]) => ({
-          name: lang,
-          percentage: Math.round((bytes / total) * 100)
-        }))
-        .sort((a, b) => b.percentage - a.percentage)
-        .slice(0, 5) // 只保留前5种语言
-      
-      const db = getDatabase()
-      db.prepare('UPDATE code_repositories SET languages = ? WHERE id = ?')
-        .run(JSON.stringify(languages), repoId)
-      
-      console.log(`[仓库] 语言统计已保存:`, languages.map(l => `${l.name} ${l.percentage}%`).join(', '))
-    }
-  } catch (error) {
-    console.error('[仓库] 获取语言统计失败:', error.message)
-  }
-}
 
 export default router

@@ -15,6 +15,10 @@ const codeRouteSource = fs.readFileSync(
   new URL('../src/routes/code.js', import.meta.url),
   'utf8'
 )
+const codeTaskProcessorSource = fs.readFileSync(
+  new URL('../src/services/codeRepositoryTaskProcessor.js', import.meta.url),
+  'utf8'
+)
 
 function withRepository(callback) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-code-security-'))
@@ -101,12 +105,13 @@ test('commit arguments are bounded before reaching Git', () => {
   assert.equal(normalizeCommitLimit('invalid'), 20)
 })
 
-test('code routes never build shell command strings or invoke SVN', () => {
-  assert.doesNotMatch(codeRouteSource, /\bexecAsync\b|\bexec\(/)
+test('code routes and task processor never build shell command strings or invoke SVN', () => {
+  const source = `${codeRouteSource}\n${codeTaskProcessorSource}`
+  assert.doesNotMatch(source, /\bexecAsync\b|\bexec\(/)
   assert.doesNotMatch(
-    codeRouteSource,
+    source,
     /svn\s+(checkout|update|log|diff)/i
   )
-  assert.match(codeRouteSource, /protocol\.file\.allow=never/)
-  assert.match(codeRouteSource, /protocol\.ext\.allow=never/)
+  assert.match(codeTaskProcessorSource, /protocol\.file\.allow=never/)
+  assert.match(codeTaskProcessorSource, /protocol\.ext\.allow=never/)
 })
