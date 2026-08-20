@@ -18,6 +18,7 @@ const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
 const MAX_ERROR_SUMMARY_LENGTH = 2048
 const TASK_STATUS_SET = new Set(['pending', 'leased', 'running', 'succeeded', 'failed', 'cancelled'])
 const EXECUTION_CLASS_SET = new Set(['cpu', 'disk', 'network', 'gpu'])
+const TASK_ORDER_SET = new Set(['asc', 'desc'])
 
 export const TASK_STATUS_PENDING = 'pending'
 export const TASK_STATUS_LEASED = 'leased'
@@ -804,7 +805,10 @@ export function getTaskByIdempotencyKey(database, value) {
 
 function normalizeListOptions(options = {}) {
   assertOptionsObject(options, 'list options')
-  const allowed = new Set(['status', 'executionClass', 'taskType', 'subjectType', 'subjectId', 'limit', 'offset'])
+  const allowed = new Set([
+    'status', 'executionClass', 'taskType', 'taskTypes', 'subjectType', 'subjectId',
+    'limit', 'offset', 'order'
+  ])
   if (Object.keys(options).some((key) => !allowed.has(key))) fail('TASK_LIST_INPUT_INVALID', 'List options contain unsupported fields.')
   let statuses = null
   if (options.status !== undefined) {
@@ -816,16 +820,27 @@ function normalizeListOptions(options = {}) {
   }
   const executionClass = options.executionClass === undefined ? null : normalizeExecutionClass(options.executionClass)
   const taskType = options.taskType === undefined ? null : normalizeToken(options.taskType, 'taskType')
+  let taskTypes = null
+  if (options.taskTypes !== undefined) {
+    if (!Array.isArray(options.taskTypes) || options.taskTypes.length === 0 ||
+      options.taskTypes.some((value) => typeof value !== 'string')) {
+      fail('TASK_LIST_INPUT_INVALID', 'taskTypes filter is invalid.')
+    }
+    taskTypes = [...new Set(options.taskTypes.map((value) => normalizeToken(value, 'taskTypes')))]
+    if (taskType !== null) fail('TASK_LIST_INPUT_INVALID', 'taskType filters cannot be combined.')
+  }
   const subjectType = options.subjectType === undefined ? null : normalizeToken(options.subjectType, 'subjectType')
   const subjectId = options.subjectId === undefined ? null : normalizeSubjectId(options.subjectId)
   const limit = normalizeInteger(options.limit, 'limit', { min: 1, max: MAX_LIST_LIMIT, defaultValue: DEFAULT_LIST_LIMIT })
   const offset = normalizeInteger(options.offset, 'offset', { min: 0, max: 1_000_000_000, defaultValue: 0 })
-  return { statuses, executionClass, taskType, subjectType, subjectId, limit, offset }
+  const order = options.order === undefined ? 'asc' : options.order
+  if (typeof order !== 'string' || !TASK_ORDER_SET.has(order)) {
+    fail('TASK_LIST_INPUT_INVALID', 'order must be asc or desc.')
+  }
+  return { statuses, executionClass, taskType, taskTypes, subjectType, subjectId, limit, offset, order }
 }
 
-export function listTasks(database, options = {}) {
-  assertDatabase(database)
-  const normalized = normalizeListOptions(options)
+function buildListFilter(normalized) {
   const clauses = []
   const parameters = []
   if (normalized.statuses) {
@@ -833,22 +848,52 @@ export function listTasks(database, options = {}) {
     parameters.push(...normalized.statuses)
   }
   if (normalized.executionClass !== null) { clauses.push('execution_class = ?'); parameters.push(normalized.executionClass) }
-  if (normalized.taskType !== null) { clauses.push('task_type = ?'); parameters.push(normalized.taskType) }
+  if (normalized.taskTypes !== null) {
+    clauses.push(`task_type IN (${normalized.taskTypes.map(() => '?').join(', ')})`)
+    parameters.push(...normalized.taskTypes)
+  } else if (normalized.taskType !== null) {
+    clauses.push('task_type = ?')
+    parameters.push(normalized.taskType)
+  }
   if (normalized.subjectType !== null) { clauses.push('subject_type = ?'); parameters.push(normalized.subjectType) }
   if (normalized.subjectId !== null) { clauses.push('subject_id = ?'); parameters.push(normalized.subjectId) }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+  return { where, parameters }
+}
+
+export function listTasks(database, options = {}) {
+  assertDatabase(database)
+  const normalized = normalizeListOptions(options)
+  const { where, parameters } = buildListFilter(normalized)
   try {
     const rows = database.prepare(`
       SELECT ${SELECT_COLUMNS}
         FROM ${TASK_TABLE}
         ${where}
-       ORDER BY id ASC
+       ORDER BY id ${normalized.order.toUpperCase()}
        LIMIT ? OFFSET ?
     `).all(...parameters, normalized.limit, normalized.offset)
     return Object.freeze(rows.map(publicTask))
   } catch (error) {
     if (error instanceof TaskStoreError) throw error
     fail('TASK_STORE_READ_FAILED', 'Tasks could not be listed.', {}, error)
+  }
+}
+
+export function countTasks(database, options = {}) {
+  assertDatabase(database)
+  const normalized = normalizeListOptions(options)
+  const { where, parameters } = buildListFilter(normalized)
+  try {
+    const row = database.prepare(`
+      SELECT COUNT(*) AS total
+        FROM ${TASK_TABLE}
+        ${where}
+    `).get(...parameters)
+    return Number(row?.total ?? 0)
+  } catch (error) {
+    if (error instanceof TaskStoreError) throw error
+    fail('TASK_STORE_READ_FAILED', 'Task count could not be read.', {}, error)
   }
 }
 
@@ -1387,6 +1432,7 @@ export class TaskStore {
   getById(id) { return getTaskById(this.#database, id) }
   getByIdempotencyKey(key) { return getTaskByIdempotencyKey(this.#database, key) }
   list(options) { return listTasks(this.#database, options) }
+  count(options) { return countTasks(this.#database, options) }
   leaseNext(options = {}) { return leaseNext(this.#database, options, { now: this.now, tokenFactory: this.tokenFactory }) }
   markRunning(taskOrOptions, rawOptions, rawToken) {
     const options = typeof rawOptions === 'string'

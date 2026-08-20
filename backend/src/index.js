@@ -59,6 +59,7 @@ import todosRoutes from './routes/todos.js'
 import blogRoutes from './routes/blog.js'
 import storageConsistencyRoutes from './routes/storageConsistency.js'
 import privateSpaceMigrationRoutes from './routes/privateSpaceMigration.js'
+import tasksRoutes from './routes/tasks.js'
 import { getDatabase } from './config/database.js'
 import { authenticateToken, requireOwner } from './middlewares/auth.js'
 import { accessLogger, queryLogs, getLogStats, initLogger } from './services/logger.js'
@@ -297,6 +298,7 @@ app.use('/api/todos', ...ownerOnly, todosRoutes)
 app.use('/api/blog', ...ownerOnly, blogRoutes)
 app.use('/api/storage-consistency', ...ownerOnly, storageConsistencyRoutes)
 app.use('/api/private-space-migration', ...ownerOnly, privateSpaceMigrationRoutes)
+app.use('/api/tasks', ...ownerOnly, tasksRoutes)
 
 // 管理员访问日志接口
 app.get('/api/admin/logs', authenticateToken, requireOwner, (req, res) => {
