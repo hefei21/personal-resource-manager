@@ -85,6 +85,19 @@ function coverResult(coversRoot, filePath, rebuilt) {
   })
 }
 
+export function resolveExistingEbookCover({
+  booksRoot,
+  storedPath,
+  coverPath,
+  fileSystem = fs
+} = {}) {
+  const coversRoot = prepareCoversRoot(booksRoot, fileSystem)
+  const existing = existingCoverPath(coversRoot, storedPath ?? coverPath, fileSystem)
+  return existing ? coverResult(coversRoot, existing, false) : null
+}
+
+export const findExistingEbookCover = resolveExistingEbookCover
+
 export async function ensureEbookCover({
   book,
   booksRoot,
@@ -104,8 +117,9 @@ export async function ensureEbookCover({
   }
 
   const coversRoot = prepareCoversRoot(booksRoot, fileSystem)
-  const existing = existingCoverPath(coversRoot, book.cover_image, fileSystem)
-  if (existing) return coverResult(coversRoot, existing, false)
+  const existingPath = existingCoverPath(coversRoot, book.cover_image, fileSystem)
+  const existing = existingPath ? coverResult(coversRoot, existingPath, false) : null
+  if (existing) return existing
 
   const extension = path.extname(String(book.original_name || book.file_path || '')).toLowerCase()
   if (extension !== '.epub' && String(book.file_type || '').toLowerCase() !== 'epub') {

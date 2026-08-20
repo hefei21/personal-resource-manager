@@ -16,7 +16,22 @@ import { PAGINATION } from '../config/constants.js'
 import { ensureUploadDirectory, inspectChunks, mergeChunkFiles, uploadPath, validateArchiveEntries, validateUploadDescriptor } from '../services/uploadSecurity.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { commitEbookUpload } from '../services/ebookStorageService.js'
-import { EbookCoverError, encodeEbookCoverJpeg, ensureEbookCover } from '../services/ebookCoverService.js'
+import {
+  EbookCoverError,
+  encodeEbookCoverJpeg,
+  resolveExistingEbookCover,
+  ensureEbookCover
+} from '../services/ebookCoverService.js'
+import { registerTaskProcessor } from '../services/taskRuntime.js'
+import {
+  createEbookCoverTaskProcessor,
+  EBOOK_COVER_EXECUTION_CLASS,
+  EBOOK_COVER_PROCESSOR_VERSION,
+  EBOOK_COVER_SUBJECT_TYPE,
+  EBOOK_COVER_TASK_TYPE,
+  EBOOK_COVER_TASK_TYPES
+} from '../services/ebookCoverTaskProcessor.js'
+import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
 import {
   listDeletedEbooks,
   permanentlyDeleteEbook,
@@ -26,7 +41,8 @@ import {
 } from '../services/ebookTrashService.js'
 
 const router = express.Router()
-const ebookCoverRequests = new Map()
+export const EBOOK_COVER_WAIT_INTERVAL_MS = 100
+export const EBOOK_COVER_WAIT_TIMEOUT_MS = 60_000
 const BOOK_UPLOAD_POLICY = {
   extensions: ['.txt', '.epub', '.pdf', '.mobi', '.azw', '.azw3', '.fb2', '.html', '.htm'],
   maxChunks: 1000,
@@ -148,6 +164,15 @@ function extractEpubCover(epubPath) {
     console.error('❌ 提取EPUB封面失败:', error)
     return null
   }
+}
+
+function extractValidatedEpubCover(bookPath) {
+  try {
+    validateEpubArchive(bookPath)
+  } catch (error) {
+    throw new EbookCoverError('EBOOK_COVER_ARCHIVE_INVALID', 'EPUB archive validation failed.', error)
+  }
+  return extractEpubCover(bookPath)
 }
 
 // 辅助函数：从PDF文件中提取封面图片（使用pdf-poppler或pdf2pic需要额外依赖，暂时跳过）
@@ -1064,37 +1089,6 @@ async function verifiedBookPath(book) {
   return (await getResourceStorageRuntime().contentService.resolveVerifiedFilePath(book)).filePath
 }
 
-async function verifiedBookCover(database, book) {
-  const requestKey = String(book.id)
-  if (!ebookCoverRequests.has(requestKey)) {
-    const request = ensureEbookCover({
-      book,
-      booksRoot: getStoragePath('books'),
-      resolveBookPath: verifiedBookPath,
-      extractCover: async (bookPath) => {
-        try {
-          validateEpubArchive(bookPath)
-        } catch (error) {
-          throw new EbookCoverError('EBOOK_COVER_ARCHIVE_INVALID', 'EPUB archive validation failed.', error)
-        }
-        return extractEpubCover(bookPath)
-      },
-      compressCover: encodeEbookCoverJpeg,
-      updateCoverPath: (coverPath, previousCoverPath) => {
-        const result = database.prepare(`
-          UPDATE books SET cover_image = ?
-          WHERE id = ? AND cover_image IS ?
-        `).run(coverPath, book.id, previousCoverPath)
-        if (result.changes !== 1) {
-          throw new EbookCoverError('EBOOK_COVER_UPDATE_CONFLICT', 'Ebook cover changed concurrently.')
-        }
-      }
-    }).finally(() => ebookCoverRequests.delete(requestKey))
-    ebookCoverRequests.set(requestKey, request)
-  }
-  return ebookCoverRequests.get(requestKey)
-}
-
 function activeBook(database, id) {
   return database.prepare(`
     SELECT b.* FROM books b WHERE b.id = ? AND NOT EXISTS (
@@ -1103,6 +1097,132 @@ function activeBook(database, id) {
     )
   `).get(id)
 }
+
+function persistEbookCoverPath(coverPath, previousCoverPath, context = {}) {
+  const database = context.database ?? getDatabase()
+  const bookId = context.book?.id
+  if (!Number.isSafeInteger(Number(bookId)) || Number(bookId) <= 0) {
+    throw new EbookCoverError('EBOOK_COVER_INPUT_INVALID', 'Ebook cover update input is invalid.')
+  }
+  try {
+    const result = database.prepare(`
+      UPDATE books SET cover_image = ?
+      WHERE id = ? AND cover_image IS ?
+    `).run(coverPath, Number(bookId), previousCoverPath)
+    if (result.changes !== 1) {
+      throw new EbookCoverError('EBOOK_COVER_UPDATE_CONFLICT', 'Ebook cover changed concurrently.')
+    }
+  } catch (error) {
+    if (error instanceof EbookCoverError) throw error
+    throw new EbookCoverError('EBOOK_COVER_DATABASE_UNAVAILABLE', 'Ebook cover database update failed.', error)
+  }
+}
+
+function isEpubBook(book) {
+  const extension = path.extname(String(book?.original_name || book?.file_path || '')).toLowerCase()
+  return extension === '.epub' || String(book?.file_type || '').toLowerCase() === 'epub'
+}
+
+export function enqueueEbookCoverTask(database, bookId, runIdentity = randomUUID()) {
+  return enqueueExclusiveRun(database, {
+    taskType: EBOOK_COVER_TASK_TYPE,
+    processorVersion: EBOOK_COVER_PROCESSOR_VERSION,
+    subjectType: EBOOK_COVER_SUBJECT_TYPE,
+    subjectId: String(bookId),
+    subjectVersionId: runIdentity,
+    input: { bookId },
+    executionClass: EBOOK_COVER_EXECUTION_CLASS
+  }, { taskTypes: EBOOK_COVER_TASK_TYPES })
+}
+
+function requestAbortController(req, res) {
+  const controller = new AbortController()
+  const listeners = []
+  const abort = () => controller.abort()
+  // IncomingMessage's `close` event may also fire after a normally completed
+  // request body, before the response has been produced. Treat only an actual
+  // request abort or a closed response as the waiter disconnecting.
+  for (const [target, eventName] of [[req, 'aborted'], [res, 'close']]) {
+    if (target && typeof target.once === 'function') {
+      target.once(eventName, abort)
+      listeners.push([target, eventName])
+    }
+  }
+  if (req?.aborted || req?.destroyed || res?.destroyed) controller.abort()
+  return {
+    signal: controller.signal,
+    cleanup() {
+      for (const [target, eventName] of listeners) {
+        target.removeListener?.(eventName, abort)
+      }
+    }
+  }
+}
+
+function sleepForEbookCover(milliseconds, signal) {
+  if (signal?.aborted) return Promise.resolve()
+  return new Promise(resolve => {
+    let timer
+    const done = () => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    timer = setTimeout(done, milliseconds)
+    signal?.addEventListener('abort', done, { once: true })
+  })
+}
+
+export async function waitForEbookCoverTask({
+  taskId,
+  readTask,
+  signal,
+  intervalMs = EBOOK_COVER_WAIT_INTERVAL_MS,
+  timeoutMs = EBOOK_COVER_WAIT_TIMEOUT_MS,
+  now = () => Date.now(),
+  sleep = sleepForEbookCover
+} = {}) {
+  if (typeof readTask !== 'function') throw new TypeError('readTask must be a function')
+  if (typeof now !== 'function') throw new TypeError('now must be a function')
+  if (typeof sleep !== 'function') throw new TypeError('sleep must be a function')
+  const pollInterval = Number.isFinite(intervalMs) && intervalMs >= 0 ? intervalMs : EBOOK_COVER_WAIT_INTERVAL_MS
+  const timeout = Number.isFinite(timeoutMs) && timeoutMs >= 0 ? timeoutMs : EBOOK_COVER_WAIT_TIMEOUT_MS
+  const startedAt = now()
+  const maxPolls = Math.max(1, Math.ceil(timeout / Math.max(1, pollInterval)) + 1)
+  let polls = 0
+
+  while (polls < maxPolls) {
+    if (signal?.aborted) return Object.freeze({ task: null, aborted: true, timedOut: false })
+    const task = await readTask(taskId)
+    if (task === null || task === undefined) {
+      return Object.freeze({ task: null, aborted: false, timedOut: false, missing: true })
+    }
+    if (['succeeded', 'failed', 'cancelled'].includes(task.status)) {
+      return Object.freeze({ task, aborted: false, timedOut: false })
+    }
+    polls += 1
+    if (signal?.aborted) return Object.freeze({ task: null, aborted: true, timedOut: false })
+    if (now() - startedAt >= timeout) break
+    await sleep(Math.min(pollInterval, Math.max(0, timeout - (now() - startedAt))), signal)
+  }
+  return Object.freeze({ task: null, aborted: Boolean(signal?.aborted), timedOut: !signal?.aborted })
+}
+
+const registeredEbookCoverTaskProcessor = createEbookCoverTaskProcessor({
+  databaseProvider: getDatabase,
+  booksRoot,
+  resolveBookPath: verifiedBookPath,
+  extractCover: extractValidatedEpubCover,
+  compressCover: encodeEbookCoverJpeg,
+  updateCoverPath: persistEbookCoverPath,
+  ensureCover: ensureEbookCover
+})
+registerTaskProcessor(
+  EBOOK_COVER_TASK_TYPE,
+  EBOOK_COVER_PROCESSOR_VERSION,
+  EBOOK_COVER_EXECUTION_CLASS,
+  registeredEbookCoverTaskProcessor
+)
 
 function sendEbookRouteError(res, error) {
   const code = String(error?.code || '')
@@ -2146,7 +2266,41 @@ router.get('/:id/resource', authenticateToken, ebookResourceLimiter, async (req,
   }
 })
 
-// 获取封面图片；派生封面缺失时从受控 EPUB 原文件按需重建。
+function sendEbookCoverFile(res, cover) {
+  const ext = path.extname(cover.filePath).toLowerCase()
+  const contentTypes = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp'
+  }
+  const contentType = contentTypes[ext] || 'image/jpeg'
+
+  res.setHeader('Content-Type', contentType)
+  res.setHeader('Cache-Control', 'private, max-age=86400')
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.sendFile(cover.fileName, { root: cover.root })
+}
+
+function sendEbookCoverError(res, error) {
+  const code = String(error?.code || '')
+  if (code === 'EBOOK_COVER_BOOK_NOT_FOUND' ||
+      code === 'EBOOK_COVER_NOT_FOUND' ||
+      code === 'EBOOK_COVER_SOURCE_MISSING') {
+    return res.status(404).json({ code, message: '封面不存在' })
+  }
+  if (code === 'EBOOK_COVER_TOO_LARGE') {
+    return res.status(413).json({ code, message: '封面文件过大' })
+  }
+  if (code === 'EBOOK_COVER_ARCHIVE_INVALID') {
+    return res.status(422).json({ code, message: '电子书文件无效' })
+  }
+  console.error('获取封面失败:', code || error?.name || 'UNKNOWN')
+  return res.status(500).json({ message: '服务器错误' })
+}
+
+// 获取封面图片；派生封面缺失时从受控 EPUB 原文件按需提交持久任务。
 router.get('/:id/cover', authenticateToken, ebookResourceLimiter, async (req, res) => {
   try {
     const bookId = Number(req.params.id)
@@ -2160,36 +2314,63 @@ router.get('/:id/cover', authenticateToken, ebookResourceLimiter, async (req, re
       return res.status(404).json({ message: '封面不存在' })
     }
 
-    const cover = await verifiedBookCover(db, book)
-
-    // 根据文件扩展名设置Content-Type
-    const ext = path.extname(cover.filePath).toLowerCase()
-    const contentTypes = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.webp': 'image/webp'
+    const existingCover = resolveExistingEbookCover({
+      booksRoot,
+      storedPath: book.cover_image
+    })
+    if (existingCover) return sendEbookCoverFile(res, existingCover)
+    if (!isEpubBook(book)) {
+      return res.status(404).json({ code: 'EBOOK_COVER_NOT_FOUND', message: '封面不存在' })
     }
-    const contentType = contentTypes[ext] || 'image/jpeg'
 
-    res.setHeader('Content-Type', contentType)
-    res.setHeader('Cache-Control', 'private, max-age=86400')
-    res.setHeader('X-Content-Type-Options', 'nosniff')
-    res.sendFile(cover.fileName, { root: cover.root })
+    const outcome = enqueueEbookCoverTask(db, bookId)
+    const requestAbort = requestAbortController(req, res)
+    try {
+      const waited = await waitForEbookCoverTask({
+        taskId: outcome.task.id,
+        readTask: taskId => getTaskById(db, taskId),
+        signal: requestAbort.signal
+      })
+      if (waited.aborted) return
+      if (waited.timedOut) {
+        res.setHeader('Retry-After', '1')
+        return res.status(503).json({
+          code: 'EBOOK_COVER_TASK_TIMEOUT',
+          message: '封面生成仍在进行中'
+        })
+      }
+      if (waited.missing) {
+        return sendEbookCoverError(res, { code: 'EBOOK_COVER_TASK_MISSING' })
+      }
+      if (!waited.task || waited.task.status !== 'succeeded') {
+        return sendEbookCoverError(res, {
+          code: waited.task?.errorCode || 'EBOOK_COVER_TASK_FAILED'
+        })
+      }
+
+      const refreshedBook = activeBook(db, bookId)
+      if (!refreshedBook) {
+        return res.status(404).json({ message: '封面不存在' })
+      }
+      const generatedCover = resolveExistingEbookCover({
+        booksRoot,
+        storedPath: refreshedBook.cover_image
+      })
+      if (!generatedCover) {
+        return sendEbookCoverError(res, { code: 'EBOOK_COVER_NOT_FOUND' })
+      }
+      if (requestAbort.signal.aborted) return
+      return sendEbookCoverFile(res, generatedCover)
+    } finally {
+      requestAbort.cleanup()
+    }
   } catch (error) {
-    if (error instanceof EbookCoverError &&
-        (error.code === 'EBOOK_COVER_NOT_FOUND' || error.code === 'EBOOK_COVER_SOURCE_MISSING')) {
-      return res.status(404).json({ code: error.code, message: '封面不存在' })
-    }
-    if (error instanceof EbookCoverError && error.code === 'EBOOK_COVER_TOO_LARGE') {
-      return res.status(413).json({ code: error.code, message: '封面文件过大' })
-    }
-    if (error instanceof EbookCoverError && error.code === 'EBOOK_COVER_ARCHIVE_INVALID') {
-      return res.status(422).json({ code: error.code, message: '电子书文件无效' })
+    if (req?.aborted || req?.destroyed || res?.destroyed) return
+    if (error instanceof EbookCoverError || String(error?.code || '').startsWith('EBOOK_COVER_')) {
+      return sendEbookCoverError(res, error)
     }
     console.error('获取封面失败:', error?.code || error?.name || 'UNKNOWN')
-    res.status(500).json({ message: '服务器错误' })
+    return res.status(500).json({ message: '服务器错误' })
   }
 })
 
