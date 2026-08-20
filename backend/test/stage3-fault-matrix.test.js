@@ -49,7 +49,12 @@ function removeFixture(directory) {
 
 function openTaskDatabase(databasePath) {
   const database = new Database(databasePath)
-  database.exec(CREATE_TASK_SCHEMA_SQL)
+  const taskSchemaExists = database.prepare(`
+    SELECT 1
+    FROM sqlite_master
+    WHERE type = 'table' AND name = 'tasks'
+  `).get()
+  if (!taskSchemaExists) database.exec(CREATE_TASK_SCHEMA_SQL)
   return database
 }
 
