@@ -898,7 +898,8 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
       originalName: req.file.originalname,
       fields: { ...uploadFields, title: finalTitle },
       totalPages,
-      coverImagePath
+      coverImagePath,
+      metadataState: initialEbookMetadataState(req.file.originalname, metadataState)
     })
     bookInserted = true
 
@@ -963,7 +964,7 @@ function uniqueBookTitle(database, requestedTitle, originalName) {
   return candidate
 }
 
-async function createManagedBook({ database, staged, originalName, fields, totalPages, coverImagePath }) {
+async function createManagedBook({ database, staged, originalName, fields, totalPages, coverImagePath, metadataState }) {
   const runtime = getResourceStorageRuntime()
   const finalTitle = uniqueBookTitle(database, fields.title, originalName)
   const created = await commitEbookUpload({
@@ -976,7 +977,10 @@ async function createManagedBook({ database, staged, originalName, fields, total
       originalName,
       fileType: ebookFileType(originalName),
       totalPages,
-      coverImagePath
+      coverImagePath,
+      metadataStatus: metadataState?.status ?? 'ready',
+      metadataErrorCode: metadataState?.errorCode ?? null,
+      metadataParserVersion: metadataState?.parserVersion ?? null
     }
   })
   return Object.freeze({
@@ -1009,6 +1013,17 @@ function metadataStatusForValues(metadata) {
     .every(field => metadataValuePresent(metadata?.[field]))
     ? 'ready'
     : 'partial'
+}
+
+function initialEbookMetadataState(originalName, metadataState) {
+  if (path.extname(String(originalName || '')).toLowerCase() !== '.epub') {
+    return Object.freeze({ status: 'ready', errorCode: null, parserVersion: null })
+  }
+  return Object.freeze({
+    status: metadataState.status === 'pending' ? 'failed' : metadataState.status,
+    errorCode: metadataState.errorCode,
+    parserVersion: EBOOK_METADATA_PARSER_VERSION
+  })
 }
 
 function mergeEbookMetadataFields(fields, parsedMetadata) {
@@ -1442,7 +1457,8 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
       originalName,
       fields: { ...uploadFields, title: finalTitle },
       totalPages,
-      coverImagePath
+      coverImagePath,
+      metadataState: initialEbookMetadataState(originalName, metadataState)
     })
 
     const metadataResult = completeEbookMetadataUpload({

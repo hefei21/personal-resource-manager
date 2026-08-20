@@ -19,6 +19,22 @@ function requiredText(value, field) {
   return value.trim()
 }
 
+function metadataState(ebook) {
+  const status = ebook.metadataStatus ?? 'ready'
+  if (!['ready', 'partial', 'failed'].includes(status)) {
+    fail('EBOOK_UPLOAD_INVALID', 'metadataStatus is invalid.')
+  }
+  const errorCode = ebook.metadataErrorCode ?? null
+  if (errorCode !== null && (typeof errorCode !== 'string' || !/^[A-Z][A-Z0-9_.-]{0,63}$/u.test(errorCode))) {
+    fail('EBOOK_UPLOAD_INVALID', 'metadataErrorCode is invalid.')
+  }
+  const parserVersion = ebook.metadataParserVersion ?? null
+  if (parserVersion !== null && (typeof parserVersion !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(parserVersion))) {
+    fail('EBOOK_UPLOAD_INVALID', 'metadataParserVersion is invalid.')
+  }
+  return Object.freeze({ status, errorCode, parserVersion })
+}
+
 export async function commitEbookUpload({ database, storageService, staged, ebook, idempotencyKey } = {}) {
   if (!database || typeof database.prepare !== 'function' || typeof database.transaction !== 'function') {
     fail('EBOOK_UPLOAD_DATABASE_INVALID', 'Ebook upload database is invalid.')
@@ -34,6 +50,7 @@ export async function commitEbookUpload({ database, storageService, staged, eboo
   const title = requiredText(ebook.title, 'title')
   const originalName = requiredText(ebook.originalName, 'originalName')
   const fileType = requiredText(ebook.fileType, 'fileType')
+  const metadata = metadataState(ebook)
   let result = null
   await coordinateStorageCommit({
     database,
@@ -48,8 +65,9 @@ export async function commitEbookUpload({ database, storageService, staged, eboo
         INSERT INTO books
           (title, author, year, publisher, isbn, description, category_id, file_path,
            storage_key, content_sha256, content_bytes, original_name, file_type, file_size,
-           total_pages, cover_image)
-        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
+           total_pages, cover_image, metadata_status, metadata_error_code,
+           metadata_parser_version, metadata_updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `).run(
         title,
         ebook.author ?? null,
@@ -65,7 +83,10 @@ export async function commitEbookUpload({ database, storageService, staged, eboo
         fileType,
         bytes,
         ebook.totalPages ?? 0,
-        ebook.coverImagePath ?? null
+        ebook.coverImagePath ?? null,
+        metadata.status,
+        metadata.errorCode,
+        metadata.parserVersion
       )
       const id = Number(inserted.lastInsertRowid)
       database.prepare(`
