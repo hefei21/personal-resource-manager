@@ -107,6 +107,12 @@ class FakeTaskStore {
     this.successes = []
     this.failures = []
     this.running = []
+    this.recoveries = []
+  }
+
+  recoverExpiredLeases() {
+    this.recoveries.push(true)
+    return { recoveredCount: 0, recoveredIds: [], failedCount: 0, failedIds: [] }
   }
 
   leaseNext(options) {
@@ -223,6 +229,84 @@ test('NAS quotas are independent and GPU is never claimable', async () => {
   assert.equal(store.get(1).attemptCount, 0)
   assert.equal(store.get(4).attemptCount, 0)
   await executor.stop({ timeoutMs: 0 })
+})
+
+test('NAS executor recovers leases before claiming and keeps background recovery failures contained', async () => {
+  const store = new FakeTaskStore([makeFakeTask(30, 'disk')])
+  const events = []
+  const originalRecover = store.recoverExpiredLeases.bind(store)
+  const originalLease = store.leaseNext.bind(store)
+  store.recoverExpiredLeases = () => {
+    events.push('recover')
+    return originalRecover()
+  }
+  store.leaseNext = (options) => {
+    events.push('lease')
+    return originalLease(options)
+  }
+  const registry = createTaskProcessorRegistry({ processors: [{
+    taskType: 'task.disk',
+    processorVersion: 'disk-v1',
+    executionClass: 'disk',
+    handler: async () => ({ ok: true })
+  }] })
+  const timers = new ManualTimers()
+  const executor = createNasTaskExecutor({
+    store,
+    registry,
+    owner: 'nas-recovery-order',
+    quotas: { cpu: 0, disk: 1, network: 0 },
+    timers,
+    pollIntervalMs: 1000
+  })
+  await executor.runOnce()
+  assert.deepEqual(events.slice(0, 2), ['recover', 'lease'])
+  assert.equal(store.recoveries.length, 1)
+  await executor.runOnce()
+  assert.equal(store.recoveries.length, 1)
+  await executor.stop({ timeoutMs: 0 })
+
+  const failingStore = new FakeTaskStore([])
+  failingStore.recoverExpiredLeases = () => { throw new Error('recovery unavailable') }
+  const failingExecutor = createNasTaskExecutor({
+    store: failingStore,
+    registry: createTaskProcessorRegistry({ processors: [{
+      taskType: 'task.disk',
+      processorVersion: 'disk-v1',
+      executionClass: 'disk',
+      handler: async () => null
+    }] }),
+    owner: 'nas-recovery-error',
+    quotas: { cpu: 0, disk: 0, network: 0 },
+    timers: new ManualTimers(),
+    pollIntervalMs: 1000
+  })
+  await assert.rejects(() => failingExecutor.runOnce(), /recovery unavailable/u)
+  await failingExecutor.stop({ timeoutMs: 0 })
+
+  const backgroundTimers = new ManualTimers()
+  const backgroundStore = new FakeTaskStore([])
+  backgroundStore.recoverExpiredLeases = () => { throw new Error('transient recovery failure') }
+  const backgroundExecutor = createNasTaskExecutor({
+    store: backgroundStore,
+    registry: createTaskProcessorRegistry({ processors: [{
+      taskType: 'task.disk',
+      processorVersion: 'disk-v1',
+      executionClass: 'disk',
+      handler: async () => null
+    }] }),
+    owner: 'nas-recovery-background',
+    quotas: { cpu: 0, disk: 0, network: 0 },
+    timers: backgroundTimers,
+    pollIntervalMs: 1000
+  })
+  backgroundExecutor.start()
+  const firstPoll = backgroundTimers.idsByDelay(0)[0]
+  backgroundTimers.run(firstPoll)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(backgroundTimers.idsByDelay(1000).length, 1)
+  await backgroundExecutor.stop({ timeoutMs: 0 })
 })
 
 test('NAS executor only polls after explicit start and stops future polling', async () => {
@@ -604,10 +688,19 @@ test('SQLite NAS executor timeout leaves a running lease for expiry recovery', n
     assert.equal(report.timedOut, true)
     assert.equal(store.getById(task.id).status, 'running')
     now = '2026-08-20T02:00:00.100Z'
-    const recovered = store.recoverExpiredLeases()
-    assert.deepEqual(recovered.recoveredIds, [task.id])
+    const restartedExecutor = createNasTaskExecutor({
+      store,
+      registry,
+      owner: 'nas-timeout-restarted',
+      quotas: { cpu: 0, disk: 0, network: 0 },
+      leaseDurationMs: 100,
+      heartbeatIntervalMs: 10,
+      clock: () => now
+    })
+    await restartedExecutor.runOnce()
     assert.equal(store.getById(task.id).status, 'pending')
     assert.equal(store.getById(task.id).attemptCount, 1)
+    await restartedExecutor.stop({ timeoutMs: 0 })
     void round
   } finally {
     database.close()

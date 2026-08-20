@@ -212,6 +212,109 @@ test('TaskStore enqueues atomically, deduplicates canonical input, and fails clo
   }
 })
 
+test('exclusive runs are idempotent, mutually exclusive across task types, and reusable after terminal state', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({
+      database,
+      now: '2026-08-20T01:02:03.000Z',
+      tokenFactory: () => 'exclusive-token'
+    })
+    const mutexTaskTypes = ['code.clone', 'code.sync', 'code.reclone']
+    const firstInput = taskInput({
+      taskType: 'code.clone',
+      processorVersion: 'code-v1',
+      subjectType: 'code-repository',
+      subjectId: 900,
+      subjectVersionId: 'run-1',
+      input: { remote: 'origin-a' }
+    })
+    const first = store.enqueueExclusiveRun(firstInput, { taskTypes: mutexTaskTypes })
+    assert.equal(first.created, true)
+    assert.equal(first.outcome, 'created')
+    assert.equal(first.activeConflict, false)
+
+    const repeated = store.enqueueExclusiveRun({ ...firstInput, input: { remote: 'origin-a' } }, {
+      exclusiveTaskTypes: mutexTaskTypes
+    })
+    assert.equal(repeated.created, false)
+    assert.equal(repeated.outcome, 'idempotent')
+    assert.equal(repeated.task.id, first.task.id)
+
+    assert.throws(
+      () => store.enqueueExclusiveRun({ ...firstInput, input: { remote: 'origin-b' } }, { taskTypes: mutexTaskTypes }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_IDEMPOTENCY_CONFLICT'
+    )
+
+    const secondInput = taskInput({
+      taskType: 'code.sync',
+      processorVersion: 'code-v1',
+      subjectType: 'code-repository',
+      subjectId: 900,
+      subjectVersionId: 'run-2',
+      input: { remote: 'origin-a' }
+    })
+    const activeConflict = store.enqueueExclusiveRun(secondInput, { taskTypes: mutexTaskTypes })
+    assert.equal(activeConflict.created, false)
+    assert.equal(activeConflict.outcome, 'active-conflict')
+    assert.equal(activeConflict.activeConflict, true)
+    assert.equal(activeConflict.task.id, first.task.id)
+    assert.equal(database.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 1)
+    assert.equal(database.prepare('SELECT attempt_count FROM tasks WHERE id = ?').pluck().get(first.task.id), 0)
+
+    const lease = store.leaseNext({ owner: 'exclusive-worker', leaseDurationMs: 5000, executionClass: 'disk' })
+    store.markRunning({ id: first.task.id, owner: 'exclusive-worker', token: lease.leaseToken })
+    store.succeed({ id: first.task.id, owner: 'exclusive-worker', token: lease.leaseToken, result: { ok: true } })
+    const afterTerminal = store.enqueueExclusiveRun(secondInput, { taskTypes: mutexTaskTypes })
+    assert.equal(afterTerminal.created, true)
+    assert.equal(afterTerminal.outcome, 'created')
+    assert.notEqual(afterTerminal.task.id, first.task.id)
+    assert.equal(database.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 2)
+  } finally {
+    database.close()
+  }
+})
+
+test('two SQLite connections serialize exclusive run submission to one active task', nativeTestOptions, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'pr-manager-exclusive-competition-'))
+  const databasePath = path.join(directory, 'tasks.sqlite')
+  let firstDatabase
+  let secondDatabase
+  try {
+    firstDatabase = new Database(databasePath)
+    applyTaskMigration(firstDatabase)
+    secondDatabase = new Database(databasePath)
+    applyTaskMigration(secondDatabase)
+    const firstStore = createTaskStore({ database: firstDatabase, now: '2026-08-20T01:02:03.000Z' })
+    const secondStore = createTaskStore({ database: secondDatabase, now: '2026-08-20T01:02:03.000Z' })
+    const mutexTaskTypes = ['code.clone', 'code.sync']
+    const first = firstStore.enqueueExclusiveRun(taskInput({
+      taskType: 'code.clone',
+      subjectType: 'code-repository',
+      subjectId: 901,
+      subjectVersionId: 'run-a',
+      input: { remote: 'origin-a' }
+    }), { taskTypes: mutexTaskTypes })
+    const second = secondStore.enqueueExclusiveRun(taskInput({
+      taskType: 'code.sync',
+      subjectType: 'code-repository',
+      subjectId: 901,
+      subjectVersionId: 'run-b',
+      input: { remote: 'origin-a' }
+    }), { taskTypes: mutexTaskTypes })
+    assert.equal(first.created, true)
+    assert.equal(second.created, false)
+    assert.equal(second.outcome, 'active-conflict')
+    assert.equal(second.task.id, first.task.id)
+    assert.equal(firstDatabase.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 1)
+  } finally {
+    if (secondDatabase?.open) secondDatabase.close()
+    if (firstDatabase?.open) firstDatabase.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test('TaskStore records survive closing and reopening the same SQLite file', nativeTestOptions, () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'pr-manager-task-store-'))
   const databasePath = path.join(directory, 'tasks.sqlite')

@@ -26,6 +26,7 @@ import { ensureDirectories } from './config/storage.js'
 import { initRedis, closeRedis, isRedisConnected } from './utils/redis.js'
 import { migrateCompressCovers } from './utils/migration.js'
 import { migrate as migrateAccessLogs } from '../migrate-access-logs.js'
+import { startTaskRuntime, stopTaskRuntime } from './services/taskRuntime.js'
 
 // 导入安全中间件
 import {
@@ -433,7 +434,8 @@ async function initialize() {
     ensureDirectories()
 
     // 初始化数据库（better-sqlite3 是同步的）
-    initDatabase()
+    const database = initDatabase()
+    startTaskRuntime({ database })
 
     console.log('✓ 数据库初始化完成')
 
@@ -475,12 +477,14 @@ async function initialize() {
 // 优雅关闭
 process.on('SIGTERM', async () => {
   console.log('收到 SIGTERM 信号，正在关闭服务器...')
+  await stopTaskRuntime()
   await closeRedis()
   process.exit(0)
 })
 
 process.on('SIGINT', async () => {
   console.log('收到 SIGINT 信号，正在关闭服务器...')
+  await stopTaskRuntime()
   await closeRedis()
   process.exit(0)
 })

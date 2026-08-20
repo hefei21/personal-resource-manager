@@ -13,6 +13,7 @@ const MAX_LEASE_DURATION_MS = 365 * 24 * 60 * 60 * 1000
 const DEFAULT_LIST_LIMIT = 50
 const MAX_LIST_LIMIT = 100
 const MAX_SUPPORTED_PROCESSOR_IDENTITIES = 100
+const MAX_EXCLUSIVE_TASK_TYPES = 100
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
 const MAX_ERROR_SUMMARY_LENGTH = 2048
 const TASK_STATUS_SET = new Set(['pending', 'leased', 'running', 'succeeded', 'failed', 'cancelled'])
@@ -440,6 +441,70 @@ function normalizeEnqueueInput(input, now) {
   })
 }
 
+const EXCLUSIVE_TASK_TYPE_OPTION_NAMES = Object.freeze([
+  'taskTypes',
+  'exclusiveTaskTypes',
+  'mutuallyExclusiveTaskTypes',
+  'mutexTaskTypes'
+])
+
+function normalizeExclusiveTaskTypes(value, fieldName) {
+  const values = Array.isArray(value) ? value : [value]
+  if (values.length === 0 || values.length > MAX_EXCLUSIVE_TASK_TYPES) {
+    fail('TASK_EXCLUSIVE_TASK_TYPES_INVALID', `${fieldName} must contain between one and ${MAX_EXCLUSIVE_TASK_TYPES} task types.`)
+  }
+  const normalized = [...new Set(values.map((taskType) => normalizeToken(taskType, `${fieldName} entry`)))].sort()
+  if (normalized.length === 0) {
+    fail('TASK_EXCLUSIVE_TASK_TYPES_INVALID', `${fieldName} must contain at least one task type.`)
+  }
+  return normalized
+}
+
+function sameStringSet(first, second) {
+  return first.length === second.length && first.every((value, index) => value === second[index])
+}
+
+function resolveExclusiveTaskTypes(source, fieldName) {
+  const names = EXCLUSIVE_TASK_TYPE_OPTION_NAMES
+    .filter((name) => Object.hasOwn(source, name) && source[name] !== undefined)
+  if (names.length === 0) return null
+  const normalized = names.map((name) => normalizeExclusiveTaskTypes(source[name], `${fieldName}.${name}`))
+  if (normalized.some((value) => !sameStringSet(value, normalized[0]))) {
+    fail('TASK_INPUT_INVALID', 'Exclusive task type aliases must match.')
+  }
+  return normalized[0]
+}
+
+function normalizeExclusiveRunInput(input, options) {
+  assertOptionsObject(input, 'task input')
+  assertOptionsObject(options, 'exclusive enqueue options')
+  const allowedOptions = new Set(['now', ...EXCLUSIVE_TASK_TYPE_OPTION_NAMES])
+  if (Object.keys(options).some((key) => !allowedOptions.has(key))) {
+    fail('TASK_INPUT_INVALID', 'Exclusive enqueue options contain unsupported fields.')
+  }
+
+  const taskInput = { ...input }
+  const inputTaskTypes = resolveExclusiveTaskTypes(taskInput, 'task input')
+  for (const name of EXCLUSIVE_TASK_TYPE_OPTION_NAMES) delete taskInput[name]
+  if (!Object.hasOwn(taskInput, 'input')) {
+    fail('TASK_INPUT_INVALID', 'Exclusive run input must include the complete task input payload.')
+  }
+
+  const normalized = normalizeEnqueueInput(taskInput, options.now)
+  if (normalized.subjectVersionId === null) {
+    fail('TASK_SUBJECT_VERSION_INVALID', 'subjectVersionId is required for an exclusive run.')
+  }
+  const optionTaskTypes = resolveExclusiveTaskTypes(options, 'exclusive enqueue options')
+  if (inputTaskTypes && optionTaskTypes && !sameStringSet(inputTaskTypes, optionTaskTypes)) {
+    fail('TASK_INPUT_INVALID', 'Exclusive task type declarations must match.')
+  }
+  const taskTypes = optionTaskTypes ?? inputTaskTypes ?? [normalized.taskType]
+  if (!taskTypes.includes(normalized.taskType)) {
+    fail('TASK_EXCLUSIVE_TASK_TYPES_INVALID', 'Exclusive task types must include the requested task type.')
+  }
+  return Object.freeze({ normalized, taskTypes: Object.freeze([...taskTypes]) })
+}
+
 const SELECT_COLUMNS = `
   id, idempotency_key, input_fingerprint, task_type, processor_version,
   subject_type, subject_id, subject_version_id, subject_content_sha256, input_json,
@@ -489,6 +554,11 @@ function publicTask(row) {
 
 function readById(database, id) {
   return database.prepare(`SELECT ${SELECT_COLUMNS} FROM ${TASK_TABLE} WHERE id = ?`).get(id)
+}
+
+function readByIdempotencyKey(database, idempotencyKey) {
+  return database.prepare(`SELECT ${SELECT_COLUMNS} FROM ${TASK_TABLE} WHERE idempotency_key = ?`)
+    .get(idempotencyKey)
 }
 
 function normalizeTaskId(value) {
@@ -702,7 +772,7 @@ export function getTaskByIdempotencyKey(database, value) {
   assertDatabase(database)
   const key = normalizeIdempotencyKey(value)
   try {
-    const row = database.prepare(`SELECT ${SELECT_COLUMNS} FROM ${TASK_TABLE} WHERE idempotency_key = ?`).get(key)
+    const row = readByIdempotencyKey(database, key)
     return publicTask(row)
   } catch (error) {
     if (error instanceof TaskStoreError) throw error
@@ -760,6 +830,52 @@ export function listTasks(database, options = {}) {
   }
 }
 
+function verifyIdempotentTaskInput(existing, normalized) {
+  if (!existing) fail('TASK_STORE_WRITE_FAILED', 'Task could not be enqueued.')
+  if (existing.input_fingerprint !== normalized.inputFingerprint) {
+    fail('TASK_IDEMPOTENCY_CONFLICT', 'Idempotency key is bound to different task input.', {
+      idempotencyKey: normalized.idempotencyKey,
+      existingInputFingerprint: existing.input_fingerprint,
+      requestedInputFingerprint: normalized.inputFingerprint
+    })
+  }
+}
+
+function insertNormalizedTask(database, normalized) {
+  const insert = database.prepare(`
+    INSERT INTO ${TASK_TABLE} (
+      idempotency_key, input_fingerprint, task_type, processor_version,
+      subject_type, subject_id, subject_version_id, subject_content_sha256,
+      input_json, status, execution_class, priority, available_at, max_attempts, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(idempotency_key) DO NOTHING
+  `).run(
+    normalized.idempotencyKey,
+    normalized.inputFingerprint,
+    normalized.taskType,
+    normalized.processorVersion,
+    normalized.subjectType,
+    normalized.subjectId,
+    normalized.subjectVersionId,
+    normalized.subjectContentSha256,
+    normalized.inputJson,
+    normalized.status,
+    normalized.executionClass,
+    normalized.priority,
+    normalized.availableAt,
+    normalized.maxAttempts,
+    normalized.createdAt,
+    normalized.updatedAt
+  )
+  const existing = readByIdempotencyKey(database, normalized.idempotencyKey)
+  verifyIdempotentTaskInput(existing, normalized)
+  return { row: existing, created: insert.changes === 1 }
+}
+
+function enqueueNormalizedTask(database, normalized) {
+  return insertNormalizedTask(database, normalized)
+}
+
 export function enqueueTask(database, input, options = {}) {
   assertDatabase(database, true)
   assertOptionsObject(options, 'enqueue options')
@@ -767,48 +883,48 @@ export function enqueueTask(database, input, options = {}) {
   if (Object.keys(options).some((key) => !allowedOptions.has(key))) fail('TASK_INPUT_INVALID', 'Enqueue options contain unsupported fields.')
   const normalized = normalizeEnqueueInput(input, options.now)
   try {
-    const outcome = database.transaction(() => {
-      const insert = database.prepare(`
-        INSERT INTO ${TASK_TABLE} (
-          idempotency_key, input_fingerprint, task_type, processor_version,
-          subject_type, subject_id, subject_version_id, subject_content_sha256,
-          input_json, status, execution_class, priority, available_at, max_attempts, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(idempotency_key) DO NOTHING
-      `).run(
-        normalized.idempotencyKey,
-        normalized.inputFingerprint,
-        normalized.taskType,
-        normalized.processorVersion,
-        normalized.subjectType,
-        normalized.subjectId,
-        normalized.subjectVersionId,
-        normalized.subjectContentSha256,
-        normalized.inputJson,
-        normalized.status,
-        normalized.executionClass,
-        normalized.priority,
-        normalized.availableAt,
-        normalized.maxAttempts,
-        normalized.createdAt,
-        normalized.updatedAt
-      )
-      const existing = database.prepare(`SELECT ${SELECT_COLUMNS} FROM ${TASK_TABLE} WHERE idempotency_key = ?`)
-        .get(normalized.idempotencyKey)
-      if (!existing) fail('TASK_STORE_WRITE_FAILED', 'Task could not be enqueued.')
-      if (existing.input_fingerprint !== normalized.inputFingerprint) {
-        fail('TASK_IDEMPOTENCY_CONFLICT', 'Idempotency key is bound to different task input.', {
-          idempotencyKey: normalized.idempotencyKey,
-          existingInputFingerprint: existing.input_fingerprint,
-          requestedInputFingerprint: normalized.inputFingerprint
-        })
-      }
-      return { row: existing, created: insert.changes === 1 }
-    })()
+    const outcome = database.transaction(() => enqueueNormalizedTask(database, normalized))()
     return Object.freeze({ task: publicTask(outcome.row), created: outcome.created })
   } catch (error) {
     if (error instanceof TaskStoreError) throw error
     fail('TASK_STORE_WRITE_FAILED', 'Task could not be enqueued.', {}, error)
+  }
+}
+
+export function enqueueExclusiveRun(database, input, options = {}) {
+  assertDatabase(database, true)
+  const { normalized, taskTypes } = normalizeExclusiveRunInput(input, options)
+  try {
+    const outcome = runImmediateTransaction(database, () => {
+      const existing = readByIdempotencyKey(database, normalized.idempotencyKey)
+      if (existing) {
+        verifyIdempotentTaskInput(existing, normalized)
+        return { row: existing, created: false, outcome: 'idempotent' }
+      }
+
+      const active = database.prepare(`
+        SELECT ${SELECT_COLUMNS}
+          FROM ${TASK_TABLE}
+         WHERE subject_type = ?
+           AND subject_id = ?
+           AND task_type IN (${taskTypes.map(() => '?').join(', ')})
+           AND status IN ('pending', 'leased', 'running')
+         ORDER BY id ASC
+         LIMIT 1
+      `).get(normalized.subjectType, normalized.subjectId, ...taskTypes)
+      if (active) return { row: active, created: false, outcome: 'active-conflict' }
+
+      return { ...enqueueNormalizedTask(database, normalized), outcome: 'created' }
+    })
+    return Object.freeze({
+      task: publicTask(outcome.row),
+      created: outcome.created,
+      outcome: outcome.outcome,
+      activeConflict: outcome.outcome === 'active-conflict'
+    })
+  } catch (error) {
+    if (error instanceof TaskStoreError) throw error
+    fail('TASK_STORE_WRITE_FAILED', 'Exclusive task could not be enqueued.', {}, error)
   }
 }
 
@@ -1184,6 +1300,8 @@ export const succeedTask = succeed
 export const cancelTask = cancel
 
 export class TaskStore {
+  #database
+
   constructor(options = {}) {
     if (options && typeof options.prepare === 'function') options = { database: options }
     assertOptionsObject(options, 'TaskStore options')
@@ -1206,21 +1324,24 @@ export class TaskStore {
     if (hasTokenFactory && hasLeaseTokenFactory && options.tokenFactory !== options.leaseTokenFactory) {
       fail('TASK_TOKEN_INVALID', 'Lease token factory aliases must match.')
     }
-    this.database = options.database
+    this.#database = options.database
     this.now = options.now
     this.tokenFactory = options.tokenFactory ?? options.leaseTokenFactory ?? defaultLeaseTokenFactory
   }
 
-  enqueue(input) { return enqueueTask(this.database, input, { now: this.now }) }
-  getById(id) { return getTaskById(this.database, id) }
-  getByIdempotencyKey(key) { return getTaskByIdempotencyKey(this.database, key) }
-  list(options) { return listTasks(this.database, options) }
-  leaseNext(options = {}) { return leaseNext(this.database, options, { now: this.now, tokenFactory: this.tokenFactory }) }
+  enqueue(input) { return enqueueTask(this.#database, input, { now: this.now }) }
+  enqueueExclusiveRun(input, options = {}) {
+    return enqueueExclusiveRun(this.#database, input, { ...options, now: this.now })
+  }
+  getById(id) { return getTaskById(this.#database, id) }
+  getByIdempotencyKey(key) { return getTaskByIdempotencyKey(this.#database, key) }
+  list(options) { return listTasks(this.#database, options) }
+  leaseNext(options = {}) { return leaseNext(this.#database, options, { now: this.now, tokenFactory: this.tokenFactory }) }
   markRunning(taskOrOptions, rawOptions, rawToken) {
     const options = typeof rawOptions === 'string'
       ? { owner: rawOptions, token: rawToken }
       : rawOptions
-    return markRunning(this.database, taskOrOptions, options, { now: this.now })
+    return markRunning(this.#database, taskOrOptions, options, { now: this.now })
   }
   heartbeat(taskOrOptions, rawOptions, rawToken, rawDuration) {
     const options = typeof rawOptions === 'string'
@@ -1230,7 +1351,7 @@ export class TaskStore {
           ...(rawDuration === undefined ? {} : { leaseDurationMs: rawDuration })
         }
       : rawOptions
-    return heartbeat(this.database, taskOrOptions, options, { now: this.now })
+    return heartbeat(this.#database, taskOrOptions, options, { now: this.now })
   }
   succeed(taskOrOptions, rawOptions, rawTokenOrResult, rawResult) {
     const options = typeof rawOptions === 'string'
@@ -1238,7 +1359,7 @@ export class TaskStore {
       : rawTokenOrResult === undefined || !isPlainObject(rawOptions)
         ? rawOptions
         : { ...rawOptions, result: rawTokenOrResult }
-    return succeed(this.database, taskOrOptions, options, { now: this.now })
+    return succeed(this.#database, taskOrOptions, options, { now: this.now })
   }
   fail(taskOrOptions, rawOptions, rawTokenOrFailure, rawFailure) {
     const options = typeof rawOptions === 'string'
@@ -1246,16 +1367,16 @@ export class TaskStore {
       : (rawTokenOrFailure === undefined && rawFailure === undefined) || !isPlainObject(rawOptions)
         ? rawOptions
         : { ...rawOptions, ...(isPlainObject(rawFailure) ? rawFailure : rawTokenOrFailure) }
-    return failTask(this.database, taskOrOptions, options, { now: this.now })
+    return failTask(this.#database, taskOrOptions, options, { now: this.now })
   }
   cancel(taskOrOptions, rawOptions, rawToken) {
     const options = typeof rawOptions === 'string'
       ? { owner: rawOptions, token: rawToken }
       : rawOptions
-    return cancel(this.database, taskOrOptions, options, { now: this.now })
+    return cancel(this.#database, taskOrOptions, options, { now: this.now })
   }
   recoverExpiredLeases(options = {}) {
-    return recoverExpiredLeases(this.database, options, { now: this.now })
+    return recoverExpiredLeases(this.#database, options, { now: this.now })
   }
 }
 

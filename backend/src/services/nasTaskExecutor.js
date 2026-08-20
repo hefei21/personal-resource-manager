@@ -12,6 +12,7 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 10_000
 const DEFAULT_POLL_INTERVAL_MS = 1_000
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000
 const DEFAULT_RETRY_DELAY_MS = 1_000
+const DEFAULT_RECOVERY_INTERVAL_MS = 30_000
 const DEFAULT_QUOTA = 1
 const MAX_ERROR_SUMMARY_LENGTH = 256
 
@@ -225,7 +226,8 @@ export class NasTaskExecutor {
     const allowed = new Set([
       'store', 'taskStore', 'registry', 'processorRegistry', 'owner', 'workerId', 'leaseDurationMs', 'leaseDuration',
       'heartbeatIntervalMs', 'heartbeatInterval', 'pollIntervalMs', 'pollInterval',
-      'drainTimeoutMs', 'drainTimeout', 'retryDelayMs', 'retryDelay', 'quotas', 'quota',
+      'drainTimeoutMs', 'drainTimeout', 'retryDelayMs', 'retryDelay',
+      'recoveryIntervalMs', 'recoveryInterval', 'quotas', 'quota',
       'concurrency', 'maxConcurrency', 'clock', 'now', 'timers', 'timer', 'setTimeout',
       'clearTimeout', 'cpuQuota', 'diskQuota', 'networkQuota', 'gpuQuota'
     ])
@@ -235,7 +237,8 @@ export class NasTaskExecutor {
     this.store = options.store ?? options.taskStore
     if (!this.store || typeof this.store.leaseNext !== 'function' ||
       typeof this.store.markRunning !== 'function' || typeof this.store.heartbeat !== 'function' ||
-      typeof this.store.succeed !== 'function' || typeof this.store.fail !== 'function') {
+      typeof this.store.succeed !== 'function' || typeof this.store.fail !== 'function' ||
+      typeof this.store.recoverExpiredLeases !== 'function') {
       fail('NAS_EXECUTOR_STORE_INVALID', 'Task store does not implement the executor contract.')
     }
     this.registry = options.registry ?? options.processorRegistry
@@ -259,6 +262,20 @@ export class NasTaskExecutor {
     )
     if (this.heartbeatIntervalMs >= this.leaseDurationMs) {
       fail('NAS_EXECUTOR_HEARTBEAT_INTERVAL_INVALID', 'Heartbeat interval must be shorter than lease duration.')
+    }
+    const defaultRecoveryIntervalMs = Math.max(
+      1,
+      Math.min(DEFAULT_RECOVERY_INTERVAL_MS, Math.floor(this.leaseDurationMs / 2))
+    )
+    this.recoveryIntervalMs = resolveAlias(
+      options,
+      ['recoveryIntervalMs', 'recoveryInterval'],
+      'recoveryIntervalMs',
+      (value, fieldName) => normalizeDuration(value, fieldName),
+      defaultRecoveryIntervalMs
+    )
+    if (this.recoveryIntervalMs > this.leaseDurationMs) {
+      fail('NAS_EXECUTOR_RECOVERY_INTERVAL_INVALID', 'Recovery interval must not exceed lease duration.')
     }
     this.pollIntervalMs = resolveAlias(
       options,
@@ -319,6 +336,7 @@ export class NasTaskExecutor {
     this._runOncePromise = null
     this._dispatching = false
     this._timedOut = false
+    this._lastRecoveryAtMs = null
     this._active = new Map()
     this._activeCounts = Object.fromEntries(ALL_EXECUTION_CLASSES.map((executionClass) => [executionClass, 0]))
   }
@@ -432,8 +450,22 @@ export class NasTaskExecutor {
       active: this.activeCount
     }
     const executions = []
+    let recoveryFailed = false
     try {
+      const recoveryAtMs = this._recoveryAtIfDue()
+      if (recoveryAtMs !== null) {
+        try {
+          const recovery = this.store.recoverExpiredLeases()
+          if (recovery && typeof recovery.then === 'function') await recovery
+          this._lastRecoveryAtMs = recoveryAtMs
+        } catch (error) {
+          if (!suppressStoreErrors) throw error
+          summary.skipped += 1
+          recoveryFailed = true
+        }
+      }
       for (const executionClass of NAS_EXECUTION_CLASSES) {
+        if (recoveryFailed) break
         const quota = this.quotas[executionClass]
         const availableSlots = Math.max(0, quota - this._activeCounts[executionClass])
         for (let slot = 0; slot < availableSlots; slot += 1) {
@@ -486,6 +518,17 @@ export class NasTaskExecutor {
     summary.failed = executions.filter(({ outcome }) => outcome === 'failed').length
     summary.active = this.activeCount
     return Object.freeze(summary)
+  }
+
+  _recoveryAtIfDue() {
+    if (this.supportedProcessorIdentities.length === 0) return null
+    const nowMs = this._nowDate().getTime()
+    if (
+      this._lastRecoveryAtMs !== null &&
+      nowMs >= this._lastRecoveryAtMs &&
+      nowMs - this._lastRecoveryAtMs < this.recoveryIntervalMs
+    ) return null
+    return nowMs
   }
 
   _createRecord(task, executionClass, handler) {
