@@ -508,6 +508,65 @@ test('lease credentials and expiry protect markRunning and heartbeat', nativeTes
   }
 })
 
+test('progress updates require a live running lease and preserve task execution state', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  let now = '2026-08-20T02:00:00.000Z'
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({ database, now: () => now, tokenFactory: () => 'progress-token' })
+    const task = store.enqueue(taskInput({ subjectId: 1061 })).task
+    const lease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+
+    for (const progress of [undefined, Number.NaN, Number.POSITIVE_INFINITY, -1, 100.1]) {
+      assert.throws(
+        () => store.updateProgress({ id: task.id, owner: 'worker-a', token: lease.leaseToken, progress }),
+        (error) => error instanceof TaskStoreError && error.code === 'TASK_PROGRESS_INVALID'
+      )
+    }
+    assert.throws(
+      () => store.updateProgress({ id: task.id, owner: 'worker-a', token: lease.leaseToken, progress: 10 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_INVALID_STATE'
+    )
+
+    store.markRunning({ id: task.id, owner: 'worker-a', token: lease.leaseToken })
+    const before = store.getById(task.id)
+    now = '2026-08-20T02:00:00.250Z'
+    const updated = store.updateProgress({
+      id: task.id,
+      owner: 'worker-a',
+      token: lease.leaseToken,
+      progress: 42.5
+    })
+    assert.equal(updated.progress, 42.5)
+    assert.equal(updated.status, 'running')
+    assert.equal(updated.attemptCount, before.attemptCount)
+    assert.equal(updated.leaseOwner, before.leaseOwner)
+    assert.equal(updated.leaseToken, before.leaseToken)
+    assert.equal(updated.leaseExpiresAt, before.leaseExpiresAt)
+    assert.equal(updated.updatedAt, now)
+
+    assert.throws(
+      () => store.updateProgress({ id: task.id, owner: 'worker-b', token: lease.leaseToken, progress: 50 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_MISMATCH'
+    )
+    now = '2026-08-20T02:00:01.000Z'
+    assert.throws(
+      () => store.updateProgress({ id: task.id, owner: 'worker-a', token: lease.leaseToken, progress: 50 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_EXPIRED'
+    )
+    assert.equal(store.getById(task.id).progress, 42.5)
+
+    now = '2026-08-20T02:00:00.500Z'
+    store.succeed({ id: task.id, owner: 'worker-a', token: lease.leaseToken })
+    assert.throws(
+      () => store.updateProgress({ id: task.id, owner: 'worker-a', token: lease.leaseToken, progress: 75 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_INVALID_STATE'
+    )
+  } finally {
+    database.close()
+  }
+})
+
 test('success requires the running lease and stores canonical JSON result', nativeTestOptions, () => {
   const database = new Database(':memory:')
   let now = '2026-08-20T02:00:00.000Z'

@@ -11,6 +11,7 @@ import {
   TaskProcessorRegistry,
   TaskProcessorRegistryError
 } from '../src/services/taskProcessorRegistry.js'
+import { TaskProcessorError } from '../src/services/taskProcessorError.js'
 import {
   createNasTaskExecutor,
   NasTaskExecutorError
@@ -104,6 +105,7 @@ class FakeTaskStore {
   constructor(tasks) {
     this.tasks = tasks.map((task) => ({ ...task }))
     this.heartbeats = []
+    this.progresses = []
     this.successes = []
     this.failures = []
     this.running = []
@@ -141,6 +143,14 @@ class FakeTaskStore {
     return Object.freeze({ id: options.id, status: 'running' })
   }
 
+  updateProgress(options) {
+    const task = this.tasks.find((candidate) => candidate.id === options.id)
+    assert.ok(task)
+    task.progress = options.progress
+    this.progresses.push({ ...options })
+    return Object.freeze({ ...task })
+  }
+
   succeed(options) {
     const task = this.tasks.find((candidate) => candidate.id === options.id)
     assert.ok(task)
@@ -152,7 +162,7 @@ class FakeTaskStore {
   fail(options) {
     const task = this.tasks.find((candidate) => candidate.id === options.id)
     assert.ok(task)
-    task.status = task.attemptCount < task.maxAttempts ? 'pending' : 'failed'
+    task.status = options.retryAt && task.attemptCount < task.maxAttempts ? 'pending' : 'failed'
     this.failures.push({ ...options })
     return Object.freeze({ ...task })
   }
@@ -191,6 +201,33 @@ test('processor registry freezes route identity and rejects duplicate/conflictin
     processorVersion: 'extractor-v1',
     executionClass: 'disk'
   }])
+})
+
+test('TaskProcessorError exposes a frozen, single-line retry contract', () => {
+  const error = new TaskProcessorError({
+    code: 'TASK_INPUT_INVALID',
+    summary: 'invalid input\nstack details',
+    retryable: false
+  })
+  assert.equal(error.name, 'TaskProcessorError')
+  assert.equal(error.code, 'TASK_INPUT_INVALID')
+  assert.equal(error.summary, 'invalid input')
+  assert.equal(error.message, error.summary)
+  assert.equal(error.retryable, false)
+  assert.equal(Object.isFrozen(error), true)
+  for (const [field, value] of [['code', 'OTHER'], ['summary', 'other'], ['retryable', true]]) {
+    assert.throws(() => { error[field] = value }, TypeError)
+  }
+  const truncated = new TaskProcessorError({
+    code: 'TASK_INPUT_INVALID',
+    summary: 'x'.repeat(300),
+    retryable: true
+  })
+  assert.equal(truncated.summary.length, 256)
+  assert.throws(
+    () => new TaskProcessorError({ code: 'bad code', summary: 'invalid', retryable: true }),
+    TypeError
+  )
 })
 
 test('NAS quotas are independent and GPU is never claimable', async () => {
@@ -474,6 +511,14 @@ test('NAS executor heartbeat uses a frozen task context and clears its timer', a
   assert.equal(Object.isFrozen(context.task), true)
   assert.equal(Object.isFrozen(context), true)
   assert.equal(typeof context.heartbeat, 'function')
+  assert.equal(typeof context.progress, 'function')
+  await context.progress(37.5)
+  assert.deepEqual(store.progresses, [{
+    id: 10,
+    owner: 'nas-heartbeat',
+    token: 'lease-10',
+    progress: 37.5
+  }])
   const heartbeatTimer = timers.idsByDelay(10)[0]
   assert.ok(heartbeatTimer)
   timers.run(heartbeatTimer)
@@ -484,6 +529,125 @@ test('NAS executor heartbeat uses a frozen task context and clears its timer', a
   await round
   assert.equal(timers.idsByDelay(10).length, 0)
   await executor.stop({ timeoutMs: 0 })
+})
+
+test('NAS executor applies domain retry policy and keeps ordinary errors redacted', async () => {
+  const store = new FakeTaskStore([
+    makeFakeTask(30, 'disk', { maxAttempts: 2 }),
+    makeFakeTask(31, 'disk', { maxAttempts: 2 }),
+    makeFakeTask(32, 'disk', { maxAttempts: 1 })
+  ])
+  let retryableAttempts = 0
+  const registry = createTaskProcessorRegistry({ processors: [{
+    taskType: 'task.disk',
+    processorVersion: 'disk-v1',
+    executionClass: 'disk',
+    handler: async ({ task }) => {
+      if (task.id === 30) {
+        throw new TaskProcessorError({
+          code: 'TASK_INPUT_INVALID',
+          summary: 'invalid source at C:\\private\\input.txt\nstack details',
+          retryable: false
+        })
+      }
+      if (task.id === 31 && retryableAttempts++ === 0) {
+        throw new TaskProcessorError({
+          code: 'TASK_TEMPORARY_FAILURE',
+          summary: 'temporary processor failure',
+          retryable: true
+        })
+      }
+      if (task.id === 32) throw new Error('ordinary failure at /srv/private/source.txt\nstack details')
+      return { ok: true }
+    }
+  }] })
+  const executor = createNasTaskExecutor({
+    store,
+    registry,
+    owner: 'nas-domain-errors',
+    quotas: { cpu: 0, disk: 1, network: 0 },
+    retryDelayMs: 1000,
+    clock: () => '2026-08-20T02:00:00.000Z'
+  })
+
+  await executor.runOnce()
+  assert.equal(store.get(30).status, 'failed')
+  assert.equal(store.failures[0].errorCode, 'TASK_INPUT_INVALID')
+  assert.equal(Object.hasOwn(store.failures[0], 'retryAt'), false)
+  assert.doesNotMatch(store.failures[0].errorSummary, /(?:C:\\|\/srv\/|stack)/iu)
+
+  await executor.runOnce()
+  assert.equal(store.get(31).status, 'pending')
+  assert.equal(store.failures[1].errorCode, 'TASK_TEMPORARY_FAILURE')
+  assert.equal(store.failures[1].retryAt, '2026-08-20T02:00:01.000Z')
+
+  await executor.runOnce()
+  assert.equal(store.get(31).status, 'succeeded')
+
+  await executor.runOnce()
+  assert.equal(store.get(32).status, 'failed')
+  assert.equal(store.failures[2].errorCode, 'TASK_PROCESSOR_FAILED')
+  assert.doesNotMatch(store.failures[2].errorSummary, /(?:C:\\|\/srv\/|stack)/iu)
+  await executor.stop({ timeoutMs: 0 })
+})
+
+test('NAS executor surfaces progress store failures and rejects progress after settlement', async () => {
+  const store = new FakeTaskStore([makeFakeTask(33, 'disk')])
+  const registry = createTaskProcessorRegistry({ processors: [{
+    taskType: 'task.disk',
+    processorVersion: 'disk-v1',
+    executionClass: 'disk',
+    handler: async ({ progress }) => {
+      await progress(25)
+      return { ok: true }
+    }
+  }] })
+  store.updateProgress = () => { throw new Error('progress database unavailable') }
+  const executor = createNasTaskExecutor({
+    store,
+    registry,
+    owner: 'nas-progress-error',
+    quotas: { cpu: 0, disk: 1, network: 0 },
+    heartbeatIntervalMs: 10,
+    leaseDurationMs: 100
+  })
+  await assert.rejects(() => executor.runOnce(), /progress database unavailable/u)
+  assert.equal(store.failures.length, 0)
+  await executor.stop({ timeoutMs: 0 })
+
+  const retainedContextStore = new FakeTaskStore([makeFakeTask(34, 'disk')])
+  let context
+  let release
+  const waiting = new Promise((resolve) => { release = resolve })
+  const retainedContextRegistry = createTaskProcessorRegistry({ processors: [{
+    taskType: 'task.disk',
+    processorVersion: 'disk-v1',
+    executionClass: 'disk',
+    handler: async (received) => {
+      context = received
+      await waiting
+      return { ok: true }
+    }
+  }] })
+  const timers = new ManualTimers()
+  const retainedContextExecutor = createNasTaskExecutor({
+    store: retainedContextStore,
+    registry: retainedContextRegistry,
+    owner: 'nas-progress-stop',
+    quotas: { cpu: 0, disk: 1, network: 0 },
+    leaseDurationMs: 100,
+    heartbeatIntervalMs: 10,
+    timers
+  })
+  const round = retainedContextExecutor.runOnce()
+  await Promise.resolve()
+  await Promise.resolve()
+  const stopPromise = retainedContextExecutor.stop({ timeoutMs: 100 })
+  await context.progress(50)
+  release()
+  await round
+  await stopPromise
+  await assert.rejects(() => context.progress(75), /no longer allowed/u)
 })
 
 test('NAS executor stop drains before deadline and timeout leaves lease recovery in charge', async () => {
@@ -539,6 +703,12 @@ test('NAS executor rejects invalid heartbeat interval and nonzero GPU quota earl
   assert.throws(
     () => createNasTaskExecutor({ ...base, quotas: { gpu: 1 } }),
     (error) => error instanceof NasTaskExecutorError && error.code === 'NAS_EXECUTOR_QUOTA_INVALID'
+  )
+  const missingProgressStore = new FakeTaskStore([])
+  missingProgressStore.updateProgress = undefined
+  assert.throws(
+    () => createNasTaskExecutor({ ...base, store: missingProgressStore }),
+    (error) => error instanceof NasTaskExecutorError && error.code === 'NAS_EXECUTOR_STORE_INVALID'
   )
 })
 

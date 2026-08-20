@@ -218,6 +218,13 @@ function normalizeInteger(value, fieldName, { min = 0, max = Number.MAX_SAFE_INT
   return resolved
 }
 
+function normalizeProgress(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+    fail('TASK_PROGRESS_INVALID', 'progress must be a finite number between 0 and 100.')
+  }
+  return Object.is(value, -0) ? 0 : value
+}
+
 function normalizeDuration(value, fieldName = 'leaseDurationMs') {
   if (!Number.isSafeInteger(value) || value < 1 || value > MAX_LEASE_DURATION_MS) {
     fail('TASK_DURATION_INVALID', `${fieldName} must be a positive duration in milliseconds.`)
@@ -713,6 +720,21 @@ function normalizeCredentialActionOptions(taskOrOptions, rawOptions, fieldName) 
   return Object.freeze({ id: source.id, owner: credentials.owner, token: credentials.token, now: source.now })
 }
 
+function normalizeProgressOptions(taskOrOptions, rawOptions) {
+  const source = normalizeTaskActionOptions(taskOrOptions, rawOptions, new Set([
+    'id', 'taskId', 'owner', 'leaseOwner', 'token', 'leaseToken', 'progress', 'now'
+  ]), 'updateProgress')
+  const credentials = normalizeLeaseCredentials(source)
+  if (!Object.hasOwn(source, 'progress')) fail('TASK_PROGRESS_INVALID', 'progress is required.')
+  return Object.freeze({
+    id: source.id,
+    owner: credentials.owner,
+    token: credentials.token,
+    progress: normalizeProgress(source.progress),
+    now: source.now
+  })
+}
+
 function normalizeSucceedOptions(taskOrOptions, rawOptions) {
   const source = normalizeTaskActionOptions(taskOrOptions, rawOptions, new Set([
     'id', 'taskId', 'owner', 'leaseOwner', 'token', 'leaseToken', 'result', 'now'
@@ -1100,6 +1122,35 @@ export function heartbeat(database, taskOrOptions, rawOptions, dependencies = {}
   }
 }
 
+export function updateProgress(database, taskOrOptions, rawOptions, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeProgressOptions(taskOrOptions, rawOptions)
+  const timestamp = operationTimestamp(normalized.now, dependencies.now)
+  try {
+    const row = runImmediateTransaction(database, () => {
+      const current = readById(database, normalized.id)
+      assertUsableLease(current, [TASK_STATUS_RUNNING], normalized, timestamp)
+      protectedUpdate(database, `
+        UPDATE ${TASK_TABLE}
+           SET progress = ?,
+               updated_at = ?
+         WHERE id = ?
+           AND status = 'running'
+           AND lease_owner = ?
+           AND lease_token = ?
+           AND lease_expires_at > ?
+      `, [
+        normalized.progress, timestamp, normalized.id,
+        normalized.owner, normalized.token, timestamp
+      ])
+      return readById(database, normalized.id)
+    })
+    return publicTask(row)
+  } catch (error) {
+    operationError(error)
+  }
+}
+
 export function succeed(database, taskOrOptions, rawOptions, dependencies = {}) {
   assertDatabase(database, true)
   const normalized = normalizeSucceedOptions(taskOrOptions, rawOptions)
@@ -1352,6 +1403,14 @@ export class TaskStore {
         }
       : rawOptions
     return heartbeat(this.#database, taskOrOptions, options, { now: this.now })
+  }
+  updateProgress(taskOrOptions, rawOptions, rawToken, rawProgress) {
+    const options = typeof rawOptions === 'string'
+      ? { owner: rawOptions, token: rawToken, progress: rawProgress }
+      : rawProgress === undefined || !isPlainObject(rawOptions)
+        ? rawOptions
+        : { ...rawOptions, progress: rawToken }
+    return updateProgress(this.#database, taskOrOptions, options, { now: this.now })
   }
   succeed(taskOrOptions, rawOptions, rawTokenOrResult, rawResult) {
     const options = typeof rawOptions === 'string'

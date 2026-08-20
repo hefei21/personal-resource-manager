@@ -2,6 +2,7 @@ import {
   normalizeProcessorIdentity,
   TaskProcessorRegistryError
 } from './taskProcessorRegistry.js'
+import { TaskProcessorError } from './taskProcessorError.js'
 
 const NAS_EXECUTION_CLASSES = Object.freeze(['cpu', 'disk', 'network'])
 const ALL_EXECUTION_CLASSES = Object.freeze(['cpu', 'disk', 'network', 'gpu'])
@@ -15,6 +16,7 @@ const DEFAULT_RETRY_DELAY_MS = 1_000
 const DEFAULT_RECOVERY_INTERVAL_MS = 30_000
 const DEFAULT_QUOTA = 1
 const MAX_ERROR_SUMMARY_LENGTH = 256
+const TASK_PROGRESS_REJECTED = 'TASK_PROGRESS_REJECTED'
 
 export const NAS_TASK_EXECUTOR_ERROR_CODES = Object.freeze({
   PROCESSOR_FAILED: 'TASK_PROCESSOR_FAILED',
@@ -124,12 +126,16 @@ function toDate(value) {
 }
 
 function safeErrorSummary(error) {
-  const message = error && typeof error.message === 'string'
-    ? error.message
-    : typeof error === 'string'
-      ? error
-      : ''
-  const firstLine = message.split(/[\r\n]/u, 1)[0].trim()
+  const message = error && typeof error.summary === 'string'
+    ? error.summary
+    : error && typeof error.message === 'string'
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : ''
+  const firstLine = message.split(/[\r\n]/u, 1)[0]
+    .replace(/[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f]/gu, ' ')
+    .trim()
   if (!firstLine) return 'Processor execution failed.'
   const withoutWindowsPath = firstLine.replace(/[A-Za-z]:[\\/][^<>:"|?*\r\n]*/gu, '<path>')
   const withoutPosixPath = withoutWindowsPath.replace(
@@ -237,6 +243,7 @@ export class NasTaskExecutor {
     this.store = options.store ?? options.taskStore
     if (!this.store || typeof this.store.leaseNext !== 'function' ||
       typeof this.store.markRunning !== 'function' || typeof this.store.heartbeat !== 'function' ||
+      typeof this.store.updateProgress !== 'function' ||
       typeof this.store.succeed !== 'function' || typeof this.store.fail !== 'function' ||
       typeof this.store.recoverExpiredLeases !== 'function') {
       fail('NAS_EXECUTOR_STORE_INVALID', 'Task store does not implement the executor contract.')
@@ -512,7 +519,11 @@ export class NasTaskExecutor {
       this._maybeFinishDrain()
     }
     if (waitForExecutions && executions.length > 0) {
-      await Promise.allSettled(executions.map(({ promise }) => promise))
+      const results = await Promise.allSettled(executions.map(({ promise }) => promise))
+      const rejected = results.find((result) => result.status === 'rejected')
+      if (rejected) throw rejected.reason
+    } else {
+      for (const { promise } of executions) void promise.catch(() => {})
     }
     summary.succeeded = executions.filter(({ outcome }) => outcome === 'succeeded').length
     summary.failed = executions.filter(({ outcome }) => outcome === 'failed').length
@@ -542,6 +553,8 @@ export class NasTaskExecutor {
       heartbeatStopped: false,
       heartbeatFailed: false,
       allowTerminalWrite: true,
+      progressAllowed: this._state !== 'stopping' && this._state !== 'stopped',
+      progressError: null,
       settled: false,
       outcome: 'running',
       promise: null
@@ -564,7 +577,8 @@ export class NasTaskExecutor {
     return Object.freeze({
       task: record.task,
       signal: record.controller.signal,
-      heartbeat: () => this._controlledHeartbeat(record)
+      heartbeat: () => this._controlledHeartbeat(record),
+      progress: async (value) => this._controlledProgress(record, value)
     })
   }
 
@@ -574,6 +588,10 @@ export class NasTaskExecutor {
       try {
         result = await record.handler(this._contextFor(record))
       } catch (error) {
+        if (record.progressError) {
+          record.outcome = 'abandoned'
+          throw record.progressError
+        }
         if (record.allowTerminalWrite && !record.heartbeatFailed) {
           await this._failRecord(record, error)
           record.outcome = 'failed'
@@ -581,6 +599,10 @@ export class NasTaskExecutor {
           record.outcome = 'abandoned'
         }
         return
+      }
+      if (record.progressError) {
+        record.outcome = 'abandoned'
+        throw record.progressError
       }
       if (!record.allowTerminalWrite || record.heartbeatFailed) {
         record.outcome = 'abandoned'
@@ -605,20 +627,26 @@ export class NasTaskExecutor {
 
   async _failRecord(record, error) {
     let retryAt
-    try {
-      retryAt = new Date(this._nowDate().getTime() + this.retryDelayMs).toISOString()
-    } catch {
-      retryAt = undefined
+    const retryable = error instanceof TaskProcessorError ? error.retryable : true
+    if (retryable) {
+      try {
+        retryAt = new Date(this._nowDate().getTime() + this.retryDelayMs).toISOString()
+      } catch {
+        retryAt = undefined
+      }
     }
     try {
-      await this.store.fail({
+      const failure = {
         id: record.task.id,
         owner: this.owner,
         token: record.task.leaseToken,
-        errorCode: NAS_TASK_EXECUTOR_ERROR_CODES.PROCESSOR_FAILED,
+        errorCode: error instanceof TaskProcessorError
+          ? error.code
+          : NAS_TASK_EXECUTOR_ERROR_CODES.PROCESSOR_FAILED,
         errorSummary: safeErrorSummary(error),
         ...(retryAt === undefined ? {} : { retryAt })
-      })
+      }
+      await this.store.fail(failure)
     } catch {
       // A lost/expired lease is intentionally left for lease recovery.
     }
@@ -669,6 +697,30 @@ export class NasTaskExecutor {
     })
   }
 
+  async _controlledProgress(record, value) {
+    if (record.settled || !record.progressAllowed || !record.allowTerminalWrite) {
+      throw new NasTaskExecutorError(
+        TASK_PROGRESS_REJECTED,
+        'Task progress updates are no longer allowed.'
+      )
+    }
+    try {
+      return await this.store.updateProgress({
+        id: record.task.id,
+        owner: this.owner,
+        token: record.task.leaseToken,
+        progress: value
+      })
+    } catch (error) {
+      record.progressError = error
+      record.progressAllowed = false
+      record.allowTerminalWrite = false
+      this._stopHeartbeat(record)
+      record.controller.abort()
+      throw error
+    }
+  }
+
   _stopHeartbeat(record) {
     record.heartbeatStopped = true
     if (record.heartbeatTimer !== null) {
@@ -690,6 +742,7 @@ export class NasTaskExecutor {
     if (this._state !== 'stopping') return
     this._timedOut = true
     for (const record of this._active.values()) {
+      record.progressAllowed = false
       record.allowTerminalWrite = false
       this._stopHeartbeat(record)
       record.controller.abort()
