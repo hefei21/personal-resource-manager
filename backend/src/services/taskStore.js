@@ -12,6 +12,7 @@ const DEFAULT_LEASE_DURATION_MS = 60_000
 const MAX_LEASE_DURATION_MS = 365 * 24 * 60 * 60 * 1000
 const DEFAULT_LIST_LIMIT = 50
 const MAX_LIST_LIMIT = 100
+const MAX_SUPPORTED_PROCESSOR_IDENTITIES = 100
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
 const MAX_ERROR_SUMMARY_LENGTH = 2048
 const TASK_STATUS_SET = new Set(['pending', 'leased', 'running', 'succeeded', 'failed', 'cancelled'])
@@ -323,6 +324,79 @@ function normalizeExecutionClass(value) {
   return resolved
 }
 
+function normalizeSupportedProcessorIdentity(value, fieldName = 'supported processor') {
+  const source = isPlainObject(value) && Object.hasOwn(value, 'handler') && typeof value.handler === 'function'
+    ? {
+        taskType: value.taskType,
+        processorVersion: value.processorVersion,
+        executionClass: value.executionClass
+      }
+    : value
+  assertOptionsObject(source, fieldName)
+  const allowed = new Set(['taskType', 'processorVersion', 'executionClass'])
+  if (Object.keys(source).some((key) => !allowed.has(key))) {
+    fail('TASK_PROCESSOR_IDENTITY_INVALID', `${fieldName} contains unsupported fields.`)
+  }
+  if (!Object.hasOwn(source, 'executionClass')) {
+    fail('TASK_PROCESSOR_IDENTITY_INVALID', `${fieldName}.executionClass is required.`)
+  }
+  return Object.freeze({
+    taskType: normalizeToken(source.taskType, `${fieldName}.taskType`),
+    processorVersion: normalizeToken(source.processorVersion, `${fieldName}.processorVersion`),
+    executionClass: normalizeExecutionClass(source.executionClass)
+  })
+}
+
+function supportedProcessorIdentityKey(identity) {
+  return `${identity.taskType}\u001f${identity.processorVersion}\u001f${identity.executionClass}`
+}
+
+function resolveSupportedProcessorSource(value) {
+  if (Array.isArray(value)) return value
+  if (value && typeof value.getSupportedProcessorIdentities === 'function') {
+    return value.getSupportedProcessorIdentities()
+  }
+  if (value && typeof value.getProcessorIdentities === 'function') {
+    return value.getProcessorIdentities()
+  }
+  if (value && typeof value.list === 'function') {
+    return value.list()
+  }
+  fail('TASK_PROCESSOR_IDENTITY_INVALID', 'Supported processors must be an array or registry.')
+}
+
+function normalizeSupportedProcessorIdentities(options) {
+  const names = ['supportedProcessors', 'supportedProcessorIdentities', 'processorIdentities']
+    .filter((key) => Object.hasOwn(options, key) && options[key] !== undefined)
+  if (names.length === 0) return null
+  const normalizedByName = names.map((name) => {
+    const source = resolveSupportedProcessorSource(options[name])
+    if (!Array.isArray(source)) fail('TASK_PROCESSOR_IDENTITY_INVALID', `${name} must be an array.`)
+    if (source.length > MAX_SUPPORTED_PROCESSOR_IDENTITIES) {
+      fail('TASK_PROCESSOR_IDENTITY_INVALID', `${name} exceeds the supported processor limit.`)
+    }
+    const seen = new Set()
+    const identities = []
+    for (const value of source) {
+      const identity = normalizeSupportedProcessorIdentity(value, `${name} entry`)
+      const key = supportedProcessorIdentityKey(identity)
+      if (!seen.has(key)) {
+        seen.add(key)
+        identities.push(identity)
+      }
+    }
+    return identities
+  })
+  const firstKeys = new Set(normalizedByName[0].map(supportedProcessorIdentityKey))
+  if (normalizedByName.some((identities) => {
+    const keys = new Set(identities.map(supportedProcessorIdentityKey))
+    return keys.size !== firstKeys.size || [...keys].some((key) => !firstKeys.has(key))
+  })) {
+    fail('TASK_INPUT_INVALID', 'Supported processor aliases must match.')
+  }
+  return Object.freeze(normalizedByName[0])
+}
+
 function normalizeEnqueueInput(input, now) {
   assertOptionsObject(input, 'task input')
   const allowed = new Set([
@@ -509,7 +583,9 @@ function normalizeLeaseNextOptions(options = {}) {
   assertOptionsObject(options, 'lease options')
   const allowed = new Set([
     'owner', 'leaseOwner', 'leaseDurationMs', 'leaseDuration', 'durationMs',
-    'executionClass', 'executionClasses', 'now', 'tokenFactory', 'leaseTokenFactory'
+    'executionClass', 'executionClasses', 'supportedProcessors',
+    'supportedProcessorIdentities', 'processorIdentities', 'now', 'tokenFactory',
+    'leaseTokenFactory'
   ])
   if (Object.keys(options).some((key) => !allowed.has(key))) {
     fail('TASK_INPUT_INVALID', 'Lease options contain unsupported fields.')
@@ -534,6 +610,7 @@ function normalizeLeaseNextOptions(options = {}) {
     owner: credentials.owner,
     leaseDurationMs,
     executionClasses,
+    supportedProcessorIdentities: normalizeSupportedProcessorIdentities(options),
     now: options.now,
     tokenFactory: tokenFactories[0]
   })
@@ -738,6 +815,20 @@ export function enqueueTask(database, input, options = {}) {
 const defaultLeaseTokenFactory = () => randomBytes(32).toString('base64url')
 const LEASE_EXPIRED_SUMMARY = 'Task lease expired before completion.'
 
+function supportedProcessorClause(identities) {
+  if (identities === null) return { sql: '', parameters: [] }
+  if (identities.length === 0) return { sql: ' AND 0 = 1', parameters: [] }
+  const clauses = identities.map(() => '(task_type = ? AND processor_version = ? AND execution_class = ?)')
+  return {
+    sql: ` AND (${clauses.join(' OR ')})`,
+    parameters: identities.flatMap(({ taskType, processorVersion, executionClass }) => [
+      taskType,
+      processorVersion,
+      executionClass
+    ])
+  }
+}
+
 function operationTimestamp(rawNow, fallbackNow) {
   return operationNow(rawNow === undefined ? fallbackNow : rawNow)
 }
@@ -768,7 +859,12 @@ export function leaseNext(database, options = {}, dependencies = {}) {
       const classClause = normalized.executionClasses
         ? ` AND execution_class IN (${normalized.executionClasses.map(() => '?').join(', ')})`
         : ''
-      const selectionParameters = [timestamp, ...normalized.executionClasses ?? []]
+      const processorClause = supportedProcessorClause(normalized.supportedProcessorIdentities)
+      const selectionParameters = [
+        timestamp,
+        ...normalized.executionClasses ?? [],
+        ...processorClause.parameters
+      ]
       const candidate = database.prepare(`
         SELECT id
           FROM ${TASK_TABLE}
@@ -776,6 +872,7 @@ export function leaseNext(database, options = {}, dependencies = {}) {
            AND available_at <= ?
            AND attempt_count < max_attempts
            ${classClause}
+           ${processorClause.sql}
          ORDER BY priority DESC, available_at ASC, id ASC
          LIMIT 1
       `).get(...selectionParameters)
@@ -801,6 +898,7 @@ export function leaseNext(database, options = {}, dependencies = {}) {
            AND available_at <= ?
            AND attempt_count < max_attempts
            ${classClause}
+           ${processorClause.sql}
       `).run(
         leaseToken,
         normalized.owner,
@@ -809,7 +907,8 @@ export function leaseNext(database, options = {}, dependencies = {}) {
         timestamp,
         candidate.id,
         timestamp,
-        ...normalized.executionClasses ?? []
+        ...normalized.executionClasses ?? [],
+        ...processorClause.parameters
       )
       if (update.changes !== 1) return null
       return readById(database, candidate.id)

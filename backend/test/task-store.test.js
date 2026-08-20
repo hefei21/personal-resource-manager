@@ -139,6 +139,17 @@ test('task input validation rejects circular JSON and invalid scheduling values 
     (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_CREDENTIALS_INVALID'
   )
   assert.throws(
+    () => store.leaseNext({
+      owner: 'worker-1',
+      supportedProcessors: Array.from({ length: 101 }, (_, index) => ({
+        taskType: `task.${index}`,
+        processorVersion: 'v1',
+        executionClass: 'cpu'
+      }))
+    }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_PROCESSOR_IDENTITY_INVALID'
+  )
+  assert.throws(
     () => store.fail({ id: 1, owner: 'worker-1', token: 'lease-token', errorCode: 'bad code', errorSummary: 'failure' }),
     (error) => error instanceof TaskStoreError && error.code === 'TASK_ERROR_INVALID'
   )
@@ -270,6 +281,53 @@ test('leaseNext applies readiness, priority, available time, and execution-class
     const cpuLease = store.leaseNext({ owner: 'worker-cpu', leaseDurationMs: 5000, executionClass: 'cpu' })
     assert.equal(cpuLease.id, cpuReady.id)
     assert.equal(store.leaseNext({ owner: 'worker-disk', leaseDurationMs: 5000, executionClass: 'disk' }), null)
+  } finally {
+    database.close()
+  }
+})
+
+test('leaseNext supported processor filtering binds task type, version, and execution class', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({
+      database,
+      now: '2026-08-20T02:00:00.000Z',
+      tokenFactory: () => 'supported-processor-token'
+    })
+    const supported = store.enqueue(taskInput({ subjectId: 120, executionClass: 'disk', priority: 1 })).task
+    const gpu = store.enqueue(taskInput({ subjectId: 121, executionClass: 'gpu', priority: 100 })).task
+    const wrongVersion = store.enqueue(taskInput({
+      subjectId: 122,
+      processorVersion: 'extractor-v2',
+      executionClass: 'disk',
+      priority: 100
+    })).task
+    const unknown = store.enqueue(taskInput({
+      subjectId: 123,
+      taskType: 'unknown.processor',
+      processorVersion: 'unknown-v1',
+      executionClass: 'disk',
+      priority: 100
+    })).task
+
+    const lease = store.leaseNext({
+      owner: 'nas-worker',
+      leaseDurationMs: 5000,
+      supportedProcessors: [{
+        taskType: 'document.extract',
+        processorVersion: 'extractor-v1',
+        executionClass: 'disk'
+      }]
+    })
+    assert.equal(lease.id, supported.id)
+    assert.equal(lease.attemptCount, 1)
+    assert.equal(store.getById(gpu.id).status, 'pending')
+    assert.equal(store.getById(gpu.id).attemptCount, 0)
+    assert.equal(store.getById(wrongVersion.id).status, 'pending')
+    assert.equal(store.getById(wrongVersion.id).attemptCount, 0)
+    assert.equal(store.getById(unknown.id).status, 'pending')
+    assert.equal(store.getById(unknown.id).attemptCount, 0)
   } finally {
     database.close()
   }
