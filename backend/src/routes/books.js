@@ -31,7 +31,18 @@ import {
   EBOOK_COVER_TASK_TYPE,
   EBOOK_COVER_TASK_TYPES
 } from '../services/ebookCoverTaskProcessor.js'
+import {
+  createEbookMetadataTaskProcessor,
+  EBOOK_METADATA_EXECUTION_CLASS,
+  EBOOK_METADATA_PARSER_VERSION,
+  EBOOK_METADATA_PROCESSOR_VERSION,
+  EBOOK_METADATA_SUBJECT_TYPE,
+  EBOOK_METADATA_TASK_TYPE,
+  EBOOK_METADATA_TASK_TYPES,
+  parseEpubMetadata as parseManagedEpubMetadata
+} from '../services/ebookMetadataTaskProcessor.js'
 import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
+import { projectTask } from '../services/taskTypeCatalog.js'
 import {
   listDeletedEbooks,
   permanentlyDeleteEbook,
@@ -49,6 +60,25 @@ const BOOK_UPLOAD_POLICY = {
   maxChunkBytes: 11 * 1024 * 1024,
   maxTotalBytes: 500 * 1024 * 1024
 }
+
+const EBOOK_METADATA_PUBLIC_ERROR_CODES = new Set([
+  'EBOOK_METADATA_BOOK_NOT_FOUND',
+  'EBOOK_METADATA_NOT_EPUB',
+  'EBOOK_METADATA_SOURCE_MISSING',
+  'EBOOK_METADATA_SOURCE_INVALID',
+  'EBOOK_METADATA_CONTENT_HASH_MISSING',
+  'EBOOK_METADATA_CONTENT_CHANGED',
+  'EBOOK_METADATA_ARCHIVE_INVALID',
+  'EBOOK_METADATA_OPF_MISSING',
+  'EBOOK_METADATA_NO_FIELDS',
+  'EBOOK_METADATA_PARSE_FAILED',
+  'EBOOK_METADATA_PARSE_TIMEOUT',
+  'EBOOK_METADATA_INPUT_INVALID',
+  'EBOOK_METADATA_DATABASE_UNAVAILABLE',
+  'EBOOK_METADATA_CANCELLED',
+  'EBOOK_METADATA_TASK_ENQUEUE_FAILED'
+])
+const EBOOK_METADATA_STATUS_SET = new Set(['ready', 'pending', 'partial', 'failed'])
 
 function validateEpubArchive(filePath) {
   const archive = new AdmZip(filePath)
@@ -180,175 +210,6 @@ function extractPdfCover(pdfPath) {
   // PDF封面提取需要额外的库如 pdf-poppler 或 pdf2pic
   // 这些库需要系统安装 poppler-utils，暂时不实现
   return null
-}
-
-// 辅助函数：从XML中提取文本内容（处理CDATA和嵌套标签）
-function extractXmlText(xmlString, tagPattern) {
-  // 尝试多种匹配模式
-  const patterns = [
-    // 标准格式 <dc:tag>content</dc:tag>
-    new RegExp(`<${tagPattern}[^>]*>([^<]*)</${tagPattern}>`, 'i'),
-    // 带命名空间的格式
-    new RegExp(`<[^:]+:${tagPattern}[^>]*>([^<]*)</[^:]+:${tagPattern}>`, 'i'),
-    // 自闭合标签（无内容）
-    new RegExp(`<${tagPattern}[^>]*>\\s*([^<\\s][^<]*)\\s*</${tagPattern}>`, 'i')
-  ]
-  
-  for (const pattern of patterns) {
-    const match = xmlString.match(pattern)
-    if (match && match[1]) {
-      // 清理内容：去除前后空白、解码HTML实体
-      let content = match[1].trim()
-      // 解码常见HTML实体
-      content = content.replace(/&amp;/g, '&')
-                      .replace(/&lt;/g, '<')
-                      .replace(/&gt;/g, '>')
-                      .replace(/&quot;/g, '"')
-                      .replace(/&#39;/g, "'")
-                      .replace(/&apos;/g, "'")
-      return content
-    }
-  }
-  return null
-}
-
-// 辅助函数：解析EPUB元数据
-function parseEpubMetadata(epubPath) {
-  try {
-    console.log('📖 开始解析EPUB元数据')
-    const zip = new AdmZip(epubPath)
-    const zipEntries = zip.getEntries()
-
-    // 从 container.xml 找 OPF 路径
-    let opfPath = null
-    const containerEntry = zipEntries.find(e => e.entryName === 'META-INF/container.xml')
-    if (containerEntry) {
-      const containerXml = containerEntry.getData().toString('utf8')
-      const rootfileMatch = containerXml.match(/<rootfile[^>]*full-path=["']([^"']+)["']/i)
-      if (rootfileMatch) {
-        opfPath = rootfileMatch[1]
-        console.log(`📋 从container.xml找到OPF路径: ${opfPath}`)
-      }
-    }
-
-    // 查找OPF文件
-    let opfEntry = null
-    if (opfPath) {
-      opfEntry = zipEntries.find(e => e.entryName === opfPath)
-    }
-    if (!opfEntry) {
-      opfEntry = zipEntries.find(e => e.entryName.endsWith('.opf'))
-    }
-
-    if (!opfEntry) {
-      console.log(`⚠️ 未找到OPF文件，无法解析元数据`)
-      return null
-    }
-
-    console.log(`📄 找到OPF文件: ${opfEntry.entryName}`)
-    const opfContent = opfEntry.getData().toString('utf8')
-    
-    // 调试：打印OPF内容的前500字符
-    console.log(`📄 OPF内容预览: ${opfContent.substring(0, 500)}...`)
-
-    // 解析元数据
-    const metadata = {
-      title: null,
-      author: null,
-      publisher: null,
-      year: null,
-      isbn: null,
-      description: null
-    }
-
-    // 提取标题 - 多种格式尝试
-    metadata.title = extractXmlText(opfContent, 'dc:title')
-    if (!metadata.title) {
-      // 尝试不带命名空间的格式
-      const titleMatch = opfContent.match(/<title[^>]*>([^<]*)<\/title>/i)
-      if (titleMatch) metadata.title = titleMatch[1].trim()
-    }
-
-    // 提取作者 - 多种格式尝试
-    metadata.author = extractXmlText(opfContent, 'dc:creator')
-    if (!metadata.author) {
-      // 尝试查找 creator 标签的其他格式
-      const creatorMatches = opfContent.matchAll(/<[^>]*creator[^>]*>([^<]+)<\/[^>]*creator>/gi)
-      const authors = []
-      for (const match of creatorMatches) {
-        if (match[1] && match[1].trim()) {
-          authors.push(match[1].trim())
-        }
-      }
-      if (authors.length > 0) {
-        metadata.author = authors.join(', ')
-      }
-    }
-
-    // 提取出版社
-    metadata.publisher = extractXmlText(opfContent, 'dc:publisher')
-
-    // 提取日期/年份 - 多种格式
-    const datePatterns = [
-      /<dc:date[^>]*>([^<]*)<\/dc:date>/i,
-      /<[^:]+:date[^>]*>([^<]*)<\/[^:]+:date>/i,
-      /<meta[^>]*property=["']dcterms:modified["'][^>]*>([^<]*)</i,
-      /<meta[^>]*name=["']date["'][^>]*content=["']([^"']+)["']/i
-    ]
-    for (const pattern of datePatterns) {
-      const match = opfContent.match(pattern)
-      if (match && match[1]) {
-        const dateStr = match[1].trim()
-        const yearMatch = dateStr.match(/(\d{4})/)
-        if (yearMatch) {
-          metadata.year = yearMatch[1]
-          break
-        }
-      }
-    }
-
-    // 提取ISBN - 多种格式
-    const isbnPatterns = [
-      /<dc:identifier[^>]*scheme=["']ISBN["'][^>]*>([^<]*)<\/dc:identifier>/i,
-      /<dc:identifier[^>]*>([^<]*ISBN[^<]*)<\/dc:identifier>/i,
-      /<[^:]+:identifier[^>]*>([^<]*ISBN[^<]*)<\/[^:]+:identifier>/i,
-      /ISBN[:\s]*(97[89][\d-]+)/i
-    ]
-    for (const pattern of isbnPatterns) {
-      const match = opfContent.match(pattern)
-      if (match) {
-        if (pattern.toString().includes('ISBN[:\\s]*')) {
-          metadata.isbn = match[1]
-        } else {
-          metadata.isbn = match[1].replace(/ISBN[:\s]*/i, '').trim()
-        }
-        if (metadata.isbn) break
-      }
-    }
-
-    // 提取描述/简介
-    metadata.description = extractXmlText(opfContent, 'dc:description')
-    if (!metadata.description) {
-      // 尝试其他描述标签
-      const descPatterns = [
-        /<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i,
-        /<meta[^>]*property=["']dcterms:description["'][^>]*>([^<]*)</i
-      ]
-      for (const pattern of descPatterns) {
-        const match = opfContent.match(pattern)
-        if (match && match[1]) {
-          metadata.description = match[1].trim()
-          break
-        }
-      }
-    }
-
-    console.log(`✅ EPUB元数据解析成功:`, metadata)
-    return metadata
-  } catch (error) {
-    console.error('❌ 解析EPUB元数据失败:', error)
-    return null
-  }
 }
 
 // 辅助函数：解析EPUB目录（TOC）
@@ -755,21 +616,15 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
       isbn: null,
       description: null
     }
+    let metadataStatus = 'ready'
+    let metadataErrorCode = null
 
     if (fileType === 'epub') {
       console.log(`📖 开始解析EPUB元数据...`)
-      const epubMetadata = parseEpubMetadata(finalPath)
-      if (epubMetadata) {
-        metadata = { ...metadata, ...epubMetadata }
-        console.log(`✅ 元数据解析结果:`, {
-          书名: metadata.title,
-          作者: metadata.author,
-          出版社: metadata.publisher,
-          年份: metadata.year
-        })
-      } else {
-        console.log(`⚠️ 元数据解析返回空，使用默认值`)
-      }
+      const parsed = bestEffortEbookMetadata(finalPath, fileName)
+      metadata = parsed.metadata
+      metadataStatus = parsed.status
+      metadataErrorCode = parsed.errorCode
     }
 
     staged = await stageTemporaryFile(finalPath)
@@ -780,7 +635,9 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
       stagingToken: staged.token,
       contentSha256: staged.sha256,
       contentBytes: staged.bytes,
-      originalName: fileName
+      originalName: fileName,
+      metadataStatus,
+      metadataErrorCode
     } })
   } catch (error) {
     console.error('合并分片失败:', error)
@@ -830,21 +687,22 @@ router.post('/parse-metadata', authenticateToken, requireWritePermission, upload
       isbn: null,
       description: null
     }
+    let metadataStatus = 'ready'
+    let metadataErrorCode = null
 
     // 解析EPUB元数据
     if (fileType === 'epub') {
-      const epubMetadata = parseEpubMetadata(filePath)
-      if (epubMetadata) {
-        metadata = { ...metadata, ...epubMetadata }
-      }
+      const parsed = bestEffortEbookMetadata(filePath, req.file.originalname)
+      metadata = parsed.metadata
+      metadataStatus = parsed.status
+      metadataErrorCode = parsed.errorCode
     }
 
     // 删除临时文件
-    res.json({ data: metadata })
+    res.json({ data: { ...metadata, metadataStatus, metadataErrorCode } })
   } catch (error) {
-    console.error('解析元数据失败:', error)
-    // 删除临时文件
-    res.status(500).json({ message: '解析失败', error: error.message })
+    console.error('解析元数据失败:', stableEbookMetadataErrorCode(error))
+    res.status(500).json({ code: stableEbookMetadataErrorCode(error), message: '解析失败' })
   } finally {
     if (filePath) fs.rmSync(filePath, { force: true })
   }
@@ -921,6 +779,8 @@ router.get('/', authenticateToken, async (req, res) => {
       fileType: row.file_type,
       fileSize: row.file_size,
       totalPages: row.total_pages,
+      metadataStatus: publicEbookMetadataStatus(row.metadata_status),
+      metadataErrorCode: publicEbookMetadataErrorCode(row.metadata_error_code),
       currentPage: row.current_page || 0,
       progress: row.progress || 0,
       fontSize: row.font_size || 16,
@@ -958,8 +818,30 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
 
     const db = getDatabase()
 
+    const requestedFields = { title, author, year, publisher, isbn, description, categoryId }
+    const metadataAttempt = fileType === 'epub'
+      ? bestEffortEbookMetadata(filePath, req.file.originalname)
+      : Object.freeze({
+          metadata: fallbackEbookMetadata(req.file.originalname),
+          status: 'ready',
+          errorCode: null,
+          needsReparse: false
+        })
+    const uploadFields = fileType === 'epub'
+      ? mergeEbookMetadataFields(requestedFields, metadataAttempt.metadata)
+      : requestedFields
+    const metadataState = fileType === 'epub'
+      ? Object.freeze({
+          status: metadataAttempt.needsReparse
+            ? 'pending'
+            : metadataStatusForValues(uploadFields),
+          errorCode: metadataAttempt.errorCode
+        })
+      : Object.freeze({ status: 'ready', errorCode: null })
+
     // 检查重名
-    let finalTitle = title || req.file.originalname.replace(/\.[^/.]+$/, '')
+    const titleBase = uploadFields.title || req.file.originalname.replace(/\.[^/.]+$/, '')
+    let finalTitle = titleBase
     let suffix = 1
     let unique = false
 
@@ -969,7 +851,7 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
       if (!existing) {
         unique = true
       } else {
-        finalTitle = `${title || req.file.originalname.replace(/\.[^/.]+$/, '')} (${suffix})`
+        finalTitle = `${titleBase} (${suffix})`
         suffix++
       }
     }
@@ -1014,23 +896,38 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
       database: db,
       staged,
       originalName: req.file.originalname,
-      fields: { title: finalTitle, author, year, publisher, isbn, description, categoryId },
+      fields: { ...uploadFields, title: finalTitle },
       totalPages,
       coverImagePath
     })
     bookInserted = true
 
+    const metadataResult = completeEbookMetadataUpload({
+      database: db,
+      bookId: created.id,
+      originalName: req.file.originalname,
+      contentSha256: created.contentSha256,
+      metadataState
+    })
+
     console.log(`✅ 书籍上传成功:`, {
       ID: created.id,
       书名: finalTitle,
-      作者: author || '未填写',
+      作者: uploadFields.author || '未填写',
       封面: coverImagePath ? '已提取' : '无'
     })
 
     // 清除分类缓存，确保分类数量统计实时更新
     await cache.del(CacheKeys.BOOK_CATEGORIES)
 
-    res.json({ id: created.id, title: created.title, message: '上传成功' })
+    res.json({
+      id: created.id,
+      title: created.title,
+      message: '上传成功',
+      metadataStatus: metadataResult.metadataStatus,
+      metadataErrorCode: metadataResult.metadataErrorCode,
+      metadataTask: metadataResult.metadataTask
+    })
   } catch (error) {
     console.error('❌ 上传书籍失败:', error?.code || error?.name || 'UNKNOWN')
     if (!bookInserted && storedFilePath) fs.rmSync(storedFilePath, { force: true })
@@ -1082,7 +979,176 @@ async function createManagedBook({ database, staged, originalName, fields, total
       coverImagePath
     }
   })
-  return Object.freeze({ id: created.id, title: created.title })
+  return Object.freeze({
+    id: created.id,
+    title: created.title,
+    contentSha256: created.sha256,
+    contentBytes: created.bytes
+  })
+}
+
+function metadataValuePresent(value) {
+  return value !== null && value !== undefined && String(value).trim() !== ''
+}
+
+function fallbackEbookMetadata(originalName) {
+  const fileName = path.basename(String(originalName || ''))
+  const title = path.basename(fileName, path.extname(fileName)).normalize('NFKC').trim() || '未命名书籍'
+  return {
+    title,
+    author: null,
+    year: null,
+    publisher: null,
+    isbn: null,
+    description: null
+  }
+}
+
+function metadataStatusForValues(metadata) {
+  return ['title', 'author', 'publisher', 'year', 'isbn', 'description']
+    .every(field => metadataValuePresent(metadata?.[field]))
+    ? 'ready'
+    : 'partial'
+}
+
+function mergeEbookMetadataFields(fields, parsedMetadata) {
+  const merged = { ...fields }
+  for (const field of ['title', 'author', 'year', 'publisher', 'isbn', 'description']) {
+    if (!metadataValuePresent(merged[field]) && metadataValuePresent(parsedMetadata?.[field])) {
+      merged[field] = parsedMetadata[field]
+    }
+  }
+  return merged
+}
+
+function stableEbookMetadataErrorCode(error) {
+  const code = String(error?.code || '')
+  return EBOOK_METADATA_PUBLIC_ERROR_CODES.has(code) ? code : 'EBOOK_METADATA_PARSE_FAILED'
+}
+
+function publicEbookMetadataErrorCode(value) {
+  if (value === null || value === undefined || value === '') return null
+  return stableEbookMetadataErrorCode({ code: value })
+}
+
+function publicEbookMetadataStatus(value) {
+  return EBOOK_METADATA_STATUS_SET.has(value) ? value : 'ready'
+}
+
+function bestEffortEbookMetadata(epubPath, originalName) {
+  const fallback = fallbackEbookMetadata(originalName)
+  try {
+    const parsed = parseManagedEpubMetadata(epubPath)
+    const metadata = { ...fallback, ...parsed }
+    return Object.freeze({
+      metadata,
+      status: metadataStatusForValues(metadata),
+      errorCode: null,
+      needsReparse: false
+    })
+  } catch (error) {
+    const errorCode = stableEbookMetadataErrorCode(error)
+    return Object.freeze({
+      metadata: fallback,
+      status: 'pending',
+      errorCode,
+      needsReparse: true
+    })
+  }
+}
+
+function persistEbookMetadataState(database, bookId, status, errorCode = null) {
+  const normalizedCode = errorCode === null ? null : stableEbookMetadataErrorCode({ code: errorCode })
+  database.prepare(`
+    UPDATE books
+       SET metadata_status = ?,
+           metadata_error_code = ?,
+           metadata_parser_version = ?,
+           metadata_updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+  `).run(status, normalizedCode, EBOOK_METADATA_PARSER_VERSION, bookId)
+}
+
+function runEbookMetadataTransaction(database, callback) {
+  const transaction = database.transaction(callback)
+  return typeof transaction.immediate === 'function' ? transaction.immediate() : transaction()
+}
+
+function metadataRunVersionId(runIdentity = randomUUID()) {
+  const normalized = String(runIdentity || '').normalize('NFKC').trim()
+  if (!normalized || normalized.length > 96 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    const error = new Error('Ebook metadata task run identity is invalid.')
+    error.code = 'EBOOK_METADATA_INPUT_INVALID'
+    throw error
+  }
+  return `${EBOOK_METADATA_PARSER_VERSION}:${normalized}`
+}
+
+export function enqueueEbookMetadataTask(database, bookId, contentSha256, runIdentity) {
+  const normalizedBookId = Number(bookId)
+  const normalizedHash = String(contentSha256 || '').toLowerCase()
+  if (!Number.isSafeInteger(normalizedBookId) || normalizedBookId <= 0 ||
+    !/^[a-f0-9]{64}$/u.test(normalizedHash)) {
+    const error = new Error('Ebook metadata task identity is invalid.')
+    error.code = 'EBOOK_METADATA_INPUT_INVALID'
+    throw error
+  }
+  return enqueueExclusiveRun(database, {
+    taskType: EBOOK_METADATA_TASK_TYPE,
+    processorVersion: EBOOK_METADATA_PROCESSOR_VERSION,
+    subjectType: EBOOK_METADATA_SUBJECT_TYPE,
+    subjectId: String(normalizedBookId),
+    subjectVersionId: metadataRunVersionId(runIdentity),
+    subjectContentSha256: normalizedHash,
+    input: { bookId: normalizedBookId },
+    executionClass: EBOOK_METADATA_EXECUTION_CLASS
+  }, { taskTypes: EBOOK_METADATA_TASK_TYPES })
+}
+
+export function projectEbookMetadataTask(task) {
+  const projected = projectTask(task)
+  return projected?.taskType === EBOOK_METADATA_TASK_TYPE ? projected : null
+}
+
+export function completeEbookMetadataUpload({ database, bookId, originalName, contentSha256, metadataState }) {
+  const fileType = path.extname(String(originalName || '')).toLowerCase()
+  if (fileType !== '.epub') {
+    return Object.freeze({ metadataStatus: 'ready', metadataErrorCode: null, metadataTask: null })
+  }
+
+  let status = metadataState.status
+  let errorCode = metadataState.errorCode
+  let metadataTask = null
+  let activeConflict = false
+  if (status === 'pending') {
+    try {
+      const outcome = runEbookMetadataTransaction(database, () => {
+        persistEbookMetadataState(database, bookId, status, errorCode)
+        return enqueueEbookMetadataTask(database, bookId, contentSha256)
+      })
+      metadataTask = projectEbookMetadataTask(outcome.task)
+      if (!metadataTask) throw new Error('Metadata task projection failed.')
+      activeConflict = outcome.activeConflict === true
+    } catch {
+      status = 'failed'
+      errorCode = 'EBOOK_METADATA_TASK_ENQUEUE_FAILED'
+      try { persistEbookMetadataState(database, bookId, status, errorCode) } catch {}
+    }
+  } else {
+    try {
+      persistEbookMetadataState(database, bookId, status, errorCode)
+    } catch {
+      status = 'failed'
+      errorCode = 'EBOOK_METADATA_DATABASE_UNAVAILABLE'
+    }
+  }
+
+  return Object.freeze({
+    metadataStatus: status,
+    metadataErrorCode: errorCode,
+    metadataTask,
+    activeConflict
+  })
 }
 
 async function verifiedBookPath(book) {
@@ -1224,6 +1290,17 @@ registerTaskProcessor(
   registeredEbookCoverTaskProcessor
 )
 
+const registeredEbookMetadataTaskProcessor = createEbookMetadataTaskProcessor({
+  databaseProvider: getDatabase,
+  resolveBookPath: verifiedBookPath
+})
+registerTaskProcessor(
+  EBOOK_METADATA_TASK_TYPE,
+  EBOOK_METADATA_PROCESSOR_VERSION,
+  EBOOK_METADATA_EXECUTION_CLASS,
+  registeredEbookMetadataTaskProcessor
+)
+
 function sendEbookRouteError(res, error) {
   const code = String(error?.code || '')
   if (code.endsWith('_INVALID') || code === 'EBOOK_IDS_INVALID') return res.status(400).json({ code, message: '请求无效' })
@@ -1237,6 +1314,21 @@ function sendEbookRouteError(res, error) {
     return res.status(409).json({ code, message: '旧版内容迁移后才能永久删除' })
   }
   return res.status(500).json({ code: code || 'EBOOK_OPERATION_FAILED', message: '服务器错误' })
+}
+
+function sendEbookMetadataRouteError(res, error) {
+  const code = stableEbookMetadataErrorCode(error)
+  if (code === 'EBOOK_METADATA_INPUT_INVALID') {
+    return res.status(400).json({ code, message: '请求无效' })
+  }
+  if (code === 'EBOOK_METADATA_BOOK_NOT_FOUND' || code === 'EBOOK_METADATA_SOURCE_MISSING') {
+    return res.status(404).json({ code, message: '资源不存在' })
+  }
+  if (code === 'EBOOK_METADATA_NOT_EPUB' || code === 'EBOOK_METADATA_CONTENT_CHANGED') {
+    return res.status(409).json({ code, message: '资源状态冲突' })
+  }
+  console.error('电子书元数据任务失败:', code)
+  return res.status(500).json({ code, message: '服务器错误' })
 }
 
 // 使用已上传的文件路径创建书籍（分片上传后调用）
@@ -1275,8 +1367,30 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
 
     const db = getDatabase()
 
+    const requestedFields = { title, author, year, publisher, isbn, description, categoryId }
+    const metadataAttempt = fileType === 'epub'
+      ? bestEffortEbookMetadata(filePath, originalName)
+      : Object.freeze({
+          metadata: fallbackEbookMetadata(originalName),
+          status: 'ready',
+          errorCode: null,
+          needsReparse: false
+        })
+    const uploadFields = fileType === 'epub'
+      ? mergeEbookMetadataFields(requestedFields, metadataAttempt.metadata)
+      : requestedFields
+    const metadataState = fileType === 'epub'
+      ? Object.freeze({
+          status: metadataAttempt.needsReparse
+            ? 'pending'
+            : metadataStatusForValues(uploadFields),
+          errorCode: metadataAttempt.errorCode
+        })
+      : Object.freeze({ status: 'ready', errorCode: null })
+
     // 检查重名
-    let finalTitle = title || originalName.replace(/\.[^/.]+$/, '')
+    const titleBase = uploadFields.title || originalName.replace(/\.[^/.]+$/, '')
+    let finalTitle = titleBase
     let suffix = 1
     let unique = false
 
@@ -1286,7 +1400,7 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
       if (!existing) {
         unique = true
       } else {
-        finalTitle = `${title || originalName.replace(/\.[^/.]+$/, '')} (${suffix})`
+        finalTitle = `${titleBase} (${suffix})`
         suffix++
       }
     }
@@ -1326,9 +1440,17 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
       database: db,
       staged: { token: stagingToken, sha256: contentSha256, bytes: contentBytes },
       originalName,
-      fields: { title: finalTitle, author, year, publisher, isbn, description, categoryId },
+      fields: { ...uploadFields, title: finalTitle },
       totalPages,
       coverImagePath
+    })
+
+    const metadataResult = completeEbookMetadataUpload({
+      database: db,
+      bookId: created.id,
+      originalName,
+      contentSha256: created.contentSha256,
+      metadataState
     })
 
     console.log(`✅ 书籍创建成功:`, {
@@ -1338,10 +1460,63 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
       封面: coverImagePath ? '已提取' : '无'
     })
 
-    res.json({ id: created.id, title: created.title, message: '上传成功' })
+    res.json({
+      id: created.id,
+      title: created.title,
+      message: '上传成功',
+      metadataStatus: metadataResult.metadataStatus,
+      metadataErrorCode: metadataResult.metadataErrorCode,
+      metadataTask: metadataResult.metadataTask
+    })
   } catch (error) {
     console.error('❌ 创建书籍失败:', error?.code || error?.name || 'UNKNOWN')
     sendEbookRouteError(res, error)
+  }
+})
+
+// 手动触发 EPUB 元数据重解析；解析在持久任务运行时中异步执行。
+router.post('/:id/reparse-metadata', authenticateToken, requireWritePermission, async (req, res) => {
+  const bookId = Number(req.params.id)
+  if (!Number.isSafeInteger(bookId) || bookId <= 0) {
+    return sendEbookMetadataRouteError(res, { code: 'EBOOK_METADATA_INPUT_INVALID' })
+  }
+
+  try {
+    const database = getDatabase()
+    const book = activeBook(database, bookId)
+    if (!book) return sendEbookMetadataRouteError(res, { code: 'EBOOK_METADATA_BOOK_NOT_FOUND' })
+    if (!isEpubBook(book)) return sendEbookMetadataRouteError(res, { code: 'EBOOK_METADATA_NOT_EPUB' })
+
+    const contentSha256 = String(book.content_sha256 || '').toLowerCase()
+    if (!/^[a-f0-9]{64}$/u.test(contentSha256)) {
+      return sendEbookMetadataRouteError(res, { code: 'EBOOK_METADATA_CONTENT_HASH_MISSING' })
+    }
+
+    let outcome
+    try {
+      outcome = runEbookMetadataTransaction(database, () => {
+        persistEbookMetadataState(database, bookId, 'pending', null)
+        return enqueueEbookMetadataTask(database, bookId, contentSha256)
+      })
+    } catch (error) {
+      try { persistEbookMetadataState(database, bookId, 'failed', 'EBOOK_METADATA_TASK_ENQUEUE_FAILED') } catch {}
+      throw Object.assign(new Error('Metadata task enqueue failed.', { cause: error }), {
+        code: 'EBOOK_METADATA_TASK_ENQUEUE_FAILED'
+      })
+    }
+    const projected = projectEbookMetadataTask(outcome.task)
+    if (!projected) throw Object.assign(new Error('Metadata task projection failed.'), {
+      code: 'EBOOK_METADATA_TASK_ENQUEUE_FAILED'
+    })
+    res.setHeader('Cache-Control', 'no-store')
+    return res.status(outcome.activeConflict ? 409 : 202).json({
+      data: projected,
+      task: projected,
+      created: outcome.created,
+      activeConflict: outcome.activeConflict
+    })
+  } catch (error) {
+    return sendEbookMetadataRouteError(res, error)
   }
 })
 
