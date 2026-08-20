@@ -145,7 +145,8 @@ const menuItems = [
   { value: 'code', label: '代码管理', icon: 'code' },
   { value: 'bookmarks', label: '书签管理', icon: 'bookmark' },
   { value: 'anime', label: '动漫管理', icon: 'video' },
-  { value: 'games', label: '游戏管理', icon: 'gamepad' }
+  { value: 'games', label: '游戏管理', icon: 'gamepad' },
+  { value: 'tasks', label: '任务中心', icon: 'list-dashes' }
 ]
 
 // 组件挂载后关闭初始loading
@@ -220,7 +221,8 @@ const pageTitle = computed(() => {
     Anime: '动漫管理',
     Games: '游戏管理',
     Blog: '博客管理',
-    Logs: '访问日志'
+    Logs: '访问日志',
+    Tasks: '任务中心'
   }
   return titles[route.name] || '雨的空间'
 })

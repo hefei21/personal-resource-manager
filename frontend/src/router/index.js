@@ -71,6 +71,11 @@ const routes = [
         name: 'Logs',
         component: () => import('@/views/Logs.vue'),
         meta: { requiresAdmin: true }
+      },
+      {
+        path: 'tasks',
+        name: 'Tasks',
+        component: () => import('@/views/Tasks.vue')
       }
     ]
   }

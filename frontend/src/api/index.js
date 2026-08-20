@@ -78,6 +78,12 @@ export default {
     check: () => api.get('/auth/check'),
     changePassword: (data) => api.post('/auth/change-password', data)
   },
+  tasks: {
+    list: (params) => api.get('/tasks', { params }),
+    get: (id) => api.get(`/tasks/${id}`),
+    cancel: (id) => api.post(`/tasks/${id}/cancel`),
+    retry: (id) => api.post(`/tasks/${id}/retry`)
+  },
   demo: {
     createSession: () => api.post('/demo/sessions'),
     checkSession: () => api.get('/demo/session'),
