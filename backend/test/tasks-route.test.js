@@ -660,7 +660,7 @@ test('TaskStore supports controlled DESC ordering, task-type filtering, paginati
     insert.run('task:' + 'a'.repeat(64), 'b'.repeat(64), 'games.steam.sync', 'game-library', 'owner', '{}', 'succeeded', 'network', timestamp, timestamp, timestamp)
     insert.run('task:' + 'c'.repeat(64), 'd'.repeat(64), 'games.steam.sync', 'game-library', 'owner', '{}', 'failed', 'network', timestamp, timestamp, timestamp)
     insert.run('task:' + 'e'.repeat(64), 'f'.repeat(64), 'anime.bangumi.refresh', 'anime', '7', '{"animeId":7}', 'failed', 'network', timestamp, timestamp, timestamp)
-    insert.run('task:' + '1'.repeat(64), '2'.repeat(64), 'future.internal.task', 'v1', 'future', '9', '{}', 'failed', 'network', timestamp, timestamp, timestamp)
+    insert.run('task:' + '1'.repeat(64), '2'.repeat(64), 'future.internal.task', 'future', '9', '{}', 'failed', 'network', timestamp, timestamp, timestamp)
 
     const options = {
       status: ['failed'],
