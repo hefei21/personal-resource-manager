@@ -183,7 +183,9 @@ const taskTypeOptions = [
   { value: 'music.lyrics.batch', label: '批量下载歌词' },
   { value: 'games.steam.sync', label: 'Steam 游戏同步' },
   { value: 'anime.bangumi.refresh', label: '动漫信息刷新' },
-  { value: 'ebook.cover.generate', label: '电子书封面生成' }
+  { value: 'ebook.cover.generate', label: '电子书封面生成' },
+  { value: 'ebook.metadata.reparse', label: '电子书元数据重解析' },
+  { value: 'music.metadata.reparse', label: '音乐元数据重解析' }
 ]
 
 const orderOptions = [
@@ -212,6 +214,7 @@ const SUBJECT_LABELS = Object.freeze({
   'code-repository': '代码仓库',
   anime: '动漫',
   ebook: '电子书',
+  music: '音乐',
   'music-library': '音乐库',
   'game-library': 'Steam游戏库'
 })
@@ -223,6 +226,10 @@ const TASK_ERROR_MESSAGES = Object.freeze({
   TASK_INPUT_INVALID: '任务输入无效',
   TASK_ID_INVALID: '来源资源标识无效',
   TASK_TYPE_UNSUPPORTED: '任务类型暂不支持',
+  EBOOK_METADATA_PARSE_FAILED: '电子书元数据解析失败，可重试',
+  EBOOK_METADATA_PARSE_TIMEOUT: '电子书元数据解析超时，可重试',
+  MUSIC_METADATA_PARSE_FAILED: '音乐元数据解析失败，可重试',
+  MUSIC_METADATA_PARSE_TIMEOUT: '音乐元数据解析超时，可重试',
   TASK_CANCELLED: '任务已取消',
   EBOOK_COVER_TASK_TIMEOUT: '封面生成超时，请稍后重试',
   EBOOK_COVER_TASK_MISSING: '封面任务不存在',

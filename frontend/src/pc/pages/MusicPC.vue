@@ -204,7 +204,10 @@
                   <NativeIcon name="music" v-if="!coverCache[row.id]" />
                   <img v-else :src="coverCache[row.id]" alt="cover" />
                 </div>
-                <span class="title-text" :title="row.title">{{ row.title }}</span>
+                 <span class="title-text" :title="row.title">{{ row.title }}</span>
+                 <NativeTag v-if="metadataStatusLabel(row.metadataStatus)" :theme="metadataStatusTheme(row.metadataStatus)" variant="light">
+                   {{ metadataStatusLabel(row.metadataStatus) }}
+                 </NativeTag>
               </div>
             </div>
           </template>
@@ -227,6 +230,11 @@
               </NativeButton>
               <NativeButton class="music-op-btn" theme="default" size="small" iconSize="1.2em" @click.stop="editSong(row)" :disabled="isGuest">
                 <template #icon><NativeIcon name="pencil" /></template>
+              </NativeButton>
+              <NativeButton class="music-op-btn" theme="default" variant="outline" size="small" iconSize="1.2em"
+                :loading="metadataReparseLoading[row.id]" :disabled="isGuest" title="重新解析元数据"
+                @click.stop="reparseSongMetadata(row)">
+                <template #icon><NativeIcon name="arrow-clockwise" /></template>
               </NativeButton>
               <NativePopconfirm :content="currentPlaylist ? '确定从歌单移除吗？' : '确定将这首音乐移入回收站吗？'" @confirm="deleteSong(row.id)">
                 <template #trigger>
@@ -688,6 +696,7 @@ const isUploading = ref(false)
 // 编辑相关
 const showEditDialog = ref(false)
 const editForm = ref({ id: null, title: '', artist: '', album: '' })
+const metadataReparseLoading = ref({})
 
 // 歌单对话框
 const showPlaylistManageDialog = ref(false)
@@ -1948,6 +1957,32 @@ function formatFileSize(bytes) {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+function metadataStatusLabel(status) {
+  return ({ pending: '元数据排队中', partial: '元数据不完整', failed: '元数据解析失败' })[status] || ''
+}
+
+function metadataStatusTheme(status) {
+  return status === 'failed' ? 'danger' : status === 'pending' ? 'warning' : 'default'
+}
+
+async function reparseSongMetadata(song) {
+  if (!song?.id || metadataReparseLoading.value[song.id]) return
+  metadataReparseLoading.value[song.id] = true
+  try {
+    await api.music.reparseMetadata(song.id)
+    toast.success('元数据重解析任务已加入队列')
+  } catch (error) {
+    if (error.response?.status === 409 && error.response?.data?.activeConflict) {
+      toast.info('该音乐的元数据重解析任务已在运行')
+    } else {
+      toast.error(error.response?.data?.message || '元数据重解析任务创建失败')
+    }
+  } finally {
+    metadataReparseLoading.value[song.id] = false
+    await refreshCurrentPage()
+  }
 }
 
 function formatTrashDate(value) {

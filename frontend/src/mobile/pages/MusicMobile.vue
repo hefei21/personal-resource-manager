@@ -89,6 +89,9 @@
           <div class="song-info">
             <div class="song-title">{{ song.title }}</div>
             <div class="song-subtitle">{{ song.artist || '未知艺术家' }}{{ song.album ? ' - ' + song.album : '' }}</div>
+            <div v-if="metadataStatusLabel(song.metadataStatus)" class="metadata-status" :class="`is-${song.metadataStatus}`">
+              {{ metadataStatusLabel(song.metadataStatus) }}
+            </div>
           </div>
 
           <!-- 右侧操作 -->
@@ -180,6 +183,9 @@
           </div>
           <div class="sheet-item" @click="editSong(currentSong)">
             <NativeIcon name="edit" /> 编辑
+          </div>
+          <div class="sheet-item" @click="reparseSongMetadata(currentSong)">
+            <NativeIcon name="arrow-clockwise" /> 重新解析元数据
           </div>
           <div class="sheet-item delete" @click="confirmDelete(currentSong)">
             <NativeIcon name="delete" /> {{ currentPlaylist ? '从歌单移除' : '移入回收站' }}
@@ -375,6 +381,7 @@ const songsToAdd = ref([])
 // 编辑
 const editDialogVisible = ref(false)
 const editForm = ref({ id: null, title: '', artist: '', album: '' })
+const metadataReparseLoading = ref({})
 
 // 删除
 const deleteConfirmVisible = ref(false)
@@ -855,6 +862,31 @@ const doDelete = async () => {
   } catch (error) {
     console.error('处理音乐失败:', error)
     toast.error(error.response?.data?.message || (currentPlaylist.value ? '从歌单移除失败' : '移入回收站失败'))
+  }
+}
+
+const metadataStatusLabel = (status) => ({
+  pending: '元数据排队中',
+  partial: '元数据不完整',
+  failed: '元数据解析失败'
+})[status] || ''
+
+const reparseSongMetadata = async (song) => {
+  if (!song?.id || metadataReparseLoading.value[song.id]) return
+  metadataReparseLoading.value[song.id] = true
+  closeActionMenu()
+  try {
+    await api.music.reparseMetadata(song.id)
+    toast.success('元数据重解析任务已加入队列')
+  } catch (error) {
+    if (error.response?.status === 409 && error.response?.data?.activeConflict) {
+      toast.info('该音乐的元数据重解析任务已在运行')
+    } else {
+      toast.error(error.response?.data?.message || '元数据重解析任务创建失败')
+    }
+  } finally {
+    metadataReparseLoading.value[song.id] = false
+    await loadMusic()
   }
 }
 
@@ -1794,4 +1826,13 @@ onUnmounted(() => {
   font-size: 14px;
   outline: none;
 }
+.metadata-status {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #666;
+}
+
+.metadata-status.is-pending { color: #b26a00; }
+.metadata-status.is-failed { color: #c62828; }
+
 </style>

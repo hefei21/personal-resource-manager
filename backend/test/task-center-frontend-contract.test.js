@@ -18,12 +18,18 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
   const routerSource = readFrontend('router/index.js')
   const pcLayoutSource = readFrontend('pc/layout/Layout.vue')
   const mobileLayoutSource = readFrontend('mobile/layout/Layout.vue')
+  const booksPcSource = readFrontend('pc/pages/BooksPC.vue')
+  const booksMobileSource = readFrontend('mobile/pages/BooksMobile.vue')
+  const musicPcSource = readFrontend('pc/pages/MusicPC.vue')
+  const musicMobileSource = readFrontend('mobile/pages/MusicMobile.vue')
 
   assert.match(apiSource, /tasks:\s*\{/u)
   assert.match(apiSource, /list:\s*\(params\)\s*=>\s*api\.get\('\/tasks',\s*\{\s*params\s*\}\)/u)
   assert.match(apiSource, /get:\s*\(id\)\s*=>\s*api\.get\(`\/tasks\/\$\{id\}`\)/u)
   assert.match(apiSource, /cancel:\s*\(id\)\s*=>\s*api\.post\(`\/tasks\/\$\{id\}\/cancel`\)/u)
   assert.match(apiSource, /retry:\s*\(id\)\s*=>\s*api\.post\(`\/tasks\/\$\{id\}\/retry`\)/u)
+  assert.match(apiSource, /reparseMetadata:\s*\(id\)\s*=>\s*api\.post\(`\/ebooks\/\$\{id\}\/reparse-metadata`\)/u)
+  assert.match(apiSource, /reparseMetadata:\s*\(id\)\s*=>\s*api\.post\(`\/music\/\$\{id\}\/reparse`\)/u)
 
   assert.match(storeSource, /defineStore\('tasks'/u)
   for (const field of ['tasks', 'pagination', 'loading', 'error', 'filter', 'fetch', 'refresh', 'setFilters', 'retry', 'cancel']) {
@@ -55,7 +61,9 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
     'music.lyrics.batch',
     'games.steam.sync',
     'anime.bangumi.refresh',
-    'ebook.cover.generate'
+    'ebook.cover.generate',
+    'ebook.metadata.reparse',
+    'music.metadata.reparse'
   ]) {
     assert.match(taskTypeSource, new RegExp(taskType.replaceAll('.', '\\.'), 'u'), taskType)
   }
@@ -64,6 +72,17 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
   assert.match(pcLayoutSource, /value:\s*'tasks',[\s\S]*?任务中心/u)
   assert.match(mobileLayoutSource, /value:\s*'tasks',[\s\S]*?任务中心/u)
   assert.doesNotMatch(readFrontend('views/DemoWorkspace.vue'), /任务中心|\/tasks/u)
+
+  for (const source of [booksPcSource, booksMobileSource]) {
+    assert.match(source, /api\.books\.reparseMetadata/u)
+    assert.match(source, /metadataStatusLabel/u)
+    assert.match(source, /activeConflict/u)
+  }
+  for (const source of [musicPcSource, musicMobileSource]) {
+    assert.match(source, /api\.music\.reparseMetadata/u)
+    assert.match(source, /metadataStatusLabel/u)
+    assert.match(source, /activeConflict/u)
+  }
 
   for (const source of [storeSource, viewSource]) {
     assert.doesNotMatch(source, /errorSummary|leaseToken|leaseOwner|leaseExpiresAt/u)

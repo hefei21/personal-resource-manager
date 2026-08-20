@@ -1908,6 +1908,8 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
     if (columnNames.includes('duration')) selectFields.push('m.duration')
     if (columnNames.includes('file_size')) selectFields.push('m.file_size')
     if (columnNames.includes('file_type')) selectFields.push('m.file_type')
+    if (columnNames.includes('metadata_status')) selectFields.push('m.metadata_status')
+    if (columnNames.includes('metadata_error_code')) selectFields.push('m.metadata_error_code')
     // 添加 has_cover 标志位
     if (columnNames.includes('cover_image')) {
       selectFields.push("CASE WHEN m.cover_image IS NOT NULL AND m.cover_image != '' THEN 1 ELSE 0 END as has_cover")
@@ -1943,6 +1945,8 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
     
     const songs = rows.map(row => ({
       ...row,
+      metadataStatus: publicMusicMetadataStatus(row.metadata_status),
+      metadataErrorCode: publicMusicMetadataErrorCode(row.metadata_error_code),
       created_at: convertToUTC8(row.created_at),
       updated_at: convertToUTC8(row.updated_at),
       added_at: convertToUTC8(row.added_at)
