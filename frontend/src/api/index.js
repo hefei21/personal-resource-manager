@@ -246,6 +246,7 @@ export default {
     updateStatus: (id, status) => api.post(`/anime/${id}/status`, { status }),
     updateRating: (id, rating) => api.post(`/anime/${id}/rating`, { rating }),
     refresh: (id) => api.post(`/anime/${id}/refresh`),
+    getRefreshStatus: (id, taskId) => api.get(`/anime/${id}/refresh-status/${taskId}`),
     searchResources: (keyword, mode = 'parallel') => api.get('/anime/resources/search', { params: { keyword, mode } }),
     testResources: () => api.get('/anime/resources/test'),
     batchDownloadCovers: () => api.post('/anime/batch-download-covers'),
