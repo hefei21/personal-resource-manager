@@ -260,14 +260,18 @@ test('moves a unique file identifier, creates candidates for unreliable identifi
       database,
       scanRootId: rootId,
       generation: 3,
-      observations: [fileObservation('other.txt', 'same', null), fileObservation('missing.txt', 'gone', 'dev:77')]
+      observations: [
+        fileObservation('other.txt', 'same', null),
+        fileObservation('folder/new.txt', 'different', null),
+        fileObservation('missing.txt', 'gone', 'dev:77')
+      ]
     })
-    assert.equal(candidate.counts.added, 2)
-    assert.ok(candidate.counts.conflicts >= 1)
+    assert.equal(candidate.counts.added, 3)
+    assert.ok(candidate.counts.conflicts >= 2)
     const missing = database.prepare(`SELECT relative_path, state FROM ${RESOURCE_SOURCE_TABLE} WHERE relative_path = 'new.txt'`).get()
     assert.equal(missing.state, 'missing')
     assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM ${RESOURCE_CONFLICT_CANDIDATE_TABLE}`).get().count >= 2, true)
-    assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM ${NAS_SCAN_ENTRY_TABLE}`).get().count, 3)
+    assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM ${NAS_SCAN_ENTRY_TABLE}`).get().count, 4)
   } finally {
     database.close()
     removeRoot(root)
