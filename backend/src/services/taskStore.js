@@ -1175,7 +1175,7 @@ export function enqueueExclusiveRun(database, input, options = {}) {
   }
 }
 
-const defaultLeaseTokenFactory = () => randomBytes(32).toString('base64url')
+const defaultLeaseTokenFactory = () => `lease-${randomBytes(32).toString('base64url')}`
 const LEASE_EXPIRED_SUMMARY = 'Task lease expired before completion.'
 
 function supportedProcessorClause(identities) {
