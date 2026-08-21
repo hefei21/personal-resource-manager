@@ -495,6 +495,10 @@ function documentVersionRows(database, document) {
      WHERE document_id = ?
      ORDER BY version ASC, id ASC
   `).all(document.id)
+  const currentVersion = Number(document.version)
+  const priorVersions = Number.isSafeInteger(currentVersion)
+    ? historical.filter((row) => Number(row.version) !== currentVersion)
+    : historical
   return [
     {
       id: null,
@@ -507,7 +511,7 @@ function documentVersionRows(database, document) {
       note: '当前版本',
       created_at: document.updated_at ?? document.created_at
     },
-    ...historical
+    ...priorVersions
   ]
 }
 
