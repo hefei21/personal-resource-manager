@@ -570,6 +570,7 @@ test('NAS executor applies domain retry policy and keeps ordinary errors redacte
     makeFakeTask(32, 'disk', { maxAttempts: 1 })
   ])
   let retryableAttempts = 0
+  const logEvents = []
   const registry = createTaskProcessorRegistry({ processors: [{
     taskType: 'task.disk',
     processorVersion: 'disk-v1',
@@ -599,7 +600,8 @@ test('NAS executor applies domain retry policy and keeps ordinary errors redacte
     owner: 'nas-domain-errors',
     quotas: { cpu: 0, disk: 1, network: 0 },
     retryDelayMs: 1000,
-    clock: () => '2026-08-20T02:00:00.000Z'
+    clock: () => '2026-08-20T02:00:00.000Z',
+    logger: { warn: (event) => logEvents.push(event) }
   })
 
   await executor.runOnce()
@@ -620,6 +622,14 @@ test('NAS executor applies domain retry policy and keeps ordinary errors redacte
   assert.equal(store.get(32).status, 'failed')
   assert.equal(store.failures[2].errorCode, 'TASK_PROCESSOR_FAILED')
   assert.doesNotMatch(store.failures[2].errorSummary, /(?:C:\\|\/srv\/|stack)/iu)
+  assert.equal(logEvents.length, 3)
+  assert.deepEqual(Object.keys(logEvents[0]).sort(), [
+    'attempt', 'causeCategory', 'errorCode', 'event', 'retryable',
+    'subjectId', 'subjectType', 'taskId', 'taskType'
+  ])
+  assert.equal(logEvents[0].event, 'task_execution_failed')
+  assert.equal(logEvents[0].causeCategory, 'PROCESSOR_OTHER')
+  assert.doesNotMatch(JSON.stringify(logEvents), /private|source\.txt|stack|temporary processor failure/iu)
   await executor.stop({ timeoutMs: 0 })
 })
 

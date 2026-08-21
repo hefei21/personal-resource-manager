@@ -1,5 +1,13 @@
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
 const MAX_SUMMARY_LENGTH = 256
+const CAUSE_CATEGORY_SET = new Set([
+  'PROXY_DNS',
+  'PROXY_CONNECTION',
+  'NETWORK_DNS',
+  'NETWORK_CONNECTION',
+  'NETWORK_TIMEOUT',
+  'NETWORK_OTHER'
+])
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -31,12 +39,18 @@ export class TaskProcessorError extends Error {
     if (typeof options.retryable !== 'boolean') {
       throw new TypeError('Task processor error retryable flag is invalid.')
     }
+    const causeCategory = options.causeCategory === undefined
+      ? null
+      : typeof options.causeCategory === 'string' && CAUSE_CATEGORY_SET.has(options.causeCategory)
+        ? options.causeCategory
+        : (() => { throw new TypeError('Task processor error cause category is invalid.') })()
     super(summary)
     this.name = 'TaskProcessorError'
     Object.defineProperties(this, {
       code: { value: code, enumerable: true },
       summary: { value: summary, enumerable: true },
-      retryable: { value: options.retryable, enumerable: true }
+      retryable: { value: options.retryable, enumerable: true },
+      causeCategory: { value: causeCategory, enumerable: true }
     })
     Object.freeze(this)
   }

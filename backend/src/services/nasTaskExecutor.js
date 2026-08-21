@@ -244,7 +244,7 @@ export class NasTaskExecutor {
       'drainTimeoutMs', 'drainTimeout', 'retryDelayMs', 'retryDelay',
       'recoveryIntervalMs', 'recoveryInterval', 'quotas', 'quota',
       'concurrency', 'maxConcurrency', 'clock', 'now', 'timers', 'timer', 'setTimeout',
-      'clearTimeout', 'cpuQuota', 'diskQuota', 'networkQuota', 'gpuQuota'
+      'clearTimeout', 'cpuQuota', 'diskQuota', 'networkQuota', 'gpuQuota', 'logger'
     ])
     if (Object.keys(options).some((key) => !allowed.has(key))) {
       fail('NAS_EXECUTOR_INPUT_INVALID', 'Executor options contain unsupported fields.')
@@ -262,6 +262,10 @@ export class NasTaskExecutor {
     if (!this.registry) fail('NAS_EXECUTOR_REGISTRY_INVALID', 'Processor registry is required.')
     this.owner = resolveAlias(options, ['owner', 'workerId'], 'owner', normalizeOwner)
     if (!this.owner) fail('NAS_EXECUTOR_OWNER_INVALID', 'Executor owner is required.')
+    this.logger = options.logger ?? console
+    if (!this.logger || typeof this.logger.warn !== 'function') {
+      fail('NAS_EXECUTOR_LOGGER_INVALID', 'Executor logger must expose warn().')
+    }
 
     this.leaseDurationMs = resolveAlias(
       options,
@@ -744,8 +748,36 @@ export class NasTaskExecutor {
         ...(retryAt === undefined ? {} : { retryAt })
       }
       await this.store.fail(failure)
+      this._logTaskFailure(record, error, failure.errorCode, retryable)
     } catch {
       // A lost/expired lease is intentionally left for lease recovery.
+    }
+  }
+
+  _logTaskFailure(record, error, errorCode, retryable) {
+    const task = record?.task ?? {}
+    const subjectId = typeof task.subjectId === 'string'
+      ? task.subjectId
+      : Number.isSafeInteger(task.subjectId) && task.subjectId > 0
+        ? String(task.subjectId)
+        : null
+    const event = Object.freeze({
+      event: 'task_execution_failed',
+      taskId: Number.isSafeInteger(task.id) && task.id > 0 ? task.id : null,
+      taskType: typeof task.taskType === 'string' ? task.taskType : null,
+      subjectType: typeof task.subjectType === 'string' ? task.subjectType : null,
+      subjectId,
+      attempt: Number.isSafeInteger(task.attemptCount) ? task.attemptCount : null,
+      errorCode,
+      retryable,
+      causeCategory: error instanceof TaskProcessorError && typeof error.causeCategory === 'string'
+        ? error.causeCategory
+        : 'PROCESSOR_OTHER'
+    })
+    try {
+      this.logger.warn(event)
+    } catch {
+      // Logging must never change task state transitions.
     }
   }
 

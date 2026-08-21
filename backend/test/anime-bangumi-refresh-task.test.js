@@ -299,6 +299,24 @@ test('processor classifies stable, retryable, and cancellation failures without 
     )
   }
 
+  const proxyFailure = Object.assign(
+    new Error('getaddrinfo ENOTFOUND clash https://secret.example/?token=private'),
+    { code: 'ENOTFOUND', hostname: 'clash' }
+  )
+  const proxyProcessor = createProcessor(createFakeDatabase(), {
+    fetchDetail: async () => { throw proxyFailure }
+  })
+  await assert.rejects(
+    () => proxyProcessor({ task: task(), signal: new AbortController().signal }),
+    (error) => {
+      assert.equal(error.code, 'PROXY_DNS_FAILED')
+      assert.equal(error.causeCategory, 'PROXY_DNS')
+      assert.equal(error.retryable, true)
+      assert.doesNotMatch(`${error.message}${JSON.stringify(error)}`, /secret|private|example/iu)
+      return true
+    }
+  )
+
   const invalidProcessor = createProcessor(createFakeDatabase(), {
     fetchDetail: async () => ({ subject: {}, characters: [], persons: [] })
   })

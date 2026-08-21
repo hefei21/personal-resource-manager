@@ -59,6 +59,6 @@ test('processor registration and task inputs do not start runtime or persist rep
   assert.match(processorSource, /registerTaskProcessor\('code\.repository\.sync', 'v1', 'network'/)
   assert.match(processorSource, /registerTaskProcessor\('code\.repository\.reclone', 'v1', 'network'/)
   assert.match(processorSource, /keys\.length !== 1 \|\| keys\[0\] !== 'repoId'/u)
-  assert.match(processorSource, /changedFileCount === 0[\s\S]*updateLastSync\(database, repo\.id\)/u)
+  assert.match(processorSource, /changeSummary\.total === 0[\s\S]*updateLastSync\(database, repo\.id\)/u)
   assert.doesNotMatch(processorSource, /startTaskRuntime|initDatabase/u)
 })

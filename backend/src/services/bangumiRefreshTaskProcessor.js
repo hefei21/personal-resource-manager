@@ -1,5 +1,6 @@
 import { getDatabase } from '../config/database.js'
 import { TaskProcessorError } from './taskProcessorError.js'
+import { taskNetworkError } from './networkTaskError.js'
 
 export const BANGUMI_REFRESH_TASK_TYPE = 'anime.bangumi.refresh'
 export const BANGUMI_REFRESH_PROCESSOR_VERSION = 'v1'
@@ -127,7 +128,11 @@ function mapBangumiRequestError(error, signal) {
     return taskError('BANGUMI_UNAVAILABLE', 'Bangumi 服务暂时不可用，请稍后重试。', true)
   }
   if (isNetworkError(error)) {
-    return taskError('BANGUMI_NETWORK_ERROR', 'Bangumi 网络请求失败，请稍后重试。', true)
+    return taskNetworkError(error, {
+      code: 'BANGUMI_NETWORK_ERROR',
+      summary: 'Bangumi 网络请求失败，请稍后重试。',
+      retryable: true
+    })
   }
   return taskError('BANGUMI_REQUEST_FAILED', 'Bangumi 请求失败。')
 }

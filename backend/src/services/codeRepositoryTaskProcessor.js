@@ -6,6 +6,7 @@ import axios from 'axios'
 import { getDatabase } from '../config/database.js'
 import { registerTaskProcessor } from './taskRuntime.js'
 import { TaskProcessorError } from './taskProcessorError.js'
+import { classifyNetworkTaskFailure, taskNetworkError } from './networkTaskError.js'
 import {
   RepositorySecurityError,
   resolveManagedRepositoryPath,
@@ -33,8 +34,21 @@ const GIT_STATUS_TIMEOUT_MS = 30_000
 const TASK_ID_PATTERN = /^[1-9]\d*$/u
 const GITHUB_REPOSITORY_PATTERN = /github\.com\/([^/]+)\/([^/.]+)/u
 
-const REPOSITORY_DIRTY_MESSAGE = (changedFileCount) =>
-  `检测到 ${changedFileCount} 个本地改动，已停止同步以避免覆盖。可选择安全重克隆，旧文件会保留为独立备份。`
+const REPOSITORY_DIRTY_LABELS = Object.freeze({
+  modified: '修改',
+  deleted: '删除',
+  untracked: '未跟踪',
+  typeChanged: '类型变化',
+  other: '其他'
+})
+
+const REPOSITORY_DIRTY_MESSAGE = (summary) => {
+  const details = Object.entries(REPOSITORY_DIRTY_LABELS)
+    .filter(([key]) => summary[key] > 0)
+    .map(([key, label]) => `${label} ${summary[key]}`)
+    .join('、')
+  return `检测到 ${summary.total} 个本地改动（${details}），已停止同步以避免覆盖。可选择安全重克隆，旧文件会保留为独立备份。`
+}
 
 function isAbortError(error, signal) {
   return Boolean(signal?.aborted) || error?.name === 'AbortError' || error?.code === 'ABORT_ERR'
@@ -50,8 +64,8 @@ function throwIfAborted(signal) {
   }
 }
 
-function taskError(code, summary, retryable = false) {
-  return new TaskProcessorError({ code, summary, retryable })
+function taskError(code, summary, retryable = false, causeCategory) {
+  return new TaskProcessorError({ code, summary, retryable, ...(causeCategory ? { causeCategory } : {}) })
 }
 
 function mapProcessorError(error, operation) {
@@ -244,6 +258,7 @@ function cloneGitWithProgress(url, repositoryPath, {
     let timeout = null
     let progressChain = Promise.resolve()
     let progressError = null
+    let networkFailure = null
 
     const settle = (callback) => {
       if (settled) return
@@ -282,19 +297,34 @@ function cloneGitWithProgress(url, repositoryPath, {
       }
 
       proc.stderr?.on('data', (data) => {
+        networkFailure ??= classifyNetworkTaskFailure({ message: String(data) })
         const parsed = parseGitProgress(data)
         if (parsed) queueProgress(parsed.progress)
       })
       proc.on('error', (error) => {
         settle(() => {
           if (isAbortError(error, signal)) throwIfAborted(signal)
-          throw taskError('GIT_CLONE_FAILED', '代码仓库克隆失败。', true)
+          throw taskNetworkError(error, {
+            code: 'GIT_CLONE_FAILED',
+            summary: '代码仓库克隆失败。',
+            retryable: true
+          })
         })
       })
       proc.on('close', (code) => {
         settle(() => {
           throwIfAborted(signal)
-          if (code !== 0) throw taskError('GIT_CLONE_FAILED', '代码仓库克隆失败。', true)
+          if (code !== 0) {
+            if (networkFailure?.code) {
+              throw taskError(
+                networkFailure.code,
+                networkFailure.summary,
+                networkFailure.retryable,
+                networkFailure.causeCategory
+              )
+            }
+            throw taskError('GIT_CLONE_FAILED', '代码仓库克隆失败。', true, networkFailure?.causeCategory)
+          }
         })
       })
       timeout = setTimeout(() => {
@@ -313,7 +343,25 @@ function cloneGitWithProgress(url, repositoryPath, {
   })
 }
 
-async function getRepositoryChangeCount(repositoryPath, runGit, signal) {
+export function summarizeGitPorcelain(output) {
+  const entries = String(output ?? '').split('\0').filter(Boolean)
+  const summary = { modified: 0, deleted: 0, untracked: 0, typeChanged: 0, other: 0, total: 0 }
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]
+    if (entry.length < 2) continue
+    const status = entry.slice(0, 2)
+    summary.total += 1
+    if (status === '??') summary.untracked += 1
+    else if (status.includes('T')) summary.typeChanged += 1
+    else if (status.includes('D')) summary.deleted += 1
+    else if (status.includes('M') || status.includes('A')) summary.modified += 1
+    else summary.other += 1
+    if ((status.includes('R') || status.includes('C')) && index + 1 < entries.length) index += 1
+  }
+  return Object.freeze(summary)
+}
+
+async function getRepositoryChangeSummary(repositoryPath, runGit, signal) {
   try {
     const { stdout } = await runGit([
       '-C', repositoryPath,
@@ -322,7 +370,7 @@ async function getRepositoryChangeCount(repositoryPath, runGit, signal) {
       '-z',
       '--untracked-files=all'
     ], { timeout: GIT_STATUS_TIMEOUT_MS, signal })
-    return String(stdout ?? '').split('\0').filter(Boolean).length
+    return summarizeGitPorcelain(stdout)
   } catch (error) {
     if (isAbortError(error, signal)) throwIfAborted(signal)
     throw taskError('GIT_STATUS_FAILED', '无法读取代码仓库状态。', true)
@@ -339,7 +387,11 @@ async function runGitOperation(runGit, args, { signal, operationCode, retryable 
     })
   } catch (error) {
     if (isAbortError(error, signal)) throwIfAborted(signal)
-    throw taskError(operationCode, 'Git 操作失败。', retryable)
+    throw taskNetworkError(error, {
+      code: operationCode,
+      summary: 'Git 操作失败。',
+      retryable
+    })
   }
 }
 
@@ -457,7 +509,13 @@ async function executeClone({
     })
     return await completeGitOperation({ database, repo, progress, fetchLanguages, message })
   } catch (error) {
-    if (!(error instanceof TaskProcessorError) || error.code === 'GIT_CLONE_FAILED' || error.code === 'GIT_CLONE_TIMEOUT') {
+    const removableCloneFailureCodes = new Set([
+      'GIT_CLONE_FAILED',
+      'GIT_CLONE_TIMEOUT',
+      'PROXY_DNS_FAILED',
+      'PROXY_CONNECTION_FAILED'
+    ])
+    if (!(error instanceof TaskProcessorError) || removableCloneFailureCodes.has(error.code)) {
       try { removeSafePartialCloneDirectory(repo.repositoryPath) } catch {}
     }
     throw error
@@ -491,9 +549,9 @@ async function executeSync({
   if (!await isValidGitRepository(repo.repositoryPath, runGit, signal)) {
     throw taskError('REPOSITORY_NOT_GIT', '代码仓库目录不是有效的 Git 仓库。', false)
   }
-  const changedFileCount = await getRepositoryChangeCount(repo.repositoryPath, runGit, signal)
-  if (changedFileCount > 0) {
-    throw taskError('REPOSITORY_DIRTY', REPOSITORY_DIRTY_MESSAGE(changedFileCount), false)
+  const changeSummary = await getRepositoryChangeSummary(repo.repositoryPath, runGit, signal)
+  if (changeSummary.total > 0) {
+    throw taskError('REPOSITORY_DIRTY', REPOSITORY_DIRTY_MESSAGE(changeSummary), false)
   }
   await progress(30)
   await runGitOperation(runGit, [
@@ -588,8 +646,8 @@ async function executeReclone({
     if (!await isValidGitRepository(repo.repositoryPath, runGit, signal)) {
       throw taskError('REPOSITORY_NOT_GIT', '代码仓库目录不是有效的 Git 仓库。', false)
     }
-    const changedFileCount = await getRepositoryChangeCount(repo.repositoryPath, runGit, signal)
-    if (changedFileCount === 0) {
+    const changeSummary = await getRepositoryChangeSummary(repo.repositoryPath, runGit, signal)
+    if (changeSummary.total === 0) {
       if (backupEntry && pathExists(backupPath)) {
         await progress(90)
         updateLastSync(database, repo.id)

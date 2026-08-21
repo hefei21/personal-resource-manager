@@ -4,6 +4,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
 import { registerTaskProcessor } from './taskRuntime.js'
 import { TaskProcessorError } from './taskProcessorError.js'
+import { taskNetworkError } from './networkTaskError.js'
 
 export const STEAM_SYNC_TASK_TYPE = 'games.steam.sync'
 export const STEAM_SYNC_PROCESSOR_VERSION = 'v1'
@@ -64,7 +65,11 @@ function mapSteamRequestError(error, signal) {
     return taskError('STEAM_API_REQUEST_REJECTED', 'Steam API 请求被拒绝。')
   }
   if (NETWORK_ERROR_CODES.has(error?.code) || error?.request) {
-    return taskError('STEAM_NETWORK_ERROR', 'Steam API 网络请求失败。', true)
+    return taskNetworkError(error, {
+      code: 'STEAM_NETWORK_ERROR',
+      summary: 'Steam API 网络请求失败。',
+      retryable: true
+    })
   }
   return taskError('STEAM_API_REQUEST_FAILED', 'Steam API 请求失败。')
 }

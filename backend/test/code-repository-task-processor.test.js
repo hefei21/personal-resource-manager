@@ -113,7 +113,7 @@ function createFakeGitRunner() {
   return { calls, runGit }
 }
 
-function createFakeSpawn({ hold = false, calls }) {
+function createFakeSpawn({ hold = false, calls, failureStderr = null }) {
   return (command, args, options) => {
     const process = new EventEmitter()
     process.stderr = new EventEmitter()
@@ -134,7 +134,8 @@ function createFakeSpawn({ hold = false, calls }) {
       queueMicrotask(() => {
         const targetPath = args.at(-1)
         fs.mkdirSync(path.join(targetPath, '.git'), { recursive: true })
-        process.emit('close', 0)
+        if (failureStderr) process.stderr.emit('data', failureStderr)
+        process.emit('close', failureStderr ? 128 : 0)
       })
     }
     return process
@@ -207,6 +208,58 @@ test('sync rejects dirty workspaces without reset, clean, or stash', { ...DATABA
       (error) => error.code === 'REPOSITORY_DIRTY' && error.retryable === false
     )
     assert.equal(fakeGit.calls.some(({ args }) => args.some((arg) => ['reset', 'clean', 'stash'].includes(arg))), false)
+  } finally {
+    database.close()
+    fs.rmSync(fixture.storageRoot, { recursive: true, force: true })
+  }
+})
+
+test('Git porcelain summary counts categories without retaining file names', PROCESSOR_TEST_OPTIONS, () => {
+  const summary = processorModule.summarizeGitPorcelain([
+    ' M secret-name.txt',
+    'D  deleted/private.txt',
+    '?? token.txt',
+    ' T link.txt',
+    'R  renamed.txt',
+    'old-name.txt'
+  ].join('\0') + '\0')
+  assert.deepEqual(summary, {
+    modified: 1,
+    deleted: 1,
+    untracked: 1,
+    typeChanged: 1,
+    other: 1,
+    total: 5
+  })
+  assert.doesNotMatch(JSON.stringify(summary), /secret|private|token|renamed|old-name/u)
+})
+
+test('clone maps Clash DNS failure and removes only its safe partial target', { ...DATABASE_TEST_OPTIONS, ...PROCESSOR_TEST_OPTIONS }, async () => {
+  const database = createDatabase()
+  const fixture = createFixture()
+  try {
+    insertRepository(database, fixture.repositoryPath)
+    const fakeGit = createFakeGitRunner()
+    const spawnCalls = []
+    const processor = createProcessor(
+      database,
+      fixture.storageRoot,
+      fakeGit.runGit,
+      createFakeSpawn({
+        calls: spawnCalls,
+        failureStderr: "fatal: unable to access 'https://user:secret@github.com/acme/sample.git/': Could not resolve proxy: clash"
+      })
+    )
+    await assert.rejects(
+      () => processor({ task: task(TASK_TYPES[0], 22), signal: new AbortController().signal }),
+      (error) => {
+        assert.equal(error.code, 'PROXY_DNS_FAILED')
+        assert.equal(error.causeCategory, 'PROXY_DNS')
+        assert.doesNotMatch(`${error.message}${JSON.stringify(error)}`, /user|secret|github\.com/iu)
+        return true
+      }
+    )
+    assert.equal(fs.existsSync(fixture.repositoryPath), false)
   } finally {
     database.close()
     fs.rmSync(fixture.storageRoot, { recursive: true, force: true })

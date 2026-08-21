@@ -237,6 +237,28 @@ test('Steam processor classifies 403 as stable and network failures as retryable
       return true
     }
   )
+
+  const proxyProcessor = createSteamSyncTaskProcessor({
+    database,
+    axiosClient: {
+      get: async () => {
+        const error = new Error('getaddrinfo ENOTFOUND clash https://secret.example/?token=private')
+        error.code = 'ENOTFOUND'
+        error.hostname = 'clash'
+        throw error
+      }
+    }
+  })
+  await assert.rejects(
+    () => proxyProcessor({ task: task(), signal: new AbortController().signal }),
+    (error) => {
+      assert.equal(error.code, 'PROXY_DNS_FAILED')
+      assert.equal(error.causeCategory, 'PROXY_DNS')
+      assert.equal(error.retryable, true)
+      assert.doesNotMatch(`${error.message}${JSON.stringify(error)}`, /secret|private|example/iu)
+      return true
+    }
+  )
 })
 
 test('Steam processor passes cancellation through, performs one request per attempt, and keeps upserts idempotent', async () => {
