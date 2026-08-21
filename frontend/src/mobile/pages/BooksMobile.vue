@@ -83,8 +83,16 @@
           <div class="book-info">
             <div class="book-title" :title="book.title">{{ book.title }}</div>
             <div class="book-author">{{ book.author || '未知作者' }}</div>
+            <div v-if="metadataStatusLabel(book.metadataStatus)" class="metadata-status" :class="`is-${book.metadataStatus}`">
+              {{ metadataStatusLabel(book.metadataStatus) }}
+            </div>
           </div>
           <div v-if="!isGuest" class="book-card-actions" @click.stop>
+            <NativeButton v-if="canReparseBook(book)" theme="default" variant="outline" size="small"
+              :loading="metadataReparseLoading[book.id]" @click="handleMetadataReparse(book)">
+              <template #icon><NativeIcon name="arrow-clockwise" /></template>
+              重解析
+            </NativeButton>
             <NativePopconfirm content="确定将这本书移入回收站吗？" @confirm="handleDelete(book.id)">
               <template #trigger>
                 <NativeButton theme="danger" variant="outline" size="small">
@@ -311,6 +319,7 @@ const selectedFile = ref(null)
 const selectedFileName = ref('')
 const parsingMetadata = ref(false)
 const uploading = ref(false)
+const metadataReparseLoading = ref({})
 const uploadForm = ref({
   title: '',
   author: '',
@@ -561,8 +570,16 @@ async function confirmUpload() {
     if (uploadForm.value.publisher) formData.append('publisher', uploadForm.value.publisher)
     if (uploadForm.value.categoryId) formData.append('categoryId', uploadForm.value.categoryId)
 
-    await api.books.upload(formData)
-    showToast('上传成功')
+    const response = await api.books.upload(formData)
+    const metadataStatus = response.data?.metadataStatus
+    showToast(
+      metadataStatus === 'pending'
+        ? '上传成功，元数据将在后台重解析'
+        : metadataStatus === 'failed'
+          ? '上传成功，元数据解析失败，可稍后手动重试'
+          : '上传成功',
+      metadataStatus === 'pending' || metadataStatus === 'failed' ? 'warning' : 'success'
+    )
     showUploadDialog.value = false
     loadBooks()
   } catch (error) {
@@ -587,6 +604,32 @@ function handleReaderClose() {
   loadBooks()
 }
 
+
+function canReparseBook(book) {
+  return String(book?.fileType || '').toLowerCase() === 'epub'
+}
+
+function metadataStatusLabel(status) {
+  return ({ pending: '元数据排队中', partial: '元数据不完整', failed: '元数据解析失败' })[status] || ''
+}
+
+async function handleMetadataReparse(book) {
+  if (!canReparseBook(book) || metadataReparseLoading.value[book.id]) return
+  metadataReparseLoading.value[book.id] = true
+  try {
+    await api.books.reparseMetadata(book.id)
+    showToast('元数据重解析任务已加入队列')
+  } catch (error) {
+    if (error.response?.status === 409 && error.response?.data?.activeConflict) {
+      showToast('该书的元数据重解析任务已在运行', 'warning')
+    } else {
+      showToast(error.response?.data?.message || '元数据重解析任务创建失败', 'error')
+    }
+  } finally {
+    metadataReparseLoading.value[book.id] = false
+    await loadBooks()
+  }
+}
 
 </script>
 
@@ -1139,4 +1182,13 @@ function handleReaderClose() {
   color: #0052d9;
   margin: 4px 0 0 0;
 }
+.metadata-status {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--native-color-text-secondary, #666);
+}
+
+.metadata-status.is-pending { color: #b26a00; }
+.metadata-status.is-failed { color: #c62828; }
+
 </style>

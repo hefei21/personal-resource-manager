@@ -78,6 +78,14 @@ export default {
     check: () => api.get('/auth/check'),
     changePassword: (data) => api.post('/auth/change-password', data)
   },
+  tasks: {
+    list: (params) => api.get('/tasks', { params }),
+    get: (id) => api.get(`/tasks/${id}`),
+    cancel: (id) => api.post(`/tasks/${id}/cancel`),
+    retry: (id) => api.post(`/tasks/${id}/retry`),
+    cleanupPreview: () => api.post('/tasks/cleanup/preview', {}),
+    cleanupExecute: (data) => api.post('/tasks/cleanup/execute', data)
+  },
   demo: {
     createSession: () => api.post('/demo/sessions'),
     checkSession: () => api.get('/demo/session'),
@@ -125,6 +133,7 @@ export default {
     artists: () => api.get('/music/artists'),
     albums: () => api.get('/music/albums'),
     update: (id, data) => api.put(`/music/${id}`, data),
+    reparseMetadata: (id) => api.post(`/music/${id}/reparse`),
     delete: (id) => api.delete(`/music/${id}`),
     batchDelete: (data) => api.post('/music/batch-delete', data),
     trash: () => api.get('/music/trash'),
@@ -191,6 +200,7 @@ export default {
     }),
     uploadWithPath: (data) => api.post('/ebooks/upload-with-path', data),
     update: (id, data) => api.put(`/ebooks/${id}`, data),
+    reparseMetadata: (id) => api.post(`/ebooks/${id}/reparse-metadata`),
     delete: (id) => api.delete(`/ebooks/${id}`),
     batchDelete: (data) => api.post('/ebooks/batch-delete', data),
     trash: () => api.get('/ebooks/trash'),
@@ -246,6 +256,7 @@ export default {
     updateStatus: (id, status) => api.post(`/anime/${id}/status`, { status }),
     updateRating: (id, rating) => api.post(`/anime/${id}/rating`, { rating }),
     refresh: (id) => api.post(`/anime/${id}/refresh`),
+    getRefreshStatus: (id, taskId) => api.get(`/anime/${id}/refresh-status/${taskId}`),
     searchResources: (keyword, mode = 'parallel') => api.get('/anime/resources/search', { params: { keyword, mode } }),
     testResources: () => api.get('/anime/resources/test'),
     batchDownloadCovers: () => api.post('/anime/batch-download-covers'),

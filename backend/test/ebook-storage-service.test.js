@@ -48,7 +48,11 @@ function setup({ readingProgress = true } = {}) {
       file_type TEXT,
       file_size INTEGER DEFAULT 0,
       total_pages INTEGER DEFAULT 0,
-      cover_image TEXT
+      cover_image TEXT,
+      metadata_status TEXT NOT NULL DEFAULT 'ready',
+      metadata_error_code TEXT,
+      metadata_parser_version TEXT,
+      metadata_updated_at TEXT
     );
     ${ENSURE_STORAGE_COMMIT_OPERATIONS_SQL};
   `)
@@ -86,10 +90,20 @@ test('commits a staged ebook and its initial progress in one database transactio
       storageService: value.storageService,
       staged,
       idempotencyKey: 'ebook-upload:test-success',
-      ebook: { title: '测试书', originalName: 'test.epub', fileType: 'epub', totalPages: 9 }
+      ebook: {
+        title: '测试书',
+        originalName: 'test.epub',
+        fileType: 'epub',
+        totalPages: 9,
+        metadataStatus: 'failed',
+        metadataErrorCode: 'EBOOK_METADATA_PARSE_FAILED',
+        metadataParserVersion: 'epub-parser-v1'
+      }
     })
     const book = value.database.prepare(`
-      SELECT title, file_path, storage_key, content_sha256, content_bytes, original_name, file_size
+      SELECT title, file_path, storage_key, content_sha256, content_bytes, original_name, file_size,
+             metadata_status, metadata_error_code, metadata_parser_version,
+             metadata_updated_at IS NOT NULL AS has_metadata_updated_at
       FROM books WHERE id = ?
     `).get(result.id)
     assert.equal(book.title, '测试书')
@@ -99,6 +113,10 @@ test('commits a staged ebook and its initial progress in one database transactio
     assert.equal(book.content_bytes, 13)
     assert.equal(book.file_size, 13)
     assert.equal(book.original_name, 'test.epub')
+    assert.equal(book.metadata_status, 'failed')
+    assert.equal(book.metadata_error_code, 'EBOOK_METADATA_PARSE_FAILED')
+    assert.equal(book.metadata_parser_version, 'epub-parser-v1')
+    assert.equal(book.has_metadata_updated_at, 1)
     assert.equal(value.database.prepare('SELECT COUNT(*) AS count FROM reading_progress WHERE book_id = ?').get(result.id).count, 1)
     assert.equal((await value.storageService.stat(result.storageKey)).bytes, 13)
   } finally {

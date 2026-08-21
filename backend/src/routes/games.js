@@ -1,4 +1,5 @@
 import express from 'express'
+import { randomUUID } from 'node:crypto'
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
@@ -8,6 +9,15 @@ import { compressBase64Image } from '../utils/imageCompress.js'
 import { convertToUTC8 } from '../utils/time.js'
 import { PAGINATION, TIMEOUT } from '../config/constants.js'
 import { safeAxiosGet } from '../services/outboundRequest.js'
+import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
+import {
+  STEAM_SYNC_EXECUTION_CLASS,
+  STEAM_SYNC_MAX_ATTEMPTS,
+  STEAM_SYNC_PROCESSOR_VERSION,
+  STEAM_SYNC_SUBJECT_ID,
+  STEAM_SYNC_SUBJECT_TYPE,
+  STEAM_SYNC_TASK_TYPE
+} from '../services/steamSyncTaskProcessor.js'
 
 const router = express.Router()
 
@@ -243,247 +253,163 @@ router.delete('/steam/config', authenticateToken, requireWritePermission, (req, 
 
 // Steam 同步
 
-// 异步任务管理器
-const syncTasks = new Map()
+const STEAM_SYNC_TASK_TYPES = Object.freeze([STEAM_SYNC_TASK_TYPE])
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'leased', 'running'])
 
-// 创建任务
-function createTask() {
-  const taskId = `sync_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-  const task = {
-    id: taskId,
-    status: 'pending', // pending, running, completed, failed
-    progress: 0,
-    message: '等待开始...',
-    result: null,
-    error: null,
-    startTime: null,
-    endTime: null
-  }
-  syncTasks.set(taskId, task)
-  return task
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
-// 更新任务状态
-function updateTask(taskId, updates) {
-  const task = syncTasks.get(taskId)
-  if (task) {
-    Object.assign(task, updates)
+export function normalizeSteamSyncIdempotencyKey(value) {
+  if (value === undefined || value === null) return randomUUID()
+  if (typeof value !== 'string') {
+    const error = new Error('Idempotency-Key 无效')
+    error.code = 'TASK_IDEMPOTENCY_KEY_INVALID'
+    throw error
   }
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || normalized.length > 128 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    const error = new Error('Idempotency-Key 无效')
+    error.code = 'TASK_IDEMPOTENCY_KEY_INVALID'
+    throw error
+  }
+  return normalized
 }
 
-// 清理过期任务（超过1小时）
-setInterval(() => {
-  const now = Date.now()
-  for (const [id, task] of syncTasks) {
-    if (task.endTime && now - task.endTime > 3600000) {
-      syncTasks.delete(id)
-    }
-  }
-}, 60000)
+function taskCounter(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
 
-// 后台执行同步任务 - 只同步游戏列表，成就按需获取
-async function executeSyncTask(taskId, steamId, apiKey) {
-  const task = syncTasks.get(taskId)
-  if (!task) return
+function taskTimestamp(value) {
+  if (typeof value !== 'string') return null
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : null
+}
 
-  updateTask(taskId, { status: 'running', startTime: Date.now(), message: '正在获取游戏列表...' })
-
-  try {
-    // 检查代理配置
-    if (!steamAgent) {
-      console.warn(`[任务 ${taskId}] 警告: 未配置 HTTP_PROXY，Steam API 可能无法访问`)
-    }
-    
-    let db
-    try {
-      db = getDatabase()
-    } catch (e) {
-      throw new Error('数据库连接失败: ' + e.message)
-    }
-
-    // 获取游戏列表（带重试机制）
-    const gamesUrl = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${apiKey}&steamid=${steamId}&include_appinfo=1&include_played_free_games=1`
-
-    let gamesResponse
-    let lastError = null
-
-    // 最多重试3次
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        console.log(`[任务 ${taskId}] 尝试获取游戏列表 (第${attempt}次)...`)
-        gamesResponse = await axios.get(gamesUrl, {
-          httpsAgent: steamAgent,
-          timeout: 60000, // 增加到60秒
-          validateStatus: (status) => status < 500 // 只将 5xx 视为错误
-        })
-        
-        // 检查 Steam API 返回的错误
-        if (gamesResponse.status === 403) {
-          throw new Error('Steam API 密钥无效或权限不足')
-        }
-        if (gamesResponse.status === 429) {
-          throw new Error('Steam API 请求过于频繁，请稍后再试')
-        }
-        
-        break // 成功则退出循环
-      } catch (e) {
-        lastError = e
-        console.error(`[任务 ${taskId}] 第${attempt}次尝试失败:`, e.message || e.code || '未知错误')
-        if (attempt < 3) {
-          console.log(`[任务 ${taskId}] 等待5秒后重试...`)
-          await new Promise(resolve => setTimeout(resolve, 5000))
-        }
-      }
-    }
-
-    if (!gamesResponse) {
-      throw new Error('获取游戏列表失败: ' + (lastError?.message || lastError?.code || '网络错误'))
-    }
-
-    const games = gamesResponse.data.response?.games || []
-    console.log(`[任务 ${taskId}] 获取到 ${games.length} 个游戏`)
-
-    let newCount = 0
-    let updateCount = 0
-    const totalGames = games.length
-
-    // 使用事务批量处理游戏数据（大幅提升性能）
-    const insertGame = db.prepare(`
-      INSERT INTO games (steam_appid, title, cover_image, playtime_forever, playtime_2weeks, last_played)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `)
-    const updateGame = db.prepare(`
-      UPDATE games SET
-        playtime_forever = ?,
-        playtime_2weeks = ?,
-        last_played = ?,
-        cover_image = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE steam_appid = ?
-    `)
-    const findGame = db.prepare('SELECT id, cover_image, cover_image_data FROM games WHERE steam_appid = ?')
-
-    // 批量处理游戏数据
-    const transaction = db.transaction((gamesList) => {
-      for (const game of gamesList) {
-        // 使用纵向封面图（library_600x900.jpg）适配卡片显示
-        const coverUrl = `https://steamcdn-a.akamaihd.net/steam/apps/${game.appid}/library_600x900.jpg`
-        const existing = findGame.get(game.appid)
-
-        if (existing) {
-          // 已有封面数据则完全保留封面信息，只更新游玩时间
-          if (existing.cover_image_data) {
-            updateGame.run(
-              game.playtime_forever || 0,
-              game.playtime_2weeks || 0,
-              game.rtime_last_played ? new Date(game.rtime_last_played * 1000).toISOString() : null,
-              existing.cover_image, // 保留原封面 URL
-              game.appid
-            )
-          } else {
-            // 没有封面数据时，才更新封面 URL
-            const shouldUpdateCover = !existing.cover_image || existing.cover_image.includes('steamcommunity/public/images/apps')
-            const newCoverUrl = shouldUpdateCover ? coverUrl : existing.cover_image
-            updateGame.run(
-              game.playtime_forever || 0,
-              game.playtime_2weeks || 0,
-              game.rtime_last_played ? new Date(game.rtime_last_played * 1000).toISOString() : null,
-              newCoverUrl,
-              game.appid
-            )
-          }
-          updateCount++
-        } else {
-          insertGame.run(
-            game.appid,
-            game.name,
-            coverUrl,
-            game.playtime_forever || 0,
-            game.playtime_2weeks || 0,
-            game.rtime_last_played ? new Date(game.rtime_last_played * 1000).toISOString() : null
-          )
-          newCount++
-        }
-      }
-    })
-
-    // 执行事务
-    try {
-      transaction(games)
-    } catch (dbError) {
-      console.error(`[任务 ${taskId}] 数据库事务失败:`, dbError)
-      throw new Error('数据库操作失败: ' + dbError.message)
-    }
-    
-    updateTask(taskId, { progress: 50, message: `游戏数据同步完成 (${newCount} 新增, ${updateCount} 更新)` })
-
-    // 更新同步时间（不再自动获取成就，改为按需获取）
-    try {
-      db.prepare('UPDATE steam_config SET last_sync = CURRENT_TIMESTAMP WHERE id = 1').run()
-    } catch (e) {
-      console.warn(`[任务 ${taskId}] 更新同步时间失败:`, e.message)
-    }
-
-    const message = `同步完成！新增 ${newCount} 个游戏，更新 ${updateCount} 个游戏`
-
-    updateTask(taskId, {
-      status: 'completed',
-      progress: 100,
-      message,
-      result: { newCount, updateCount, total: totalGames },
-      endTime: Date.now()
-    })
-    console.log(`[任务 ${taskId}] 同步完成: ${message}`)
-  } catch (error) {
-    console.error(`[任务 ${taskId}] 同步失败:`, error)
-    updateTask(taskId, {
-      status: 'failed',
-      message: '同步失败: ' + error.message,
-      error: error.message,
-      endTime: Date.now()
-    })
+function steamTaskResult(task) {
+  if (!isPlainObject(task?.result)) return null
+  const inserted = taskCounter(task.result.inserted ?? task.result.newCount)
+  const updated = taskCounter(task.result.updated ?? task.result.updateCount)
+  return {
+    total: taskCounter(task.result.total),
+    inserted,
+    updated,
+    newCount: inserted,
+    updateCount: updated
   }
 }
 
-// 开始同步（异步）- 只同步游戏列表，成就按需获取
+function isSteamSyncTask(task) {
+  return task?.taskType === STEAM_SYNC_TASK_TYPE &&
+    task?.processorVersion === STEAM_SYNC_PROCESSOR_VERSION &&
+    task?.executionClass === STEAM_SYNC_EXECUTION_CLASS &&
+    task?.subjectType === STEAM_SYNC_SUBJECT_TYPE &&
+    task?.subjectId === STEAM_SYNC_SUBJECT_ID
+}
+
+export function publicSteamSyncTaskStatus(task) {
+  if (!isSteamSyncTask(task)) return null
+  const active = ACTIVE_TASK_STATUSES.has(task.status)
+  const result = steamTaskResult(task)
+  const status = active
+    ? 'running'
+    : task.status === 'succeeded'
+      ? 'completed'
+      : 'failed'
+  const message = active
+    ? '正在获取游戏列表...'
+    : status === 'completed'
+      ? `同步完成！新增 ${result?.inserted ?? 0} 个游戏，更新 ${result?.updated ?? 0} 个游戏`
+      : task.status === 'cancelled'
+        ? '任务已取消'
+        : task.errorSummary || '同步失败'
+  const progress = typeof task.progress === 'number' && Number.isFinite(task.progress) &&
+    task.progress >= 0 && task.progress <= 100
+    ? task.progress
+    : 0
+
+  return {
+    id: task.id,
+    taskId: task.id,
+    status,
+    progress,
+    message,
+    result,
+    error: status === 'failed' ? task.errorSummary || null : null,
+    startTime: taskTimestamp(task.startedAt || task.createdAt),
+    endTime: taskTimestamp(task.finishedAt),
+    ...(task.errorCode ? { code: task.errorCode } : {})
+  }
+}
+
+export function enqueueSteamSyncTask(database, idempotencyKey) {
+  const subjectVersionId = normalizeSteamSyncIdempotencyKey(idempotencyKey)
+  return enqueueExclusiveRun(database, {
+    taskType: STEAM_SYNC_TASK_TYPE,
+    processorVersion: STEAM_SYNC_PROCESSOR_VERSION,
+    subjectType: STEAM_SYNC_SUBJECT_TYPE,
+    subjectId: STEAM_SYNC_SUBJECT_ID,
+    subjectVersionId,
+    input: {},
+    executionClass: STEAM_SYNC_EXECUTION_CLASS,
+    maxAttempts: STEAM_SYNC_MAX_ATTEMPTS
+  }, { taskTypes: STEAM_SYNC_TASK_TYPES })
+}
+
+// 开始同步（持久任务）- 只同步游戏列表，成就按需获取
 router.post('/steam/sync', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const config = db.prepare('SELECT steam_id, api_key FROM steam_config WHERE id = 1').get()
-    if (!config) {
-      return res.status(400).json({ message: '请先配置 Steam 账号' })
+    const input = req.body === undefined ? {} : req.body
+    if (!isPlainObject(input) || Object.keys(input).length !== 0) {
+      return res.status(400).json({ message: 'Steam 同步任务输入必须为空对象。', code: 'TASK_INPUT_INVALID' })
     }
 
-    // 检查是否有正在运行的任务
-    for (const [id, task] of syncTasks) {
-      if (task.status === 'running') {
-        return res.json({ taskId: id, status: 'running', message: '已有同步任务在进行中' })
-      }
+    const outcome = enqueueSteamSyncTask(
+      getDatabase(),
+      normalizeSteamSyncIdempotencyKey(req.get('Idempotency-Key'))
+    )
+    const task = outcome.task
+    if (outcome.activeConflict) {
+      return res.json({ taskId: task.id, status: 'running', message: '已有同步任务在进行中' })
     }
 
-    // 创建新任务
-    const task = createTask()
-    
-    // 异步执行同步
-    executeSyncTask(task.id, config.steam_id, config.api_key)
+    if (outcome.created) {
+      return res.json({ taskId: task.id, status: 'pending', message: '同步任务已启动' })
+    }
 
-    res.json({ taskId: task.id, status: 'pending', message: '同步任务已启动' })
+    const publicTask = publicSteamSyncTaskStatus(task)
+    return res.json({
+      taskId: task.id,
+      status: publicTask?.status || 'pending',
+      message: outcome.created ? '同步任务已启动' : publicTask?.message || '同步任务已受理'
+    })
   } catch (error) {
-    console.error('启动同步失败:', error)
-    res.status(500).json({ message: '启动同步失败: ' + error.message })
+    if (error?.code === 'TASK_IDEMPOTENCY_KEY_INVALID') {
+      return res.status(400).json({ message: error.message, code: error.code })
+    }
+    console.error('启动 Steam 同步失败:', error?.code || 'UNKNOWN_ERROR')
+    return res.status(500).json({ message: '启动同步失败' })
   }
 })
 
 // 查询同步任务状态
 router.get('/steam/sync/:taskId', authenticateToken, (req, res) => {
-  const { taskId } = req.params
-  const task = syncTasks.get(taskId)
-  
-  if (!task) {
-    return res.status(404).json({ message: '任务不存在' })
+  try {
+    const task = getTaskById(getDatabase(), req.params.taskId)
+    const publicTask = publicSteamSyncTaskStatus(task)
+    if (!publicTask) {
+      return res.status(404).json({ message: '任务不存在' })
+    }
+    return res.json({ data: publicTask })
+  } catch (error) {
+    if (error?.code === 'TASK_ID_INVALID' || error?.code === 'TASK_NOT_FOUND') {
+      return res.status(404).json({ message: '任务不存在' })
+    }
+    console.error('查询 Steam 同步任务失败:', error?.code || 'UNKNOWN_ERROR')
+    return res.status(500).json({ message: '服务器错误' })
   }
-
-  res.json({ data: task })
 })
 
 // 游戏管理

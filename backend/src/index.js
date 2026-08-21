@@ -26,6 +26,7 @@ import { ensureDirectories } from './config/storage.js'
 import { initRedis, closeRedis, isRedisConnected } from './utils/redis.js'
 import { migrateCompressCovers } from './utils/migration.js'
 import { migrate as migrateAccessLogs } from '../migrate-access-logs.js'
+import { startTaskRuntime, stopTaskRuntime } from './services/taskRuntime.js'
 
 // 导入安全中间件
 import {
@@ -58,6 +59,7 @@ import todosRoutes from './routes/todos.js'
 import blogRoutes from './routes/blog.js'
 import storageConsistencyRoutes from './routes/storageConsistency.js'
 import privateSpaceMigrationRoutes from './routes/privateSpaceMigration.js'
+import tasksRoutes from './routes/tasks.js'
 import { getDatabase } from './config/database.js'
 import { authenticateToken, requireOwner } from './middlewares/auth.js'
 import { accessLogger, queryLogs, getLogStats, initLogger } from './services/logger.js'
@@ -296,6 +298,7 @@ app.use('/api/todos', ...ownerOnly, todosRoutes)
 app.use('/api/blog', ...ownerOnly, blogRoutes)
 app.use('/api/storage-consistency', ...ownerOnly, storageConsistencyRoutes)
 app.use('/api/private-space-migration', ...ownerOnly, privateSpaceMigrationRoutes)
+app.use('/api/tasks', ...ownerOnly, tasksRoutes)
 
 // 管理员访问日志接口
 app.get('/api/admin/logs', authenticateToken, requireOwner, (req, res) => {
@@ -433,7 +436,8 @@ async function initialize() {
     ensureDirectories()
 
     // 初始化数据库（better-sqlite3 是同步的）
-    initDatabase()
+    const database = initDatabase()
+    startTaskRuntime({ database })
 
     console.log('✓ 数据库初始化完成')
 
@@ -475,12 +479,14 @@ async function initialize() {
 // 优雅关闭
 process.on('SIGTERM', async () => {
   console.log('收到 SIGTERM 信号，正在关闭服务器...')
+  await stopTaskRuntime()
   await closeRedis()
   process.exit(0)
 })
 
 process.on('SIGINT', async () => {
   console.log('收到 SIGINT 信号，正在关闭服务器...')
+  await stopTaskRuntime()
   await closeRedis()
   process.exit(0)
 })

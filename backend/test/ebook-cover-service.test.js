@@ -5,7 +5,11 @@ import path from 'node:path'
 import test from 'node:test'
 
 import sharp from 'sharp'
-import { encodeEbookCoverJpeg, ensureEbookCover } from '../src/services/ebookCoverService.js'
+import {
+  encodeEbookCoverJpeg,
+  ensureEbookCover,
+  resolveExistingEbookCover
+} from '../src/services/ebookCoverService.js'
 
 const jpeg = (...bytes) => Buffer.from([0xFF, 0xD8, 0xFF, ...bytes])
 
@@ -47,6 +51,26 @@ test('returns an existing regular cover inside the covers root', async () => {
     assert.equal(result.filePath, fs.realpathSync.native(coverPath))
     assert.equal(result.rebuilt, false)
     assert.equal(resolved, false)
+  } finally { value.cleanup() }
+})
+
+test('resolves only an existing controlled cover without touching EPUB dependencies', () => {
+  const value = fixture()
+  try {
+    const coversRoot = path.join(value.booksRoot, 'covers')
+    fs.mkdirSync(coversRoot)
+    const coverPath = path.join(coversRoot, 'existing.jpg')
+    fs.writeFileSync(coverPath, 'cover')
+    const result = resolveExistingEbookCover({
+      booksRoot: value.booksRoot,
+      storedPath: coverPath
+    })
+    assert.equal(result.filePath, fs.realpathSync.native(coverPath))
+    assert.equal(result.rebuilt, false)
+    assert.equal(resolveExistingEbookCover({
+      booksRoot: value.booksRoot,
+      storedPath: path.join(coversRoot, 'missing.jpg')
+    }), null)
   } finally { value.cleanup() }
 })
 

@@ -38,6 +38,12 @@ import {
   MUSIC_STORAGE_MIGRATION_SOURCE_NO_INDEXES,
   MUSIC_STORAGE_TARGET_SHAPE
 } from './musicStorageSchema.js'
+import {
+  CREATE_TASK_SCHEMA_SQL,
+  CREATE_TASK_TABLE_SQL,
+  TASK_KNOWN_INDEXES,
+  TASK_TARGET_SHAPE
+} from './taskSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -1963,6 +1969,135 @@ export const applicationMigrationRegistry = createMigrationRegistry([
           triggers: []
         }
       ]
+    }
+  },
+  {
+    id: '0054_persistent_tasks',
+    source: CREATE_TASK_SCHEMA_SQL,
+    compatibility: {
+      kind: 'table-transition',
+      table: 'tasks',
+      target: TASK_TARGET_SHAPE,
+      targetProof: {
+        createTableSqlSha256: sha256(CREATE_TASK_TABLE_SQL),
+        indexes: TASK_KNOWN_INDEXES,
+        triggers: [],
+        externalDependencies: { inboundForeignKeys: 'none', schemaSqlReferences: 'none' }
+      },
+      missingTable: 'create',
+      legacy: []
+    }
+  },
+  {
+    id: '0055_books_metadata_status',
+    source: "ALTER TABLE books ADD COLUMN metadata_status TEXT NOT NULL DEFAULT 'ready';",
+    compatibility: {
+      kind: 'column',
+      table: 'books',
+      column: {
+        name: 'metadata_status',
+        type: 'TEXT',
+        notNull: true,
+        defaultValue: "'ready'"
+      }
+    }
+  },
+  {
+    id: '0056_books_metadata_error_code',
+    source: 'ALTER TABLE books ADD COLUMN metadata_error_code TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'books',
+      column: {
+        name: 'metadata_error_code',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0057_books_metadata_parser_version',
+    source: 'ALTER TABLE books ADD COLUMN metadata_parser_version TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'books',
+      column: {
+        name: 'metadata_parser_version',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0058_books_metadata_updated_at',
+    source: 'ALTER TABLE books ADD COLUMN metadata_updated_at TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'books',
+      column: {
+        name: 'metadata_updated_at',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0059_music_metadata_status',
+    source: "ALTER TABLE music ADD COLUMN metadata_status TEXT NOT NULL DEFAULT 'ready';",
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'metadata_status',
+        type: 'TEXT',
+        notNull: true,
+        defaultValue: "'ready'"
+      }
+    }
+  },
+  {
+    id: '0060_music_metadata_error_code',
+    source: 'ALTER TABLE music ADD COLUMN metadata_error_code TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'metadata_error_code',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0061_music_metadata_parser_version',
+    source: 'ALTER TABLE music ADD COLUMN metadata_parser_version TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'metadata_parser_version',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
+    }
+  },
+  {
+    id: '0062_music_metadata_updated_at',
+    source: 'ALTER TABLE music ADD COLUMN metadata_updated_at TEXT;',
+    compatibility: {
+      kind: 'column',
+      table: 'music',
+      column: {
+        name: 'metadata_updated_at',
+        type: 'TEXT',
+        notNull: false,
+        defaultValue: null
+      }
     }
   }
 ])

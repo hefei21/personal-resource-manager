@@ -4,6 +4,7 @@ import path from 'path'
 import fs from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { randomUUID } from 'node:crypto'
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
@@ -18,6 +19,27 @@ import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js
 import { getStorageCommitOperation } from '../services/storageCommitCoordinator.js'
 import { commitMusicUpload } from '../services/musicStorageService.js'
 import { hashMusicFile, musicContentType, parseMusicRange } from '../services/musicPlaybackService.js'
+import { registerTaskProcessor } from '../services/taskRuntime.js'
+import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
+import {
+  createMusicMetadataTaskProcessor,
+  enqueueMusicMetadataTask,
+  MUSIC_METADATA_EXECUTION_CLASS,
+  MUSIC_METADATA_PARSER_VERSION,
+  MUSIC_METADATA_PROCESSOR_VERSION,
+  MUSIC_METADATA_SUBJECT_TYPE,
+  MUSIC_METADATA_TASK_TYPE,
+  projectMusicMetadataTask
+} from '../services/musicMetadataTaskProcessor.js'
+import {
+  createMusicLyricsTaskProcessor,
+  MUSIC_LYRICS_EXECUTION_CLASS,
+  MUSIC_LYRICS_PROCESSOR_VERSION,
+  MUSIC_LYRICS_SUBJECT_ID,
+  MUSIC_LYRICS_SUBJECT_TYPE,
+  MUSIC_LYRICS_TASK_TYPES,
+  normalizeMusicLyricsTaskInput
+} from '../services/musicLyricsTaskProcessor.js'
 import {
   listDeletedMusic,
   permanentlyDeleteMusic,
@@ -39,9 +61,6 @@ const httpsAgent = process.env.HTTP_PROXY
   ? new HttpsProxyAgent(process.env.HTTP_PROXY)
   : undefined
 
-// 歌词批量下载任务存储
-const lyricTasks = new Map()
-
 // 上传取消管理
 // 使用 Set 存储已取消的 fileId，实现实时取消功能
 const cancelledUploads = new Set()
@@ -51,7 +70,7 @@ const cancelledUploads = new Set()
 const uploadProgress = new Map()
 
 // 定期清理过期的取消标记（避免内存泄漏）
-setInterval(() => {
+const uploadCleanupTimer = setInterval(() => {
   // 清理 10 分钟前的取消标记（保留足够时间让正在进行的请求检测到）
   if (cancelledUploads.size > 100) {
     cancelledUploads.clear()
@@ -76,6 +95,7 @@ setInterval(() => {
     }
   }
 }, 10 * 60 * 1000)
+uploadCleanupTimer.unref?.()
 
 // 中文拼音排序（使用 Intl.Collator）
 // 使用 JavaScript 内置的 Intl.Collator 实现中文拼音排序
@@ -105,7 +125,7 @@ function parseFlacVorbisComments(buffer) {
     const metadata = { title: null, artist: null, album: null }
 
     // 遍历 metadata blocks
-    while (offset < buffer.length) {
+    while (offset + 4 <= buffer.length) {
       // 读取 block header（4字节）
       const isLast = (buffer[offset] & 0x80) !== 0
       const blockType = buffer[offset] & 0x7F
@@ -157,8 +177,9 @@ function parseFlacVorbisComments(buffer) {
 
     return metadata
   } catch (error) {
-    console.log('[轻量解析] FLAC Vorbis 解析失败:', error.message)
-    return null
+    const failure = new Error('Lightweight music metadata parsing failed.')
+    failure.code = 'MUSIC_METADATA_LIGHTWEIGHT_PARSE_FAILED'
+    throw failure
   }
 }
 
@@ -167,7 +188,7 @@ function parseMp3Id3Tags(buffer) {
   try {
     // 检查 ID3v2 标签
     if (buffer.length < 10 || buffer.slice(0, 3).toString('ascii') !== 'ID3') {
-      return null
+      return { title: null, artist: null, album: null }
     }
 
     const metadata = { title: null, artist: null, album: null }
@@ -221,8 +242,9 @@ function parseMp3Id3Tags(buffer) {
 
     return metadata
   } catch (error) {
-    console.log('[轻量解析] MP3 ID3 解析失败:', error.message)
-    return null
+    const failure = new Error('Lightweight music metadata parsing failed.')
+    failure.code = 'MUSIC_METADATA_LIGHTWEIGHT_PARSE_FAILED'
+    throw failure
   }
 }
 
@@ -230,9 +252,15 @@ function parseMp3Id3Tags(buffer) {
 function parseMetadataLightweight(filePath, originalName) {
   try {
     const ext = path.extname(originalName).toLowerCase()
-    const buffer = fs.readFileSync(filePath, { start: 0, end: 65535 }) // 只读取前 64KB
-    
-    console.log('[轻量解析] 尝试解析:', originalName)
+    const handle = fs.openSync(filePath, 'r')
+    let buffer
+    try {
+      const prefix = Buffer.allocUnsafe(64 * 1024)
+      const bytesRead = fs.readSync(handle, prefix, 0, prefix.length, 0)
+      buffer = prefix.subarray(0, bytesRead)
+    } finally {
+      fs.closeSync(handle)
+    }
     
     if (ext === '.flac') {
       return parseFlacVorbisComments(buffer)
@@ -242,8 +270,9 @@ function parseMetadataLightweight(filePath, originalName) {
     
     return null
   } catch (error) {
-    console.log('[轻量解析] 解析失败:', error.message)
-    return null
+    const failure = new Error('Lightweight music metadata source could not be read.')
+    failure.code = 'MUSIC_METADATA_LIGHTWEIGHT_PARSE_FAILED'
+    throw failure
   }
 }
 
@@ -275,119 +304,281 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage, limits: { fileSize: MUSIC_UPLOAD_POLICY.maxChunkBytes, files: 1 } })
 
-// 解析音乐元数据（三层降级策略）
-async function parseMusicMetadata(filePath, originalName) {
-  const ext = path.extname(originalName).toLowerCase()
-  const baseName = path.basename(originalName, ext)
+// 解析音乐元数据（三层降级策略）。解析器只返回安全字段；原始标签和异常正文
+// 不进入日志、响应或持久任务。
+export async function parseMusicMetadata(filePath, originalName, { signal } = {}) {
+  const ext = path.extname(String(originalName || '')).toLowerCase()
+  const fallback = fallbackMusicMetadata(originalName)
+  let probeFailure = null
 
-  // 默认值从文件名推断
-  let title = baseName
-  let artist = ''
-  let album = ''
-  let duration = 0
-  let coverImage = null
-
-  // 第一层：尝试使用 FFprobe（最可靠，需要 FFmpeg）
+  // 第一层：尝试使用 FFprobe（最可靠，需要 FFmpeg）。
   try {
-    console.log('[元数据解析] 第一层：尝试 FFprobe...')
     const { stdout } = await execFileAsync(
       'ffprobe', ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
-      { maxBuffer: 50 * 1024 * 1024, timeout: 10000 }
+      { maxBuffer: 50 * 1024 * 1024, timeout: 10_000, signal }
     )
 
     const probeData = JSON.parse(stdout)
     const format = probeData.format || {}
     const tags = format.tags || {}
+    const metadata = {
+      title: tags.title || tags.TITLE || fallback.title,
+      artist: tags.artist || tags.ARTIST || tags.album_artist || tags.ALBUM_ARTIST || tags.artists || null,
+      album: tags.album || tags.ALBUM || null,
+      duration: format.duration ? Math.round(Number.parseFloat(format.duration)) : 0,
+      coverImage: null
+    }
 
-    console.log('[FFprobe] 解析成功')
-    console.log('[FFprobe] 格式:', format.format_long_name || format.format_name)
-    console.log('[FFprobe] 标签:', JSON.stringify(tags))
-
-    // 提取基本信息
-    title = tags.title || tags.TITLE || title
-    artist = tags.artist || tags.ARTIST || tags.album_artist || tags.ALBUM_ARTIST || tags.artists || artist
-    album = tags.album || tags.ALBUM || album
-    duration = format.duration ? Math.round(parseFloat(format.duration)) : duration
-
-    // 提取封面图片
-    const videoStream = probeData.streams?.find(s => 
+    const videoStream = probeData.streams?.find(s =>
       s.codec_type === 'video' && s.disposition?.attached_pic === 1
     )
-    
     if (videoStream) {
-      console.log('[FFprobe] 提取封面中...')
       try {
         const { stdout: coverData } = await execFileAsync(
           'ffmpeg', ['-v', 'quiet', '-i', filePath, '-an', '-vcodec', 'copy', '-f', 'image2pipe', '-'],
-          { 
+          {
             encoding: 'buffer',
             maxBuffer: 10 * 1024 * 1024,
-            timeout: 5000
+            timeout: 5_000,
+            signal
           }
         )
-        
         const mimeType = videoStream.codec_name === 'png' ? 'image/png' : 'image/jpeg'
         const rawCoverImage = `data:${mimeType};base64,${coverData.toString('base64')}`
-        
-        // 压缩封面图片
-        coverImage = await compressBase64Image(rawCoverImage, { maxWidth: 500, maxHeight: 500, quality: 85 })
-        console.log('[FFprobe] 封面提取成功，原始大小:', coverData.length, '字节')
-      } catch (coverError) {
-        console.log('[FFprobe] 封面提取失败:', coverError.message)
+        metadata.coverImage = await compressBase64Image(rawCoverImage, {
+          maxWidth: 500,
+          maxHeight: 500,
+          quality: 85
+        })
+      } catch {
+        // A missing cover is a partial metadata result, not an upload failure.
       }
     }
 
-    console.log(`[FFprobe] 最终结果: ${title} - ${artist} (${duration}s)${coverImage ? ' [有封面]' : ''}`)
-    
-    // FFprobe 成功，直接返回
     const stats = fs.statSync(filePath)
+    const normalized = { ...fallback, ...metadata, fileSize: stats.size, fileType: ext.replace('.', '') }
     return {
-      title,
-      artist,
-      album,
-      duration,
-      fileSize: stats.size,
-      fileType: ext.replace('.', ''),
-      coverImage
+      ...normalized,
+      status: musicMetadataStatusForValues(normalized),
+      errorCode: null,
+      needsReparse: false
     }
   } catch (error) {
-    console.log(`[FFprobe] 失败: ${error.message}`)
+    probeFailure = error
   }
 
-  // 第二层：轻量级纯 JS 解析（无需外部依赖）
-  console.log('[元数据解析] 第二层：尝试轻量级解析...')
-  const lightweightMetadata = parseMetadataLightweight(filePath, originalName)
-  
-  if (lightweightMetadata) {
-    console.log('[轻量解析] 成功:', lightweightMetadata)
-    
-    // 使用轻量级解析的结果
-    title = lightweightMetadata.title || title
-    artist = lightweightMetadata.artist || artist
-    album = lightweightMetadata.album || album
-    
-    console.log(`[轻量解析] 最终结果: ${title} - ${artist}`)
-  } else {
-    console.log('[轻量解析] 失败，使用文件名作为默认值')
+  // 第二层：轻量级纯 JS 解析（无需外部依赖）。标签缺失仍是可用的 partial
+  // 结果；只有轻量解析本身异常时才把错误交给持久任务恢复。
+  let lightweightMetadata
+  try {
+    lightweightMetadata = parseMetadataLightweight(filePath, originalName)
+  } catch (error) {
+    const failure = new Error('Music metadata parsers failed.')
+    failure.code = probeFailure?.code === 'ETIMEDOUT' || probeFailure?.killed
+      ? 'MUSIC_METADATA_PARSE_TIMEOUT'
+      : 'MUSIC_METADATA_PARSE_FAILED'
+    throw failure
   }
 
-  // 第三层：降级到文件名（已在初始化时设置）
+  if (lightweightMetadata === null) {
+    const failure = new Error('Music metadata parsers failed.')
+    failure.code = probeFailure?.code === 'ETIMEDOUT' || probeFailure?.killed
+      ? 'MUSIC_METADATA_PARSE_TIMEOUT'
+      : 'MUSIC_METADATA_PARSE_FAILED'
+    throw failure
+  }
 
-  // 获取文件大小
   const stats = fs.statSync(filePath)
-  const fileSize = stats.size
+  const normalized = {
+    ...fallback,
+    title: lightweightMetadata.title || fallback.title,
+    artist: lightweightMetadata.artist || null,
+    album: lightweightMetadata.album || null,
+    duration: 0,
+    coverImage: null,
+    fileSize: stats.size,
+    fileType: ext.replace('.', '')
+  }
+  return {
+    ...normalized,
+    status: 'partial',
+    errorCode: null,
+    needsReparse: false
+  }
+}
 
-  console.log(`[元数据解析] 最终: ${title} - ${artist} (${duration}s)`)
+const MUSIC_METADATA_PUBLIC_ERROR_CODES = new Set([
+  'MUSIC_METADATA_MUSIC_NOT_FOUND',
+  'MUSIC_METADATA_SOURCE_MISSING',
+  'MUSIC_METADATA_SOURCE_INVALID',
+  'MUSIC_METADATA_CONTENT_HASH_MISSING',
+  'MUSIC_METADATA_CONTENT_CHANGED',
+  'MUSIC_METADATA_NO_FIELDS',
+  'MUSIC_METADATA_PARSE_FAILED',
+  'MUSIC_METADATA_PARSE_TIMEOUT',
+  'MUSIC_METADATA_INPUT_INVALID',
+  'MUSIC_METADATA_DATABASE_UNAVAILABLE',
+  'MUSIC_METADATA_CANCELLED',
+  'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+])
+const MUSIC_METADATA_STATUS_SET = new Set(['ready', 'pending', 'partial', 'failed'])
 
+function metadataValuePresent(value) {
+  return value !== null && value !== undefined && String(value).trim() !== ''
+}
+
+function fallbackMusicMetadata(originalName) {
+  const fileName = path.basename(String(originalName || '').replace(/\\/gu, '/'))
+  const title = path.basename(fileName, path.extname(fileName)).normalize('NFKC').trim() || '未命名音乐'
   return {
     title,
-    artist,
-    album,
-    duration,
-    fileSize,
-    fileType: ext.replace('.', ''),
-    coverImage
+    artist: null,
+    album: null,
+    duration: 0,
+    coverImage: null
   }
+}
+
+function musicMetadataStatusForValues(metadata) {
+  return ['title', 'artist', 'album'].every(field => metadataValuePresent(metadata?.[field])) &&
+    Number(metadata?.duration) > 0
+    ? 'ready'
+    : 'partial'
+}
+
+function initialMusicMetadataState(metadataState) {
+  return Object.freeze({
+    status: metadataState.status === 'pending' ? 'failed' : metadataState.status,
+    errorCode: metadataState.errorCode ?? null,
+    parserVersion: MUSIC_METADATA_PARSER_VERSION
+  })
+}
+
+function persistedMusicRecoveryState(music) {
+  const status = publicMusicMetadataStatus(music?.metadata_status)
+  if (status !== 'failed') return Object.freeze({ status, errorCode: music?.metadata_error_code ?? null })
+  return Object.freeze({
+    status: 'pending',
+    errorCode: publicMusicMetadataErrorCode(music?.metadata_error_code) || 'MUSIC_METADATA_PARSE_FAILED'
+  })
+}
+
+function stableMusicMetadataErrorCode(error) {
+  const code = String(error?.code || '')
+  return MUSIC_METADATA_PUBLIC_ERROR_CODES.has(code) ? code : 'MUSIC_METADATA_PARSE_FAILED'
+}
+
+function publicMusicMetadataErrorCode(value) {
+  if (value === null || value === undefined || value === '') return null
+  return stableMusicMetadataErrorCode({ code: value })
+}
+
+function publicMusicMetadataStatus(value) {
+  return MUSIC_METADATA_STATUS_SET.has(value) ? value : 'ready'
+}
+
+async function bestEffortMusicMetadata(filePath, originalName) {
+  const fallback = fallbackMusicMetadata(originalName)
+  try {
+    const parsed = await parseMusicMetadata(filePath, originalName)
+    const metadata = {
+      ...fallback,
+      title: parsed.title || fallback.title,
+      artist: parsed.artist || null,
+      album: parsed.album || null,
+      duration: parsed.duration || 0,
+      coverImage: parsed.coverImage || null,
+      fileSize: parsed.fileSize ?? null,
+      fileType: parsed.fileType || path.extname(String(originalName || '')).replace(/^\./u, '').toLowerCase()
+    }
+    return Object.freeze({
+      metadata,
+      status: musicMetadataStatusForValues(metadata),
+      errorCode: null,
+      needsReparse: false
+    })
+  } catch (error) {
+    return Object.freeze({
+      metadata: {
+        ...fallback,
+        fileSize: null,
+        fileType: path.extname(String(originalName || '')).replace(/^\./u, '').toLowerCase()
+      },
+      status: 'pending',
+      errorCode: stableMusicMetadataErrorCode(error),
+      needsReparse: true
+    })
+  }
+}
+
+function persistMusicMetadataState(database, musicId, status, errorCode = null) {
+  const normalizedCode = errorCode === null ? null : stableMusicMetadataErrorCode({ code: errorCode })
+  database.prepare(`
+    UPDATE music
+       SET metadata_status = ?,
+           metadata_error_code = ?,
+           metadata_parser_version = ?,
+           metadata_updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+  `).run(status, normalizedCode, MUSIC_METADATA_PARSER_VERSION, musicId)
+}
+
+function runMusicMetadataTransaction(database, callback) {
+  const transaction = database.transaction(callback)
+  return typeof transaction.immediate === 'function' ? transaction.immediate() : transaction()
+}
+
+export function completeMusicMetadataUpload({
+  database,
+  musicId,
+  originalName,
+  contentSha256,
+  metadataState = { status: 'ready', errorCode: null }
+}) {
+  const extension = path.extname(String(originalName || '')).toLowerCase()
+  if (!MUSIC_UPLOAD_POLICY.extensions.includes(extension)) {
+    return Object.freeze({ metadataStatus: 'ready', metadataErrorCode: null, metadataTask: null })
+  }
+
+  let status = metadataState.status
+  let errorCode = metadataState.errorCode ?? null
+  let metadataTask = null
+  let activeConflict = false
+  if (status === 'pending') {
+    try {
+      const outcome = runMusicMetadataTransaction(database, () => {
+        persistMusicMetadataState(database, musicId, status, errorCode)
+        const queued = enqueueMusicMetadataTask(database, musicId, contentSha256)
+        const projected = projectMusicMetadataTask(queued.task)
+        if (!projected) {
+          const error = new Error('Music metadata task projection failed.')
+          error.code = 'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+          throw error
+        }
+        return { ...queued, task: projected }
+      })
+      metadataTask = outcome.task
+      activeConflict = outcome.activeConflict === true
+    } catch {
+      status = 'failed'
+      errorCode = 'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+      try { persistMusicMetadataState(database, musicId, status, errorCode) } catch {}
+    }
+  } else {
+    try {
+      persistMusicMetadataState(database, musicId, status, errorCode)
+    } catch {
+      status = 'failed'
+      errorCode = 'MUSIC_METADATA_DATABASE_UNAVAILABLE'
+    }
+  }
+
+  return Object.freeze({
+    metadataStatus: publicMusicMetadataStatus(status),
+    metadataErrorCode: publicMusicMetadataErrorCode(errorCode),
+    metadataTask,
+    activeConflict
+  })
 }
 
 function isRegularFile(filePath) {
@@ -421,7 +612,8 @@ function musicUploadIdempotencyKey(fileId) {
 function existingMusicUpload(database, operation) {
   if (!operation?.storageKey) return null
   const music = database.prepare(`
-    SELECT id, title, artist, album, storage_key, content_sha256, content_bytes
+    SELECT id, title, artist, album, original_name, metadata_status, metadata_error_code,
+           storage_key, content_sha256, content_bytes
       FROM music
      WHERE storage_key = ?
      LIMIT 1
@@ -432,12 +624,20 @@ function existingMusicUpload(database, operation) {
       title: music.title,
       artist: music.artist,
       album: music.album,
-      message: '上传成功'
+      message: '上传成功',
+      metadataStatus: publicMusicMetadataStatus(music.metadata_status),
+      metadataErrorCode: publicMusicMetadataErrorCode(music.metadata_error_code)
     }),
     reference: Object.freeze({
       storage_key: music.storage_key,
       content_sha256: music.content_sha256,
       content_bytes: music.content_bytes
+    }),
+    recovery: Object.freeze({
+      id: music.id,
+      originalName: music.original_name,
+      contentSha256: music.content_sha256,
+      metadataState: persistedMusicRecoveryState(music)
     })
   }) : null
 }
@@ -466,6 +666,30 @@ function sendMusicRouteError(res, error) {
     return res.status(400).json({ code, message: '请求无效' })
   }
   return res.status(500).json({ code: code || 'MUSIC_OPERATION_FAILED', message: '服务器错误' })
+}
+
+function sendMusicMetadataRouteError(res, error) {
+  const code = stableMusicMetadataErrorCode(error)
+  if (code === 'MUSIC_METADATA_INPUT_INVALID') {
+    return res.status(400).json({ code, message: '请求无效' })
+  }
+  if (code === 'MUSIC_METADATA_MUSIC_NOT_FOUND' || code === 'MUSIC_METADATA_SOURCE_MISSING') {
+    return res.status(404).json({ code, message: '资源不存在' })
+  }
+  if (code === 'MUSIC_METADATA_CONTENT_HASH_MISSING' || code === 'MUSIC_METADATA_CONTENT_CHANGED') {
+    return res.status(409).json({ code, message: '资源状态冲突' })
+  }
+  console.error('音乐元数据任务失败:', code)
+  return res.status(500).json({ code, message: '服务器错误' })
+}
+
+function activeMusic(database, id) {
+  return database.prepare(`
+    SELECT m.* FROM music m WHERE m.id = ? AND NOT EXISTS (
+      SELECT 1 FROM resource_trash_entries t
+      WHERE t.resource_type = 'music' AND t.resource_id = m.id
+    )
+  `).get(id)
 }
 
 async function invalidateMusicCaches() {
@@ -610,10 +834,22 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
       const existing = existingMusicUpload(db, operation)
       if (!existing) return res.status(500).json({ message: '上传状态异常' })
       await verifyMusicUploadContent(runtime, existing.reference)
+      const recovery = completeMusicMetadataUpload({
+        database: db,
+        musicId: existing.recovery.id,
+        originalName: existing.recovery.originalName,
+        contentSha256: existing.recovery.contentSha256,
+        metadataState: existing.recovery.metadataState
+      })
       clearMusicUploadInputs(fileId, totalChunks, mergedPath)
       uploadProgress.delete(fileId)
       cancelledUploads.delete(fileId)
-      return res.json(existing.response)
+      return res.json({
+        ...existing.response,
+        metadataStatus: recovery.metadataStatus,
+        metadataErrorCode: recovery.metadataErrorCode,
+        metadataTask: recovery.metadataTask
+      })
     }
 
     // A cancelled upload without a commit ledger is no longer retryable.
@@ -723,7 +959,9 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
         })
       }
 
-      const metadata = await parseMusicMetadata(sourcePath, fileName)
+      const metadataAttempt = await bestEffortMusicMetadata(sourcePath, fileName)
+      const metadata = metadataAttempt.metadata
+      const initialMetadataState = initialMusicMetadataState(metadataAttempt)
       if (!staged) {
         staged = await runtime.storageService.stageFromStream(fs.createReadStream(sourcePath))
       }
@@ -740,7 +978,10 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
           duration: metadata.duration,
           originalName: fileName,
           fileType: metadata.fileType,
-          coverImage: metadata.coverImage
+          coverImage: metadata.coverImage,
+          metadataStatus: initialMetadataState.status,
+          metadataErrorCode: initialMetadataState.errorCode,
+          metadataParserVersion: initialMetadataState.parserVersion
         }
       })
       await verifyMusicUploadContent(runtime, {
@@ -749,12 +990,23 @@ router.post('/merge-chunks', authenticateToken, requireWritePermission, async (r
         content_bytes: committed.bytes
       })
 
+      const metadataResult = completeMusicMetadataUpload({
+        database: db,
+        musicId: committed.id,
+        originalName: fileName,
+        contentSha256: committed.sha256,
+        metadataState: metadataAttempt
+      })
+
       const response = {
         id: committed.id,
         title: committed.title,
         artist: metadata.artist,
         album: metadata.album,
-        message: '上传成功'
+        message: '上传成功',
+        metadataStatus: metadataResult.metadataStatus,
+        metadataErrorCode: metadataResult.metadataErrorCode,
+        metadataTask: metadataResult.metadataTask
       }
       clearMusicUploadInputs(fileId, totalChunks, mergedPath)
       uploadProgress.delete(fileId)
@@ -1022,6 +1274,8 @@ router.get('/', authenticateToken, async (req, res) => {
     if (columnNames.includes('duration')) selectFields.push('duration')
     if (columnNames.includes('file_size')) selectFields.push('file_size')
     if (columnNames.includes('file_type')) selectFields.push('file_type')
+    if (columnNames.includes('metadata_status')) selectFields.push('metadata_status')
+    if (columnNames.includes('metadata_error_code')) selectFields.push('metadata_error_code')
     // 添加 has_cover 标志位（封面是否存在）
     if (columnNames.includes('cover_image')) {
       selectFields.push("CASE WHEN cover_image IS NOT NULL AND cover_image != '' THEN 1 ELSE 0 END as has_cover")
@@ -1091,6 +1345,8 @@ router.get('/', authenticateToken, async (req, res) => {
     // 转换时间
     const musicList = rows.map(row => ({
       ...row,
+      metadataStatus: publicMusicMetadataStatus(row.metadata_status),
+      metadataErrorCode: publicMusicMetadataErrorCode(row.metadata_error_code),
       created_at: convertToUTC8(row.created_at),
       updated_at: convertToUTC8(row.updated_at)
     }))
@@ -1193,59 +1449,52 @@ router.get('/albums', authenticateToken, async (req, res) => {
   }
 })
 
-// 重新解析音乐元数据
+// 手动触发音乐元数据重解析；解析在持久任务运行时中异步执行。
 router.post('/:id/reparse', authenticateToken, requireWritePermission, async (req, res) => {
-  try {
-    const db = getDatabase()
-    const music = db.prepare('SELECT * FROM music WHERE id = ?').get(req.params.id)
+  const musicId = Number(req.params.id)
+  if (!Number.isSafeInteger(musicId) || musicId <= 0) {
+    return sendMusicMetadataRouteError(res, { code: 'MUSIC_METADATA_INPUT_INVALID' })
+  }
 
-    if (!music) {
-      return res.status(404).json({ message: '音乐不存在' })
+  try {
+    const database = getDatabase()
+    const music = activeMusic(database, musicId)
+    if (!music) return sendMusicMetadataRouteError(res, { code: 'MUSIC_METADATA_MUSIC_NOT_FOUND' })
+
+    const contentSha256 = String(music.content_sha256 || '').toLowerCase()
+    if (!/^[a-f0-9]{64}$/u.test(contentSha256)) {
+      return sendMusicMetadataRouteError(res, { code: 'MUSIC_METADATA_CONTENT_HASH_MISSING' })
     }
 
-    const contentService = getResourceStorageRuntime().contentServiceFor('music')
-    const verified = await contentService.resolveVerifiedFilePath(music)
-    const originalName = music.original_name || `${music.title || 'music'}.${music.file_type || 'mp3'}`
-    console.log(`[元数据] 重新解析音乐内容: ${verified.source}`)
+    let outcome
+    try {
+      outcome = runMusicMetadataTransaction(database, () => {
+        persistMusicMetadataState(database, musicId, 'pending', null)
+        const queued = enqueueMusicMetadataTask(database, musicId, contentSha256)
+        const projected = projectMusicMetadataTask(queued.task)
+        if (!projected) {
+          const error = new Error('Music metadata task projection failed.')
+          error.code = 'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+          throw error
+        }
+        return { ...queued, task: projected }
+      })
+    } catch (error) {
+      try { persistMusicMetadataState(database, musicId, 'failed', 'MUSIC_METADATA_TASK_ENQUEUE_FAILED') } catch {}
+      throw Object.assign(new Error('Music metadata task enqueue failed.', { cause: error }), {
+        code: 'MUSIC_METADATA_TASK_ENQUEUE_FAILED'
+      })
+    }
 
-    // 重新解析元数据
-    const metadata = await parseMusicMetadata(verified.filePath, originalName)
-
-    // 更新数据库
-    const stmt = db.prepare(`
-      UPDATE music SET 
-        title = ?, 
-        artist = ?, 
-        album = ?, 
-        duration = ?,
-        cover_image = ?,
-        updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ?
-    `)
-    stmt.run(
-      metadata.title,
-      metadata.artist,
-      metadata.album,
-      metadata.duration,
-      metadata.coverImage,
-      req.params.id
-    )
-
-    console.log(`[元数据] 重新解析成功: ${metadata.title} - ${metadata.artist}`)
-
-    res.json({
-      message: '重新解析成功',
-      metadata: {
-        title: metadata.title,
-        artist: metadata.artist,
-        album: metadata.album,
-        duration: metadata.duration,
-        hasCover: !!metadata.coverImage
-      }
+    res.setHeader('Cache-Control', 'no-store')
+    return res.status(outcome.activeConflict ? 409 : 202).json({
+      data: outcome.task,
+      task: outcome.task,
+      created: outcome.created,
+      activeConflict: outcome.activeConflict
     })
   } catch (error) {
-    console.error('重新解析失败:', error?.code || error?.name || 'UNKNOWN')
-    sendMusicRouteError(res, error)
+    return sendMusicMetadataRouteError(res, error)
   }
 })
 
@@ -1659,6 +1908,8 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
     if (columnNames.includes('duration')) selectFields.push('m.duration')
     if (columnNames.includes('file_size')) selectFields.push('m.file_size')
     if (columnNames.includes('file_type')) selectFields.push('m.file_type')
+    if (columnNames.includes('metadata_status')) selectFields.push('m.metadata_status')
+    if (columnNames.includes('metadata_error_code')) selectFields.push('m.metadata_error_code')
     // 添加 has_cover 标志位
     if (columnNames.includes('cover_image')) {
       selectFields.push("CASE WHEN m.cover_image IS NOT NULL AND m.cover_image != '' THEN 1 ELSE 0 END as has_cover")
@@ -1694,6 +1945,8 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
     
     const songs = rows.map(row => ({
       ...row,
+      metadataStatus: publicMusicMetadataStatus(row.metadata_status),
+      metadataErrorCode: publicMusicMetadataErrorCode(row.metadata_error_code),
       created_at: convertToUTC8(row.created_at),
       updated_at: convertToUTC8(row.updated_at),
       added_at: convertToUTC8(row.added_at)
@@ -1839,6 +2092,23 @@ router.put('/playlists/:id/songs/reorder', authenticateToken, requireWritePermis
 
 // 歌词管理
 
+function isLyricAbortError(error, signal) {
+  return Boolean(signal?.aborted) ||
+    error?.name === 'AbortError' ||
+    error?.code === 'ABORT_ERR' ||
+    error?.code === 'ERR_CANCELED' ||
+    error?.name === 'CanceledError'
+}
+
+function throwIfLyricAborted(signal) {
+  if (signal?.aborted) {
+    const error = new Error('歌词任务已取消')
+    error.name = 'AbortError'
+    error.code = 'ABORT_ERR'
+    throw error
+  }
+}
+
 // 歌词源配置（按优先级顺序）
 const LYRIC_SOURCES = [
   {
@@ -1916,7 +2186,7 @@ function calculateSongMatchScore(song, targetTitle, targetArtist) {
   return titleScore + artistScore
 }
 
-async function searchNeteaseMusic(title, artist) {
+async function searchNeteaseMusic(title, artist, { signal } = {}) {
   try {
     // 第一次搜索：标题 + 艺术家
     let keyword = artist ? `${title} ${artist}` : title
@@ -1933,6 +2203,7 @@ async function searchNeteaseMusic(title, artist) {
       },
       httpsAgent,
       timeout: 10000,
+      signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': 'https://music.163.com',
@@ -1956,6 +2227,7 @@ async function searchNeteaseMusic(title, artist) {
         },
         httpsAgent,
         timeout: 10000,
+        signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           'Referer': 'https://music.163.com',
@@ -1991,6 +2263,7 @@ async function searchNeteaseMusic(title, artist) {
     console.log('[网易云音乐] 未找到匹配的歌曲')
     return null
   } catch (error) {
+    if (isLyricAbortError(error, signal)) throw error
     console.error('[网易云音乐] 搜索失败:', error.message)
     return null
   }
@@ -2055,7 +2328,7 @@ function mergeLrcWithTranslation(originalLrc, translationLrc) {
   return mergedLines.join('\n')
 }
 
-async function getNeteaseLyric(songId) {
+async function getNeteaseLyric(songId, { signal } = {}) {
   try {
     const lyricUrl = `${NETEASE_API_BASE}/song/lyric`
 
@@ -2070,6 +2343,7 @@ async function getNeteaseLyric(songId) {
       },
       httpsAgent,
       timeout: 10000,
+      signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': 'https://music.163.com',
@@ -2091,6 +2365,7 @@ async function getNeteaseLyric(songId) {
 
     return mergedLrc
   } catch (error) {
+    if (isLyricAbortError(error, signal)) throw error
     console.error('[网易云音乐] 获取歌词失败:', error.message)
     return null
   }
@@ -2099,7 +2374,7 @@ async function getNeteaseLyric(songId) {
 // QQ音乐
 const QQ_MUSIC_API_BASE = 'https://c.y.qq.com/soso/fcgi-bin'
 
-async function searchQQMusic(title, artist) {
+async function searchQQMusic(title, artist, { signal } = {}) {
   try {
     const searchUrl = `${QQ_MUSIC_API_BASE}/client_search_cp`
     
@@ -2120,6 +2395,7 @@ async function searchQQMusic(title, artist) {
       },
       httpsAgent,
       timeout: 10000,
+      signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': 'https://y.qq.com',
@@ -2147,6 +2423,7 @@ async function searchQQMusic(title, artist) {
         },
         httpsAgent,
         timeout: 10000,
+        signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           'Referer': 'https://y.qq.com',
@@ -2201,12 +2478,13 @@ async function searchQQMusic(title, artist) {
     console.log('[QQ音乐] 未找到匹配的歌曲')
     return null
   } catch (error) {
+    if (isLyricAbortError(error, signal)) throw error
     console.error('[QQ音乐] 搜索失败:', error.message)
     return null
   }
 }
 
-async function getQQMusicLyric(songMid) {
+async function getQQMusicLyric(songMid, { signal } = {}) {
   try {
     const lyricUrl = 'https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg'
 
@@ -2220,6 +2498,7 @@ async function getQQMusicLyric(songMid) {
       },
       httpsAgent,
       timeout: 10000,
+      signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': 'https://y.qq.com',
@@ -2233,6 +2512,7 @@ async function getQQMusicLyric(songMid) {
 
     return null
   } catch (error) {
+    if (isLyricAbortError(error, signal)) throw error
     console.error('[QQ音乐] 获取歌词失败:', error.message)
     return null
   }
@@ -2241,7 +2521,7 @@ async function getQQMusicLyric(songMid) {
 // 酷狗音乐
 const KUGOU_API_BASE = 'https://songsearch.kugou.com'
 
-async function searchKugouMusic(title, artist) {
+async function searchKugouMusic(title, artist, { signal } = {}) {
   try {
     const searchUrl = `${KUGOU_API_BASE}/song_search_v2`
     
@@ -2259,6 +2539,7 @@ async function searchKugouMusic(title, artist) {
       },
       httpsAgent,
       timeout: 10000,
+      signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': 'https://www.kugou.com',
@@ -2283,6 +2564,7 @@ async function searchKugouMusic(title, artist) {
         },
         httpsAgent,
         timeout: 10000,
+        signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           'Referer': 'https://www.kugou.com',
@@ -2338,12 +2620,13 @@ async function searchKugouMusic(title, artist) {
     console.log('[酷狗音乐] 未找到匹配的歌曲')
     return null
   } catch (error) {
+    if (isLyricAbortError(error, signal)) throw error
     console.error('[酷狗音乐] 搜索失败:', error.message)
     return null
   }
 }
 
-async function getKugouLyric(hash) {
+async function getKugouLyric(hash, { signal } = {}) {
   try {
     const lyricUrl = 'https://www.kugou.com/yy/index.php'
 
@@ -2356,6 +2639,7 @@ async function getKugouLyric(hash) {
       },
       httpsAgent,
       timeout: 10000,
+      signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': 'https://www.kugou.com',
@@ -2369,26 +2653,30 @@ async function getKugouLyric(hash) {
 
     return null
   } catch (error) {
+    if (isLyricAbortError(error, signal)) throw error
     console.error('[酷狗音乐] 获取歌词失败:', error.message)
     return null
   }
 }
 
 // 搜索歌词（按优先级尝试多个歌词源）
-async function searchLyricsFromSources(title, artist) {
+async function searchLyricsFromSources(title, artist, { signal } = {}) {
   console.log(`[歌词搜索] 开始搜索: ${title} - ${artist || '未知'}`)
 
   // 按优先级顺序尝试每个歌词源
   for (const source of LYRIC_SOURCES) {
     try {
+      throwIfLyricAborted(signal)
       console.log(`[歌词搜索] 尝试 ${source.name}...`)
 
-      const songInfo = await source.search(title, artist)
+      const songInfo = await source.search(title, artist, { signal })
 
       if (songInfo) {
         console.log(`[${source.name}] 找到歌曲: ${songInfo.name} - ${songInfo.artists}`)
 
-        const lyric = await source.getLyric(songInfo.id || songInfo.hash)
+        const lyric = await source.getLyric(songInfo.id || songInfo.hash, { signal })
+
+        throwIfLyricAborted(signal)
 
         if (lyric) {
           console.log(`[${source.name}] 成功获取歌词`)
@@ -2400,6 +2688,7 @@ async function searchLyricsFromSources(title, artist) {
         }
       }
     } catch (error) {
+      if (isLyricAbortError(error, signal)) throw error
       console.error(`[${source.name}] 失败:`, error.message)
       continue // 继续尝试下一个源
     }
@@ -2421,7 +2710,16 @@ router.get('/lyrics/search', authenticateToken, async (req, res) => {
 
     const result = await searchLyricsFromSources(title, artist || '')
 
-    res.json({
+    if (!result) {
+      return res.json({
+        success: false,
+        source: null,
+        lyrics: null,
+        message: '未找到歌词'
+      })
+    }
+
+    return res.json({
       success: true,
       source: result.source,
       lyrics: result.lrc
@@ -2432,182 +2730,169 @@ router.get('/lyrics/search', authenticateToken, async (req, res) => {
   }
 })
 
-// 批量下载歌词（异步任务）
+function normalizeLyricsTaskVersionId(value) {
+  if (value === undefined || value === null) return randomUUID()
+  if (typeof value !== 'string') {
+    const error = new Error('Idempotency-Key 无效')
+    error.code = 'TASK_IDEMPOTENCY_KEY_INVALID'
+    throw error
+  }
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || normalized.length > 128 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    const error = new Error('Idempotency-Key 无效')
+    error.code = 'TASK_IDEMPOTENCY_KEY_INVALID'
+    throw error
+  }
+  return normalized
+}
+
+function lyricsTaskVersionId(req) {
+  return normalizeLyricsTaskVersionId(req.get('Idempotency-Key'))
+}
+
+function enqueueMusicLyricsTask(database, input, subjectVersionId) {
+  return enqueueExclusiveRun(database, {
+    taskType: 'music.lyrics.batch',
+    processorVersion: MUSIC_LYRICS_PROCESSOR_VERSION,
+    subjectType: MUSIC_LYRICS_SUBJECT_TYPE,
+    subjectId: MUSIC_LYRICS_SUBJECT_ID,
+    subjectVersionId,
+    input,
+    executionClass: MUSIC_LYRICS_EXECUTION_CLASS
+  }, { taskTypes: MUSIC_LYRICS_TASK_TYPES })
+}
+
+function taskTimestamp(value) {
+  if (!value) return null
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+function publicLyricsTaskResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null
+  const rawResults = Array.isArray(result.results) ? result.results : []
+  const results = rawResults.slice(0, 500).flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    if (!Number.isSafeInteger(item.musicId) || item.musicId <= 0) return []
+    const output = {
+      musicId: item.musicId,
+      success: item.success === true
+    }
+    if (typeof item.source === 'string' && item.source) output.source = item.source
+    if (typeof item.error === 'string' && item.error) output.error = item.error
+    if (item.skipped === true) {
+      output.skipped = true
+      output.reason = '已有歌词'
+    }
+    return [output]
+  })
+  return {
+    total: Number.isSafeInteger(result.total) && result.total >= 0 ? result.total : 0,
+    success: Number.isSafeInteger(result.success) && result.success >= 0 ? result.success : 0,
+    failed: Number.isSafeInteger(result.failed) && result.failed >= 0 ? result.failed : 0,
+    skipped: Number.isSafeInteger(result.skipped) && result.skipped >= 0 ? result.skipped : 0,
+    results
+  }
+}
+
+function publicLyricsTaskStatus(task) {
+  const result = publicLyricsTaskResult(task.result)
+  const input = task.input && typeof task.input === 'object' && !Array.isArray(task.input)
+    ? task.input
+    : null
+  const total = result?.total ?? (Array.isArray(input?.musicIds) ? input.musicIds.length : 0)
+  const status = {
+    pending: 'pending',
+    leased: 'running',
+    running: 'running',
+    succeeded: 'completed',
+    failed: 'failed',
+    cancelled: 'cancelled'
+  }[task.status] || 'failed'
+  const percentage = Number.isFinite(task.progress)
+    ? Math.max(0, Math.min(100, task.progress))
+    : 0
+  const progress = total > 0 ? Math.min(total, Math.round((percentage / 100) * total)) : 0
+  const publicTask = {
+    id: task.id,
+    taskId: task.id,
+    status,
+    progress,
+    total,
+    success: result?.success ?? 0,
+    failed: result?.failed ?? 0,
+    skipped: result?.skipped ?? 0,
+    results: result?.results ?? [],
+    startTime: taskTimestamp(task.startedAt || task.createdAt),
+    endTime: taskTimestamp(task.finishedAt)
+  }
+  if (typeof task.errorSummary === 'string' && task.errorSummary) {
+    publicTask.error = task.errorSummary
+  }
+  return publicTask
+}
+
+function sendEnqueuedMusicLyricsTask(res, outcome, total) {
+  if (outcome.activeConflict) {
+    return res.status(409).json({
+      success: true,
+      taskId: outcome.task.id,
+      message: '歌词任务正在运行'
+    })
+  }
+  return res.json({
+    success: true,
+    taskId: outcome.task.id,
+    message: outcome.task.status === 'succeeded'
+      ? '歌词下载已完成'
+      : `开始下载 ${total} 首歌曲的歌词`
+  })
+}
+
+// 批量下载歌词（持久任务）
 router.post('/lyrics/batch-download', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { musicIds, force = false } = req.body
-
-    if (!musicIds || !Array.isArray(musicIds)) {
-      return res.status(400).json({ message: '无效的音乐ID列表' })
-    }
-
-    // 生成任务ID
-    const taskId = `lyric_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-
-    // 初始化任务状态
-    const task = {
-      id: taskId,
-      status: 'pending',
-      progress: 0,
-      total: musicIds.length,
-      success: 0,
-      failed: 0,
-      results: [],
-      startTime: Date.now()
-    }
-
-    lyricTasks.set(taskId, task)
-
-    // 立即返回任务ID
-    res.json({
-      success: true,
-      taskId,
-      message: `开始下载 ${musicIds.length} 首歌曲的歌词`
-    })
-
-    // 异步执行下载任务
-    executeLyricDownloadTask(taskId, musicIds, force)
-
+    const normalizedInput = normalizeMusicLyricsTaskInput({ input: req.body })
+    const subjectVersionId = lyricsTaskVersionId(req)
+    const outcome = enqueueMusicLyricsTask(
+      getDatabase(),
+      normalizedInput,
+      subjectVersionId
+    )
+    return sendEnqueuedMusicLyricsTask(res, outcome, normalizedInput.musicIds.length)
   } catch (error) {
-    console.error('批量下载歌词失败:', error)
-    res.status(500).json({ message: '服务器错误', error: error.message })
+    if (error?.code === 'TASK_IDEMPOTENCY_KEY_INVALID' ||
+      error?.code === 'TASK_INPUT_INVALID' ||
+      error?.code === 'TASK_IDEMPOTENCY_CONFLICT') {
+      return res.status(error.code === 'TASK_IDEMPOTENCY_CONFLICT' ? 409 : 400).json({
+        message: error.summary || error.message,
+        code: error.code
+      })
+    }
+    console.error('批量下载歌词入队失败:', error)
+    return res.status(500).json({ message: '服务器错误' })
   }
 })
-
-// 异步执行歌词下载任务
-async function executeLyricDownloadTask(taskId, musicIds, force = false) {
-  const task = lyricTasks.get(taskId)
-  if (!task) return
-
-  const db = getDatabase()
-
-  // 检查数据库字段
-  const columns = db.prepare("PRAGMA table_info(music)").all()
-  const columnNames = columns.map(c => c.name)
-
-  const hasLyricsField = columnNames.includes('lyrics')
-  const hasLyricsSourceField = columnNames.includes('lyrics_source')
-  const hasHasLyricsField = columnNames.includes('has_lyrics')
-
-  if (!hasLyricsField) {
-    task.status = 'failed'
-    task.error = '数据库未升级'
-    return
-  }
-
-  task.status = 'running'
-
-  for (let i = 0; i < musicIds.length; i++) {
-    const musicId = musicIds[i]
-
-    try {
-      // 获取音乐信息（包含歌词状态）
-      const music = db.prepare('SELECT id, title, artist, lyrics, has_lyrics FROM music WHERE id = ?').get(musicId)
-
-      if (!music) {
-        task.failed++
-        task.results.push({ musicId, success: false, error: '音乐不存在' })
-        task.progress = i + 1
-        continue
-      }
-
-      // 跳过已有歌词的歌曲（除非强制下载）
-      if (!force && (music.has_lyrics || music.lyrics)) {
-        console.log(`[歌词下载] 跳过已有歌词: ${music.title} - ${music.artist}`)
-        task.skipped = (task.skipped || 0) + 1
-        task.results.push({ musicId, success: true, skipped: true, reason: '已有歌词' })
-        task.progress = i + 1
-        continue
-      }
-
-      // 搜索歌词
-      const searchResult = await searchLyricsFromSources(music.title, music.artist || '')
-
-      if (searchResult && searchResult.lrc) {
-        // 更新数据库
-        const updateFields = ['lyrics = ?', 'lyrics_updated_at = CURRENT_TIMESTAMP']
-        const params = [searchResult.lrc]
-
-        if (hasLyricsSourceField) {
-          updateFields.push('lyrics_source = ?')
-          params.push(searchResult.source)
-        }
-
-        if (hasHasLyricsField) {
-          updateFields.push('has_lyrics = 1')
-        }
-
-        params.push(musicId)
-
-        db.prepare(`
-          UPDATE music
-          SET ${updateFields.join(', ')}
-          WHERE id = ?
-        `).run(...params)
-
-        task.success++
-        task.results.push({
-          musicId,
-          success: true,
-          title: music.title,
-          artist: music.artist,
-          source: searchResult.source
-        })
-        console.log(`[歌词下载] 成功: ${music.title}`)
-      } else {
-        task.failed++
-        task.results.push({
-          musicId,
-          success: false,
-          title: music.title,
-          artist: music.artist,
-          error: '未找到歌词'
-        })
-      }
-
-      task.progress = i + 1
-
-    } catch (err) {
-      task.failed++
-      task.results.push({ musicId, success: false, error: err.message })
-      task.progress = i + 1
-    }
-  }
-
-  // 任务完成
-  task.status = 'completed'
-  task.endTime = Date.now()
-  console.log(`[任务完成] 成功: ${task.success}, 失败: ${task.failed}`)
-}
 
 // 查询歌词下载任务进度
 router.get('/lyrics/task/:taskId', authenticateToken, async (req, res) => {
   try {
-    const { taskId } = req.params
-    const task = lyricTasks.get(taskId)
-
-    if (!task) {
+    const task = getTaskById(getDatabase(), req.params.taskId)
+    if (!task || task.taskType !== 'music.lyrics.batch' ||
+      task.subjectType !== MUSIC_LYRICS_SUBJECT_TYPE ||
+      task.subjectId !== MUSIC_LYRICS_SUBJECT_ID) {
       return res.status(404).json({ message: '任务不存在' })
     }
-
-    res.json({
+    return res.json({
       success: true,
-      task: {
-        id: task.id,
-        status: task.status,
-        progress: task.progress,
-        total: task.total,
-        success: task.success,
-        failed: task.failed,
-        results: task.results,
-        startTime: task.startTime,
-        endTime: task.endTime
-      }
+      task: publicLyricsTaskStatus(task)
     })
-
   } catch (error) {
-    console.error('查询任务失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    if (error?.code === 'TASK_NOT_FOUND' || error?.code === 'TASK_ID_INVALID') {
+      return res.status(404).json({ message: '任务不存在' })
+    }
+    console.error('查询歌词任务失败:', error)
+    return res.status(500).json({ message: '服务器错误' })
   }
 })
 
@@ -2763,5 +3048,31 @@ router.get('/:id/cover', authenticateToken, async (req, res) => {
     res.status(500).json({ message: '服务器错误' })
   }
 })
+
+async function verifiedMusicPath(music) {
+  return (await getResourceStorageRuntime().contentServiceFor('music').resolveVerifiedFilePath(music)).filePath
+}
+
+const musicMetadataTaskProcessor = createMusicMetadataTaskProcessor({
+  databaseProvider: getDatabase,
+  resolveMusicPath: verifiedMusicPath,
+  parseMetadata: parseMusicMetadata
+})
+registerTaskProcessor(
+  MUSIC_METADATA_TASK_TYPE,
+  MUSIC_METADATA_PROCESSOR_VERSION,
+  MUSIC_METADATA_EXECUTION_CLASS,
+  musicMetadataTaskProcessor
+)
+
+const musicLyricsTaskProcessor = createMusicLyricsTaskProcessor({
+  searchLyricsFromSources
+})
+registerTaskProcessor(
+  'music.lyrics.batch',
+  MUSIC_LYRICS_PROCESSOR_VERSION,
+  MUSIC_LYRICS_EXECUTION_CLASS,
+  musicLyricsTaskProcessor
+)
 
 export default router

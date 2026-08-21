@@ -236,6 +236,9 @@
       >
         <template #cell-title="{ row }">
           <span class="book-title-text" :title="row.title">{{ row.title }}</span>
+          <NativeTag v-if="metadataStatusLabel(row.metadataStatus)" :theme="metadataStatusTheme(row.metadataStatus)" variant="light">
+            {{ metadataStatusLabel(row.metadataStatus) }}
+          </NativeTag>
         </template>
         <template #cell-author="{ row }">
           {{ row.author || '-' }}
@@ -261,6 +264,10 @@
             </NativeButton>
             <NativeButton theme="default" size="small" iconSize="1em" @click="handleEditBook(row)" :disabled="isGuest">
               <NativeIcon name="pencil" size="14" /> 编辑
+            </NativeButton>
+            <NativeButton v-if="canReparseBook(row)" theme="default" variant="outline" size="small"
+              :loading="metadataReparseLoading[row.id]" :disabled="isGuest" @click="handleMetadataReparse(row)">
+              <NativeIcon name="arrow-clockwise" size="14" /> 重解析
             </NativeButton>
             <NativeButton theme="default" size="small" iconSize="1em" @click="handleDownload(row)" :disabled="isGuest">
               <NativeIcon name="download" size="14" /> 下载
@@ -324,6 +331,9 @@
           <div class="book-info">
             <h4 class="book-title" :title="book.title">{{ book.title }}</h4>
             <p class="book-author" v-if="book.author">{{ book.author }}</p>
+            <NativeTag v-if="metadataStatusLabel(book.metadataStatus)" :theme="metadataStatusTheme(book.metadataStatus)" variant="light">
+              {{ metadataStatusLabel(book.metadataStatus) }}
+            </NativeTag>
             <div class="book-progress" v-if="book.progress > 0">
               <NativeProgress
                 :percentage="Math.round(book.progress * 100) / 100"
@@ -335,6 +345,10 @@
           <div class="book-actions">
             <NativeButton class="book-edit-btn" size="small" theme="default" @click.stop="handleEditBook(book)" :disabled="isGuest">
               <template #icon><NativeIcon name="pencil" /></template>
+            </NativeButton>
+            <NativeButton v-if="canReparseBook(book)" size="small" theme="default" variant="outline"
+              :loading="metadataReparseLoading[book.id]" :disabled="isGuest" @click.stop="handleMetadataReparse(book)">
+              <template #icon><NativeIcon name="arrow-clockwise" /></template>
             </NativeButton>
             <div class="book-delete-wrapper" @click.stop>
               <NativePopconfirm
@@ -648,7 +662,7 @@ import {
   NativeButton, NativeInput, NativeCard, NativeDialog, NativeIcon,
   NativeSpace, NativeSelect, NativeTable, NativeForm, NativeFormItem,
   NativeTextarea, NativeProgress, NativePopconfirm, NativeDivider,
-  NativeUpload
+  NativeUpload, NativeTag
 } from '@/components/native'
 import { generateCFI, parseCFI, scrollToCFI, getCurrentCFI, ChapterBoundaryCache, CharacterOffsetProgress } from '@/utils/epub-cfi'
 import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
@@ -714,6 +728,7 @@ const uploadRules = {
 // 编辑相关
 const editBookDialogVisible = ref(false)
 const editBookForm = ref({})
+const metadataReparseLoading = ref({})
 
 // 阅读器相关
 const readerDialogVisible = ref(false)
@@ -1248,7 +1263,14 @@ async function handleUploadConfirm() {
       返回数据: response.data
     })
 
-    toast.success('上传成功')
+    const metadataStatus = response.data?.metadataStatus
+    toast[metadataStatus === 'pending' || metadataStatus === 'failed' ? 'warning' : 'success'](
+      metadataStatus === 'pending'
+        ? '上传成功，元数据将在后台重解析'
+        : metadataStatus === 'failed'
+          ? '上传成功，元数据解析失败，可稍后手动重试'
+          : '上传成功'
+    )
     uploadDialogVisible.value = false
     stagedUpload.value = null
     await Promise.all([loadCategories(), loadBooks()])
@@ -1296,6 +1318,36 @@ async function handleDelete(id) {
     await Promise.all([loadCategories(), loadBooks()])
   } catch (error) {
     toast.error(error.response?.data?.message || '移入回收站失败')
+  }
+}
+
+function canReparseBook(book) {
+  return String(book?.fileType || '').toLowerCase() === 'epub'
+}
+
+function metadataStatusLabel(status) {
+  return ({ pending: '元数据排队中', partial: '元数据不完整', failed: '元数据解析失败' })[status] || ''
+}
+
+function metadataStatusTheme(status) {
+  return status === 'failed' ? 'danger' : status === 'pending' ? 'warning' : 'default'
+}
+
+async function handleMetadataReparse(book) {
+  if (!canReparseBook(book) || metadataReparseLoading.value[book.id]) return
+  metadataReparseLoading.value[book.id] = true
+  try {
+    await api.books.reparseMetadata(book.id)
+    toast.success('元数据重解析任务已加入队列')
+  } catch (error) {
+    if (error.response?.status === 409 && error.response?.data?.activeConflict) {
+      toast.info('该书的元数据重解析任务已在运行')
+    } else {
+      toast.error(error.response?.data?.message || '元数据重解析任务创建失败')
+    }
+  } finally {
+    metadataReparseLoading.value[book.id] = false
+    await loadBooks()
   }
 }
 

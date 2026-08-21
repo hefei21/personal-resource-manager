@@ -598,11 +598,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 43 column migrations and ten registered table transitions', () => {
+test('application registry freezes 51 column migrations and eleven registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 53)
+  assert.equal(applicationMigrationRegistry.migrations.length, 62)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -632,7 +632,16 @@ test('application registry freezes 43 column migrations and ten registered table
       '0050_resource_trash_entries',
       '0051_private_document_migration_map',
       '0052_books_storage_shape',
-      '0053_music_storage_shape'
+      '0053_music_storage_shape',
+      '0054_persistent_tasks',
+      '0055_books_metadata_status',
+      '0056_books_metadata_error_code',
+      '0057_books_metadata_parser_version',
+      '0058_books_metadata_updated_at',
+      '0059_music_metadata_status',
+      '0060_music_metadata_error_code',
+      '0061_music_metadata_parser_version',
+      '0062_music_metadata_updated_at'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({

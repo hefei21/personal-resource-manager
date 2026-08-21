@@ -177,7 +177,7 @@
         </NativeButton>
         <!-- 已收藏状态下的操作 -->
         <template v-if="isImported && localAnime">
-          <NativeButton variant="outline" @click="refreshAnime" :loading="refreshing" :disabled="isGuest">
+          <NativeButton variant="outline" @click="refreshAnime" :loading="refreshing" :disabled="isGuest || refreshing">
             <template #icon><NativeIcon name="arrow-clockwise" /></template>
             刷新
           </NativeButton>
@@ -219,7 +219,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import api from '../api'
 import { usePermission } from '@/composables/usePermission'
 import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect, NativePopconfirm } from '@/components/native'
@@ -262,6 +262,12 @@ const searchingResources = ref(false)
 const showResources = ref(false)
 const resources = ref([])
 const refreshing = ref(false)
+const REFRESH_POLL_INTERVAL_MS = 1000
+const REFRESH_POLL_TIMEOUT_MS = 120000
+let refreshPollTimer = null
+let refreshPollReject = null
+let refreshPollToken = 0
+let componentUnmounted = false
 
 // 标签列表
 const tags = computed(() => {
@@ -573,26 +579,90 @@ async function handleDelete() {
   }
 }
 
+function createRefreshPollingError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function cancelRefreshPolling(message = '刷新已停止') {
+  refreshPollToken += 1
+  if (refreshPollTimer !== null) {
+    clearTimeout(refreshPollTimer)
+    refreshPollTimer = null
+  }
+  const reject = refreshPollReject
+  refreshPollReject = null
+  if (reject) reject(createRefreshPollingError('REFRESH_POLL_CANCELLED', message))
+}
+
+async function pollRefreshTask(animeId, taskId) {
+  const token = refreshPollToken
+  const deadline = Date.now() + REFRESH_POLL_TIMEOUT_MS
+
+  while (true) {
+    if (token !== refreshPollToken) {
+      throw createRefreshPollingError('REFRESH_POLL_CANCELLED', '刷新已停止')
+    }
+    if (Date.now() >= deadline) {
+      throw createRefreshPollingError('REFRESH_POLL_TIMEOUT', '刷新任务超时，请稍后查看')
+    }
+
+    const response = await api.anime.getRefreshStatus(animeId, taskId)
+    if (Date.now() >= deadline) {
+      throw createRefreshPollingError('REFRESH_POLL_TIMEOUT', '刷新任务超时，请稍后查看')
+    }
+    const statusData = response.data?.data || response.data?.task || response.data
+    const status = statusData?.status
+    if (status === 'completed' || status === 'succeeded') return statusData
+    if (status === 'failed' || status === 'cancelled') {
+      throw createRefreshPollingError(
+        statusData?.errorCode || 'ANIME_REFRESH_FAILED',
+        statusData?.message || '动漫刷新失败，请稍后重试'
+      )
+    }
+
+    await new Promise((resolve, reject) => {
+      refreshPollReject = reject
+      refreshPollTimer = setTimeout(() => {
+        refreshPollTimer = null
+        refreshPollReject = null
+        resolve()
+      }, REFRESH_POLL_INTERVAL_MS)
+    })
+  }
+}
+
 // 刷新动漫信息
 async function refreshAnime() {
-  if (!localAnime.value) return
-  
+  if (!localAnime.value || refreshing.value) return
+
+  cancelRefreshPolling()
   refreshing.value = true
+  const animeId = localAnime.value.id
   try {
     const response = await api.anime.refresh(localAnime.value.id)
+    const taskId = response.data?.taskId || response.data?.data?.taskId
+    if (!taskId) throw createRefreshPollingError('ANIME_REFRESH_TASK_INVALID', '刷新任务响应无效')
+
+    await pollRefreshTask(animeId, taskId)
+    const detailResponse = await api.anime.get(animeId)
+    const updatedAnime = detailResponse.data?.data
+    if (!updatedAnime) throw createRefreshPollingError('ANIME_REFRESH_DATA_INVALID', '刷新后动漫数据无效')
+
+    anime.value = updatedAnime
+    localAnime.value = updatedAnime
+    characters.value = updatedAnime.characters || []
+    staff.value = updatedAnime.staff || []
     toast.success('刷新成功')
-    
-    // 更新本地数据
-    anime.value = response.data.data
-    localAnime.value = response.data.data
-    characters.value = response.data.data.characters || []
-    staff.value = response.data.data.staff || []
     
     emit('updated')
   } catch (error) {
-    toast.error(error.response?.data?.message || '刷新失败')
+    if (!componentUnmounted && error?.code !== 'REFRESH_POLL_CANCELLED') {
+      toast.error(error.response?.data?.message || error.message || '动漫刷新失败，请稍后重试')
+    }
   } finally {
-    refreshing.value = false
+    if (!componentUnmounted) refreshing.value = false
   }
 }
 
@@ -600,6 +670,8 @@ async function refreshAnime() {
 watch(visible, (val) => {
   if (val) {
     loadDetail()
+  } else {
+    cancelRefreshPolling()
   }
 })
 
@@ -608,6 +680,11 @@ watch(() => props.bangumiId, () => {
   if (visible.value) {
     loadDetail()
   }
+})
+
+onUnmounted(() => {
+  componentUnmounted = true
+  cancelRefreshPolling()
 })
 </script>
 

@@ -156,7 +156,8 @@ const menuItems = [
   { value: 'code', label: '代码管理', iconPath: 'M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z' },
   { value: 'bookmarks', label: '书签管理', iconPath: 'M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z' },
   { value: 'anime', label: '动漫管理', iconPath: 'M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z' },
-  { value: 'games', label: '游戏管理', iconPath: 'M15 7.5V2H9v5.5l3 3 3-3zM7.5 9H2v6h5.5l3-3-3-3zM9 16.5V22h6v-5.5l-3-3-3 3zM16.5 9l-3 3 3 3H22V9h-5.5z' }
+  { value: 'games', label: '游戏管理', iconPath: 'M15 7.5V2H9v5.5l3 3 3-3zM7.5 9H2v6h5.5l3-3-3-3zM9 16.5V22h6v-5.5l-3-3-3 3zM16.5 9l-3 3 3 3H22V9h-5.5z' },
+  { value: 'tasks', label: '任务中心', iconPath: 'M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z' }
 ]
 
 // 组件挂载后关闭初始loading
@@ -337,7 +338,8 @@ const pageTitle = computed(() => {
     Anime: '动漫管理',
     Games: '游戏管理',
     Blog: '博客管理',
-    Logs: '访问日志'
+    Logs: '访问日志',
+    Tasks: '任务中心'
   }
   return titles[route.name] || '雨的空间'
 })

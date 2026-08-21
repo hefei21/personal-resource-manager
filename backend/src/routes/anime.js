@@ -1,4 +1,5 @@
 import express from 'express'
+import { randomUUID } from 'node:crypto'
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { getDatabase } from '../config/database.js'
@@ -7,6 +8,16 @@ import { cache, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
 import { bangumiLimiter, scraperLimiter } from '../middlewares/security.js'
 import { safeAxiosGet } from '../services/outboundRequest.js'
+import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
+import { registerTaskProcessor } from '../services/taskRuntime.js'
+import {
+  BANGUMI_REFRESH_EXECUTION_CLASS,
+  BANGUMI_REFRESH_PROCESSOR_VERSION,
+  BANGUMI_REFRESH_SUBJECT_TYPE,
+  BANGUMI_REFRESH_TASK_TYPE,
+  BANGUMI_REFRESH_TASK_TYPES,
+  createBangumiRefreshTaskProcessor
+} from '../services/bangumiRefreshTaskProcessor.js'
 
 const router = express.Router()
 const BANGUMI_API_BASE = process.env.BANGUMI_API_BASE || 'https://api.bgm.tv'
@@ -27,14 +38,34 @@ const httpsAgent = process.env.HTTP_PROXY
   : undefined
 
 // 下载图片并转换为base64（带压缩）
-async function downloadImageAsBase64(imageUrl) {
+function isAbortError(error, signal) {
+  return Boolean(signal?.aborted) ||
+    error?.name === 'AbortError' ||
+    error?.code === 'ABORT_ERR' ||
+    error?.code === 'ERR_CANCELED' ||
+    error?.name === 'CanceledError'
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    const error = new Error('请求已取消')
+    error.name = 'AbortError'
+    error.code = 'ABORT_ERR'
+    throw error
+  }
+}
+
+export async function downloadImageAsBase64(imageUrl, { signal } = {}) {
+  throwIfAborted(signal)
   if (!imageUrl) return null
   try {
     const response = await safeAxiosGet(imageUrl, {
       responseType: 'arraybuffer',
       timeout: 15000,
-      maxContentLength: 5 * 1024 * 1024
+      maxContentLength: 5 * 1024 * 1024,
+      signal
     })
+    throwIfAborted(signal)
     const contentType = String(response.headers['content-type'] || '')
       .split(';')[0]
       .toLowerCase()
@@ -45,34 +76,43 @@ async function downloadImageAsBase64(imageUrl) {
     const rawBase64 = `data:${contentType};base64,${base64}`
     
     // 压缩图片
-    return await compressBase64Image(rawBase64, { maxWidth: 500, maxHeight: 500, quality: 85 })
+    const compressed = await compressBase64Image(rawBase64, { maxWidth: 500, maxHeight: 500, quality: 85 })
+    throwIfAborted(signal)
+    return compressed
   } catch (error) {
-    console.error('下载图片失败:', error.message)
+    if (isAbortError(error, signal)) throw error
+    console.error('下载图片失败:', error?.code || error?.name || 'UNKNOWN_ERROR')
     return null
   }
 }
 
 // 获取动漫详情（包含角色和制作人员）
-async function getAnimeDetail(bangumiId) {
-  // 尝试从缓存获取
+export async function getAnimeDetail(bangumiId, { bypassCache = false, signal } = {}) {
+  throwIfAborted(signal)
+
+  // 正常详情读取尝试从缓存获取；主动刷新必须绕过缓存。
   const cacheKey = `anime:detail:${bangumiId}`
-  try {
-    const cached = await cache.get(cacheKey)
-    if (cached) {
-      console.log(`[Redis] 命中缓存: ${cacheKey}`)
-      return cached
+  if (!bypassCache) {
+    try {
+      const cached = await cache.get(cacheKey)
+      if (cached) {
+        console.log(`[Redis] 命中缓存: ${cacheKey}`)
+        return cached
+      }
+    } catch (e) {
+      console.error('[动漫详情] 读取缓存失败:', e)
     }
-  } catch (e) {
-    console.error('[动漫详情] 读取缓存失败:', e)
   }
 
   try {
     // 并行请求基本信息、角色、制作人员
     const [subjectRes, charactersRes, personsRes] = await Promise.all([
-      axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}`, { httpsAgent, timeout: 15000, headers: BANGUMI_HEADERS }),
-      axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}/characters`, { httpsAgent, timeout: 15000, headers: BANGUMI_HEADERS }),
-      axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}/persons`, { httpsAgent, timeout: 15000, headers: BANGUMI_HEADERS })
+      axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}`, { httpsAgent, timeout: 15000, headers: BANGUMI_HEADERS, signal }),
+      axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}/characters`, { httpsAgent, timeout: 15000, headers: BANGUMI_HEADERS, signal }),
+      axios.get(`${BANGUMI_API_V0}/subjects/${bangumiId}/persons`, { httpsAgent, timeout: 15000, headers: BANGUMI_HEADERS, signal })
     ])
+
+    throwIfAborted(signal)
 
     const result = {
       subject: subjectRes.data,
@@ -85,8 +125,15 @@ async function getAnimeDetail(bangumiId) {
 
     return result
   } catch (error) {
-    console.error('获取动漫详情失败:', error.message)
-    throw new Error('获取详情失败')
+    if (isAbortError(error, signal)) throw error
+    console.error('获取动漫详情失败:', error?.code || error?.response?.status || 'UNKNOWN_ERROR')
+    const sanitized = new Error('获取详情失败')
+    if (Number.isInteger(error?.response?.status)) {
+      sanitized.response = { status: error.response.status }
+    }
+    if (typeof error?.code === 'string') sanitized.code = error.code
+    if (error?.request) sanitized.request = {}
+    throw sanitized
   }
 }
 
@@ -99,6 +146,97 @@ function extractFromInfobox(infobox, key) {
     return item.value.map(v => typeof v === 'string' ? v : v.v || v.name).join(', ')
   }
   return typeof item.value === 'string' ? item.value : item.value.v || item.value.name
+}
+
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'leased', 'running'])
+
+function taskError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+export function normalizeBangumiRefreshAnimeId(value) {
+  const normalized = String(value ?? '').normalize('NFKC').trim()
+  if (!/^[1-9]\d*$/u.test(normalized) || !Number.isSafeInteger(Number(normalized))) {
+    throw taskError('ANIME_ID_INVALID', '动漫 ID 无效')
+  }
+  return Number(normalized)
+}
+
+export function normalizeBangumiRefreshIdempotencyKey(value) {
+  if (value === undefined || value === null) return randomUUID()
+  if (typeof value !== 'string') {
+    throw taskError('TASK_IDEMPOTENCY_KEY_INVALID', 'Idempotency-Key 无效')
+  }
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || normalized.length > 128 || /[\u0000-\u001f\u007f]/u.test(normalized)) {
+    throw taskError('TASK_IDEMPOTENCY_KEY_INVALID', 'Idempotency-Key 无效')
+  }
+  return normalized
+}
+
+function isBangumiRefreshTask(task, animeId) {
+  return task?.taskType === BANGUMI_REFRESH_TASK_TYPE &&
+    task?.processorVersion === BANGUMI_REFRESH_PROCESSOR_VERSION &&
+    task?.executionClass === BANGUMI_REFRESH_EXECUTION_CLASS &&
+    task?.subjectType === BANGUMI_REFRESH_SUBJECT_TYPE &&
+    (animeId === undefined || task?.subjectId === String(animeId))
+}
+
+function refreshTaskMessage(taskStatus, errorCode) {
+  if (ACTIVE_TASK_STATUSES.has(taskStatus)) return '正在刷新动漫信息…'
+  if (taskStatus === 'succeeded') return '动漫信息刷新完成'
+  if (taskStatus === 'cancelled') return '动漫刷新任务已取消'
+  return {
+    ANIME_NOT_FOUND: '动漫不存在，刷新未执行。',
+    ANIME_BANGUMI_ID_MISSING: '该动漫未配置 Bangumi ID，无法刷新。',
+    ANIME_BANGUMI_ID_INVALID: '该动漫的 Bangumi ID 无效，无法刷新。',
+    BANGUMI_NOT_FOUND: 'Bangumi 条目不存在，刷新未执行。',
+    BANGUMI_CREDENTIALS_INVALID: 'Bangumi 凭据无效，请检查服务配置。',
+    BANGUMI_RATE_LIMITED: 'Bangumi 请求过于频繁，请稍后重试。',
+    BANGUMI_UNAVAILABLE: 'Bangumi 服务暂时不可用，请稍后重试。',
+    BANGUMI_NETWORK_ERROR: 'Bangumi 网络请求失败，请稍后重试。',
+    BANGUMI_RESPONSE_INVALID: 'Bangumi 返回数据无效，刷新失败。'
+  }[errorCode] || '动漫刷新失败，请稍后重试。'
+}
+
+export function publicBangumiRefreshTaskStatus(task, animeId) {
+  if (!isBangumiRefreshTask(task, animeId)) return null
+  const status = {
+    pending: 'pending',
+    leased: 'running',
+    running: 'running',
+    succeeded: 'completed',
+    failed: 'failed',
+    cancelled: 'cancelled'
+  }[task.status] || 'failed'
+  const progress = typeof task.progress === 'number' && Number.isFinite(task.progress)
+    ? Math.max(0, Math.min(100, task.progress))
+    : 0
+  return {
+    taskId: task.id,
+    status,
+    progress,
+    message: refreshTaskMessage(task.status, task.errorCode),
+    errorCode: task.status === 'failed' || task.status === 'cancelled'
+      ? task.errorCode || null
+      : null
+  }
+}
+
+export function enqueueBangumiRefreshTask(database, animeId, idempotencyKey) {
+  const normalizedAnimeId = normalizeBangumiRefreshAnimeId(animeId)
+  const subjectVersionId = normalizeBangumiRefreshIdempotencyKey(idempotencyKey)
+  return enqueueExclusiveRun(database, {
+    taskType: BANGUMI_REFRESH_TASK_TYPE,
+    processorVersion: BANGUMI_REFRESH_PROCESSOR_VERSION,
+    subjectType: BANGUMI_REFRESH_SUBJECT_TYPE,
+    subjectId: String(normalizedAnimeId),
+    subjectVersionId,
+    input: { animeId: normalizedAnimeId },
+    executionClass: BANGUMI_REFRESH_EXECUTION_CLASS
+  }, { taskTypes: BANGUMI_REFRESH_TASK_TYPES })
 }
 
 // 爬取 Bangumi 动漫信息（保留旧函数兼容性）
@@ -663,106 +801,66 @@ router.post('/:id/rating', authenticateToken, async (req, res) => {
   }
 })
 
-// 刷新动漫信息（从 Bangumi API 重新获取并更新）
+// 查询单条动漫刷新任务状态。只返回稳定的兼容字段，不透传任务内部内容。
+router.get('/:id/refresh-status/:taskId', authenticateToken, (req, res) => {
+  try {
+    const animeId = normalizeBangumiRefreshAnimeId(req.params.id)
+    const task = getTaskById(getDatabase(), req.params.taskId)
+    const publicTask = publicBangumiRefreshTaskStatus(task, animeId)
+    if (!publicTask) {
+      return res.status(404).json({ message: '刷新任务不存在' })
+    }
+    return res.json({ data: publicTask })
+  } catch (error) {
+    if (error?.code === 'ANIME_ID_INVALID' || error?.code === 'TASK_ID_INVALID' ||
+      error?.code === 'TASK_NOT_FOUND') {
+      return res.status(404).json({ message: '刷新任务不存在' })
+    }
+    console.error('查询动漫刷新任务失败:', error?.code || 'UNKNOWN_ERROR')
+    return res.status(500).json({ message: '查询刷新任务失败' })
+  }
+})
+
+// 刷新动漫信息（持久任务）
 router.post('/:id/refresh', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    
-    // 获取当前动漫信息
-    const stmt = db.prepare('SELECT bangumi_id FROM anime WHERE id = ?')
-    const anime = stmt.get(req.params.id)
-    
+    const animeId = normalizeBangumiRefreshAnimeId(req.params.id)
+    const database = getDatabase()
+    const anime = database.prepare('SELECT id FROM anime WHERE id = ?').get(animeId)
     if (!anime) {
       return res.status(404).json({ message: '动漫不存在' })
     }
-    
-    const bangumiId = anime.bangumi_id
-    
-    // 从 Bangumi API 重新获取详细信息
-    const detail = await getAnimeDetail(bangumiId)
-    const animeInfo = detail.subject
-    const characters = detail.characters || []
-    const staff = detail.persons || []
-    
-    // 提取标签
-    const tags = animeInfo.tags ? animeInfo.tags.map(t => t.name).join(',') : ''
-    
-    // 从 infobox 提取详细信息
-    const infobox = animeInfo.infobox || []
-    const author = extractFromInfobox(infobox, '作者') || extractFromInfobox(infobox, '原作')
-    const director = extractFromInfobox(infobox, '导演') || extractFromInfobox(infobox, '监督')
-    const studio = extractFromInfobox(infobox, '动画制作') || extractFromInfobox(infobox, '制作')
-    
-    // 下载封面图片并转换为base64
-    const coverImageUrl = animeInfo.images?.large || animeInfo.images?.common
-    console.log('[刷新动漫] 下载封面图片:', coverImageUrl)
-    const coverImageData = await downloadImageAsBase64(coverImageUrl)
-    console.log('[刷新动漫] 封面图片下载:', coverImageData ? '成功' : '失败')
-    
-    // 更新数据库
-    const updateStmt = db.prepare(`
-      UPDATE anime SET
-        title = ?,
-        name_cn = ?,
-        name_original = ?,
-        summary = ?,
-        cover_image = ?,
-        cover_image_data = ?,
-        rating = ?,
-        rating_count = ?,
-        tags = ?,
-        air_date = ?,
-        eps = ?,
-        eps_total = ?,
-        author = ?,
-        director = ?,
-        studio = ?,
-        infobox = ?,
-        characters = ?,
-        staff = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `)
-    
-    updateStmt.run(
-      animeInfo.name,
-      animeInfo.name_cn,
-      animeInfo.name,
-      animeInfo.summary,
-      coverImageUrl,
-      coverImageData,
-      animeInfo.rating?.score || 0,
-      animeInfo.rating?.total || 0,
-      tags,
-      animeInfo.date || animeInfo.air_date,
-      animeInfo.eps || 0,
-      animeInfo.eps_count || animeInfo.total_episodes || 0,
-      author,
-      director,
-      studio,
-      JSON.stringify(infobox),
-      JSON.stringify(characters),
-      JSON.stringify(staff),
-      req.params.id
+
+    const outcome = enqueueBangumiRefreshTask(
+      database,
+      animeId,
+      normalizeBangumiRefreshIdempotencyKey(req.get('Idempotency-Key'))
     )
-    
-    // 返回更新后的数据
-    const resultStmt = db.prepare('SELECT * FROM anime WHERE id = ?')
-    const result = resultStmt.get(req.params.id)
-    
-    res.json({
-      message: '刷新成功',
-      data: {
-        ...result,
-        tags: result.tags ? result.tags.split(',') : [],
-        infobox: result.infobox ? JSON.parse(result.infobox) : null,
-        characters: result.characters ? JSON.parse(result.characters) : [],
-        staff: result.staff ? JSON.parse(result.staff) : []
-      }
+    if (outcome.activeConflict) {
+      return res.json({
+        taskId: outcome.task.id,
+        status: 'running',
+        message: '已有动漫刷新任务正在进行中'
+      })
+    }
+
+    const publicTask = publicBangumiRefreshTaskStatus(outcome.task, animeId)
+    return res.json({
+      taskId: outcome.task.id,
+      status: publicTask?.status || 'pending',
+      message: outcome.created
+        ? '动漫刷新任务已受理'
+        : publicTask?.message || '动漫刷新任务已受理'
     })
   } catch (error) {
-    console.error('刷新动漫失败:', error)
-    res.status(500).json({ message: error.message || '刷新失败' })
+    if (error?.code === 'ANIME_ID_INVALID' || error?.code === 'TASK_IDEMPOTENCY_KEY_INVALID') {
+      return res.status(400).json({ message: error.message, code: error.code })
+    }
+    if (error?.code === 'TASK_IDEMPOTENCY_CONFLICT') {
+      return res.status(409).json({ message: '刷新任务幂等键冲突', code: error.code })
+    }
+    console.error('动漫刷新任务入队失败:', error?.code || 'UNKNOWN_ERROR')
+    return res.status(500).json({ message: '启动刷新失败' })
   }
 })
 
@@ -1316,5 +1414,19 @@ router.get('/resources/search', authenticateToken, scraperLimiter, async (req, r
     res.status(500).json({ message: '搜索资源失败' })
   }
 })
+
+// 路由模块在任务运行时启动前加载，因此在模块底部完成处理器注册。
+const registeredBangumiRefreshTaskProcessor = createBangumiRefreshTaskProcessor({
+  databaseProvider: getDatabase,
+  fetchDetail: getAnimeDetail,
+  downloadImage: downloadImageAsBase64,
+  extractInfobox: extractFromInfobox
+})
+registerTaskProcessor(
+  BANGUMI_REFRESH_TASK_TYPE,
+  BANGUMI_REFRESH_PROCESSOR_VERSION,
+  BANGUMI_REFRESH_EXECUTION_CLASS,
+  registeredBangumiRefreshTaskProcessor
+)
 
 export default router

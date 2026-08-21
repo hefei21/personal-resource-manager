@@ -31,7 +31,7 @@ test('music upload and content routes use the managed storage contracts', () => 
   )
   const retryVerifyIndex = completedRetry.indexOf('await verifyMusicUploadContent(runtime, existing.reference)')
   const retryCleanupIndex = completedRetry.indexOf('clearMusicUploadInputs(fileId, totalChunks, mergedPath)')
-  const retryResponseIndex = completedRetry.indexOf('return res.json(existing.response)')
+  const retryResponseIndex = completedRetry.indexOf('return res.json({')
   assert.ok(retryVerifyIndex >= 0 && retryVerifyIndex < retryCleanupIndex && retryVerifyIndex < retryResponseIndex)
   assert.match(completedRetry, /clearMusicUploadInputs\(fileId, totalChunks, mergedPath\)/u)
   assert.match(completedRetry, /cancelledUploads\.delete\(fileId\)/u)
@@ -54,8 +54,8 @@ test('music upload and content routes use the managed storage contracts', () => 
     routeSource.indexOf("router.post('/:id/reparse'"),
     routeSource.indexOf('// 更新音乐信息')
   )
-  assert.match(reparseRoute, /resolveVerifiedFilePath/u)
-  assert.doesNotMatch(reparseRoute, /music\.file_path/u)
+  assert.match(reparseRoute, /enqueueMusicMetadataTask/u)
+  assert.doesNotMatch(reparseRoute, /resolveVerifiedFilePath|music\.file_path|parseMusicMetadata/u)
 })
 
 test('duplicate responses do not include legacy paths', () => {

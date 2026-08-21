@@ -1,0 +1,850 @@
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+
+import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
+import { ensureMigrationControlTables } from '../src/config/migrationControlStore.js'
+import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
+import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
+import { checkMigrationCompatibility } from '../src/config/migrationCompatibility.js'
+import {
+  TaskStoreError,
+  createTaskStore,
+  deriveTaskIdempotencyKey,
+  executeTaskCleanup,
+  normalizeTaskIdentity,
+  previewTaskCleanup,
+  TASK_CLEANUP_BATCH_LIMIT
+} from '../src/services/taskStore.js'
+
+const require = createRequire(import.meta.url)
+let Database
+let nativeBindingAvailable = true
+try {
+  Database = require('better-sqlite3')
+  const probe = new Database(':memory:')
+  probe.close()
+} catch (error) {
+  if (!/Could not locate the bindings file/u.test(String(error?.message ?? ''))) throw error
+  nativeBindingAvailable = false
+}
+
+const nativeTestOptions = process.env.CI || nativeBindingAvailable
+  ? undefined
+  : { skip: 'better-sqlite3 native binding is unavailable locally; Node 22 CI must run this test' }
+const taskMigration = applicationMigrationRegistry.migrations.find(({ id }) => id === '0054_persistent_tasks')
+
+function applyTaskMigration(database) {
+  ensureMigrationControlTables(database)
+  const registry = createMigrationRegistry([taskMigration])
+  return executeMigrationBatch({
+    database,
+    registry,
+    plan: createMigrationPlan(registry, []),
+    lock: { state: 'active' },
+    now: () => '2026-08-20T00:00:00.000Z'
+  })
+}
+
+function taskInput(overrides = {}) {
+  return {
+    taskType: 'document.extract',
+    processorVersion: 'extractor-v1',
+    subjectType: 'document',
+    subjectId: 42,
+    subjectVersionId: 7,
+    subjectContentSha256: 'a'.repeat(64),
+    executionClass: 'disk',
+    input: { mode: 'text', pages: [1, 2] },
+    ...overrides
+  }
+}
+
+test('task identity is normalized into a stable content-bound idempotency key', () => {
+  const first = normalizeTaskIdentity({
+    taskType: 'document.extract',
+    processorVersion: 'extractor-v1',
+    subjectType: 'document',
+    subjectId: 42,
+    subjectVersionId: 7,
+    subjectContentSha256: 'a'.repeat(64)
+  })
+  const second = normalizeTaskIdentity({
+    subjectContentHash: 'A'.repeat(64),
+    subjectVersionId: '7',
+    subjectId: '42',
+    subjectType: 'document',
+    processorVersion: 'extractor-v1',
+    taskType: 'document.extract'
+  })
+  assert.deepEqual(first, second)
+  assert.match(deriveTaskIdempotencyKey(first), /^task:[a-f0-9]{64}$/u)
+  assert.equal(deriveTaskIdempotencyKey(first), deriveTaskIdempotencyKey(second))
+  assert.throws(
+    () => normalizeTaskIdentity({ ...first, title: 'must-not-identify-a-task' }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_IDENTITY_INVALID'
+  )
+})
+
+test('task input validation rejects circular JSON and invalid scheduling values before database access', () => {
+  const circular = {}
+  circular.self = circular
+  const fakeDatabase = {
+    prepare() { throw new Error('database must not be reached') },
+    transaction(callback) { return callback }
+  }
+  const store = createTaskStore({ database: fakeDatabase, now: '2026-08-20T01:02:03.000Z' })
+  assert.throws(
+    () => store.enqueue(taskInput({ input: circular })),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_JSON_INVALID'
+  )
+  assert.throws(
+    () => store.enqueue(taskInput({ maxAttempts: 0 })),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_NUMBER_INVALID'
+  )
+  assert.throws(
+    () => store.enqueue(taskInput({ executionClass: 'unbounded' })),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_EXECUTION_CLASS_INVALID'
+  )
+  assert.throws(
+    () => store.leaseNext({ owner: 'worker-a', leaseDurationMs: 0 }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_DURATION_INVALID'
+  )
+  assert.throws(
+    () => store.leaseNext({ owner: 'worker-a', now: 'not-a-timestamp' }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_TIMESTAMP_INVALID'
+  )
+  assert.throws(
+    () => store.succeed({ id: 1, owner: 'worker-a', token: 'lease-token', result: circular }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_JSON_INVALID'
+  )
+  assert.throws(
+    () => store.enqueue(taskInput({ availableAt: '2026-08-20T01:02:03Z' })),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_TIMESTAMP_INVALID'
+  )
+  assert.throws(
+    () => store.leaseNext({ owner: 'worker-1', leaseDurationMs: 0 }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_DURATION_INVALID'
+  )
+  assert.throws(
+    () => store.leaseNext({ owner: 'worker-1', leaseDurationMs: 1000, now: 'not-a-time' }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_TIMESTAMP_INVALID'
+  )
+  assert.throws(
+    () => store.succeed({ id: 1, owner: 'worker-1', token: 'lease-token', result: undefined }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_JSON_INVALID'
+  )
+  assert.throws(
+    () => store.leaseNext({ owner: 'worker id', leaseDurationMs: 1000 }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_CREDENTIALS_INVALID'
+  )
+  assert.throws(
+    () => store.leaseNext({
+      owner: 'worker-1',
+      supportedProcessors: Array.from({ length: 101 }, (_, index) => ({
+        taskType: `task.${index}`,
+        processorVersion: 'v1',
+        executionClass: 'cpu'
+      }))
+    }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_PROCESSOR_IDENTITY_INVALID'
+  )
+  assert.throws(
+    () => store.fail({ id: 1, owner: 'worker-1', token: 'lease-token', errorCode: 'bad code', errorSummary: 'failure' }),
+    (error) => error instanceof TaskStoreError && error.code === 'TASK_ERROR_INVALID'
+  )
+})
+
+test('0054 creates the persistent task shape and preserves an existing database', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    database.exec("CREATE TABLE sentinel (value TEXT NOT NULL); INSERT INTO sentinel VALUES ('kept');")
+    assert.equal(checkMigrationCompatibility(database, taskMigration.compatibility).status, 'missing')
+    const summary = applyTaskMigration(database)
+    assert.equal(summary.executedCount, 1)
+    assert.equal(database.prepare('SELECT value FROM sentinel').pluck().get(), 'kept')
+    assert.equal(checkMigrationCompatibility(database, taskMigration.compatibility).status, 'satisfied')
+
+    const columns = database.pragma('table_xinfo(tasks)')
+    assert.equal(columns.find(({ name }) => name === 'status').dflt_value, "'pending'")
+    assert.equal(columns.find(({ name }) => name === 'execution_class').dflt_value, "'cpu'")
+    assert.equal(columns.find(({ name }) => name === 'max_attempts').dflt_value, '3')
+    assert.deepEqual(
+      database.prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'tasks' ORDER BY name").pluck().all(),
+      ['idx_tasks_claim', 'idx_tasks_created_at', 'idx_tasks_idempotency_key', 'idx_tasks_subject']
+    )
+    assert.throws(() => database.prepare(`INSERT INTO tasks (
+      idempotency_key, input_fingerprint, task_type, processor_version, subject_type, subject_id,
+      input_json, status, execution_class, priority, available_at, max_attempts, created_at, updated_at
+    ) VALUES (?, ?, 'x', 'v1', 'document', '1', '{}', 'lost', 'cpu', 0, ?, 1, ?, ?)`)
+      .run('task:' + 'b'.repeat(64), 'c'.repeat(64), '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z', '2026-08-20T00:00:00.000Z'))
+  } finally {
+    database.close()
+  }
+})
+
+test('TaskStore enqueues atomically, deduplicates canonical input, and fails closed on conflicts', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({ database, now: '2026-08-20T01:02:03.000Z' })
+    const first = store.enqueue(taskInput())
+    const repeated = store.enqueue(taskInput({ input: { pages: [1, 2], mode: 'text' } }))
+    const created = first.task
+    assert.equal(first.created, true)
+    assert.equal(repeated.created, false)
+    assert.equal(repeated.task.id, created.id)
+    assert.equal(database.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 1)
+    assert.equal(created.status, 'pending')
+    assert.equal(created.executionClass, 'disk')
+    assert.deepEqual(created.input, { mode: 'text', pages: [1, 2] })
+    assert.equal(store.getById(String(created.id)).idempotencyKey, created.idempotencyKey)
+    assert.equal(store.getByIdempotencyKey(created.idempotencyKey).id, created.id)
+    assert.deepEqual(store.list({ status: ['pending', 'failed'], executionClass: 'disk', limit: 10 }).map(({ id }) => id), [created.id])
+    assert.throws(
+      () => store.enqueue(taskInput({ input: { mode: 'metadata' } })),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_IDEMPOTENCY_CONFLICT'
+    )
+    assert.equal(database.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 1)
+    assert.throws(() => store.list({ limit: 101 }), (error) => error.code === 'TASK_NUMBER_INVALID')
+  } finally {
+    database.close()
+  }
+})
+
+test('exclusive runs are idempotent, mutually exclusive across task types, and reusable after terminal state', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({
+      database,
+      now: '2026-08-20T01:02:03.000Z',
+      tokenFactory: () => 'exclusive-token'
+    })
+    const mutexTaskTypes = ['code.clone', 'code.sync', 'code.reclone']
+    const firstInput = taskInput({
+      taskType: 'code.clone',
+      processorVersion: 'code-v1',
+      subjectType: 'code-repository',
+      subjectId: 900,
+      subjectVersionId: 'run-1',
+      input: { remote: 'origin-a' }
+    })
+    const first = store.enqueueExclusiveRun(firstInput, { taskTypes: mutexTaskTypes })
+    assert.equal(first.created, true)
+    assert.equal(first.outcome, 'created')
+    assert.equal(first.activeConflict, false)
+
+    const repeated = store.enqueueExclusiveRun({ ...firstInput, input: { remote: 'origin-a' } }, {
+      exclusiveTaskTypes: mutexTaskTypes
+    })
+    assert.equal(repeated.created, false)
+    assert.equal(repeated.outcome, 'idempotent')
+    assert.equal(repeated.task.id, first.task.id)
+
+    assert.throws(
+      () => store.enqueueExclusiveRun({ ...firstInput, input: { remote: 'origin-b' } }, { taskTypes: mutexTaskTypes }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_IDEMPOTENCY_CONFLICT'
+    )
+
+    const secondInput = taskInput({
+      taskType: 'code.sync',
+      processorVersion: 'code-v1',
+      subjectType: 'code-repository',
+      subjectId: 900,
+      subjectVersionId: 'run-2',
+      input: { remote: 'origin-a' }
+    })
+    const activeConflict = store.enqueueExclusiveRun(secondInput, { taskTypes: mutexTaskTypes })
+    assert.equal(activeConflict.created, false)
+    assert.equal(activeConflict.outcome, 'active-conflict')
+    assert.equal(activeConflict.activeConflict, true)
+    assert.equal(activeConflict.task.id, first.task.id)
+    assert.equal(database.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 1)
+    assert.equal(database.prepare('SELECT attempt_count FROM tasks WHERE id = ?').pluck().get(first.task.id), 0)
+
+    const lease = store.leaseNext({ owner: 'exclusive-worker', leaseDurationMs: 5000, executionClass: 'disk' })
+    store.markRunning({ id: first.task.id, owner: 'exclusive-worker', token: lease.leaseToken })
+    store.succeed({ id: first.task.id, owner: 'exclusive-worker', token: lease.leaseToken, result: { ok: true } })
+    const afterTerminal = store.enqueueExclusiveRun(secondInput, { taskTypes: mutexTaskTypes })
+    assert.equal(afterTerminal.created, true)
+    assert.equal(afterTerminal.outcome, 'created')
+    assert.notEqual(afterTerminal.task.id, first.task.id)
+    assert.equal(database.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 2)
+  } finally {
+    database.close()
+  }
+})
+
+test('two SQLite connections serialize exclusive run submission to one active task', nativeTestOptions, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'pr-manager-exclusive-competition-'))
+  const databasePath = path.join(directory, 'tasks.sqlite')
+  let firstDatabase
+  let secondDatabase
+  try {
+    firstDatabase = new Database(databasePath)
+    applyTaskMigration(firstDatabase)
+    secondDatabase = new Database(databasePath)
+    applyTaskMigration(secondDatabase)
+    const firstStore = createTaskStore({ database: firstDatabase, now: '2026-08-20T01:02:03.000Z' })
+    const secondStore = createTaskStore({ database: secondDatabase, now: '2026-08-20T01:02:03.000Z' })
+    const mutexTaskTypes = ['code.clone', 'code.sync']
+    const first = firstStore.enqueueExclusiveRun(taskInput({
+      taskType: 'code.clone',
+      subjectType: 'code-repository',
+      subjectId: 901,
+      subjectVersionId: 'run-a',
+      input: { remote: 'origin-a' }
+    }), { taskTypes: mutexTaskTypes })
+    const second = secondStore.enqueueExclusiveRun(taskInput({
+      taskType: 'code.sync',
+      subjectType: 'code-repository',
+      subjectId: 901,
+      subjectVersionId: 'run-b',
+      input: { remote: 'origin-a' }
+    }), { taskTypes: mutexTaskTypes })
+    assert.equal(first.created, true)
+    assert.equal(second.created, false)
+    assert.equal(second.outcome, 'active-conflict')
+    assert.equal(second.task.id, first.task.id)
+    assert.equal(firstDatabase.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 1)
+  } finally {
+    if (secondDatabase?.open) secondDatabase.close()
+    if (firstDatabase?.open) firstDatabase.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('TaskStore records survive closing and reopening the same SQLite file', nativeTestOptions, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'pr-manager-task-store-'))
+  const databasePath = path.join(directory, 'tasks.sqlite')
+  let database
+  try {
+    database = new Database(databasePath)
+    applyTaskMigration(database)
+    const created = createTaskStore({ database, now: '2026-08-20T01:02:03.000Z' }).enqueue(taskInput()).task
+    database.close()
+    database = new Database(databasePath)
+    const restored = createTaskStore(database).getById(created.id)
+    assert.equal(restored.idempotencyKey, created.idempotencyKey)
+    assert.equal(restored.subjectContentHash, 'a'.repeat(64))
+  } finally {
+    if (database?.open) database.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('leaseNext applies readiness, priority, available time, and execution-class filters', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  let tokenNumber = 0
+  try {
+    applyTaskMigration(database)
+    const now = '2026-08-20T02:00:00.000Z'
+    const store = createTaskStore({
+      database,
+      now,
+      tokenFactory: () => `lease-token-${++tokenNumber}`
+    })
+    const future = store.enqueue(taskInput({
+      subjectId: 101,
+      executionClass: 'disk',
+      priority: 100,
+      availableAt: '2026-08-20T03:00:00.000Z'
+    })).task
+    const firstReady = store.enqueue(taskInput({
+      subjectId: 102,
+      executionClass: 'disk',
+      priority: 5,
+      availableAt: '2026-08-20T01:59:00.000Z'
+    })).task
+    const secondReady = store.enqueue(taskInput({
+      subjectId: 103,
+      executionClass: 'disk',
+      priority: 5,
+      availableAt: '2026-08-20T02:00:00.000Z'
+    })).task
+    const cpuReady = store.enqueue(taskInput({
+      subjectId: 104,
+      executionClass: 'cpu',
+      priority: 500,
+      availableAt: '2026-08-20T01:00:00.000Z'
+    })).task
+
+    const firstLease = store.leaseNext({ owner: 'worker-disk', leaseDurationMs: 5000, executionClass: 'disk' })
+    assert.equal(firstLease.id, firstReady.id)
+    assert.equal(firstLease.attemptCount, 1)
+    assert.equal(firstLease.status, 'leased')
+    assert.equal(firstLease.leaseOwner, 'worker-disk')
+    assert.match(firstLease.leaseToken, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u)
+
+    const secondLease = store.leaseNext({ owner: 'worker-disk', leaseDurationMs: 5000, executionClasses: ['disk'] })
+    assert.equal(secondLease.id, secondReady.id)
+    assert.equal(store.getById(future.id).status, 'pending')
+
+    const cpuLease = store.leaseNext({ owner: 'worker-cpu', leaseDurationMs: 5000, executionClass: 'cpu' })
+    assert.equal(cpuLease.id, cpuReady.id)
+    assert.equal(store.leaseNext({ owner: 'worker-disk', leaseDurationMs: 5000, executionClass: 'disk' }), null)
+  } finally {
+    database.close()
+  }
+})
+
+test('leaseNext supported processor filtering binds task type, version, and execution class', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({
+      database,
+      now: '2026-08-20T02:00:00.000Z',
+      tokenFactory: () => 'supported-processor-token'
+    })
+    const supported = store.enqueue(taskInput({ subjectId: 120, executionClass: 'disk', priority: 1 })).task
+    const gpu = store.enqueue(taskInput({ subjectId: 121, executionClass: 'gpu', priority: 100 })).task
+    const wrongVersion = store.enqueue(taskInput({
+      subjectId: 122,
+      processorVersion: 'extractor-v2',
+      executionClass: 'disk',
+      priority: 100
+    })).task
+    const unknown = store.enqueue(taskInput({
+      subjectId: 123,
+      taskType: 'unknown.processor',
+      processorVersion: 'unknown-v1',
+      executionClass: 'disk',
+      priority: 100
+    })).task
+
+    const lease = store.leaseNext({
+      owner: 'nas-worker',
+      leaseDurationMs: 5000,
+      supportedProcessors: [{
+        taskType: 'document.extract',
+        processorVersion: 'extractor-v1',
+        executionClass: 'disk'
+      }]
+    })
+    assert.equal(lease.id, supported.id)
+    assert.equal(lease.attemptCount, 1)
+    assert.equal(store.getById(gpu.id).status, 'pending')
+    assert.equal(store.getById(gpu.id).attemptCount, 0)
+    assert.equal(store.getById(wrongVersion.id).status, 'pending')
+    assert.equal(store.getById(wrongVersion.id).attemptCount, 0)
+    assert.equal(store.getById(unknown.id).status, 'pending')
+    assert.equal(store.getById(unknown.id).attemptCount, 0)
+  } finally {
+    database.close()
+  }
+})
+
+test('two SQLite connections cannot lease the same pending task', nativeTestOptions, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'pr-manager-task-competition-'))
+  const databasePath = path.join(directory, 'tasks.sqlite')
+  let firstDatabase
+  let secondDatabase
+  try {
+    firstDatabase = new Database(databasePath)
+    applyTaskMigration(firstDatabase)
+    secondDatabase = new Database(databasePath)
+    applyTaskMigration(secondDatabase)
+    const firstStore = createTaskStore({
+      database: firstDatabase,
+      now: '2026-08-20T02:00:00.000Z',
+      tokenFactory: () => 'first-connection-token'
+    })
+    const secondStore = createTaskStore({
+      database: secondDatabase,
+      now: '2026-08-20T02:00:00.000Z',
+      tokenFactory: () => 'second-connection-token'
+    })
+    const task = firstStore.enqueue(taskInput({ subjectId: 105 })).task
+    const firstLease = firstStore.leaseNext({ owner: 'worker-a', leaseDurationMs: 5000 })
+    const secondLease = secondStore.leaseNext({ owner: 'worker-b', leaseDurationMs: 5000 })
+    assert.equal(firstLease.id, task.id)
+    assert.equal(secondLease, null)
+    assert.equal(secondStore.getById(task.id).leaseOwner, 'worker-a')
+  } finally {
+    if (secondDatabase?.open) secondDatabase.close()
+    if (firstDatabase?.open) firstDatabase.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('lease credentials and expiry protect markRunning and heartbeat', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  let now = '2026-08-20T02:00:00.000Z'
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({ database, now: () => now, tokenFactory: () => 'protected-token' })
+    const task = store.enqueue(taskInput({ subjectId: 106 })).task
+    const lease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+    assert.equal(lease.id, task.id)
+    assert.throws(
+      () => store.markRunning({ id: task.id, owner: 'worker-b', token: lease.leaseToken }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_MISMATCH'
+    )
+    assert.equal(store.getById(task.id).status, 'leased')
+
+    now = '2026-08-20T02:00:00.100Z'
+    const nonShortened = store.heartbeat({
+      id: task.id,
+      owner: 'worker-a',
+      token: lease.leaseToken,
+      leaseDurationMs: 100
+    })
+    assert.equal(nonShortened.leaseExpiresAt, '2026-08-20T02:00:01.000Z')
+
+    now = '2026-08-20T02:00:01.000Z'
+    assert.throws(
+      () => store.markRunning({ id: task.id, owner: 'worker-a', token: lease.leaseToken }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_EXPIRED'
+    )
+    assert.throws(
+      () => store.heartbeat({ id: task.id, owner: 'worker-a', token: lease.leaseToken, leaseDurationMs: 1000 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_EXPIRED'
+    )
+    assert.equal(store.getById(task.id).status, 'leased')
+  } finally {
+    database.close()
+  }
+})
+
+test('progress updates require a live running lease and preserve task execution state', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  let now = '2026-08-20T02:00:00.000Z'
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({ database, now: () => now, tokenFactory: () => 'progress-token' })
+    const task = store.enqueue(taskInput({ subjectId: 1061 })).task
+    const lease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+
+    for (const progress of [undefined, Number.NaN, Number.POSITIVE_INFINITY, -1, 100.1]) {
+      assert.throws(
+        () => store.updateProgress({ id: task.id, owner: 'worker-a', token: lease.leaseToken, progress }),
+        (error) => error instanceof TaskStoreError && error.code === 'TASK_PROGRESS_INVALID'
+      )
+    }
+    assert.throws(
+      () => store.updateProgress({ id: task.id, owner: 'worker-a', token: lease.leaseToken, progress: 10 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_INVALID_STATE'
+    )
+
+    store.markRunning({ id: task.id, owner: 'worker-a', token: lease.leaseToken })
+    const before = store.getById(task.id)
+    now = '2026-08-20T02:00:00.250Z'
+    const updated = store.updateProgress({
+      id: task.id,
+      owner: 'worker-a',
+      token: lease.leaseToken,
+      progress: 42.5
+    })
+    assert.equal(updated.progress, 42.5)
+    assert.equal(updated.status, 'running')
+    assert.equal(updated.attemptCount, before.attemptCount)
+    assert.equal(updated.leaseOwner, before.leaseOwner)
+    assert.equal(updated.leaseToken, before.leaseToken)
+    assert.equal(updated.leaseExpiresAt, before.leaseExpiresAt)
+    assert.equal(updated.updatedAt, now)
+
+    assert.throws(
+      () => store.updateProgress({ id: task.id, owner: 'worker-b', token: lease.leaseToken, progress: 50 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_MISMATCH'
+    )
+    now = '2026-08-20T02:00:01.000Z'
+    assert.throws(
+      () => store.updateProgress({ id: task.id, owner: 'worker-a', token: lease.leaseToken, progress: 50 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_EXPIRED'
+    )
+    assert.equal(store.getById(task.id).progress, 42.5)
+
+    now = '2026-08-20T02:00:00.500Z'
+    store.succeed({ id: task.id, owner: 'worker-a', token: lease.leaseToken })
+    assert.throws(
+      () => store.updateProgress({ id: task.id, owner: 'worker-a', token: lease.leaseToken, progress: 75 }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_INVALID_STATE'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('success requires the running lease and stores canonical JSON result', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  let now = '2026-08-20T02:00:00.000Z'
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({ database, now: () => now, tokenFactory: () => 'success-token' })
+    const task = store.enqueue(taskInput({ subjectId: 107 })).task
+    const lease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+    const running = store.markRunning({ id: task.id, owner: 'worker-a', token: lease.leaseToken })
+    assert.equal(running.status, 'running')
+    now = '2026-08-20T02:00:00.500Z'
+    const renewed = store.heartbeat({
+      id: task.id,
+      owner: 'worker-a',
+      token: lease.leaseToken,
+      leaseDurationMs: 5000
+    })
+    assert.equal(renewed.leaseExpiresAt, '2026-08-20T02:00:05.500Z')
+    const succeeded = store.succeed({
+      id: task.id,
+      owner: 'worker-a',
+      token: lease.leaseToken,
+      result: { z: 1, a: ['done'] }
+    })
+    assert.equal(succeeded.status, 'succeeded')
+    assert.equal(succeeded.progress, 100)
+    assert.deepEqual(succeeded.result, { a: ['done'], z: 1 })
+    assert.equal(succeeded.leaseToken, null)
+    assert.equal(succeeded.leaseOwner, null)
+    assert.equal(succeeded.leaseExpiresAt, null)
+    assert.equal(succeeded.heartbeatAt, null)
+    assert.equal(succeeded.finishedAt, now)
+    assert.throws(
+      () => store.succeed({ id: task.id, owner: 'worker-a', token: lease.leaseToken, result: { duplicate: true } }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_INVALID_STATE'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('fail schedules a legal retry and then terminates at max attempts', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  let now = '2026-08-20T02:00:00.000Z'
+  let tokenNumber = 0
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({
+      database,
+      now: () => now,
+      tokenFactory: () => `retry-token-${++tokenNumber}`
+    })
+    const task = store.enqueue(taskInput({ subjectId: 108, maxAttempts: 2 })).task
+    const firstLease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+    const firstFailure = store.fail({
+      id: task.id,
+      owner: 'worker-a',
+      token: firstLease.leaseToken,
+      errorCode: 'TRANSIENT_FAILURE',
+      errorSummary: 'temporary backend failure',
+      retryAt: '2026-08-20T02:00:10.000Z'
+    })
+    assert.equal(firstFailure.retryScheduled, true)
+    assert.equal(firstFailure.task.status, 'pending')
+    assert.equal(firstFailure.task.attemptCount, 1)
+    assert.equal(firstFailure.task.availableAt, '2026-08-20T02:00:10.000Z')
+    assert.equal(firstFailure.task.errorCode, 'TRANSIENT_FAILURE')
+    assert.equal(firstFailure.task.leaseToken, null)
+
+    now = '2026-08-20T02:00:10.000Z'
+    const secondLease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+    assert.equal(secondLease.attemptCount, 2)
+    const terminalFailure = store.fail({
+      id: task.id,
+      owner: 'worker-a',
+      token: secondLease.leaseToken,
+      errorCode: 'PERMANENT_FAILURE',
+      errorSummary: 'attempt budget exhausted'
+    })
+    assert.equal(terminalFailure.retryScheduled, false)
+    assert.equal(terminalFailure.task.status, 'failed')
+    assert.equal(terminalFailure.task.attemptCount, 2)
+    assert.equal(terminalFailure.task.finishedAt, now)
+    assert.equal(store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 }), null)
+  } finally {
+    database.close()
+  }
+})
+
+test('cancel handles pending and active tasks while rejecting terminal repeats', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({ database, now: '2026-08-20T02:00:00.000Z', tokenFactory: () => 'cancel-token' })
+    const pending = store.enqueue(taskInput({ subjectId: 109 })).task
+    const cancelledPending = store.cancel(pending.id)
+    assert.equal(cancelledPending.status, 'cancelled')
+    assert.equal(cancelledPending.finishedAt, '2026-08-20T02:00:00.000Z')
+
+    const active = store.enqueue(taskInput({ subjectId: 110 })).task
+    const lease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 5000 })
+    assert.equal(lease.id, active.id)
+    assert.throws(
+      () => store.cancel({ id: active.id, owner: 'worker-b', token: lease.leaseToken }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_LEASE_MISMATCH'
+    )
+    const cancelledActive = store.cancel({ id: active.id, owner: 'worker-a', token: lease.leaseToken })
+    assert.equal(cancelledActive.status, 'cancelled')
+    assert.equal(cancelledActive.leaseToken, null)
+    assert.throws(
+      () => store.cancel(active.id),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_INVALID_STATE'
+    )
+  } finally {
+    database.close()
+  }
+})
+
+test('expired leased/running tasks recover across a close and reopen', nativeTestOptions, () => {
+  const directory = mkdtempSync(path.join(tmpdir(), 'pr-manager-task-recovery-'))
+  const databasePath = path.join(directory, 'tasks.sqlite')
+  let database
+  let now = '2026-08-20T02:00:00.000Z'
+  try {
+    database = new Database(databasePath)
+    applyTaskMigration(database)
+    const store = createTaskStore({ database, now: () => now, tokenFactory: () => `recovery-${now}` })
+    const recoverable = store.enqueue(taskInput({ subjectId: 111, maxAttempts: 2 })).task
+    const exhausted = store.enqueue(taskInput({ subjectId: 112, maxAttempts: 1 })).task
+    const unclaimed = store.enqueue(taskInput({ subjectId: 113 })).task
+    const recoverableLease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+    const exhaustedLease = store.leaseNext({ owner: 'worker-b', leaseDurationMs: 1000 })
+    assert.equal(recoverableLease.id, recoverable.id)
+    assert.equal(exhaustedLease.id, exhausted.id)
+    store.markRunning({ id: recoverable.id, owner: 'worker-a', token: recoverableLease.leaseToken })
+
+    now = '2026-08-20T02:00:01.000Z'
+    const report = store.recoverExpiredLeases()
+    assert.equal(Object.isFrozen(report), true)
+    assert.equal(Object.isFrozen(report.recoveredIds), true)
+    assert.deepEqual(report.recoveredIds, [recoverable.id])
+    assert.deepEqual(report.failedIds, [exhausted.id])
+    assert.equal(report.recoveredCount, 1)
+    assert.equal(report.failedCount, 1)
+    assert.equal(store.getById(unclaimed.id).status, 'pending')
+    assert.equal(store.getById(exhausted.id).errorCode, 'TASK_LEASE_EXPIRED')
+    assert.equal(store.getById(exhausted.id).errorSummary, store.getById(recoverable.id).errorSummary)
+
+    database.close()
+    database = new Database(databasePath)
+    const reopenedStore = createTaskStore({ database, now: () => now, tokenFactory: () => 'reopened-token' })
+    const restored = reopenedStore.getById(recoverable.id)
+    assert.equal(restored.status, 'pending')
+    assert.equal(restored.attemptCount, 1)
+    const olderPendingLease = reopenedStore.leaseNext({ owner: 'worker-c', leaseDurationMs: 1000 })
+    assert.equal(olderPendingLease.id, unclaimed.id)
+    assert.equal(olderPendingLease.attemptCount, 1)
+    const reLease = reopenedStore.leaseNext({ owner: 'worker-d', leaseDurationMs: 1000 })
+    assert.equal(reLease.id, recoverable.id)
+    assert.equal(reLease.attemptCount, 2)
+    assert.equal(reopenedStore.getById(exhausted.id).status, 'failed')
+    assert.deepEqual(reopenedStore.recoverExpiredLeases(), {
+      recoveredCount: 0,
+      recoveredIds: [],
+      failedCount: 0,
+      failedIds: []
+    })
+  } finally {
+    if (database?.open) database.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+function insertCleanupTask(database, { seed, status, finishedAt = null }) {
+  const timestamp = finishedAt ?? '2026-08-20T00:00:00.000Z'
+  return database.prepare(`
+    INSERT INTO tasks (
+      idempotency_key, input_fingerprint, task_type, processor_version,
+      subject_type, subject_id, input_json, status, execution_class,
+      available_at, max_attempts, finished_at, created_at, updated_at
+    ) VALUES (?, ?, 'games.steam.sync', 'v1', 'game-library', ?, '{}', ?,
+      'network', ?, 3, ?, ?, ?)
+  `).run(
+    `task:${seed.toString(16).padStart(64, '0')}`,
+    (seed + 10_000).toString(16).padStart(64, '0'),
+    `cleanup-${seed}`,
+    status,
+    timestamp,
+    finishedAt,
+    timestamp,
+    timestamp
+  ).lastInsertRowid
+}
+
+test('task cleanup applies fixed retention and never selects active or recent tasks', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const removableIds = [
+      insertCleanupTask(database, { seed: 1, status: 'succeeded', finishedAt: '2026-07-20T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 2, status: 'failed', finishedAt: '2026-05-20T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 3, status: 'cancelled', finishedAt: '2026-05-20T00:00:00.000Z' })
+    ]
+    const retainedIds = [
+      insertCleanupTask(database, { seed: 4, status: 'succeeded', finishedAt: '2026-08-01T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 5, status: 'failed', finishedAt: '2026-06-01T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 6, status: 'cancelled', finishedAt: '2026-06-01T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 7, status: 'pending' }),
+      insertCleanupTask(database, { seed: 8, status: 'running' })
+    ]
+
+    const preview = previewTaskCleanup(database, { now: '2026-08-20T00:00:00.000Z' })
+    assert.equal(preview.eligibleCount, 3)
+    assert.equal(preview.selectedCount, 3)
+    assert.deepEqual(preview.policy.retentionDays, { succeeded: 30, failed: 90, cancelled: 90 })
+    assert.equal(preview.policy.batchLimit, TASK_CLEANUP_BATCH_LIMIT)
+
+    const executed = executeTaskCleanup(database, {
+      previewedAt: preview.previewedAt,
+      expectedCount: preview.eligibleCount,
+      now: '2026-08-20T00:01:00.000Z'
+    })
+    assert.equal(executed.deletedCount, 3)
+    for (const id of removableIds) {
+      assert.equal(database.prepare('SELECT id FROM tasks WHERE id = ?').get(id), undefined)
+    }
+    for (const id of retainedIds) {
+      assert.equal(Number(database.prepare('SELECT id FROM tasks WHERE id = ?').get(id).id), Number(id))
+    }
+  } finally {
+    database.close()
+  }
+})
+
+test('task cleanup conflicts atomically when preview count changes', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    insertCleanupTask(database, { seed: 20, status: 'failed', finishedAt: '2026-01-01T00:00:00.000Z' })
+    const preview = previewTaskCleanup(database, { now: '2026-08-20T00:00:00.000Z' })
+    insertCleanupTask(database, { seed: 21, status: 'cancelled', finishedAt: '2026-01-02T00:00:00.000Z' })
+    assert.throws(
+      () => executeTaskCleanup(database, {
+        previewedAt: preview.previewedAt,
+        expectedCount: preview.eligibleCount,
+        now: '2026-08-20T00:01:00.000Z'
+      }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_CLEANUP_CONFLICT'
+    )
+    assert.equal(database.prepare('SELECT COUNT(*) AS total FROM tasks').get().total, 2)
+  } finally {
+    database.close()
+  }
+})
+
+test('task cleanup deletes only the oldest bounded batch', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    for (let seed = 100; seed < 100 + TASK_CLEANUP_BATCH_LIMIT + 1; seed += 1) {
+      insertCleanupTask(database, { seed, status: 'succeeded', finishedAt: '2026-01-01T00:00:00.000Z' })
+    }
+    const activeId = insertCleanupTask(database, { seed: 999, status: 'leased' })
+    const preview = previewTaskCleanup(database, { now: '2026-08-20T00:00:00.000Z' })
+    assert.equal(preview.eligibleCount, TASK_CLEANUP_BATCH_LIMIT + 1)
+    assert.equal(preview.selectedCount, TASK_CLEANUP_BATCH_LIMIT)
+    const executed = executeTaskCleanup(database, {
+      previewedAt: preview.previewedAt,
+      expectedCount: preview.eligibleCount,
+      now: '2026-08-20T00:01:00.000Z'
+    })
+    assert.equal(executed.deletedCount, TASK_CLEANUP_BATCH_LIMIT)
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM tasks WHERE status = 'succeeded'").get().total, 1)
+    assert.equal(Number(database.prepare('SELECT id FROM tasks WHERE id = ?').get(activeId).id), Number(activeId))
+  } finally {
+    database.close()
+  }
+})
