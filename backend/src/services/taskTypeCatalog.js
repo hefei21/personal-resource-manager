@@ -24,6 +24,11 @@ const CODE_REPOSITORY_TASK_TYPES = Object.freeze([
   'code.repository.reclone'
 ])
 
+const NAS_RESOURCE_TASK_TYPES = Object.freeze([
+  'nas.resource.scan',
+  'nas.resource.repair'
+])
+
 const CODE_CLONE_RESULT_MESSAGES = new Set(['克隆完成'])
 const CODE_SYNC_RESULT_MESSAGES = new Set([
   '同步完成',
@@ -179,6 +184,18 @@ function projectMusicMetadataInput(input) {
   return projectSingleResourceInput(input, 'musicId')
 }
 
+function projectNasResourceInput(input) {
+  if (!isPlainObject(input) || Object.keys(input).length !== 3 ||
+    !Object.hasOwn(input, 'scanRootId') ||
+    !Object.hasOwn(input, 'rulesVersion') ||
+    !Object.hasOwn(input, 'generation')) return null
+  const scanRootId = safePositiveInteger(input.scanRootId)
+  const rulesVersion = safePositiveInteger(input.rulesVersion)
+  const generation = safePositiveInteger(input.generation)
+  if (scanRootId === null || rulesVersion === null || generation === null) return null
+  return Object.freeze({ scanRootId, rulesVersion, generation })
+}
+
 function cloneCodeRepositoryInput(input) {
   const projected = projectCodeRepositoryInput(input)
   return projected === null ? null : Object.freeze({ repoId: projected.repoId })
@@ -324,6 +341,45 @@ function projectMusicMetadataResult(result) {
   return projectMetadataReparseResult(result, 'musicId')
 }
 
+function projectNasResourceResult(result) {
+  if (!isPlainObject(result)) return null
+  const projected = {}
+  let hasValue = false
+  const generation = safePositiveInteger(result.generation)
+  if (generation !== null) {
+    projected.generation = generation
+    hasValue = true
+  }
+  const rulesVersion = safePositiveInteger(result.rulesVersion)
+  if (rulesVersion !== null) {
+    projected.rulesVersion = rulesVersion
+    hasValue = true
+  }
+  for (const key of ['visitedEntries', 'files', 'excluded']) {
+    const value = safeCounter(result[key])
+    if (value !== null) {
+      projected[key] = value
+      hasValue = true
+    }
+  }
+  if (isPlainObject(result.counts)) {
+    const counts = {}
+    let hasCount = false
+    for (const key of ['added', 'moved', 'modified', 'unchanged', 'excluded', 'errors', 'missing', 'conflicts']) {
+      const value = safeCounter(result.counts[key])
+      if (value !== null) {
+        counts[key] = value
+        hasCount = true
+      }
+    }
+    if (hasCount) {
+      projected.counts = Object.freeze(counts)
+      hasValue = true
+    }
+  }
+  return hasValue ? Object.freeze(projected) : null
+}
+
 function createDefinition({
   taskType,
   executionClass,
@@ -440,6 +496,32 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     cloneInput: cloneMusicMetadataInput,
     projectResult: projectMusicMetadataResult,
     mutexTaskTypes: ['music.metadata.reparse']
+  }),
+  'nas.resource.scan': createDefinition({
+    taskType: 'nas.resource.scan',
+    executionClass: 'disk',
+    subjectType: 'nas-scan-root',
+    subjectInputField: 'scanRootId',
+    projectInput: projectNasResourceInput,
+    cloneInput: (input) => {
+      const projected = projectNasResourceInput(input)
+      return projected === null ? null : Object.freeze({ ...projected })
+    },
+    projectResult: projectNasResourceResult,
+    mutexTaskTypes: NAS_RESOURCE_TASK_TYPES
+  }),
+  'nas.resource.repair': createDefinition({
+    taskType: 'nas.resource.repair',
+    executionClass: 'disk',
+    subjectType: 'nas-scan-root',
+    subjectInputField: 'scanRootId',
+    projectInput: projectNasResourceInput,
+    cloneInput: (input) => {
+      const projected = projectNasResourceInput(input)
+      return projected === null ? null : Object.freeze({ ...projected })
+    },
+    projectResult: projectNasResourceResult,
+    mutexTaskTypes: NAS_RESOURCE_TASK_TYPES
   })
 })
 
