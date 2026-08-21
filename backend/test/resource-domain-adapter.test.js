@@ -126,7 +126,7 @@ test('projects document, ebook, and music authority rows without merging identit
     assert.equal(first.processed, 4)
     assert.equal(first.resourcesCreated, 4)
     assert.equal(first.sourcesCreated, 4)
-    assert.equal(first.versionsCreated, 3)
+    assert.equal(first.versionsCreated, 3, `unexpected domain import counts: ${JSON.stringify(first)}`)
     assert.equal(first.contentObjectsCreated, 3)
     assert.ok(first.missingContent >= 2)
     assert.ok(first.errors >= 2)
