@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - "codex/**"
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
   pull_request:
     paths:
       - "backend/**"

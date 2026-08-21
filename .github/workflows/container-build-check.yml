@@ -9,14 +9,18 @@ on:
       - "backend/.dockerignore"
       - "backend/package.json"
       - "backend/package-lock.json"
-      - "backend/src/**"
       - "frontend/Dockerfile"
       - "frontend/.dockerignore"
       - "frontend/package.json"
       - "frontend/package-lock.json"
-      - "frontend/src/**"
       - "frontend/nginx.conf"
       - "frontend/vite.config.js"
+      - ".github/workflows/baseline-images.yml"
+      - ".github/workflows/container-build-check.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "frontend/**"
       - ".github/workflows/baseline-images.yml"
       - ".github/workflows/container-build-check.yml"
   workflow_dispatch:
@@ -33,20 +37,15 @@ jobs:
     name: ${{ matrix.component }} (${{ matrix.platform }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PLATFORM_SLUG: ${{ matrix.platform == 'linux/arm64' && 'arm64' || 'amd64' }}
     strategy:
       fail-fast: false
       matrix:
         component:
           - backend
           - frontend
-        platform:
-          - linux/amd64
-          - linux/arm64
-        include:
-          - platform: linux/amd64
-            platform_slug: amd64
-          - platform: linux/arm64
-            platform_slug: arm64
+        platform: ${{ fromJSON(github.event_name == 'push' && '["linux/amd64"]' || '["linux/amd64", "linux/arm64"]') }}
 
     steps:
       - name: Checkout source
@@ -66,15 +65,15 @@ jobs:
           platforms: ${{ matrix.platform }}
           load: true
           push: false
-          tags: local/stage2-${{ matrix.component }}:${{ matrix.platform_slug }}
-          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.platform_slug }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.platform_slug }}
+          tags: local/container-check-${{ matrix.component }}:${{ env.PLATFORM_SLUG }}
+          cache-from: type=gha,scope=${{ matrix.component }}-${{ env.PLATFORM_SLUG }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ env.PLATFORM_SLUG }}
 
       - name: Check backend runtime contents
         if: matrix.component == 'backend'
         shell: bash
         run: |
-          image="local/stage2-backend:${{ matrix.platform_slug }}"
+          image="local/container-check-backend:${{ env.PLATFORM_SLUG }}"
           docker run --rm --entrypoint sh "$image" -c '
             set -eu
             command -v node >/dev/null
@@ -105,7 +104,7 @@ jobs:
         if: matrix.component == 'frontend'
         shell: bash
         run: |
-          image="local/stage2-frontend:${{ matrix.platform_slug }}"
+          image="local/container-check-frontend:${{ env.PLATFORM_SLUG }}"
           docker run --rm --add-host backend:127.0.0.1 --entrypoint sh "$image" -c '
             set -eu
             nginx -t
@@ -117,7 +116,7 @@ jobs:
       - name: Record candidate image metrics
         shell: bash
         run: |
-          image="local/stage2-${{ matrix.component }}:${{ matrix.platform_slug }}"
+          image="local/container-check-${{ matrix.component }}:${{ env.PLATFORM_SLUG }}"
           unpacked_bytes="$(docker image inspect --format '{{.Size}}' "$image")"
           layer_count="$(docker image inspect --format '{{len .RootFS.Layers}}' "$image")"
           compressed_save_bytes="$(docker save "$image" | gzip -c | wc -c | tr -d ' ')"
