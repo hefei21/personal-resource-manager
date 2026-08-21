@@ -44,6 +44,7 @@ import {
   TASK_KNOWN_INDEXES,
   TASK_TARGET_SHAPE
 } from './taskSchema.js'
+import { RESOURCE_MODEL_MIGRATIONS } from './resourceModelSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -2099,5 +2100,6 @@ export const applicationMigrationRegistry = createMigrationRegistry([
         defaultValue: null
       }
     }
-  }
+  },
+  ...RESOURCE_MODEL_MIGRATIONS
 ])
