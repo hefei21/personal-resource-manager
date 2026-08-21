@@ -27,6 +27,16 @@ import {
   validateCommitHash,
   validateGitRemoteUrl
 } from '../services/repositorySecurity.js'
+import {
+  GitNasRepositoryError,
+  getGitNasCommitDetail,
+  getGitNasRepository,
+  getGitNasRepositorySize,
+  listGitNasCommits,
+  listGitNasTree,
+  readGitNasFile,
+  readGitNasReadme
+} from '../services/gitNasRepositoryService.js'
 
 const router = express.Router()
 const runGit = createGitRunner()
@@ -45,6 +55,35 @@ function sendRepositorySecurityError(res, error) {
   return true
 }
 
+function sendGitNasError(res, error) {
+  if (!(error instanceof GitNasRepositoryError)) return false
+  const status = [
+    'GIT_NAS_INPUT_INVALID',
+    'GIT_NAS_PATH_INVALID',
+    'GIT_NAS_SYMLINK_FORBIDDEN',
+    'GIT_NAS_REALPATH_ESCAPE'
+  ].includes(error.code)
+    ? 400
+    : ['GIT_NAS_CANDIDATE_NOT_FOUND', 'GIT_NAS_ROOT_NOT_FOUND'].includes(error.code)
+      ? 404
+      : ['GIT_NAS_ROOT_DISABLED', 'GIT_NAS_CANDIDATE_STATE_INVALID'].includes(error.code)
+        ? 409
+        : 500
+  res.status(status).json({ message: 'NAS Git 来源读取失败。', code: error.code })
+  return true
+}
+
+function isGitNasRepository(repo) {
+  return repo?.type === 'git_nas'
+}
+
+function sendGitNasReadOnly(res) {
+  return res.status(409).json({
+    message: 'NAS Git 仓库为只读来源。',
+    code: 'GIT_NAS_READ_ONLY'
+  })
+}
+
 // 获取文件原始内容（用于图片等）
 router.get('/:id/raw/:path(*)', async (req, res) => {
   try {
@@ -53,10 +92,19 @@ router.get('/:id/raw/:path(*)', async (req, res) => {
     relativePath = relativePath.split('?')[0]
     relativePath = decodeURIComponent(relativePath)
     
-    const repo = db.prepare('SELECT local_path FROM code_repositories WHERE id = ?').get(req.params.id)
+    const repo = db.prepare('SELECT local_path, type FROM code_repositories WHERE id = ?').get(req.params.id)
     
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
+    }
+
+    if (isGitNasRepository(repo)) {
+      const file = readGitNasFile(db, req.params.id, relativePath, { maxBytes: 5 * 1024 * 1024 })
+      res.setHeader('Content-Type', file.contentType)
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+      res.setHeader('Pragma', 'no-cache')
+      res.setHeader('Expires', '0')
+      return res.send(file.buffer)
     }
 
     const fullPath = resolveRepositoryEntry(
@@ -101,6 +149,7 @@ router.get('/:id/raw/:path(*)', async (req, res) => {
     const stream = fs.createReadStream(fullPath)
     stream.pipe(res)
   } catch (error) {
+    if (sendGitNasError(res, error)) return
     if (sendRepositorySecurityError(res, error)) return
     if (error.code === 'ENOENT') {
       return res.status(404).json({ message: '文件不存在' })
@@ -133,12 +182,13 @@ router.get('/', authenticateToken, async (req, res) => {
     const reposWithSize = rows.map(repo => {
       let size = 0
       try {
-        const repositoryPath = resolveManagedRepositoryPath(
-          CODE_BASE_PATH,
-          repo.local_path,
-          { mustExist: true }
-        )
-        size = getDirectorySize(repositoryPath)
+        size = isGitNasRepository(repo)
+          ? getGitNasRepositorySize(db, repo.id)
+          : getDirectorySize(resolveManagedRepositoryPath(
+            CODE_BASE_PATH,
+            repo.local_path,
+            { mustExist: true }
+          ))
       } catch {
         size = 0
       }
@@ -150,7 +200,7 @@ router.get('/', authenticateToken, async (req, res) => {
         } catch (e) {}
       }
       const { local_path: _localPath, ...publicRepo } = repo
-      return { ...publicRepo, size, languages }
+      return { ...publicRepo, size, languages, readOnly: isGitNasRepository(repo) }
     })
     
     res.json({ data: reposWithSize, total: reposWithSize.length })
@@ -510,11 +560,13 @@ router.get('/github-info', authenticateToken, async (req, res) => {
 router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
-    const repo = db.prepare('SELECT local_path FROM code_repositories WHERE id = ?').get(req.params.id)
+    const repo = db.prepare('SELECT local_path, type FROM code_repositories WHERE id = ?').get(req.params.id)
     
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
     }
+
+    if (isGitNasRepository(repo)) return sendGitNasReadOnly(res)
 
     const managedPath = resolveManagedRepositoryPath(
       CODE_BASE_PATH,
@@ -530,6 +582,7 @@ router.delete('/:id', authenticateToken, requireWritePermission, async (req, res
     db.prepare('DELETE FROM code_repositories WHERE id = ?').run(req.params.id)
     res.json({ message: '删除成功' })
   } catch (error) {
+    if (sendGitNasError(res, error)) return
     if (sendRepositorySecurityError(res, error)) return
     console.error('删除代码仓库失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -572,6 +625,11 @@ router.get('/:id/tree', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
+    if (isGitNasRepository(repo)) {
+      const items = listGitNasTree(db, req.params.id, relativePath)
+      return res.json({ data: items })
+    }
+
     const fullPath = resolveRepositoryEntry(
       CODE_BASE_PATH,
       repo.local_path,
@@ -599,6 +657,7 @@ router.get('/:id/tree', authenticateToken, async (req, res) => {
 
     res.json({ data: items })
   } catch (error) {
+    if (sendGitNasError(res, error)) return
     if (sendRepositorySecurityError(res, error)) return
     if (error.code === 'ENOENT') {
       return res.status(404).json({ message: '路径不存在' })
@@ -613,7 +672,7 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
   try {
     let { path: relativePath } = req.query
     const db = getDatabase()
-    const repo = db.prepare('SELECT local_path FROM code_repositories WHERE id = ?').get(req.params.id)
+    const repo = db.prepare('SELECT local_path, type FROM code_repositories WHERE id = ?').get(req.params.id)
     
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
@@ -622,7 +681,25 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
     if (!relativePath) {
       return res.status(400).json({ message: '路径不能为空' })
     }
-    
+
+    if (isGitNasRepository(repo)) {
+      const file = readGitNasFile(db, req.params.id, relativePath)
+      const ext = path.extname(relativePath).toLowerCase()
+      const isBinary = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.exe', '.dll', '.so', '.dylib', '.zip', '.tar', '.gz', '.rar', '.7z', '.pdf'].includes(ext)
+      if (isBinary) {
+        return res.json({ data: { type: 'binary', name: file.name, size: file.size } })
+      }
+      return res.json({
+        data: {
+          type: 'text',
+          name: file.name,
+          content: file.buffer.toString('utf8'),
+          size: file.size,
+          extension: ext
+        }
+      })
+    }
+
     const fullPath = resolveRepositoryEntry(
       CODE_BASE_PATH,
       repo.local_path,
@@ -680,6 +757,7 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
       }
     })
   } catch (error) {
+    if (sendGitNasError(res, error)) return
     if (sendRepositorySecurityError(res, error)) return
     if (error.code === 'ENOENT') {
       return res.status(404).json({ message: '文件不存在' })
@@ -703,10 +781,16 @@ router.get('/:id/readme', authenticateToken, async (req, res) => {
     }
     
     const db = getDatabase()
-    const repo = db.prepare('SELECT local_path, url FROM code_repositories WHERE id = ?').get(id)
+    const repo = db.prepare('SELECT local_path, url, type FROM code_repositories WHERE id = ?').get(id)
     
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
+    }
+
+    if (isGitNasRepository(repo)) {
+      const readme = readGitNasReadme(db, id)
+      await cache.set(cacheKey, readme, CacheTTL.MEDIUM)
+      return res.json({ data: readme })
     }
 
     const repositoryPath = resolveManagedRepositoryPath(
@@ -761,6 +845,7 @@ router.get('/:id/readme', authenticateToken, async (req, res) => {
     
     res.json({ data: result })
   } catch (error) {
+    if (sendGitNasError(res, error)) return
     if (sendRepositorySecurityError(res, error)) return
     if (error.code === 'ENOENT') {
       return res.json({ data: null })
@@ -890,6 +975,12 @@ router.get('/:id/commits', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: '仓库不存在' })
     }
 
+    if (isGitNasRepository(repo)) {
+      const commits = await listGitNasCommits(db, id, limit)
+      await cache.set(cacheKey, commits, CacheTTL.MEDIUM)
+      return res.json({ data: commits })
+    }
+
     if (repo.type !== 'git') {
       return res.status(410).json({
         message: 'SVN 支持已移除，请迁移为 Git 仓库',
@@ -932,6 +1023,7 @@ router.get('/:id/commits', authenticateToken, async (req, res) => {
     
     res.json({ data: commits })
   } catch (error) {
+    if (sendGitNasError(res, error)) return
     if (sendRepositorySecurityError(res, error)) return
     if (error.code === 'ENOENT') {
       return res.status(404).json({ message: '仓库尚未克隆完成' })
@@ -958,6 +1050,12 @@ router.get('/:id/commit/:hash', authenticateToken, async (req, res) => {
     
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
+    }
+
+    if (isGitNasRepository(repo)) {
+      const commitDetail = await getGitNasCommitDetail(db, req.params.id, hash)
+      await cache.set(cacheKey, commitDetail, CacheTTL.MEDIUM)
+      return res.json({ data: commitDetail })
     }
 
     if (repo.type !== 'git') {
@@ -1009,6 +1107,7 @@ router.get('/:id/commit/:hash', authenticateToken, async (req, res) => {
     
     res.json({ data: commitDetail })
   } catch (error) {
+    if (sendGitNasError(res, error)) return
     if (sendRepositorySecurityError(res, error)) return
     if (error.code === 'ENOENT') {
       return res.status(404).json({ message: '仓库尚未克隆完成' })
@@ -1053,6 +1152,7 @@ router.post('/:id/sync', authenticateToken, requireWritePermission, async (req, 
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
     }
+    if (isGitNasRepository(repo)) return sendGitNasReadOnly(res)
     if (repo.type !== 'git') {
       return res.status(410).json({
         message: 'SVN 支持已移除，请迁移为 Git 仓库',
@@ -1089,6 +1189,7 @@ router.post('/:id/reclone', authenticateToken, requireWritePermission, async (re
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
     }
+    if (isGitNasRepository(repo)) return sendGitNasReadOnly(res)
     if (repo.type !== 'git') {
       return res.status(410).json({
         message: '仅 Git 仓库支持安全重克隆',
@@ -1150,11 +1251,16 @@ router.get('/:id', authenticateToken, async (req, res) => {
     // 检查受管仓库目录是否存在，但不向前端暴露物理路径。
     let exists = false
     try {
-      const repositoryPath = resolveManagedRepositoryPath(
-        CODE_BASE_PATH,
-        repo.local_path
-      )
-      exists = fs.existsSync(repositoryPath)
+      if (isGitNasRepository(repo)) {
+        getGitNasRepository(db, req.params.id)
+        exists = true
+      } else {
+        const repositoryPath = resolveManagedRepositoryPath(
+          CODE_BASE_PATH,
+          repo.local_path
+        )
+        exists = fs.existsSync(repositoryPath)
+      }
     } catch {
       exists = false
     }
@@ -1163,7 +1269,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
     res.json({ 
       data: {
         ...publicRepo,
-        exists
+        exists,
+        readOnly: isGitNasRepository(repo)
       }
     })
   } catch (error) {

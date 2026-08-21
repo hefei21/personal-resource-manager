@@ -158,7 +158,9 @@ test('NAS root Owner API projects safe fields and protects every write', async (
     const scanBody = await scan.json()
     assert.equal(scanBody.data.taskType, 'nas.resource.scan')
     assert.deepEqual(scanBody.data.input, { scanRootId: 1, rulesVersion: 1, generation: 1 })
-    assert.deepEqual(calls.enqueue[0].options, { mutexTaskTypes: ['nas.resource.scan', 'nas.resource.repair'] })
+    assert.deepEqual(calls.enqueue[0].options, {
+      mutexTaskTypes: ['nas.resource.scan', 'nas.resource.repair', 'code.repository.git_nas.discover']
+    })
     assert.doesNotMatch(JSON.stringify(scanBody), /root_path|relative_path|sha256|hash|lease/u)
 
     const secondScan = await fetch(`${baseUrl}/api/nas-scan-roots/1/scan`, {

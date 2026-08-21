@@ -723,6 +723,45 @@ test('catalog reserves retry metadata for the next task-center node', () => {
   }
 })
 
+test('Stage 4 import tasks project only opaque identifiers and bounded counts', () => {
+  const fixtures = [
+    taskFixture({
+      taskType: 'resource.domain.adapt',
+      executionClass: 'disk',
+      subjectType: 'resource-domain-import',
+      subjectId: 'owner',
+      input: { scope: 'all', batchSize: 250 },
+      result: { processed: 3, resourcesCreated: 2, path: '/secret/domain' }
+    }),
+    taskFixture({
+      taskType: 'code.repository.git_nas.discover',
+      executionClass: 'disk',
+      subjectType: 'nas-scan-root',
+      subjectId: '7',
+      input: { scanRootId: 7, rulesVersion: 2, generation: 3 },
+      result: { generation: 3, candidates: 2, rootPath: '/secret/nas' }
+    }),
+    taskFixture({
+      taskType: 'code.repository.git_nas.import',
+      executionClass: 'disk',
+      subjectType: 'git-nas-candidate',
+      subjectId: '9',
+      input: { candidateId: 9 },
+      result: { repositoryId: 4, resourceId: 11, status: 'imported', relativePath: 'secret/repo' }
+    })
+  ]
+  for (const fixture of fixtures) {
+    const projected = projectTask(fixture)
+    assert.ok(projected)
+    const serialized = JSON.stringify(projected)
+    assert.doesNotMatch(serialized, /\/secret|rootPath|relativePath|subjectVersionId|lease/u)
+  }
+  assert.deepEqual(
+    TASK_TYPE_CATALOG['nas.resource.scan'].mutexTaskTypes,
+    TASK_TYPE_CATALOG['code.repository.git_nas.discover'].mutexTaskTypes
+  )
+})
+
 test('TaskStore supports controlled DESC ordering, task-type filtering, pagination, and count', nativeTestOptions, () => {
   const database = new Database(':memory:')
   try {

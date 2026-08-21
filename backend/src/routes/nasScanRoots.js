@@ -13,6 +13,7 @@ import {
 } from '../services/nasScanRootService.js'
 
 const TASK_TYPES = Object.freeze(['nas.resource.scan', 'nas.resource.repair'])
+const ROOT_MUTEX_TASK_TYPES = Object.freeze([...TASK_TYPES, 'code.repository.git_nas.discover'])
 const POSITIVE_ID = /^[1-9]\d*$/u
 
 const TASK_ACTION_ERROR_CODES = Object.freeze({
@@ -197,7 +198,7 @@ export function createNasScanRootsRouter({
       }
       const input = createActionInput(root, taskType, runIdentityFactory)
       const outcome = await Promise.resolve(enqueueOperation(input, {
-        mutexTaskTypes: TASK_TYPES
+        mutexTaskTypes: ROOT_MUTEX_TASK_TYPES
       }))
       if (!outcome || outcome.activeConflict === true || outcome.outcome === 'active-conflict') {
         return sendCode(res, 409, TASK_ACTION_ERROR_CODES.CONFLICT)
