@@ -260,7 +260,7 @@ function resolveContentService({ domain, documentContentService, resourceContent
 }
 
 async function inspectContent(record, domain, dependencies, signal) {
-  const service = resolveContentService(dependencies)
+  const service = resolveContentService({ domain, ...dependencies })
   if (!service || typeof service.stat !== 'function' || typeof service.createReadStream !== 'function') {
     fail(RESOURCE_DOMAIN_IMPORT_ERROR_CODES.CONTENT_UNAVAILABLE, 'Content service is unavailable.')
   }
