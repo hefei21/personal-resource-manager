@@ -1,9 +1,12 @@
 import express from 'express'
 
+import { requireOwner } from '../middlewares/auth.js'
 import {
   countTasks as defaultCountTasks,
+  executeTaskCleanup as defaultExecuteTaskCleanup,
   getTaskById as defaultGetTaskById,
-  listTasks as defaultListTasks
+  listTasks as defaultListTasks,
+  previewTaskCleanup as defaultPreviewTaskCleanup
 } from '../services/taskStore.js'
 import { getTaskRuntime as defaultGetTaskRuntime } from '../services/taskRuntime.js'
 import {
@@ -21,6 +24,9 @@ export const TASK_CANCEL_CONFLICT_CODE = 'TASK_CANCEL_CONFLICT'
 export const TASK_CANCEL_FAILED_CODE = 'TASK_CANCEL_FAILED'
 export const TASK_RETRY_CONFLICT_CODE = 'TASK_RETRY_CONFLICT'
 export const TASK_RETRY_FAILED_CODE = 'TASK_RETRY_FAILED'
+export const TASK_CLEANUP_INVALID_CODE = 'TASK_CLEANUP_INVALID'
+export const TASK_CLEANUP_CONFLICT_CODE = 'TASK_CLEANUP_CONFLICT'
+export const TASK_CLEANUP_FAILED_CODE = 'TASK_CLEANUP_FAILED'
 export const DEFAULT_TASK_PAGE_SIZE = 50
 export const MAX_TASK_PAGE_SIZE = 100
 export const MAX_TASK_OFFSET = 1_000_000_000
@@ -60,6 +66,14 @@ const ACTION_CONFLICT_ERROR_CODES = new Set([
   'TASK_STORE_DATA_INVALID',
   TASK_CANCEL_CONFLICT_CODE,
   TASK_RETRY_CONFLICT_CODE
+])
+const CLEANUP_INPUT_ERROR_CODES = new Set([
+  TASK_CLEANUP_INVALID_CODE,
+  'TASK_CLEANUP_INPUT_INVALID',
+  'TASK_NUMBER_INVALID',
+  'TASK_TIMESTAMP_INVALID',
+  'TASK_INPUT_INVALID',
+  'TASK_STORE_INPUT_INVALID'
 ])
 
 async function defaultDatabaseProvider(req) {
@@ -216,6 +230,89 @@ function sendActionError(res, error, { conflictCode, failureCode }) {
   return sendActionFailure(res, failureCode)
 }
 
+function cleanupInputError(message) {
+  const error = new Error(message)
+  error.code = TASK_CLEANUP_INVALID_CODE
+  return error
+}
+
+function parseCleanupPreviewBody(body) {
+  const source = body === undefined || body === null ? {} : body
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    throw cleanupInputError('Cleanup preview body is invalid.')
+  }
+  if (Object.keys(source).length > 0) throw cleanupInputError('Cleanup preview body must be empty.')
+  return {}
+}
+
+function parseCleanupExecuteBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw cleanupInputError('Cleanup execute body is invalid.')
+  }
+  const allowed = new Set(['previewedAt', 'expectedCount'])
+  if (Object.keys(body).some((key) => !allowed.has(key))) {
+    throw cleanupInputError('Cleanup execute body contains unsupported fields.')
+  }
+  if (!Object.hasOwn(body, 'previewedAt') || !Object.hasOwn(body, 'expectedCount')) {
+    throw cleanupInputError('Cleanup execute body is incomplete.')
+  }
+  return {
+    previewedAt: body.previewedAt,
+    expectedCount: body.expectedCount
+  }
+}
+
+function isNonNegativeSafeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 0
+}
+
+function projectCleanupPolicy(policy) {
+  if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return null
+  const retentionDays = policy.retentionDays
+  const cutoffAt = policy.cutoffAt
+  if (!retentionDays || typeof retentionDays !== 'object' || Array.isArray(retentionDays) ||
+    !cutoffAt || typeof cutoffAt !== 'object' || Array.isArray(cutoffAt) ||
+    !isNonNegativeSafeInteger(policy.batchLimit)) return null
+  const statuses = ['succeeded', 'failed', 'cancelled']
+  if (statuses.some((status) =>
+    !isNonNegativeSafeInteger(retentionDays[status]) || typeof cutoffAt[status] !== 'string')) return null
+  return {
+    retentionDays: Object.fromEntries(statuses.map((status) => [status, retentionDays[status]])),
+    cutoffAt: Object.fromEntries(statuses.map((status) => [status, cutoffAt[status]])),
+    batchLimit: policy.batchLimit
+  }
+}
+
+function projectCleanupReport(report, mode) {
+  if (!report || typeof report !== 'object' || Array.isArray(report) ||
+    typeof report.previewedAt !== 'string' || !isNonNegativeSafeInteger(report.eligibleCount) ||
+    !isNonNegativeSafeInteger(report.selectedCount)) return null
+  const policy = projectCleanupPolicy(report.policy)
+  if (!policy) return null
+  const data = {
+    previewedAt: report.previewedAt,
+    eligibleCount: report.eligibleCount,
+    selectedCount: report.selectedCount,
+    policy
+  }
+  if (mode === 'execute') {
+    if (typeof report.executedAt !== 'string' || !isNonNegativeSafeInteger(report.deletedCount)) return null
+    data.executedAt = report.executedAt
+    data.deletedCount = report.deletedCount
+  }
+  return data
+}
+
+function sendCleanupError(res, error) {
+  if (error?.code === TASK_CLEANUP_CONFLICT_CODE || error?.code === 'TASK_CLEANUP_CONFLICT') {
+    return res.status(409).json({ code: TASK_CLEANUP_CONFLICT_CODE })
+  }
+  if (CLEANUP_INPUT_ERROR_CODES.has(error?.code)) {
+    return res.status(400).json({ code: TASK_CLEANUP_INVALID_CODE })
+  }
+  return res.status(500).json({ code: TASK_CLEANUP_FAILED_CODE })
+}
+
 function resolveActionRuntime(taskRuntime, getTaskRuntime) {
   const runtime = taskRuntime ?? getTaskRuntime()
   if (!runtime || typeof runtime.getStore !== 'function') {
@@ -245,10 +342,51 @@ export function createTasksRouter({
   listTasks = defaultListTasks,
   countTasks = defaultCountTasks,
   getTaskById = defaultGetTaskById,
+  previewTaskCleanup = defaultPreviewTaskCleanup,
+  executeTaskCleanup = defaultExecuteTaskCleanup,
   getTaskRuntime = defaultGetTaskRuntime,
   taskRuntime = null
 } = {}) {
   const router = express.Router()
+
+  // Keep the router safe when it is mounted without the shared app boundary.
+  router.use(requireOwner)
+
+  router.post('/cleanup/preview', async (req, res) => {
+    let body
+    try {
+      body = parseCleanupPreviewBody(req.body)
+    } catch (error) {
+      return sendCleanupError(res, error)
+    }
+
+    try {
+      const database = await databaseProvider(req)
+      const report = await Promise.resolve(previewTaskCleanup(database, body))
+      const data = projectCleanupReport(report, 'preview')
+      return data ? res.json({ data }) : sendCleanupError(res, new Error('Cleanup preview projection failed.'))
+    } catch (error) {
+      return sendCleanupError(res, error)
+    }
+  })
+
+  router.post('/cleanup/execute', async (req, res) => {
+    let body
+    try {
+      body = parseCleanupExecuteBody(req.body)
+    } catch (error) {
+      return sendCleanupError(res, error)
+    }
+
+    try {
+      const database = await databaseProvider(req)
+      const report = await Promise.resolve(executeTaskCleanup(database, body))
+      const data = projectCleanupReport(report, 'execute')
+      return data ? res.json({ data }) : sendCleanupError(res, new Error('Cleanup execute projection failed.'))
+    } catch (error) {
+      return sendCleanupError(res, error)
+    }
+  })
 
   router.get('/', async (req, res) => {
     let query

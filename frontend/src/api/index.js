@@ -82,7 +82,9 @@ export default {
     list: (params) => api.get('/tasks', { params }),
     get: (id) => api.get(`/tasks/${id}`),
     cancel: (id) => api.post(`/tasks/${id}/cancel`),
-    retry: (id) => api.post(`/tasks/${id}/retry`)
+    retry: (id) => api.post(`/tasks/${id}/retry`),
+    cleanupPreview: () => api.post('/tasks/cleanup/preview', {}),
+    cleanupExecute: (data) => api.post('/tasks/cleanup/execute', data)
   },
   demo: {
     createSession: () => api.post('/demo/sessions'),

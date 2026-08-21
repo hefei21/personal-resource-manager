@@ -5,10 +5,21 @@
         <h1>任务中心</h1>
         <p class="tasks-subtitle">查看后台任务进度，管理仍在运行或失败的任务。</p>
       </div>
-      <NativeButton theme="primary" :loading="store.loading" @click="handleRefresh">
-        <template #icon><NativeIcon name="arrow-clockwise" /></template>
-        刷新
-      </NativeButton>
+      <div class="tasks-heading-actions">
+        <NativeButton
+          v-if="isDesktop"
+          theme="danger"
+          variant="outline"
+          :loading="store.cleanupLoading"
+          @click="handleCleanupPreview"
+        >
+          清理历史任务
+        </NativeButton>
+        <NativeButton theme="primary" :loading="store.loading" @click="handleRefresh">
+          <template #icon><NativeIcon name="arrow-clockwise" /></template>
+          刷新
+        </NativeButton>
+      </div>
     </div>
 
     <NativeCard class="tasks-filter-card">
@@ -140,17 +151,42 @@
         </div>
       </template>
     </NativeCard>
+
+    <NativeDialog
+      v-model="cleanupDialogVisible"
+      title="清理历史任务"
+      confirm-text="确认清理"
+      :confirm-loading="store.cleanupLoading"
+      :confirm-disabled="!cleanupPreview"
+      :close-on-overlay-click="!store.cleanupLoading"
+      @confirm="handleCleanupExecute"
+    >
+      <div v-if="cleanupPreview" class="cleanup-preview">
+        <p>将清理超过固定保留期的终态任务，运行中和排队中的任务不会被删除。</p>
+        <dl>
+          <div><dt>成功任务</dt><dd>保留 {{ cleanupPreview.policy.retentionDays.succeeded }} 天</dd></div>
+          <div><dt>失败/取消任务</dt><dd>保留 {{ cleanupPreview.policy.retentionDays.failed }} 天</dd></div>
+          <div><dt>当前符合条件</dt><dd>{{ cleanupPreview.eligibleCount }} 条</dd></div>
+          <div><dt>本次最多清理</dt><dd>{{ cleanupPreview.selectedCount }} 条</dd></div>
+        </dl>
+        <p v-if="cleanupPreview.eligibleCount > cleanupPreview.selectedCount" class="cleanup-warning">
+          为控制单次事务规模，本次只清理最早的 {{ cleanupPreview.selectedCount }} 条；完成后可再次预览。
+        </p>
+        <p class="cleanup-warning">此操作只删除任务历史记录，无法撤销。</p>
+      </div>
+    </NativeDialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { TASK_ACTIVE_STATUSES, useTasksStore } from '@/stores/tasks'
 import { useToast } from '@/composables/useToast'
 import {
   NativeButton,
   NativeCard,
   NativeEmpty,
+  NativeDialog,
   NativeIcon,
   NativeLoading,
   NativePagination,
@@ -166,6 +202,10 @@ const ACTION_CONFLICT_CODES = new Set(['TASK_CANCEL_CONFLICT', 'TASK_RETRY_CONFL
 
 const store = useTasksStore()
 const toast = useToast()
+const cleanupDialogVisible = ref(false)
+const cleanupPreview = ref(null)
+const isDesktop = ref(false)
+let desktopMediaQuery = null
 
 const statusOptions = [
   { value: 'pending', label: '排队中' },
@@ -233,7 +273,9 @@ const TASK_ERROR_MESSAGES = Object.freeze({
   TASK_CANCELLED: '任务已取消',
   EBOOK_COVER_TASK_TIMEOUT: '封面生成超时，请稍后重试',
   EBOOK_COVER_TASK_MISSING: '封面任务不存在',
-  EBOOK_COVER_TASK_FAILED: '封面生成失败，请稍后重试'
+  EBOOK_COVER_TASK_FAILED: '封面生成失败，请稍后重试',
+  PROXY_DNS_FAILED: '代理服务名称无法解析，请检查容器网络',
+  PROXY_CONNECTION_FAILED: '代理服务暂时无法连接'
 })
 const LOAD_ERROR_MESSAGES = Object.freeze({
   TASK_QUERY_INVALID: '筛选条件无效，请重试',
@@ -347,6 +389,47 @@ async function handleAction(action, taskItem) {
   toast.error(action === 'cancel' ? '取消任务失败，请稍后重试' : '重试任务失败，请稍后重试')
 }
 
+async function handleCleanupPreview() {
+  const result = await store.previewCleanup()
+  if (!result.success) {
+    toast.error('任务清理预览失败，请稍后重试')
+    return
+  }
+  if (result.data.eligibleCount === 0) {
+    toast.success('当前没有超过保留期的任务')
+    return
+  }
+  cleanupPreview.value = result.data
+  cleanupDialogVisible.value = true
+}
+
+async function handleCleanupExecute() {
+  const preview = cleanupPreview.value
+  if (!preview) return
+  const result = await store.executeCleanup(preview)
+  if (result.success) {
+    cleanupDialogVisible.value = false
+    cleanupPreview.value = null
+    toast.success(`已清理 ${result.data.deletedCount} 条历史任务`)
+    return
+  }
+  if (result.code === 'TASK_CLEANUP_CONFLICT') {
+    cleanupDialogVisible.value = false
+    cleanupPreview.value = null
+    toast.warning('任务状态已变化，请重新预览后再清理')
+    return
+  }
+  toast.error('任务清理失败，请稍后重试')
+}
+
+function syncDesktopMedia(event) {
+  isDesktop.value = Boolean(event?.matches)
+  if (!isDesktop.value) {
+    cleanupDialogVisible.value = false
+    cleanupPreview.value = null
+  }
+}
+
 function isPageVisible() {
   return typeof document !== 'undefined' && document.visibilityState === 'visible'
 }
@@ -392,6 +475,9 @@ watch(() => store.hasActiveTasks, () => {
 
 onMounted(() => {
   mounted = true
+  desktopMediaQuery = window.matchMedia('(min-width: 769px)')
+  syncDesktopMedia(desktopMediaQuery)
+  desktopMediaQuery.addEventListener('change', syncDesktopMedia)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   void loadTasks()
 })
@@ -400,6 +486,7 @@ onBeforeUnmount(() => {
   mounted = false
   stopPolling()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  desktopMediaQuery?.removeEventListener('change', syncDesktopMedia)
 })
 </script>
 
@@ -423,6 +510,45 @@ onBeforeUnmount(() => {
   color: #333;
   font-size: 24px;
   font-weight: 600;
+}
+
+.tasks-heading-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.cleanup-preview {
+  color: #444;
+  line-height: 1.6;
+}
+
+.cleanup-preview > p:first-child {
+  margin-top: 0;
+}
+
+.cleanup-preview dl {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.cleanup-preview dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cleanup-preview dt {
+  color: #666;
+}
+
+.cleanup-preview dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.cleanup-warning {
+  color: #b54708;
 }
 
 .tasks-subtitle {
@@ -570,6 +696,10 @@ onBeforeUnmount(() => {
 
   .tasks-heading .native-btn {
     align-self: flex-start;
+  }
+
+  .tasks-heading-actions {
+    width: 100%;
   }
 
   .tasks-filter-grid {

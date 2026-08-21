@@ -28,6 +28,8 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
   assert.match(apiSource, /get:\s*\(id\)\s*=>\s*api\.get\(`\/tasks\/\$\{id\}`\)/u)
   assert.match(apiSource, /cancel:\s*\(id\)\s*=>\s*api\.post\(`\/tasks\/\$\{id\}\/cancel`\)/u)
   assert.match(apiSource, /retry:\s*\(id\)\s*=>\s*api\.post\(`\/tasks\/\$\{id\}\/retry`\)/u)
+  assert.match(apiSource, /cleanupPreview:\s*\(\)\s*=>\s*api\.post\('\/tasks\/cleanup\/preview',\s*\{\}\)/u)
+  assert.match(apiSource, /cleanupExecute:\s*\(data\)\s*=>\s*api\.post\('\/tasks\/cleanup\/execute',\s*data\)/u)
   assert.match(apiSource, /reparseMetadata:\s*\(id\)\s*=>\s*api\.post\(`\/ebooks\/\$\{id\}\/reparse-metadata`\)/u)
   assert.match(apiSource, /reparseMetadata:\s*\(id\)\s*=>\s*api\.post\(`\/music\/\$\{id\}\/reparse`\)/u)
 
@@ -52,6 +54,12 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
   assert.match(viewSource, /subjectLabel/u)
   assert.match(viewSource, /代码仓库/u)
   assert.match(viewSource, /Steam游戏库/u)
+  assert.match(viewSource, /v-if="isDesktop"[\s\S]*?清理历史任务/u)
+  assert.match(viewSource, /window\.matchMedia\('\(min-width: 769px\)'\)/u)
+  assert.match(viewSource, /cleanupPreview\.policy\.retentionDays\.succeeded/u)
+  assert.match(viewSource, /cleanupPreview\.policy\.retentionDays\.failed/u)
+  assert.match(viewSource, /TASK_CLEANUP_CONFLICT/u)
+  assert.match(storeSource, /expectedCount:\s*preview\.eligibleCount/u)
 
   const taskTypeSource = [storeSource, viewSource].join('\n')
   for (const taskType of [

@@ -19,6 +19,14 @@ const MAX_ERROR_SUMMARY_LENGTH = 2048
 const TASK_STATUS_SET = new Set(['pending', 'leased', 'running', 'succeeded', 'failed', 'cancelled'])
 const EXECUTION_CLASS_SET = new Set(['cpu', 'disk', 'network', 'gpu'])
 const TASK_ORDER_SET = new Set(['asc', 'desc'])
+const TASK_CLEANUP_DAY_MS = 24 * 60 * 60 * 1000
+
+export const TASK_CLEANUP_RETENTION_DAYS = Object.freeze({
+  succeeded: 30,
+  failed: 90,
+  cancelled: 90
+})
+export const TASK_CLEANUP_BATCH_LIMIT = 100
 
 export const TASK_STATUS_PENDING = 'pending'
 export const TASK_STATUS_LEASED = 'leased'
@@ -897,6 +905,178 @@ export function countTasks(database, options = {}) {
   }
 }
 
+function cleanupCutoffAt(previewedAt, retentionDays, fieldName) {
+  const milliseconds = Date.parse(previewedAt) - retentionDays * TASK_CLEANUP_DAY_MS
+  if (!Number.isSafeInteger(milliseconds)) {
+    fail('TASK_CLEANUP_INPUT_INVALID', `${fieldName} is outside the supported range.`)
+  }
+  const cutoff = new Date(milliseconds)
+  if (Number.isNaN(cutoff.getTime())) {
+    fail('TASK_CLEANUP_INPUT_INVALID', `${fieldName} is invalid.`)
+  }
+  return cutoff.toISOString()
+}
+
+function cleanupPolicy(previewedAt) {
+  const cutoffAt = Object.fromEntries(
+    Object.entries(TASK_CLEANUP_RETENTION_DAYS)
+      .map(([status, retentionDays]) => [
+        status,
+        cleanupCutoffAt(previewedAt, retentionDays, `${status} cutoff`)
+      ])
+  )
+  return deepFreeze({
+    retentionDays: { ...TASK_CLEANUP_RETENTION_DAYS },
+    cutoffAt,
+    batchLimit: TASK_CLEANUP_BATCH_LIMIT
+  })
+}
+
+function cleanupEligibilityClause(policy) {
+  return {
+    sql: `(
+      (status = 'succeeded' AND finished_at IS NOT NULL AND finished_at <= ?)
+      OR (status = 'failed' AND finished_at IS NOT NULL AND finished_at <= ?)
+      OR (status = 'cancelled' AND finished_at IS NOT NULL AND finished_at <= ?)
+    )`,
+    parameters: [
+      policy.cutoffAt.succeeded,
+      policy.cutoffAt.failed,
+      policy.cutoffAt.cancelled
+    ]
+  }
+}
+
+function countEligibleTasks(database, policy) {
+  const clause = cleanupEligibilityClause(policy)
+  const row = database.prepare(`
+    SELECT COUNT(*) AS total
+      FROM ${TASK_TABLE}
+     WHERE ${clause.sql}
+  `).get(...clause.parameters)
+  const total = Number(row?.total ?? 0)
+  if (!Number.isSafeInteger(total) || total < 0) {
+    fail('TASK_CLEANUP_DATA_INVALID', 'Task cleanup count is invalid.')
+  }
+  return total
+}
+
+function selectEligibleTaskIds(database, policy, limit) {
+  const clause = cleanupEligibilityClause(policy)
+  return database.prepare(`
+    SELECT id
+      FROM ${TASK_TABLE}
+     WHERE ${clause.sql}
+     ORDER BY finished_at ASC, id ASC
+     LIMIT ?
+  `).all(...clause.parameters, limit).map(({ id }) => id)
+}
+
+function normalizeTaskCleanupPreviewOptions(options = {}) {
+  assertOptionsObject(options, 'task cleanup preview options')
+  if (Object.keys(options).some((key) => key !== 'now')) {
+    fail('TASK_CLEANUP_INPUT_INVALID', 'Task cleanup preview options contain unsupported fields.')
+  }
+  return Object.freeze({ now: options.now })
+}
+
+function normalizeTaskCleanupExecuteOptions(options = {}) {
+  assertOptionsObject(options, 'task cleanup execute options')
+  const allowed = new Set(['previewedAt', 'expectedCount', 'now'])
+  if (Object.keys(options).some((key) => !allowed.has(key))) {
+    fail('TASK_CLEANUP_INPUT_INVALID', 'Task cleanup execute options contain unsupported fields.')
+  }
+  if (!Object.hasOwn(options, 'previewedAt')) {
+    fail('TASK_CLEANUP_INPUT_INVALID', 'previewedAt is required.')
+  }
+  if (!Object.hasOwn(options, 'expectedCount')) {
+    fail('TASK_CLEANUP_INPUT_INVALID', 'expectedCount is required.')
+  }
+  let expectedCount
+  try {
+    expectedCount = normalizeInteger(options.expectedCount, 'expectedCount', { min: 0 })
+  } catch (error) {
+    if (error instanceof TaskStoreError && error.code === 'TASK_NUMBER_INVALID') {
+      fail('TASK_CLEANUP_INPUT_INVALID', 'expectedCount is invalid.')
+    }
+    throw error
+  }
+  return Object.freeze({
+    previewedAt: normalizeTimestamp(options.previewedAt, 'previewedAt'),
+    expectedCount,
+    now: options.now
+  })
+}
+
+export function previewTaskCleanup(database, options = {}, dependencies = {}) {
+  assertDatabase(database)
+  const normalized = normalizeTaskCleanupPreviewOptions(options)
+  const previewedAt = operationTimestamp(normalized.now, dependencies.now)
+  const policy = cleanupPolicy(previewedAt)
+  try {
+    const eligibleCount = countEligibleTasks(database, policy)
+    return deepFreeze({
+      previewedAt,
+      eligibleCount,
+      selectedCount: Math.min(eligibleCount, TASK_CLEANUP_BATCH_LIMIT),
+      policy
+    })
+  } catch (error) {
+    if (error instanceof TaskStoreError) throw error
+    fail('TASK_CLEANUP_READ_FAILED', 'Task cleanup preview could not be read.', {}, error)
+  }
+}
+
+export function executeTaskCleanup(database, options = {}, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeTaskCleanupExecuteOptions(options)
+  const executedAt = operationTimestamp(normalized.now, dependencies.now)
+  if (Date.parse(normalized.previewedAt) > Date.parse(executedAt)) {
+    fail('TASK_CLEANUP_INPUT_INVALID', 'previewedAt cannot be in the future.')
+  }
+  const policy = cleanupPolicy(normalized.previewedAt)
+  try {
+    const outcome = runImmediateTransaction(database, () => {
+      const eligibleCount = countEligibleTasks(database, policy)
+      if (eligibleCount !== normalized.expectedCount) {
+        fail('TASK_CLEANUP_CONFLICT', 'Task cleanup preview no longer matches current history.')
+      }
+
+      const selectedCount = Math.min(eligibleCount, TASK_CLEANUP_BATCH_LIMIT)
+      if (selectedCount === 0) {
+        return { eligibleCount, selectedCount, deletedCount: 0 }
+      }
+
+      const ids = selectEligibleTaskIds(database, policy, selectedCount)
+      if (ids.length !== selectedCount) {
+        fail('TASK_CLEANUP_CONFLICT', 'Task cleanup selection no longer matches current history.')
+      }
+      const clause = cleanupEligibilityClause(policy)
+      const placeholders = ids.map(() => '?').join(', ')
+      const deleted = database.prepare(`
+        DELETE FROM ${TASK_TABLE}
+         WHERE id IN (${placeholders})
+           AND ${clause.sql}
+      `).run(...ids, ...clause.parameters)
+      if (deleted.changes !== selectedCount) {
+        fail('TASK_CLEANUP_CONFLICT', 'Task cleanup deletion no longer matches current history.')
+      }
+      return { eligibleCount, selectedCount, deletedCount: deleted.changes }
+    })
+    return deepFreeze({
+      previewedAt: normalized.previewedAt,
+      executedAt,
+      eligibleCount: outcome.eligibleCount,
+      selectedCount: outcome.selectedCount,
+      deletedCount: outcome.deletedCount,
+      policy
+    })
+  } catch (error) {
+    if (error instanceof TaskStoreError) throw error
+    fail('TASK_CLEANUP_WRITE_FAILED', 'Task cleanup could not be executed.', {}, error)
+  }
+}
+
 function verifyIdempotentTaskInput(existing, normalized) {
   if (!existing) fail('TASK_STORE_WRITE_FAILED', 'Task could not be enqueued.')
   if (existing.input_fingerprint !== normalized.inputFingerprint) {
@@ -1433,6 +1613,12 @@ export class TaskStore {
   getByIdempotencyKey(key) { return getTaskByIdempotencyKey(this.#database, key) }
   list(options) { return listTasks(this.#database, options) }
   count(options) { return countTasks(this.#database, options) }
+  previewTaskCleanup(options = {}) {
+    return previewTaskCleanup(this.#database, options, { now: this.now })
+  }
+  executeTaskCleanup(options = {}) {
+    return executeTaskCleanup(this.#database, options, { now: this.now })
+  }
   leaseNext(options = {}) { return leaseNext(this.#database, options, { now: this.now, tokenFactory: this.tokenFactory }) }
   markRunning(taskOrOptions, rawOptions, rawToken) {
     const options = typeof rawOptions === 'string'

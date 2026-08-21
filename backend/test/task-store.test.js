@@ -14,7 +14,10 @@ import {
   TaskStoreError,
   createTaskStore,
   deriveTaskIdempotencyKey,
-  normalizeTaskIdentity
+  executeTaskCleanup,
+  normalizeTaskIdentity,
+  previewTaskCleanup,
+  TASK_CLEANUP_BATCH_LIMIT
 } from '../src/services/taskStore.js'
 
 const require = createRequire(import.meta.url)
@@ -737,5 +740,111 @@ test('expired leased/running tasks recover across a close and reopen', nativeTes
   } finally {
     if (database?.open) database.close()
     rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+function insertCleanupTask(database, { seed, status, finishedAt = null }) {
+  const timestamp = finishedAt ?? '2026-08-20T00:00:00.000Z'
+  return database.prepare(`
+    INSERT INTO tasks (
+      idempotency_key, input_fingerprint, task_type, processor_version,
+      subject_type, subject_id, input_json, status, execution_class,
+      available_at, max_attempts, finished_at, created_at, updated_at
+    ) VALUES (?, ?, 'games.steam.sync', 'v1', 'game-library', ?, '{}', ?,
+      'network', ?, 3, ?, ?, ?)
+  `).run(
+    `task:${seed.toString(16).padStart(64, '0')}`,
+    (seed + 10_000).toString(16).padStart(64, '0'),
+    `cleanup-${seed}`,
+    status,
+    timestamp,
+    finishedAt,
+    timestamp,
+    timestamp
+  ).lastInsertRowid
+}
+
+test('task cleanup applies fixed retention and never selects active or recent tasks', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const removableIds = [
+      insertCleanupTask(database, { seed: 1, status: 'succeeded', finishedAt: '2026-07-20T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 2, status: 'failed', finishedAt: '2026-05-20T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 3, status: 'cancelled', finishedAt: '2026-05-20T00:00:00.000Z' })
+    ]
+    const retainedIds = [
+      insertCleanupTask(database, { seed: 4, status: 'succeeded', finishedAt: '2026-08-01T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 5, status: 'failed', finishedAt: '2026-06-01T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 6, status: 'cancelled', finishedAt: '2026-06-01T00:00:00.000Z' }),
+      insertCleanupTask(database, { seed: 7, status: 'pending' }),
+      insertCleanupTask(database, { seed: 8, status: 'running' })
+    ]
+
+    const preview = previewTaskCleanup(database, { now: '2026-08-20T00:00:00.000Z' })
+    assert.equal(preview.eligibleCount, 3)
+    assert.equal(preview.selectedCount, 3)
+    assert.deepEqual(preview.policy.retentionDays, { succeeded: 30, failed: 90, cancelled: 90 })
+    assert.equal(preview.policy.batchLimit, TASK_CLEANUP_BATCH_LIMIT)
+
+    const executed = executeTaskCleanup(database, {
+      previewedAt: preview.previewedAt,
+      expectedCount: preview.eligibleCount,
+      now: '2026-08-20T00:01:00.000Z'
+    })
+    assert.equal(executed.deletedCount, 3)
+    for (const id of removableIds) {
+      assert.equal(database.prepare('SELECT id FROM tasks WHERE id = ?').get(id), undefined)
+    }
+    for (const id of retainedIds) {
+      assert.equal(Number(database.prepare('SELECT id FROM tasks WHERE id = ?').get(id).id), Number(id))
+    }
+  } finally {
+    database.close()
+  }
+})
+
+test('task cleanup conflicts atomically when preview count changes', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    insertCleanupTask(database, { seed: 20, status: 'failed', finishedAt: '2026-01-01T00:00:00.000Z' })
+    const preview = previewTaskCleanup(database, { now: '2026-08-20T00:00:00.000Z' })
+    insertCleanupTask(database, { seed: 21, status: 'cancelled', finishedAt: '2026-01-02T00:00:00.000Z' })
+    assert.throws(
+      () => executeTaskCleanup(database, {
+        previewedAt: preview.previewedAt,
+        expectedCount: preview.eligibleCount,
+        now: '2026-08-20T00:01:00.000Z'
+      }),
+      (error) => error instanceof TaskStoreError && error.code === 'TASK_CLEANUP_CONFLICT'
+    )
+    assert.equal(database.prepare('SELECT COUNT(*) AS total FROM tasks').get().total, 2)
+  } finally {
+    database.close()
+  }
+})
+
+test('task cleanup deletes only the oldest bounded batch', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    for (let seed = 100; seed < 100 + TASK_CLEANUP_BATCH_LIMIT + 1; seed += 1) {
+      insertCleanupTask(database, { seed, status: 'succeeded', finishedAt: '2026-01-01T00:00:00.000Z' })
+    }
+    const activeId = insertCleanupTask(database, { seed: 999, status: 'leased' })
+    const preview = previewTaskCleanup(database, { now: '2026-08-20T00:00:00.000Z' })
+    assert.equal(preview.eligibleCount, TASK_CLEANUP_BATCH_LIMIT + 1)
+    assert.equal(preview.selectedCount, TASK_CLEANUP_BATCH_LIMIT)
+    const executed = executeTaskCleanup(database, {
+      previewedAt: preview.previewedAt,
+      expectedCount: preview.eligibleCount,
+      now: '2026-08-20T00:01:00.000Z'
+    })
+    assert.equal(executed.deletedCount, TASK_CLEANUP_BATCH_LIMIT)
+    assert.equal(database.prepare("SELECT COUNT(*) AS total FROM tasks WHERE status = 'succeeded'").get().total, 1)
+    assert.equal(Number(database.prepare('SELECT id FROM tasks WHERE id = ?').get(activeId).id), Number(activeId))
+  } finally {
+    database.close()
   }
 })

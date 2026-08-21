@@ -12,6 +12,9 @@ export const TASK_ERROR_CODE_WHITELIST = Object.freeze([
   'TASK_CANCEL_FAILED',
   'TASK_RETRY_CONFLICT',
   'TASK_RETRY_FAILED',
+  'TASK_CLEANUP_INVALID',
+  'TASK_CLEANUP_CONFLICT',
+  'TASK_CLEANUP_FAILED',
   'TASK_ACTION_CONFLICT',
   'TASK_INPUT_INVALID',
   'TASK_ID_INVALID',
@@ -25,6 +28,8 @@ export const TASK_ERROR_CODE_WHITELIST = Object.freeze([
   'EBOOK_COVER_TASK_TIMEOUT',
   'EBOOK_COVER_TASK_MISSING',
   'EBOOK_COVER_TASK_FAILED',
+  'PROXY_DNS_FAILED',
+  'PROXY_CONNECTION_FAILED',
   'SESSION_REQUIRED',
   'OWNER_REQUIRED',
   'TASK_NETWORK_ERROR',
@@ -124,6 +129,7 @@ export const useTasksStore = defineStore('tasks', () => {
     order: 'desc'
   })
   const actionLoading = reactive({})
+  const cleanupLoading = ref(false)
 
   let requestSequence = 0
   let activeRequest = null
@@ -256,6 +262,49 @@ export const useTasksStore = defineStore('tasks', () => {
     return taskId !== null && Boolean(actionLoading[taskId])
   }
 
+  async function previewCleanup() {
+    if (cleanupLoading.value) return { success: false, code: 'TASK_ACTION_IN_PROGRESS' }
+    cleanupLoading.value = true
+    try {
+      const response = await api.tasks.cleanupPreview()
+      const data = response?.data?.data
+      if (!data || typeof data.previewedAt !== 'string' ||
+        !Number.isSafeInteger(data.eligibleCount) || !Number.isSafeInteger(data.selectedCount) ||
+        !data.policy || !Number.isSafeInteger(data.policy.batchLimit)) {
+        return { success: false, code: 'TASK_CLEANUP_FAILED' }
+      }
+      return { success: true, data }
+    } catch (requestError) {
+      return { success: false, code: safeTaskErrorCode(requestError, 'TASK_CLEANUP_FAILED') }
+    } finally {
+      cleanupLoading.value = false
+    }
+  }
+
+  async function executeCleanup(preview) {
+    if (cleanupLoading.value) return { success: false, code: 'TASK_ACTION_IN_PROGRESS' }
+    if (!preview || typeof preview.previewedAt !== 'string' || !Number.isSafeInteger(preview.eligibleCount)) {
+      return { success: false, code: 'TASK_CLEANUP_INVALID' }
+    }
+    cleanupLoading.value = true
+    try {
+      const response = await api.tasks.cleanupExecute({
+        previewedAt: preview.previewedAt,
+        expectedCount: preview.eligibleCount
+      })
+      const data = response?.data?.data
+      if (!data || !Number.isSafeInteger(data.deletedCount)) {
+        return { success: false, code: 'TASK_CLEANUP_FAILED' }
+      }
+      const refreshResult = await refresh()
+      return { success: true, data, refresh: refreshResult }
+    } catch (requestError) {
+      return { success: false, code: safeTaskErrorCode(requestError, 'TASK_CLEANUP_FAILED') }
+    } finally {
+      cleanupLoading.value = false
+    }
+  }
+
   return {
     tasks,
     pagination,
@@ -263,12 +312,15 @@ export const useTasksStore = defineStore('tasks', () => {
     error,
     filter,
     actionLoading,
+    cleanupLoading,
     hasActiveTasks,
     fetch: fetchTasks,
     refresh,
     setFilters,
     retry,
     cancel,
+    previewCleanup,
+    executeCleanup,
     isActionLoading
   }
 })

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import http from 'node:http'
+import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import express from 'express'
@@ -16,6 +17,7 @@ import {
 } from '../src/services/taskTypeCatalog.js'
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
+process.env.DATA_PATH ??= path.join(os.tmpdir(), 'tasks-route-test-data')
 
 const { createTasksRouter } = await import('../src/routes/tasks.js')
 const { countTasks, createTaskStore, listTasks } = await import('../src/services/taskStore.js')
@@ -83,7 +85,15 @@ function ownerOnly(req, res, next) {
   next()
 }
 
-async function withServer({ listTasks: list, countTasks: count, getTaskById, getTaskRuntime, taskRuntime } = {}, callback) {
+async function withServer({
+  listTasks: list,
+  countTasks: count,
+  getTaskById,
+  previewTaskCleanup,
+  executeTaskCleanup,
+  getTaskRuntime,
+  taskRuntime
+} = {}, callback) {
   const app = express()
   app.use(express.json())
   app.use(
@@ -95,6 +105,8 @@ async function withServer({ listTasks: list, countTasks: count, getTaskById, get
       ...(list ? { listTasks: list } : {}),
       ...(count ? { countTasks: count } : {}),
       ...(getTaskById ? { getTaskById } : {}),
+      ...(previewTaskCleanup ? { previewTaskCleanup } : {}),
+      ...(executeTaskCleanup ? { executeTaskCleanup } : {}),
       ...(getTaskRuntime ? { getTaskRuntime } : {}),
       ...(taskRuntime ? { taskRuntime } : {})
     })
@@ -110,6 +122,72 @@ async function withServer({ listTasks: list, countTasks: count, getTaskById, get
     })
   }
 }
+
+test('task cleanup routes require owner, project aggregate preview, and execute exact preview', async () => {
+  const preview = {
+    previewedAt: '2026-08-20T00:00:00.000Z',
+    eligibleCount: 123,
+    selectedCount: 100,
+    policy: {
+      retentionDays: { succeeded: 30, failed: 90, cancelled: 90 },
+      cutoffAt: {
+        succeeded: '2026-07-21T00:00:00.000Z',
+        failed: '2026-05-22T00:00:00.000Z',
+        cancelled: '2026-05-22T00:00:00.000Z'
+      },
+      batchLimit: 100
+    }
+  }
+  const executeCalls = []
+  await withServer({
+    previewTaskCleanup: () => ({ ...preview, internalIds: [1, 2], path: '/private' }),
+    executeTaskCleanup: (_database, options) => {
+      executeCalls.push(options)
+      return { ...preview, executedAt: '2026-08-20T00:01:00.000Z', deletedCount: 100, internalIds: [1] }
+    }
+  }, async (baseUrl) => {
+    const unauthorized = await fetch(`${baseUrl}/api/tasks/cleanup/preview`, { method: 'POST' })
+    assert.equal(unauthorized.status, 401)
+
+    const previewResponse = await fetch(`${baseUrl}/api/tasks/cleanup/preview`, {
+      method: 'POST', headers: { ...ownerHeaders(), 'content-type': 'application/json' }, body: '{}'
+    })
+    assert.equal(previewResponse.status, 200)
+    const previewBody = await previewResponse.json()
+    assert.deepEqual(previewBody.data, preview)
+    assert.doesNotMatch(JSON.stringify(previewBody), /internalIds|private/u)
+
+    const executeResponse = await fetch(`${baseUrl}/api/tasks/cleanup/execute`, {
+      method: 'POST',
+      headers: { ...ownerHeaders(), 'content-type': 'application/json' },
+      body: JSON.stringify({ previewedAt: preview.previewedAt, expectedCount: preview.eligibleCount })
+    })
+    assert.equal(executeResponse.status, 200)
+    assert.deepEqual(executeCalls, [{ previewedAt: preview.previewedAt, expectedCount: preview.eligibleCount }])
+    assert.equal((await executeResponse.json()).data.deletedCount, 100)
+  })
+})
+
+test('task cleanup routes reject unsupported input and return stable conflict codes', async () => {
+  await withServer({
+    previewTaskCleanup: () => { throw Object.assign(new Error('private path'), { code: 'TASK_CLEANUP_CONFLICT' }) },
+    executeTaskCleanup: () => { throw Object.assign(new Error('private path'), { code: 'TASK_CLEANUP_CONFLICT' }) }
+  }, async (baseUrl) => {
+    const invalidPreview = await fetch(`${baseUrl}/api/tasks/cleanup/preview`, {
+      method: 'POST', headers: { ...ownerHeaders(), 'content-type': 'application/json' }, body: '{"days":1}'
+    })
+    assert.equal(invalidPreview.status, 400)
+    assert.deepEqual(await invalidPreview.json(), { code: 'TASK_CLEANUP_INVALID' })
+
+    const conflict = await fetch(`${baseUrl}/api/tasks/cleanup/execute`, {
+      method: 'POST',
+      headers: { ...ownerHeaders(), 'content-type': 'application/json' },
+      body: JSON.stringify({ previewedAt: '2026-08-20T00:00:00.000Z', expectedCount: 1 })
+    })
+    assert.equal(conflict.status, 409)
+    assert.deepEqual(await conflict.json(), { code: 'TASK_CLEANUP_CONFLICT' })
+  })
+})
 
 function ownerHeaders() {
   return { 'x-test-role': 'owner' }
