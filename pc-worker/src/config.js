@@ -54,7 +54,13 @@ export function applyCommandLineConfig(env = process.env, argv = process.argv.sl
   return env
 }
 
-export function parentProcessIdFromCommandLine(argv = process.argv.slice(2)) {
+export function parentProcessIdFromCommandLine(argv = process.argv.slice(2), currentParentProcessId = process.ppid) {
+  if (argv.includes('--watch-parent')) {
+    if (!Number.isSafeInteger(currentParentProcessId) || currentParentProcessId <= 0) {
+      fail('WORKER_CONFIG_INVALID', 'Worker parent process is invalid.')
+    }
+    return currentParentProcessId
+  }
   const index = argv.indexOf('--parent-pid')
   if (index === -1) return null
   const value = Number(argv[index + 1])

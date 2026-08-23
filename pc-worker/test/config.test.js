@@ -47,6 +47,7 @@ test('Worker rejects a missing scheduled-task NAS base URL value', () => {
 })
 
 test('Worker validates the hidden wrapper parent process id', () => {
+  assert.equal(parentProcessIdFromCommandLine(['--watch-parent'], 4321), 4321)
   assert.equal(parentProcessIdFromCommandLine(['--parent-pid', '1234']), 1234)
   assert.equal(parentProcessIdFromCommandLine([]), null)
   assert.throws(
