@@ -36,7 +36,8 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   ? undefined
   : { skip: 'better-sqlite3 native binding is unavailable locally; Node 22 CI must run this test' }
 
-const resourceMigrations = applicationMigrationRegistry.migrations.filter(({ id }) => id >= '0063_')
+const resourceMigrationIds = new Set(RESOURCE_MODEL_MIGRATIONS.map(({ id }) => id))
+const resourceMigrations = applicationMigrationRegistry.migrations.filter(({ id }) => resourceMigrationIds.has(id))
 const resourceRegistry = createMigrationRegistry(resourceMigrations)
 
 function openDatabase() {

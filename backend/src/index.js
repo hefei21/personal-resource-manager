@@ -66,6 +66,7 @@ import tasksRoutes from './routes/tasks.js'
 import nasScanRootsRoutes from './routes/nasScanRoots.js'
 import resourceDomainImportsRoutes from './routes/resourceDomainImports.js'
 import gitNasRepositoriesRoutes from './routes/gitNasRepositories.js'
+import { createPcWorkerAgentRouter, createPcWorkerOwnerRouter } from './routes/pcWorkers.js'
 import { getDatabase } from './config/database.js'
 import { authenticateToken, requireOwner } from './middlewares/auth.js'
 import { accessLogger, queryLogs, getLogStats, initLogger } from './services/logger.js'
@@ -98,8 +99,8 @@ app.use(cors((req, callback) => {
     origin: allowOrigin ? sourceOrigin : false,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'X-Requested-With', 'Accept', 'Origin'],
-    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    allowedHeaders: ['Content-Type', 'X-Requested-With', 'Accept', 'Origin', 'Authorization', 'X-Worker-Lease'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range', 'X-Content-Sha256', 'ETag'],
     maxAge: 86400
   })
 }))
@@ -308,6 +309,8 @@ app.use('/api/tasks', ...ownerOnly, tasksRoutes)
 app.use('/api/nas-scan-roots', ...ownerOnly, nasScanRootsRoutes)
 app.use('/api/resource-domain-imports', ...ownerOnly, resourceDomainImportsRoutes)
 app.use('/api/git-nas-repositories', ...ownerOnly, gitNasRepositoriesRoutes)
+app.use('/api/pc-workers', ...ownerOnly, createPcWorkerOwnerRouter())
+app.use('/api/pc-worker-agent', createPcWorkerAgentRouter())
 
 // 管理员访问日志接口
 app.get('/api/admin/logs', authenticateToken, requireOwner, (req, res) => {

@@ -45,6 +45,7 @@ import {
   TASK_TARGET_SHAPE
 } from './taskSchema.js'
 import { RESOURCE_MODEL_MIGRATIONS } from './resourceModelSchema.js'
+import { PC_WORKER_MIGRATIONS } from './pcWorkerSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -2101,5 +2102,6 @@ export const applicationMigrationRegistry = createMigrationRegistry([
       }
     }
   },
-  ...RESOURCE_MODEL_MIGRATIONS
+  ...RESOURCE_MODEL_MIGRATIONS,
+  ...PC_WORKER_MIGRATIONS
 ])

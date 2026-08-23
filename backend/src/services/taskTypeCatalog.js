@@ -70,6 +70,10 @@ function safeCounter(value) {
   return Number.isSafeInteger(value) && value >= 0 && value <= MAX_COUNTER ? value : null
 }
 
+function safeBytes(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+
 function safeProgress(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
     ? value
@@ -449,6 +453,22 @@ function projectGitNasImportResult(result) {
   })
 }
 
+function projectContentInspectionInput(input) {
+  if (!isPlainObject(input) || Object.keys(input).length !== 3 || input.schemaVersion !== 1) return null
+  const resourceVersionId = safePositiveInteger(input.resourceVersionId)
+  const contentObjectId = safePositiveInteger(input.contentObjectId)
+  if (resourceVersionId === null || contentObjectId === null) return null
+  return Object.freeze({ schemaVersion: 1, resourceVersionId, contentObjectId })
+}
+
+function projectContentInspectionResult(result) {
+  if (!isPlainObject(result) || result.schemaVersion !== 1 || !isPlainObject(result.output)) return null
+  const sha256 = safeContentHash(result.output.sha256)
+  const bytes = safeBytes(result.output.bytes)
+  if (sha256 === null || bytes === null || typeof result.output.utf8Valid !== 'boolean') return null
+  return Object.freeze({ sha256, bytes, utf8Valid: result.output.utf8Valid })
+}
+
 function createDefinition({
   taskType,
   executionClass,
@@ -630,6 +650,16 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     },
     projectResult: projectNasResourceResult,
     mutexTaskTypes: NAS_RESOURCE_TASK_TYPES
+  }),
+  'content.inspect': createDefinition({
+    taskType: 'content.inspect',
+    executionClass: 'gpu',
+    subjectType: 'resource-version',
+    subjectInputField: 'resourceVersionId',
+    projectInput: projectContentInspectionInput,
+    cloneInput: projectContentInspectionInput,
+    projectResult: projectContentInspectionResult,
+    mutexTaskTypes: ['content.inspect']
   })
 })
 
@@ -726,7 +756,8 @@ export function createTaskRetrySpec(task) {
       processorVersion: definition.processorVersion,
       subjectType: subject.type,
       subjectId: subject.id,
-      subjectVersionId: runIdentity
+      subjectVersionId: runIdentity,
+      ...(contentHash === null ? {} : { subjectContentSha256: contentHash })
     }),
     executionClass: definition.executionClass,
     input,

@@ -1,0 +1,44 @@
+name: PC Worker tests
+
+on:
+  push:
+    branches:
+      - "codex/**"
+    paths:
+      - "pc-worker/**"
+      - ".github/workflows/pc-worker-tests.yml"
+  pull_request:
+    paths:
+      - "pc-worker/**"
+      - ".github/workflows/pc-worker-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pc-worker-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: pc-worker
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Run Worker tests
+        run: npm test
