@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
-import {
+process.env.DATA_PATH ??= path.join(os.tmpdir(), 'search-index-task-processor-data')
+
+const {
   createSearchIndexTaskProcessor,
   normalizeSearchIndexTaskInput,
   SEARCH_INDEX_TASK_ERROR_CODES
-} from '../src/services/searchIndexTaskProcessor.js'
-import { projectTask } from '../src/services/taskTypeCatalog.js'
+} = await import('../src/services/searchIndexTaskProcessor.js')
+const { projectTask } = await import('../src/services/taskTypeCatalog.js')
 
 function task(overrides = {}) {
   return {
