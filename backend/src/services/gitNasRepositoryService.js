@@ -718,7 +718,7 @@ function candidateProjection(row, database) {
   return Object.freeze({
     candidateId: row.candidateId,
     name: row.title,
-    state: imported ? 'imported' : row.state
+    state: row.state === 'active' && imported ? 'imported' : row.state
   })
 }
 

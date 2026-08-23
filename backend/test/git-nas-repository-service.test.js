@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import { normalizeNasScanRules } from '../src/config/nasScan.js'
 import { RESOURCE_MODEL_MIGRATIONS } from '../src/config/resourceModelSchema.js'
+import { createNasScanRootService } from '../src/services/nasScanRootService.js'
 
 let Database = null
 try {
@@ -116,6 +117,56 @@ test('discovers safe Git roots, stops at repository boundaries, and commits reda
   } finally {
     database.close()
     fs.rmSync(rootPath, { recursive: true, force: true })
+  }
+})
+
+test('scan configuration changes fence Git imports and reads until rediscovery', databaseOptions, async () => {
+  const database = createDatabase()
+  const firstRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'git-nas-config-first-'))
+  const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'git-nas-config-second-'))
+  try {
+    for (const [rootPath, contents] of [[firstRoot, '# first\n'], [secondRoot, '# second\n']]) {
+      const repositoryPath = path.join(rootPath, 'sample')
+      fs.mkdirSync(path.join(repositoryPath, '.git'), { recursive: true })
+      fs.writeFileSync(path.join(repositoryPath, 'README.md'), contents)
+    }
+    createRoot(database, firstRoot)
+    await discoverGitNasRepositories({
+      database,
+      scanRootId: 1,
+      rulesVersion: 1,
+      generation: 1,
+      runGit: fakeGitRunner(firstRoot)
+    })
+    await importGitNasCandidate({ database, candidateId: 1, runGit: fakeGitRunner(firstRoot) })
+    assert.equal(readGitNasFile(database, 1, 'README.md').buffer.toString(), '# first\n')
+
+    const rootService = createNasScanRootService()
+    const updated = rootService.update(database, 1, { rootPath: secondRoot })
+    assert.equal(updated.rulesVersion, 2)
+    assert.deepEqual(listGitNasCandidates(database), [{ candidateId: 1, name: 'sample', state: 'missing' }])
+    await assert.rejects(
+      () => importGitNasCandidate({ database, candidateId: 1, runGit: fakeGitRunner(secondRoot) }),
+      (error) => error.code === GIT_NAS_ERROR_CODES.CANDIDATE_STATE_INVALID
+    )
+    assert.throws(
+      () => readGitNasFile(database, 1, 'README.md'),
+      (error) => error.code === GIT_NAS_ERROR_CODES.CANDIDATE_STATE_INVALID
+    )
+
+    await discoverGitNasRepositories({
+      database,
+      scanRootId: 1,
+      rulesVersion: 2,
+      generation: 2,
+      runGit: fakeGitRunner(secondRoot)
+    })
+    assert.deepEqual(listGitNasCandidates(database), [{ candidateId: 1, name: 'sample', state: 'imported' }])
+    assert.equal(readGitNasFile(database, 1, 'README.md').buffer.toString(), '# second\n')
+  } finally {
+    database.close()
+    fs.rmSync(firstRoot, { recursive: true, force: true })
+    fs.rmSync(secondRoot, { recursive: true, force: true })
   }
 })
 

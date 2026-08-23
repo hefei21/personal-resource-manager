@@ -264,11 +264,23 @@ function createService({
       if (!Number.isSafeInteger(nextRulesVersion) || nextRulesVersion < 1 || nextRulesVersion > MAX_RULES_VERSION) {
         fail(NAS_SCAN_ROOT_ERROR_CODES.WRITE_FAILED, 'The NAS scan root rules version is exhausted.')
       }
-      database.transaction(() => database.prepare(`
-        UPDATE ${NAS_SCAN_ROOT_TABLE}
-        SET name = ?, root_path = ?, enabled = ?, rules_json = ?, rules_version = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(name, rootPath, enabled ? 1 : 0, rulesJson, nextRulesVersion, id))()
+      database.transaction(() => {
+        database.prepare(`
+          UPDATE ${NAS_SCAN_ROOT_TABLE}
+          SET name = ?, root_path = ?, enabled = ?, rules_json = ?, rules_version = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(name, rootPath, enabled ? 1 : 0, rulesJson, nextRulesVersion, id)
+        if (scanConfigChanged) {
+          // A Git source is meaningful only under the scan configuration that
+          // most recently discovered it.  Fence reads/imports until a new
+          // discovery validates the same relative path under this revision.
+          database.prepare(`
+            UPDATE ${RESOURCE_SOURCE_TABLE}
+               SET state = 'missing', updated_at = CURRENT_TIMESTAMP
+             WHERE scan_root_id = ? AND source_kind = 'git_nas'
+          `).run(id)
+        }
+      })()
       return projectWithCounts(database, readRoot(database, id))
     } catch (error) {
       mapWriteError(error)
