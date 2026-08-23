@@ -158,6 +158,26 @@ test('task input validation rejects circular JSON and invalid scheduling values 
   )
 })
 
+test('default lease token generation always satisfies the public token contract', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({ database, now: '2026-08-20T01:02:03.000Z' })
+    for (let index = 0; index < 128; index++) {
+      store.enqueue(taskInput({ subjectId: 9000 + index, input: { index } }))
+    }
+    for (let index = 0; index < 128; index++) {
+      const leased = store.leaseNext({ owner: 'token-contract-worker', leaseDurationMs: 1000 })
+      assert.ok(leased)
+      assert.match(leased.leaseToken, /^lease-[A-Za-z0-9_-]{43}$/u)
+      store.markRunning({ id: leased.id, owner: 'token-contract-worker', token: leased.leaseToken })
+      store.succeed({ id: leased.id, owner: 'token-contract-worker', token: leased.leaseToken })
+    }
+  } finally {
+    database.close()
+  }
+})
+
 test('0054 creates the persistent task shape and preserves an existing database', nativeTestOptions, () => {
   const database = new Database(':memory:')
   try {

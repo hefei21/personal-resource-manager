@@ -24,6 +24,14 @@ const CODE_REPOSITORY_TASK_TYPES = Object.freeze([
   'code.repository.reclone'
 ])
 
+const NAS_RESOURCE_TASK_TYPES = Object.freeze([
+  'nas.resource.scan',
+  'nas.resource.repair',
+  'code.repository.git_nas.discover'
+])
+
+const RESOURCE_DOMAIN_SCOPES = new Set(['all', 'documents', 'ebooks', 'music'])
+
 const CODE_CLONE_RESULT_MESSAGES = new Set(['克隆完成'])
 const CODE_SYNC_RESULT_MESSAGES = new Set([
   '同步完成',
@@ -179,6 +187,40 @@ function projectMusicMetadataInput(input) {
   return projectSingleResourceInput(input, 'musicId')
 }
 
+function projectNasResourceInput(input) {
+  if (!isPlainObject(input) || Object.keys(input).length !== 3 ||
+    !Object.hasOwn(input, 'scanRootId') ||
+    !Object.hasOwn(input, 'rulesVersion') ||
+    !Object.hasOwn(input, 'generation')) return null
+  const scanRootId = safePositiveInteger(input.scanRootId)
+  const rulesVersion = safePositiveInteger(input.rulesVersion)
+  const generation = safePositiveInteger(input.generation)
+  if (scanRootId === null || rulesVersion === null || generation === null) return null
+  return Object.freeze({ scanRootId, rulesVersion, generation })
+}
+
+function projectResourceDomainInput(input) {
+  if (!isPlainObject(input)) return null
+  const keys = Object.keys(input)
+  if (!Object.hasOwn(input, 'scope') || keys.some((key) => !['scope', 'cursor', 'batchSize'].includes(key))) return null
+  if (typeof input.scope !== 'string' || !RESOURCE_DOMAIN_SCOPES.has(input.scope)) return null
+  const projected = { scope: input.scope }
+  if (Object.hasOwn(input, 'cursor')) {
+    if (!Number.isSafeInteger(input.cursor) || input.cursor < 0) return null
+    if (input.scope === 'all') return null
+    projected.cursor = input.cursor
+  }
+  if (Object.hasOwn(input, 'batchSize')) {
+    if (!Number.isSafeInteger(input.batchSize) || input.batchSize < 1 || input.batchSize > 1000) return null
+    projected.batchSize = input.batchSize
+  }
+  return Object.freeze(projected)
+}
+
+function projectGitNasImportInput(input) {
+  return projectSingleResourceInput(input, 'candidateId')
+}
+
 function cloneCodeRepositoryInput(input) {
   const projected = projectCodeRepositoryInput(input)
   return projected === null ? null : Object.freeze({ repoId: projected.repoId })
@@ -324,6 +366,89 @@ function projectMusicMetadataResult(result) {
   return projectMetadataReparseResult(result, 'musicId')
 }
 
+function projectNasResourceResult(result) {
+  if (!isPlainObject(result)) return null
+  const projected = {}
+  let hasValue = false
+  const generation = safePositiveInteger(result.generation)
+  if (generation !== null) {
+    projected.generation = generation
+    hasValue = true
+  }
+  const rulesVersion = safePositiveInteger(result.rulesVersion)
+  if (rulesVersion !== null) {
+    projected.rulesVersion = rulesVersion
+    hasValue = true
+  }
+  for (const key of ['visitedEntries', 'files', 'excluded']) {
+    const value = safeCounter(result[key])
+    if (value !== null) {
+      projected[key] = value
+      hasValue = true
+    }
+  }
+  if (isPlainObject(result.counts)) {
+    const counts = {}
+    let hasCount = false
+    for (const key of ['added', 'moved', 'modified', 'unchanged', 'excluded', 'errors', 'missing', 'conflicts']) {
+      const value = safeCounter(result.counts[key])
+      if (value !== null) {
+        counts[key] = value
+        hasCount = true
+      }
+    }
+    if (hasCount) {
+      projected.counts = Object.freeze(counts)
+      hasValue = true
+    }
+  }
+  return hasValue ? Object.freeze(projected) : null
+}
+
+function projectCounterResult(result, keys) {
+  if (!isPlainObject(result)) return null
+  const projected = {}
+  let hasValue = false
+  for (const key of keys) {
+    const value = safeCounter(result[key])
+    if (value !== null) {
+      projected[key] = value
+      hasValue = true
+    }
+  }
+  return hasValue ? Object.freeze(projected) : null
+}
+
+function projectResourceDomainResult(result) {
+  return projectCounterResult(result, [
+    'processed', 'resourcesCreated', 'resourcesReused', 'sourcesCreated',
+    'versionsCreated', 'versionsReused', 'contentObjectsCreated',
+    'contentObjectsReused', 'missingContent', 'missingRecords', 'errors', 'conflicts', 'skipped'
+  ])
+}
+
+function projectGitNasDiscoveryResult(result) {
+  return projectCounterResult(result, [
+    'generation', 'rulesVersion', 'visitedEntries', 'candidates', 'rejected',
+    'created', 'existing', 'missing'
+  ])
+}
+
+function projectGitNasImportResult(result) {
+  if (!isPlainObject(result)) return null
+  const repositoryId = safePositiveInteger(result.repositoryId)
+  const resourceId = safePositiveInteger(result.resourceId)
+  const status = result.status === 'imported' || result.status === 'already-imported'
+    ? result.status
+    : null
+  if (repositoryId === null && resourceId === null && status === null) return null
+  return Object.freeze({
+    ...(repositoryId === null ? {} : { repositoryId }),
+    ...(resourceId === null ? {} : { resourceId }),
+    ...(status === null ? {} : { status })
+  })
+}
+
 function createDefinition({
   taskType,
   executionClass,
@@ -440,6 +565,71 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     cloneInput: cloneMusicMetadataInput,
     projectResult: projectMusicMetadataResult,
     mutexTaskTypes: ['music.metadata.reparse']
+  }),
+  'resource.domain.adapt': createDefinition({
+    taskType: 'resource.domain.adapt',
+    executionClass: 'disk',
+    subjectType: 'resource-domain-import',
+    subjectId: 'owner',
+    projectInput: projectResourceDomainInput,
+    cloneInput: (input) => {
+      const projected = projectResourceDomainInput(input)
+      return projected === null ? null : Object.freeze({ ...projected })
+    },
+    projectResult: projectResourceDomainResult,
+    mutexTaskTypes: ['resource.domain.adapt']
+  }),
+  'code.repository.git_nas.discover': createDefinition({
+    taskType: 'code.repository.git_nas.discover',
+    executionClass: 'disk',
+    subjectType: 'nas-scan-root',
+    subjectInputField: 'scanRootId',
+    projectInput: projectNasResourceInput,
+    cloneInput: (input) => {
+      const projected = projectNasResourceInput(input)
+      return projected === null ? null : Object.freeze({ ...projected })
+    },
+    projectResult: projectGitNasDiscoveryResult,
+    mutexTaskTypes: NAS_RESOURCE_TASK_TYPES
+  }),
+  'code.repository.git_nas.import': createDefinition({
+    taskType: 'code.repository.git_nas.import',
+    executionClass: 'disk',
+    subjectType: 'git-nas-candidate',
+    subjectInputField: 'candidateId',
+    projectInput: projectGitNasImportInput,
+    cloneInput: (input) => {
+      const projected = projectGitNasImportInput(input)
+      return projected === null ? null : Object.freeze({ candidateId: projected.candidateId })
+    },
+    projectResult: projectGitNasImportResult,
+    mutexTaskTypes: ['code.repository.git_nas.import']
+  }),
+  'nas.resource.scan': createDefinition({
+    taskType: 'nas.resource.scan',
+    executionClass: 'disk',
+    subjectType: 'nas-scan-root',
+    subjectInputField: 'scanRootId',
+    projectInput: projectNasResourceInput,
+    cloneInput: (input) => {
+      const projected = projectNasResourceInput(input)
+      return projected === null ? null : Object.freeze({ ...projected })
+    },
+    projectResult: projectNasResourceResult,
+    mutexTaskTypes: NAS_RESOURCE_TASK_TYPES
+  }),
+  'nas.resource.repair': createDefinition({
+    taskType: 'nas.resource.repair',
+    executionClass: 'disk',
+    subjectType: 'nas-scan-root',
+    subjectInputField: 'scanRootId',
+    projectInput: projectNasResourceInput,
+    cloneInput: (input) => {
+      const projected = projectNasResourceInput(input)
+      return projected === null ? null : Object.freeze({ ...projected })
+    },
+    projectResult: projectNasResourceResult,
+    mutexTaskTypes: NAS_RESOURCE_TASK_TYPES
   })
 })
 

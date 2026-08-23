@@ -598,11 +598,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 51 column migrations and eleven registered table transitions', () => {
+test('application registry freezes 51 column migrations and nineteen registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 62)
+  assert.equal(applicationMigrationRegistry.migrations.length, 70)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -641,7 +641,15 @@ test('application registry freezes 51 column migrations and eleven registered ta
       '0059_music_metadata_status',
       '0060_music_metadata_error_code',
       '0061_music_metadata_parser_version',
-      '0062_music_metadata_updated_at'
+      '0062_music_metadata_updated_at',
+      '0063_resources',
+      '0064_resource_domain_links',
+      '0065_content_objects',
+      '0066_resource_versions',
+      '0067_nas_scan_roots',
+      '0068_resource_sources',
+      '0069_nas_scan_entries',
+      '0070_resource_conflict_candidates'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -881,6 +889,31 @@ test('application registry freezes 51 column migrations and eleven registered ta
   assert.deepEqual(
     documentsStorageMigration.sourceVariants.map(({ proofKey }) => proofKey),
     documentStorageProofKeys
+  )
+  assert.deepEqual(
+    applicationMigrationRegistry.migrations.slice(62).map(({ id, compatibility }) => ({
+      id,
+      table: compatibility.table,
+      kind: compatibility.kind,
+      missingTable: compatibility.missingTable,
+      hasStrictTargetProof: Object.hasOwn(compatibility, 'targetProof')
+    })),
+    [
+      ['0063_resources', 'resources'],
+      ['0064_resource_domain_links', 'resource_domain_links'],
+      ['0065_content_objects', 'content_objects'],
+      ['0066_resource_versions', 'resource_versions'],
+      ['0067_nas_scan_roots', 'nas_scan_roots'],
+      ['0068_resource_sources', 'resource_sources'],
+      ['0069_nas_scan_entries', 'nas_scan_entries'],
+      ['0070_resource_conflict_candidates', 'resource_conflict_candidates']
+    ].map(([id, table]) => ({
+      id,
+      table,
+      kind: 'table-transition',
+      missingTable: 'create',
+      hasStrictTargetProof: false
+    }))
   )
 })
 

@@ -208,7 +208,8 @@ test('registers 0055-0062 as ordered expand-only single-column migrations', () =
   )
   const allIds = applicationMigrationRegistry.migrations.map(({ id }) => id)
   assert.equal(allIds[allIds.indexOf('0054_persistent_tasks') + 1], '0055_books_metadata_status')
-  assert.equal(allIds.at(-1), '0062_music_metadata_updated_at')
+  assert.equal(allIds[allIds.indexOf('0055_books_metadata_status') + 7], '0062_music_metadata_updated_at')
+  assert.equal(allIds[allIds.indexOf('0062_music_metadata_updated_at') + 1], '0063_resources')
 
   for (const expected of EXPECTED_METADATA_MIGRATIONS) {
     const migration = metadataMigrations.find(({ id }) => id === expected.id)

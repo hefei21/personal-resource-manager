@@ -27,6 +27,9 @@ import { initRedis, closeRedis, isRedisConnected } from './utils/redis.js'
 import { migrateCompressCovers } from './utils/migration.js'
 import { migrate as migrateAccessLogs } from '../migrate-access-logs.js'
 import { startTaskRuntime, stopTaskRuntime } from './services/taskRuntime.js'
+import './services/nasScanTaskProcessor.js'
+import './services/resourceDomainImportTaskProcessor.js'
+import './services/gitNasTaskProcessor.js'
 
 // 导入安全中间件
 import {
@@ -60,6 +63,9 @@ import blogRoutes from './routes/blog.js'
 import storageConsistencyRoutes from './routes/storageConsistency.js'
 import privateSpaceMigrationRoutes from './routes/privateSpaceMigration.js'
 import tasksRoutes from './routes/tasks.js'
+import nasScanRootsRoutes from './routes/nasScanRoots.js'
+import resourceDomainImportsRoutes from './routes/resourceDomainImports.js'
+import gitNasRepositoriesRoutes from './routes/gitNasRepositories.js'
 import { getDatabase } from './config/database.js'
 import { authenticateToken, requireOwner } from './middlewares/auth.js'
 import { accessLogger, queryLogs, getLogStats, initLogger } from './services/logger.js'
@@ -299,6 +305,9 @@ app.use('/api/blog', ...ownerOnly, blogRoutes)
 app.use('/api/storage-consistency', ...ownerOnly, storageConsistencyRoutes)
 app.use('/api/private-space-migration', ...ownerOnly, privateSpaceMigrationRoutes)
 app.use('/api/tasks', ...ownerOnly, tasksRoutes)
+app.use('/api/nas-scan-roots', ...ownerOnly, nasScanRootsRoutes)
+app.use('/api/resource-domain-imports', ...ownerOnly, resourceDomainImportsRoutes)
+app.use('/api/git-nas-repositories', ...ownerOnly, gitNasRepositoriesRoutes)
 
 // 管理员访问日志接口
 app.get('/api/admin/logs', authenticateToken, requireOwner, (req, res) => {

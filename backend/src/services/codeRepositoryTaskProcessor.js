@@ -436,6 +436,13 @@ function loadRepository(database, repoId, storageRoot) {
      WHERE id = ?
   `).get(repoId)
   if (!repo) throw taskError('REPOSITORY_NOT_FOUND', '代码仓库不存在。', false)
+  // NAS Git repositories are deliberately imported as read-only projections.
+  // Keep this guard before URL validation and before any filesystem/Git write
+  // path so a forged persistent task cannot turn a NAS source into a mutable
+  // desktop repository.
+  if (repo.type === 'git_nas') {
+    throw taskError('GIT_NAS_READ_ONLY', 'NAS Git 仓库为只读来源。', false)
+  }
   if (repo.type !== 'git') {
     throw taskError('SVN_RETIRED', '仅支持 Git 仓库。', false)
   }
