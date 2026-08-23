@@ -264,7 +264,9 @@ export default {
     toggleHidden: (id) => api.put(`/anime/${id}/toggle-hidden`)
   },
   search: {
-    global: (keyword) => api.get('/search', { params: { keyword } })
+    global: (params) => api.get('/search', { params: typeof params === 'string' ? { q: params } : params }),
+    status: () => api.get('/search/status'),
+    refreshIndex: (options = {}) => api.post('/search/index/refresh', options)
   },
   bookSearch: {
     getConfig: () => api.get('/book-search/config'),

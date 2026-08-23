@@ -270,6 +270,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { useAuthStore } from '@/stores/auth'
@@ -277,6 +278,7 @@ import BookReader from '@/mobile/components/BookReader.vue'
 import { NativeButton, NativeIcon, NativePopconfirm } from '@/components/native'
 
 const authStore = useAuthStore()
+const route = useRoute()
 const isGuest = computed(() => authStore.isGuest())
 
 // 搜索
@@ -338,9 +340,19 @@ function showToast(message, type = 'success') {
 }
 
 // 初始化
-onMounted(() => {
-  loadCategories()
-  loadBooks()
+onMounted(async () => {
+  await Promise.all([loadCategories(), loadBooks()])
+  const bookId = Number(route.query.bookId)
+  if (Number.isSafeInteger(bookId) && bookId > 0) {
+    const book = books.value.find((item) => Number(item.id) === bookId)
+    if (book) {
+      const chapterIndex = Number(route.query.chapterIndex)
+      handleRead({
+        ...book,
+        ...(Number.isSafeInteger(chapterIndex) && chapterIndex >= 0 ? { searchChapterIndex: chapterIndex } : {})
+      })
+    }
+  }
 })
 
 // 监听弹窗显示，自动聚焦输入框

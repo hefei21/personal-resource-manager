@@ -751,6 +751,7 @@
 
 <script setup>
 import { ref, onMounted, computed, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { marked } from 'marked'
@@ -773,6 +774,7 @@ import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
 
 const toast = useToast()
+const route = useRoute()
 const { isGuest, canWrite } = usePermission()
 
 // 动态加载 PDF.js (不使用本地 pdfjs-dist,避免版本冲突)
@@ -2323,10 +2325,13 @@ function handleDownloadPreviewFile() {
   }
 }
 
-onMounted(() => {
-  loadCategories()
-  loadAllTags()
-  loadDocuments()
+onMounted(async () => {
+  await Promise.all([loadCategories(), loadAllTags(), loadDocuments()])
+  const documentId = Number(route.query.documentId)
+  if (Number.isSafeInteger(documentId) && documentId > 0) {
+    const row = documents.value.find((item) => Number(item.id) === documentId) || { id: documentId, title: `文档 ${documentId}` }
+    await loadPreviewContent(row)
+  }
 })
 </script>
 

@@ -225,7 +225,8 @@ const taskTypeOptions = [
   { value: 'anime.bangumi.refresh', label: '动漫信息刷新' },
   { value: 'ebook.cover.generate', label: '电子书封面生成' },
   { value: 'ebook.metadata.reparse', label: '电子书元数据重解析' },
-  { value: 'music.metadata.reparse', label: '音乐元数据重解析' }
+  { value: 'music.metadata.reparse', label: '音乐元数据重解析' },
+  { value: 'search.index.refresh', label: '统一搜索索引刷新' }
 ]
 
 const orderOptions = [
@@ -256,7 +257,8 @@ const SUBJECT_LABELS = Object.freeze({
   ebook: '电子书',
   music: '音乐',
   'music-library': '音乐库',
-  'game-library': 'Steam游戏库'
+  'game-library': 'Steam游戏库',
+  'search-index': '统一搜索索引'
 })
 const TASK_ERROR_MESSAGES = Object.freeze({
   TASK_PROCESSOR_FAILED: '任务处理失败，请稍后重试',

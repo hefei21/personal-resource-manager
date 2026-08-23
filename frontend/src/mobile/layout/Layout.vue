@@ -149,6 +149,7 @@ let routeLoadingTimer = null
 // 移动端菜单配置（原生实现，替代 t-menu）
 const menuItems = [
   { value: 'dashboard', label: '仪表盘', iconPath: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z' },
+  { value: 'search', label: '统一搜索', iconPath: 'M9.5 3a6.5 6.5 0 104.05 11.58L19.97 21 21 19.97l-6.42-6.42A6.5 6.5 0 009.5 3zm0 2a4.5 4.5 0 110 9 4.5 4.5 0 010-9z' },
   { value: 'documents', label: '文档管理', iconPath: 'M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z' },
   { value: 'blog', label: '博客管理', iconPath: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z' },
   { value: 'music', label: '音乐管理', iconPath: 'M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z' },
@@ -330,6 +331,7 @@ const passwordError = ref('')
 const pageTitle = computed(() => {
   const titles = {
     Dashboard: '仪表盘',
+    Search: '统一搜索',
     Documents: '文档管理',
     Music: '音乐管理',
     Books: '书籍管理',

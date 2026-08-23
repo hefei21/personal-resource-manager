@@ -523,6 +523,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
 import { marked } from 'marked'
@@ -540,6 +541,7 @@ import {
 } from '@/utils/sanitizeHtml'
 
 const toast = useToast()
+const route = useRoute()
 const { isGuest, canWrite } = usePermission()
 
 // 配置 marked 选项
@@ -1644,9 +1646,17 @@ const categoryOptions = computed(() => {
 
 // 生命周期
 
-onMounted(() => {
-  loadCategories()
-  loadDocuments()
+onMounted(async () => {
+  await Promise.all([loadCategories(), loadDocuments()])
+  const documentId = Number(route.query.documentId)
+  if (Number.isSafeInteger(documentId) && documentId > 0) {
+    const document = documents.value.find((item) => Number(item.id) === documentId) || {
+      id: documentId,
+      title: `文档 ${documentId}`,
+      filePath: ''
+    }
+    await previewDocument(document)
+  }
 })
 
 // 监听视图模式变化
