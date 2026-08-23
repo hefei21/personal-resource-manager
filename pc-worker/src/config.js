@@ -20,6 +20,29 @@ function integer(value, fallback, min, max, fieldName) {
   return parsed
 }
 
+function noProxyEntries(value) {
+  return typeof value === 'string'
+    ? value.split(',').map((entry) => entry.trim()).filter(Boolean)
+    : []
+}
+
+export function ensureNoProxyForUrl(env = process.env, rawUrl) {
+  const hostname = new URL(rawUrl).hostname.toLowerCase()
+  const entries = [...noProxyEntries(env.NO_PROXY), ...noProxyEntries(env.no_proxy)]
+  const unique = []
+  const seen = new Set()
+  for (const entry of [...entries, hostname]) {
+    const key = entry.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(entry)
+  }
+  const value = unique.join(',')
+  env.NO_PROXY = value
+  env.no_proxy = value
+  return value
+}
+
 export function loadConfig(env = process.env) {
   const rawUrl = env.PC_WORKER_NAS_BASE_URL
   if (typeof rawUrl !== 'string' || rawUrl.trim() === '') fail('WORKER_CONFIG_MISSING', 'PC_WORKER_NAS_BASE_URL is required.')
