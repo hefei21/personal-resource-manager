@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { applyCommandLineConfig, ensureNoProxyForUrl, loadConfig } from '../src/config.js'
+import {
+  applyCommandLineConfig,
+  ensureNoProxyForUrl,
+  loadConfig,
+  parentProcessIdFromCommandLine
+} from '../src/config.js'
 
 test('Worker adds the NAS host to both proxy bypass variables without losing existing entries', () => {
   const env = {
@@ -37,6 +42,15 @@ test('Worker accepts a non-secret NAS base URL from the scheduled-task command l
 test('Worker rejects a missing scheduled-task NAS base URL value', () => {
   assert.throws(
     () => applyCommandLineConfig({}, ['--nas-base-url']),
+    (error) => error.code === 'WORKER_CONFIG_INVALID'
+  )
+})
+
+test('Worker validates the hidden wrapper parent process id', () => {
+  assert.equal(parentProcessIdFromCommandLine(['--parent-pid', '1234']), 1234)
+  assert.equal(parentProcessIdFromCommandLine([]), null)
+  assert.throws(
+    () => parentProcessIdFromCommandLine(['--parent-pid', 'invalid']),
     (error) => error.code === 'WORKER_CONFIG_INVALID'
   )
 })

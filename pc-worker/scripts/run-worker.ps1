@@ -19,5 +19,5 @@ $noProxyValue = ($noProxyEntries | Select-Object -Unique) -join ','
 $env:NO_PROXY = $noProxyValue
 $env:no_proxy = $noProxyValue
 Set-Location -LiteralPath $WorkerRoot
-& $NodePath (Join-Path $WorkerRoot 'src\index.js')
+& $NodePath (Join-Path $WorkerRoot 'src\index.js') --parent-pid $PID
 exit $LASTEXITCODE

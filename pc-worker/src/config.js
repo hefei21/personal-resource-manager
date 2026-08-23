@@ -54,6 +54,16 @@ export function applyCommandLineConfig(env = process.env, argv = process.argv.sl
   return env
 }
 
+export function parentProcessIdFromCommandLine(argv = process.argv.slice(2)) {
+  const index = argv.indexOf('--parent-pid')
+  if (index === -1) return null
+  const value = Number(argv[index + 1])
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    fail('WORKER_CONFIG_INVALID', '--parent-pid requires a positive integer.')
+  }
+  return value
+}
+
 export function loadConfig(env = process.env) {
   const rawUrl = env.PC_WORKER_NAS_BASE_URL
   if (typeof rawUrl !== 'string' || rawUrl.trim() === '') fail('WORKER_CONFIG_MISSING', 'PC_WORKER_NAS_BASE_URL is required.')
