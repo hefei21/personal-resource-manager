@@ -42,6 +42,13 @@ function positiveId(value) {
   return Number.isSafeInteger(value) && value > 0 ? value : null
 }
 
+function targetLimit(value) {
+  if (value === undefined) return 50
+  if (typeof value !== 'string' || !/^[1-9]\d{0,2}$/u.test(value)) return null
+  const parsed = Number(value)
+  return parsed <= 100 ? parsed : null
+}
+
 function bearerToken(req) {
   const authorization = req.get('authorization')
   if (typeof authorization !== 'string') return null
@@ -151,6 +158,36 @@ export function createPcWorkerOwnerRouter({
 
   router.get('/', async (req, res) => {
     try { return res.json({ data: await Promise.resolve(workerList(await database(req))) }) } catch (error) { return mapError(res, error) }
+  })
+
+  router.get('/content-inspection-targets', async (req, res) => {
+    try {
+      const limit = targetLimit(req.query.limit)
+      if (limit === null || Object.keys(req.query).some((key) => key !== 'limit')) {
+        return sendCode(res, 400, 'PC_WORKER_INPUT_INVALID')
+      }
+      const rows = (await database(req)).prepare(`
+        SELECT rv.id AS resource_version_id, rv.resource_id, rv.version_number,
+               r.resource_type, r.title, c.sha256, c.bytes
+        FROM resource_versions rv
+        JOIN content_objects c ON c.id = rv.content_object_id
+        JOIN resources r ON r.id = rv.resource_id
+        WHERE r.lifecycle_status = 'active'
+          AND c.managed_storage_key IS NOT NULL
+        ORDER BY rv.created_at DESC, rv.id DESC
+        LIMIT ?
+      `).all(limit)
+      const data = rows.map((row) => ({
+        resourceVersionId: row.resource_version_id,
+        resourceId: row.resource_id,
+        resourceType: row.resource_type,
+        title: typeof row.title === 'string' ? row.title.slice(0, 256) : null,
+        versionNumber: row.version_number,
+        sha256: row.sha256,
+        bytes: row.bytes
+      }))
+      return res.json({ data })
+    } catch (error) { return mapError(res, error) }
   })
 
   router.post('/enrollments', requireWritePermission, async (req, res) => {

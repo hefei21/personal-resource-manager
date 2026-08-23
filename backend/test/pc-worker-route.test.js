@@ -98,20 +98,23 @@ function fakeStore() {
 }
 
 function fakeDatabase() {
+  const row = {
+    resource_version_id: 7,
+    resource_id: 3,
+    resource_type: 'document',
+    title: 'Fixture',
+    version_number: 1,
+    content_object_id: 9,
+    sha256,
+    bytes: content.length,
+    managed_storage_key: `documents/${sha256.slice(0, 2)}/${sha256}`,
+    lifecycle_status: 'active'
+  }
   return {
     prepare() {
       return {
-        get() {
-          return {
-            resource_version_id: 7,
-            resource_id: 3,
-            content_object_id: 9,
-            sha256,
-            bytes: content.length,
-            managed_storage_key: `documents/${sha256.slice(0, 2)}/${sha256}`,
-            lifecycle_status: 'active'
-          }
-        }
+        get() { return row },
+        all() { return [row] }
       }
     }
   }
@@ -226,6 +229,21 @@ test('Owner route requires Owner and enqueues only managed content identifiers',
 
   await withServer(app, async (baseUrl) => {
     assert.equal((await fetch(`${baseUrl}/workers`)).status, 401)
+    const targets = await fetch(`${baseUrl}/workers/content-inspection-targets?limit=10`, {
+      headers: { 'x-test-role': 'owner' }
+    })
+    assert.equal(targets.status, 200)
+    const targetBody = await targets.json()
+    assert.deepEqual(targetBody.data, [{
+      resourceVersionId: 7,
+      resourceId: 3,
+      resourceType: 'document',
+      title: 'Fixture',
+      versionNumber: 1,
+      sha256,
+      bytes: content.length
+    }])
+    assert.doesNotMatch(JSON.stringify(targetBody), /managed_storage_key|documents\//u)
     const queued = await fetch(`${baseUrl}/workers/content-inspection-tasks`, {
       method: 'POST',
       headers: { 'x-test-role': 'owner', 'content-type': 'application/json' },
