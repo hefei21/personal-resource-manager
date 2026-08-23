@@ -1,7 +1,8 @@
 import { WorkerApiClient } from './apiClient.js'
-import { ensureNoProxyForUrl, loadConfig } from './config.js'
+import { applyCommandLineConfig, ensureNoProxyForUrl, loadConfig } from './config.js'
 import { PcWorker } from './worker.js'
 
+applyCommandLineConfig()
 const config = loadConfig()
 ensureNoProxyForUrl(process.env, config.baseUrl)
 const worker = new PcWorker({

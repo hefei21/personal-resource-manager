@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { ensureNoProxyForUrl, loadConfig } from '../src/config.js'
+import { applyCommandLineConfig, ensureNoProxyForUrl, loadConfig } from '../src/config.js'
 
 test('Worker adds the NAS host to both proxy bypass variables without losing existing entries', () => {
   const env = {
@@ -24,4 +24,19 @@ test('Worker proxy bypass uses the normalized configured NAS hostname', () => {
   })
 
   assert.equal(ensureNoProxyForUrl(env, config.baseUrl), 'nas.example.test')
+})
+
+test('Worker accepts a non-secret NAS base URL from the scheduled-task command line', () => {
+  const env = {}
+
+  applyCommandLineConfig(env, ['--nas-base-url', 'https://stage5.example.test'])
+
+  assert.equal(env.PC_WORKER_NAS_BASE_URL, 'https://stage5.example.test')
+})
+
+test('Worker rejects a missing scheduled-task NAS base URL value', () => {
+  assert.throws(
+    () => applyCommandLineConfig({}, ['--nas-base-url']),
+    (error) => error.code === 'WORKER_CONFIG_INVALID'
+  )
 })

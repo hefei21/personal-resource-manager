@@ -43,6 +43,17 @@ export function ensureNoProxyForUrl(env = process.env, rawUrl) {
   return value
 }
 
+export function applyCommandLineConfig(env = process.env, argv = process.argv.slice(2)) {
+  const index = argv.indexOf('--nas-base-url')
+  if (index === -1) return env
+  const value = argv[index + 1]
+  if (typeof value !== 'string' || value === '' || value.startsWith('--')) {
+    fail('WORKER_CONFIG_INVALID', '--nas-base-url requires a value.')
+  }
+  env.PC_WORKER_NAS_BASE_URL = value
+  return env
+}
+
 export function loadConfig(env = process.env) {
   const rawUrl = env.PC_WORKER_NAS_BASE_URL
   if (typeof rawUrl !== 'string' || rawUrl.trim() === '') fail('WORKER_CONFIG_MISSING', 'PC_WORKER_NAS_BASE_URL is required.')
