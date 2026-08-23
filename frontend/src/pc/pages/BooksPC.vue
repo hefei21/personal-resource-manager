@@ -653,6 +653,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import BookSearchDialog from '@/components/BookSearchDialog.vue'
@@ -668,6 +669,7 @@ import { generateCFI, parseCFI, scrollToCFI, getCurrentCFI, ChapterBoundaryCache
 import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 
 const toast = useToast()
+const route = useRoute()
 
 const { isGuest } = usePermission()
 
@@ -1444,6 +1446,11 @@ async function handleRead(row) {
       }
     } else {
       console.log('📖 游客模式：不加载阅读进度，从开头开始阅读')
+    }
+
+    if (Number.isSafeInteger(row.searchChapterIndex) && row.searchChapterIndex >= 0 && row.searchChapterIndex < bookChapters.value.length) {
+      currentChapterIndex.value = row.searchChapterIndex
+      row.cfi = null
     }
 
     // 进度加载完成后更新 currentBook 状态
@@ -2225,9 +2232,19 @@ function handleVisibilityChange() {
   }
 }
 
-onMounted(() => {
-  loadCategories()
-  loadBooks()
+onMounted(async () => {
+  await Promise.all([loadCategories(), loadBooks()])
+  const bookId = Number(route.query.bookId)
+  if (Number.isSafeInteger(bookId) && bookId > 0) {
+    const book = books.value.find((item) => Number(item.id) === bookId)
+    if (book) {
+      const chapterIndex = Number(route.query.chapterIndex)
+      await handleRead({
+        ...book,
+        ...(Number.isSafeInteger(chapterIndex) && chapterIndex >= 0 ? { searchChapterIndex: chapterIndex } : {})
+      })
+    }
+  }
   // 监听页面卸载和标签页切换
   window.addEventListener('beforeunload', handleBeforeUnload)
   document.addEventListener('visibilitychange', handleVisibilityChange)

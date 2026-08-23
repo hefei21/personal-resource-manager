@@ -138,6 +138,7 @@ let routeLoadingTimer = null
 // 菜单配置
 const menuItems = [
   { value: 'dashboard', label: '仪表盘', icon: 'dashboard' },
+  { value: 'search', label: '统一搜索', icon: 'search' },
   { value: 'documents', label: '文档管理', icon: 'file' },
   { value: 'blog', label: '博客管理', icon: 'edit-1' },
   { value: 'music', label: '音乐管理', icon: 'music' },
@@ -213,6 +214,7 @@ const passwordError = ref('')
 const pageTitle = computed(() => {
   const titles = {
     Dashboard: '仪表盘',
+    Search: '统一搜索',
     Documents: '文档管理',
     Music: '音乐管理',
     Books: '书籍管理',

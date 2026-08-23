@@ -30,6 +30,7 @@ import { startTaskRuntime, stopTaskRuntime } from './services/taskRuntime.js'
 import './services/nasScanTaskProcessor.js'
 import './services/resourceDomainImportTaskProcessor.js'
 import './services/gitNasTaskProcessor.js'
+import './services/searchIndexTaskProcessor.js'
 
 // 导入安全中间件
 import {

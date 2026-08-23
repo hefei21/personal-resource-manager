@@ -292,10 +292,13 @@
 
 <script setup>
 import { ref, onMounted, computed, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '@/api'
 import { MdEditor, MdPreview } from 'md-editor-v3'
 import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 import 'md-editor-v3/lib/style.css'
+
+const route = useRoute()
 import 'md-editor-v3/lib/preview.css'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
@@ -579,10 +582,10 @@ async function handleDeleteCategory(id) {
   }
 }
 
-onMounted(() => {
-  loadPosts()
-  loadCategories()
-  loadTags()
+onMounted(async () => {
+  await Promise.all([loadPosts(), loadCategories(), loadTags()])
+  const postId = Number(route.query.postId)
+  if (Number.isSafeInteger(postId) && postId > 0) await handlePreview({ id: postId })
 })
 </script>
 

@@ -359,6 +359,12 @@ async function openBook() {
       console.log('📖 游客模式：不加载阅读进度，从开头开始阅读')
     }
 
+    if (Number.isSafeInteger(props.book.searchChapterIndex) &&
+        props.book.searchChapterIndex >= 0 && props.book.searchChapterIndex < totalChapterCount.value) {
+      startIndex = props.book.searchChapterIndex
+      savedCFI = null
+    }
+
     currentChapterIndex.value = startIndex
 
     // 同时加载目标章+相邻章

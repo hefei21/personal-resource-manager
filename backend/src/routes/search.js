@@ -1,69 +1,129 @@
+import { randomUUID } from 'node:crypto'
 import express from 'express'
+
 import { getDatabase } from '../config/database.js'
-import { authenticateToken } from '../middlewares/auth.js'
+import { requireOwner, requireWritePermission } from '../middlewares/auth.js'
+import { createSearchIndexService, SEARCH_INDEX_ERROR_CODES, SearchIndexError } from '../services/searchIndexService.js'
+import { collectSearchEntries } from '../services/searchSourceCollector.js'
+import {
+  SEARCH_INDEX_EXECUTION_CLASS,
+  SEARCH_INDEX_PROCESSOR_VERSION,
+  SEARCH_INDEX_TASK_TYPE
+} from '../services/searchIndexTaskProcessor.js'
+import { enqueueExclusiveRun } from '../services/taskStore.js'
+import { getTaskRuntime as defaultGetTaskRuntime } from '../services/taskRuntime.js'
+import { projectTask } from '../services/taskTypeCatalog.js'
 
-const router = express.Router()
+const SUBJECT_TYPE = 'search-index'
+const SUBJECT_ID = 'owner'
 
-// 全局搜索
-router.get('/', authenticateToken, async (req, res) => {
-  try {
-    const { keyword } = req.query
-    if (!keyword) {
-      return res.status(400).json({ message: '请输入搜索关键词' })
-    }
-
-    const db = getDatabase()
-    const searchPattern = `%${keyword}%`
-
-    // 同步查询所有资源类型
-    const documentStmt = db.prepare(
-      'SELECT id, title, category, "document" as type FROM documents WHERE title LIKE ? OR tags LIKE ?'
-    )
-    const documentResults = documentStmt.all(searchPattern, searchPattern)
-
-    const musicStmt = db.prepare(
-      'SELECT id, title, artist, "music" as type FROM music WHERE title LIKE ? OR artist LIKE ? OR tags LIKE ?'
-    )
-    const musicResults = musicStmt.all(searchPattern, searchPattern, searchPattern)
-
-    const codeStmt = db.prepare(
-      'SELECT id, name, url, "code" as type FROM code_repositories WHERE name LIKE ? OR url LIKE ? OR tags LIKE ?'
-    )
-    const codeResults = codeStmt.all(searchPattern, searchPattern, searchPattern)
-
-    const bookmarkStmt = db.prepare(
-      'SELECT id, title, url, "bookmark" as type FROM bookmarks WHERE title LIKE ? OR url LIKE ? OR tags LIKE ?'
-    )
-    const bookmarkResults = bookmarkStmt.all(searchPattern, searchPattern, searchPattern)
-
-    const animeStmt = db.prepare(
-      'SELECT id, title, "anime" as type FROM anime WHERE title LIKE ?'
-    )
-    const animeResults = animeStmt.all(searchPattern)
-
-    const allResults = [
-      ...documentResults,
-      ...musicResults,
-      ...codeResults,
-      ...bookmarkResults,
-      ...animeResults
-    ]
-
-    res.json({
-      data: allResults,
-      total: allResults.length,
-      summary: {
-        documents: documentResults.length,
-        music: musicResults.length,
-        code: codeResults.length,
-        bookmarks: bookmarkResults.length,
-        anime: animeResults.length
-      }
-    })
-  } catch (error) {
-    console.error('搜索错误:', error)
-    res.status(500).json({ message: '搜索失败' })
-  }
+export const SEARCH_ROUTE_ERROR_CODES = Object.freeze({
+  INPUT_INVALID: 'SEARCH_INPUT_INVALID',
+  INDEX_MISSING: 'SEARCH_INDEX_MISSING',
+  INDEX_UNAVAILABLE: 'SEARCH_INDEX_UNAVAILABLE',
+  REFRESH_CONFLICT: 'SEARCH_INDEX_REFRESH_CONFLICT',
+  REFRESH_FAILED: 'SEARCH_INDEX_REFRESH_FAILED'
 })
 
-export default router
+function sendError(res, status, code) {
+  return res.status(status).json({ code })
+}
+
+function normalizeRefreshBody(body) {
+  const source = body === undefined || body === null ? {} : body
+  if (!source || typeof source !== 'object' || Array.isArray(source) ||
+      Object.keys(source).some((key) => !['rebuild', 'includeCodeFiles'].includes(key))) {
+    const error = new Error('Search refresh input is invalid.')
+    error.code = SEARCH_ROUTE_ERROR_CODES.INPUT_INVALID
+    throw error
+  }
+  const rebuild = source.rebuild === undefined ? false : source.rebuild
+  const includeCodeFiles = source.includeCodeFiles === undefined ? true : source.includeCodeFiles
+  if (typeof rebuild !== 'boolean' || typeof includeCodeFiles !== 'boolean') {
+    const error = new Error('Search refresh input is invalid.')
+    error.code = SEARCH_ROUTE_ERROR_CODES.INPUT_INVALID
+    throw error
+  }
+  return Object.freeze({ rebuild, includeCodeFiles })
+}
+
+function queryError(res, error) {
+  if (error instanceof SearchIndexError) {
+    if (error.code === SEARCH_INDEX_ERROR_CODES.INPUT_INVALID) return sendError(res, 400, SEARCH_ROUTE_ERROR_CODES.INPUT_INVALID)
+    if (error.code === SEARCH_INDEX_ERROR_CODES.INDEX_MISSING) return sendError(res, 503, SEARCH_ROUTE_ERROR_CODES.INDEX_MISSING)
+  }
+  return sendError(res, 500, SEARCH_ROUTE_ERROR_CODES.INDEX_UNAVAILABLE)
+}
+
+function defaultDatabaseProvider(req) {
+  return getDatabase(req)
+}
+
+export function createSearchRouter({
+  databaseProvider = defaultDatabaseProvider,
+  collectEntries = collectSearchEntries,
+  serviceFactory = createSearchIndexService,
+  taskRuntimeProvider = defaultGetTaskRuntime,
+  enqueue = enqueueExclusiveRun,
+  runIdentityFactory = randomUUID
+} = {}) {
+  const router = express.Router()
+  router.use(requireOwner)
+
+  router.get('/status', async (req, res) => {
+    try {
+      const database = await databaseProvider(req)
+      const service = serviceFactory({ database, collectEntries })
+      return res.json({ data: service.getStatus() })
+    } catch (error) {
+      return queryError(res, error)
+    }
+  })
+
+  router.post('/index/refresh', requireWritePermission, async (req, res) => {
+    let input
+    try { input = normalizeRefreshBody(req.body) } catch { return sendError(res, 400, SEARCH_ROUTE_ERROR_CODES.INPUT_INVALID) }
+    try {
+      const database = await databaseProvider(req)
+      const runtime = taskRuntimeProvider()
+      const store = runtime?.getStore?.()
+      const enqueueOperation = store && typeof store.enqueueExclusiveRun === 'function'
+        ? (value, options) => store.enqueueExclusiveRun(value, options)
+        : (value, options) => enqueue(database, value, options)
+      const taskInput = {
+        taskType: SEARCH_INDEX_TASK_TYPE,
+        processorVersion: SEARCH_INDEX_PROCESSOR_VERSION,
+        subjectType: SUBJECT_TYPE,
+        subjectId: SUBJECT_ID,
+        subjectVersionId: String(runIdentityFactory()).slice(0, 128),
+        executionClass: SEARCH_INDEX_EXECUTION_CLASS,
+        input
+      }
+      const outcome = await Promise.resolve(enqueueOperation(taskInput, { mutexTaskTypes: [SEARCH_INDEX_TASK_TYPE] }))
+      if (!outcome || outcome.activeConflict === true || outcome.outcome === 'active-conflict') {
+        return sendError(res, 409, SEARCH_ROUTE_ERROR_CODES.REFRESH_CONFLICT)
+      }
+      const data = projectTask(outcome.task)
+      if (!data || data.taskType !== SEARCH_INDEX_TASK_TYPE) return sendError(res, 500, SEARCH_ROUTE_ERROR_CODES.REFRESH_FAILED)
+      return res.status(202).json({ data })
+    } catch (error) {
+      if (error?.code === 'TASK_STATE_CONFLICT') return sendError(res, 409, SEARCH_ROUTE_ERROR_CODES.REFRESH_CONFLICT)
+      return sendError(res, 500, SEARCH_ROUTE_ERROR_CODES.REFRESH_FAILED)
+    }
+  })
+
+  router.get('/', async (req, res) => {
+    try {
+      const database = await databaseProvider(req)
+      const service = serviceFactory({ database, collectEntries })
+      return res.json(service.query({ ...req.query, q: req.query.q ?? req.query.keyword }))
+    } catch (error) {
+      return queryError(res, error)
+    }
+  })
+
+  return router
+}
+
+export { normalizeRefreshBody as normalizeSearchRefreshBody }
+export default createSearchRouter()

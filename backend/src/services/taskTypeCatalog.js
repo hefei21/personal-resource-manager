@@ -165,6 +165,14 @@ function projectEmptyInput(input) {
   return isPlainObject(input) && Object.keys(input).length === 0 ? Object.freeze({}) : null
 }
 
+function projectSearchIndexInput(input) {
+  if (!isPlainObject(input) || Object.keys(input).some((key) => !['rebuild', 'includeCodeFiles'].includes(key))) return null
+  const rebuild = input.rebuild === undefined ? false : input.rebuild
+  const includeCodeFiles = input.includeCodeFiles === undefined ? true : input.includeCodeFiles
+  if (typeof rebuild !== 'boolean' || typeof includeCodeFiles !== 'boolean') return null
+  return Object.freeze({ rebuild, includeCodeFiles })
+}
+
 function projectAnimeRefreshInput(input) {
   if (!isPlainObject(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input, 'animeId')) return null
   const animeId = safePositiveInteger(input.animeId)
@@ -243,6 +251,11 @@ function cloneMusicLyricsInput(input) {
 function cloneEmptyInput(input) {
   const projected = projectEmptyInput(input)
   return projected === null ? null : Object.freeze({})
+}
+
+function cloneSearchIndexInput(input) {
+  const projected = projectSearchIndexInput(input)
+  return projected === null ? null : Object.freeze({ ...projected })
 }
 
 function cloneAnimeRefreshInput(input) {
@@ -423,6 +436,15 @@ function projectCounterResult(result, keys) {
   return hasValue ? Object.freeze(projected) : null
 }
 
+function projectSearchIndexResult(result) {
+  const projected = projectCounterResult(result, [
+    'inserted', 'updated', 'skipped', 'deleted', 'entryCount', 'errorCount'
+  ])
+  if (!projected) return null
+  const status = ['ready', 'partial'].includes(result.status) ? result.status : null
+  return Object.freeze({ ...projected, ...(status ? { status } : {}) })
+}
+
 function projectResourceDomainResult(result) {
   return projectCounterResult(result, [
     'processed', 'resourcesCreated', 'resourcesReused', 'sourcesCreated',
@@ -598,6 +620,16 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     },
     projectResult: projectResourceDomainResult,
     mutexTaskTypes: ['resource.domain.adapt']
+  }),
+  'search.index.refresh': createDefinition({
+    taskType: 'search.index.refresh',
+    executionClass: 'disk',
+    subjectType: 'search-index',
+    subjectId: 'owner',
+    projectInput: projectSearchIndexInput,
+    cloneInput: cloneSearchIndexInput,
+    projectResult: projectSearchIndexResult,
+    mutexTaskTypes: ['search.index.refresh']
   }),
   'code.repository.git_nas.discover': createDefinition({
     taskType: 'code.repository.git_nas.discover',

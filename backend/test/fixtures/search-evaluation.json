@@ -1,0 +1,32 @@
+[
+  {
+    "id": "note-unified-search",
+    "q": "统一搜索",
+    "filters": { "type": "note" },
+    "expected": [{ "entryKey": "note:1", "locator": { "route": "/blog", "postId": 1 } }]
+  },
+  {
+    "id": "code-function-line",
+    "q": "buildUnifiedSearch",
+    "filters": { "type": "code_file" },
+    "expected": [{ "entryKey": "code-file:2:src/search.js", "locator": { "route": "/code", "repositoryId": 2, "path": "src/search.js", "line": 2 } }]
+  },
+  {
+    "id": "document-body",
+    "q": "增量索引",
+    "filters": { "type": "document" },
+    "expected": [{ "entryKey": "document:3", "locator": { "route": "/documents", "documentId": 3 } }]
+  },
+  {
+    "id": "ebook-chapter",
+    "q": "故障恢复",
+    "filters": { "type": "ebook_chapter" },
+    "expected": [{ "entryKey": "ebook-chapter:4:2", "locator": { "route": "/books", "bookId": 4, "chapterIndex": 2 } }]
+  },
+  {
+    "id": "audio-author",
+    "q": "现场录音",
+    "filters": { "type": "audio", "author": "Owner" },
+    "expected": [{ "entryKey": "audio:5", "locator": { "route": "/music", "musicId": 5 } }]
+  }
+]

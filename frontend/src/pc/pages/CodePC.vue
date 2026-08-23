@@ -154,6 +154,7 @@
                   <span class="file-title">
                     <NativeIcon :name="isMarkdownFile(currentFile.name) ? 'file-text' : 'file'" />
                     {{ currentFile.name }}
+                    <span v-if="currentFile.searchLine" class="search-line-badge">第 {{ currentFile.searchLine }} 行</span>
                   </span>
                   <NativeButton size="small" theme="default" variant="text" @click="closeFile">
                     <template #icon><NativeIcon name="x" /></template>
@@ -308,10 +309,13 @@
 
 <script setup>
 import { ref, onMounted, computed, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '@/api'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { usePermission } from '@/composables/usePermission'
+
+const route = useRoute()
 import { 
   NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, 
   NativeCheckbox, NativeLoading, NativeEmpty, NativeIcon, NativeSpace, 
@@ -914,13 +918,16 @@ async function onTreeSelect(keys, node) {
 }
 
 // 加载文件内容
-async function loadFile(path) {
+async function loadFile(path, searchLine = null) {
   if (!currentRepo.value) return
   fileLoading.value = true
   console.log('========== 开始加载文件 ==========', path)
   try {
     const response = await api.code.getFile(currentRepo.value.id, path)
-    currentFile.value = response.data.data
+    currentFile.value = {
+      ...response.data.data,
+      ...(Number.isSafeInteger(searchLine) && searchLine > 0 ? { searchLine } : {})
+    }
     console.log('文件加载完成:', {
       name: currentFile.value?.name,
       type: currentFile.value?.type,
@@ -1166,7 +1173,21 @@ function formatDate(dateStr) {
   return date.toLocaleDateString('zh-CN')
 }
 
-onMounted(() => loadRepos())
+onMounted(async () => {
+  await loadRepos()
+  const repositoryId = Number(route.query.repositoryId)
+  if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) return
+  let repository = repoList.value.find((item) => Number(item.id) === repositoryId)
+  if (!repository) {
+    try { repository = (await api.code.get(repositoryId)).data?.data } catch { return }
+  }
+  if (!repository) return
+  await openRepo(repository)
+  if (typeof route.query.path === 'string' && route.query.path) {
+    const line = Number(route.query.line)
+    await loadFile(route.query.path, Number.isSafeInteger(line) && line > 0 ? line : null)
+  }
+})
 </script>
 
 <style scoped>
@@ -1528,6 +1549,15 @@ onMounted(() => loadRepos())
   font-weight: 500;
   font-size: 14px;
   color: #333;
+}
+
+.search-line-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .file-content {

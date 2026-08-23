@@ -278,8 +278,11 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '@/api'
 import { usePermission } from '@/composables/usePermission'
+
+const route = useRoute()
 import { 
   NativeButton, NativeInput, NativeDialog, NativeLoading, 
   NativeIcon, NativeTag, NativeForm, NativeFormItem,
@@ -734,7 +737,27 @@ function formatDate(dateStr) {
   return date.toLocaleDateString('zh-CN')
 }
 
-onMounted(() => loadRepos())
+onMounted(async () => {
+  await loadRepos()
+  const repositoryId = Number(route.query.repositoryId)
+  if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) return
+  let repository = repoList.value.find((item) => Number(item.id) === repositoryId)
+  if (!repository) {
+    try { repository = (await api.code.get(repositoryId)).data?.data } catch { return }
+  }
+  if (!repository) return
+  await openRepo(repository)
+  if (typeof route.query.path === 'string' && route.query.path) {
+    activeTab.value = 'files'
+    const line = Number(route.query.line)
+    await previewFile({
+      name: route.query.path.split('/').pop(),
+      path: route.query.path,
+      type: 'file',
+      ...(Number.isSafeInteger(line) && line > 0 ? { searchLine: line } : {})
+    })
+  }
+})
 
 // 组件卸载时清理定时器
 onUnmounted(() => {
