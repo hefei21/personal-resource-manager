@@ -6,10 +6,12 @@ on:
       - "codex/**"
     paths:
       - "backend/**"
+      - "pc-worker/src/**"
       - ".github/workflows/backend-tests.yml"
   pull_request:
     paths:
       - "backend/**"
+      - "pc-worker/src/**"
       - ".github/workflows/backend-tests.yml"
   workflow_dispatch:
 
