@@ -1,0 +1,66 @@
+[
+  {
+    "id": "javascript-qualified-method",
+    "q": "SearchService.query",
+    "filters": { "type": "code_file" },
+    "expected": [
+      {
+        "targetId": "javascript-qualified-method",
+        "locator": {
+          "route": "/code",
+          "repositoryId": 1,
+          "path": "src/search.js",
+          "line": 2,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    ]
+  },
+  {
+    "id": "python-qualified-method",
+    "q": "RepositoryIndexer.index",
+    "filters": { "type": "code_file" },
+    "expected": [
+      {
+        "targetId": "python-qualified-method",
+        "locator": {
+          "route": "/code",
+          "repositoryId": 2,
+          "path": "lib/indexer.py",
+          "line": 2,
+          "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    ]
+  },
+  {
+    "id": "same-name-cross-repository",
+    "q": "start",
+    "filters": { "type": "code_file" },
+    "expected": [
+      {
+        "targetId": "javascript-start",
+        "locator": { "repositoryId": 1, "path": "src/worker.js", "line": 2 }
+      },
+      {
+        "targetId": "python-start",
+        "locator": { "repositoryId": 2, "path": "lib/worker.py", "line": 2 }
+      }
+    ]
+  },
+  {
+    "id": "cross-file-natural-language",
+    "q": "retry policy",
+    "filters": { "type": "code_file" },
+    "expected": [
+      {
+        "targetId": "javascript-retry-policy",
+        "locator": { "repositoryId": 1, "path": "src/retry.js", "line": 1 }
+      },
+      {
+        "targetId": "python-retry-policy",
+        "locator": { "repositoryId": 2, "path": "lib/retry.py", "line": 1 }
+      }
+    ]
+  }
+]

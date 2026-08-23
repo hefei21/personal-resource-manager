@@ -47,6 +47,7 @@ import {
 import { RESOURCE_MODEL_MIGRATIONS } from './resourceModelSchema.js'
 import { PC_WORKER_MIGRATIONS } from './pcWorkerSchema.js'
 import { SEARCH_INDEX_MIGRATIONS } from './searchIndexSchema.js'
+import { CODE_SYMBOL_INDEX_MIGRATIONS } from './codeSymbolIndexSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -2105,5 +2106,6 @@ export const applicationMigrationRegistry = createMigrationRegistry([
   },
   ...RESOURCE_MODEL_MIGRATIONS,
   ...PC_WORKER_MIGRATIONS,
-  ...SEARCH_INDEX_MIGRATIONS
+  ...SEARCH_INDEX_MIGRATIONS,
+  ...CODE_SYMBOL_INDEX_MIGRATIONS
 ])

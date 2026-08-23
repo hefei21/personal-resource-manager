@@ -220,7 +220,7 @@ export default {
     delete: (id) => api.delete(`/code/${id}`),
     get: (id) => api.get(`/code/${id}`),
     getTree: (id, path) => api.get(`/code/${id}/tree`, { params: { path } }),
-    getFile: (id, path) => api.get(`/code/${id}/file`, { params: { path } }),
+    getFile: (id, path, commit) => api.get(`/code/${id}/file`, { params: { path, ...(commit ? { commit } : {}) } }),
     getReadme: (id) => api.get(`/code/${id}/readme`),
     getCommits: (id, limit) => api.get(`/code/${id}/commits`, { params: { limit } }),
     getCommitDetail: (id, hash) => api.get(`/code/${id}/commit/${hash}`),

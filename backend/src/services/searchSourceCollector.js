@@ -304,19 +304,19 @@ function collectAudio(database) {
   }))
 }
 
-function isSensitiveFile(relativePath) {
+export function isSensitiveCodeFile(relativePath) {
   const normalized = relativePath.replaceAll('\\', '/')
   const segments = normalized.split('/')
   if (segments.some((segment) => EXCLUDED_DIRECTORIES.has(segment.toLocaleLowerCase('und')))) return true
   return SENSITIVE_FILENAMES.some((pattern) => pattern.test(segments.at(-1) ?? ''))
 }
 
-function isCodeTextFile(relativePath) {
+export function isCodeTextFile(relativePath) {
   const name = path.basename(relativePath).toLocaleLowerCase('und')
   return CODE_TEXT_EXTENSIONS.has(path.extname(name)) || CODE_TEXT_FILENAMES.has(name)
 }
 
-function safeCodeText(buffer) {
+export function safeCodeText(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length > MAX_CODE_FILE_BYTES || buffer.includes(0)) return null
   const text = buffer.toString('utf8')
   if (CREDENTIAL_CONTENT_PATTERNS.some((pattern) => pattern.test(text))) return null
@@ -335,7 +335,7 @@ function collectGitNasFiles(database, repository, dependencies, signal) {
     const children = dependencies.listGitNasTree(database, repository.id, current.path)
     for (const child of children) {
       if (files.length >= MAX_CODE_FILES) break
-      if (isSensitiveFile(child.path)) continue
+      if (isSensitiveCodeFile(child.path)) continue
       if (child.type === 'directory') {
         queue.push({ path: child.path, depth: current.depth + 1 })
       } else if (child.size <= MAX_CODE_FILE_BYTES && isCodeTextFile(child.path)) {
@@ -369,7 +369,7 @@ function collectManagedFiles(repository, dependencies, signal) {
     for (const child of children) {
       if (files.length >= MAX_CODE_FILES) break
       const relativePath = current.relativePath ? `${current.relativePath}/${child.name}` : child.name
-      if (isSensitiveFile(relativePath) || child.isSymbolicLink()) continue
+      if (isSensitiveCodeFile(relativePath) || child.isSymbolicLink()) continue
       if (child.isDirectory()) {
         queue.push({
           absolutePath: path.join(current.absolutePath, child.name),

@@ -76,11 +76,12 @@ test('requires an Owner principal before exposing status, query, or refresh rout
     })
     assert.equal(demoRefresh.status, 403)
 
-    const owner = await fetch(`${baseUrl}/api/search?keyword=unified`, {
+    const owner = await fetch(`${baseUrl}/api/search?keyword=unified&mode=hybrid`, {
       headers: { 'x-test-principal': 'owner' }
     })
     assert.equal(owner.status, 200)
     assert.equal(queryCalls.length, 1)
     assert.equal(queryCalls[0].q, 'unified')
+    assert.equal(queryCalls[0].mode, 'hybrid')
   })
 })

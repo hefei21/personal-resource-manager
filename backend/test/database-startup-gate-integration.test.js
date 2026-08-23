@@ -598,11 +598,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 51 column migrations and twenty-four registered table transitions', () => {
+test('application registry freezes 51 column migrations and twenty-seven registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 75)
+  assert.equal(applicationMigrationRegistry.migrations.length, 78)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -654,7 +654,10 @@ test('application registry freezes 51 column migrations and twenty-four register
       '0072_pc_worker_enrollments',
       '0073_pc_worker_credentials',
       '0074_search_index_entries',
-      '0075_search_index_fts'
+      '0075_search_index_fts',
+      '0076_code_symbol_snapshots',
+      '0077_code_symbol_entries',
+      '0078_code_symbol_repository_state'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -916,7 +919,10 @@ test('application registry freezes 51 column migrations and twenty-four register
       ['0072_pc_worker_enrollments', 'pc_worker_enrollments'],
       ['0073_pc_worker_credentials', 'pc_worker_credentials'],
       ['0074_search_index_entries', 'search_index_entries'],
-      ['0075_search_index_fts', 'search_index_state']
+      ['0075_search_index_fts', 'search_index_state'],
+      ['0076_code_symbol_snapshots', 'code_symbol_snapshots'],
+      ['0077_code_symbol_entries', 'code_symbol_entries'],
+      ['0078_code_symbol_repository_state', 'code_symbol_repository_state']
     ].map(([id, table]) => ({
       id,
       table,

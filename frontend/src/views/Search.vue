@@ -3,7 +3,7 @@
     <section class="search-hero">
       <div>
         <h1>统一搜索</h1>
-        <p>由 NAS 本机 SQLite FTS5 提供，PC Worker 离线也可搜索。</p>
+        <p>由 NAS 本机 SQLite FTS5 与 commit 绑定符号索引提供，PC Worker 离线也可搜索。</p>
       </div>
       <button class="secondary-button" :disabled="refreshing" @click="refreshIndex(false)">
         {{ refreshing ? '索引任务运行中…' : '刷新索引' }}
@@ -15,6 +15,7 @@
         <strong>{{ indexStatusLabel }}</strong>
         <span v-if="indexStatus.lastCompletedAt">最近完成：{{ formatTime(indexStatus.lastCompletedAt) }}</span>
         <span>条目：{{ indexStatus.entryCount || 0 }}</span>
+        <span v-if="indexStatus.symbols">符号：{{ indexStatus.symbols.symbolCount || 0 }}</span>
       </div>
       <div v-if="indexStatus.pcWorker?.status === 'offline'" class="offline-note">
         PC Worker 离线；关键词检索不受影响。
@@ -117,7 +118,7 @@
           <div class="result-title-row">
             <span class="type-badge">{{ typeLabel(item.resourceType) }}</span>
             <h2>{{ item.title }}</h2>
-            <span v-if="item.indexStatus !== 'ready'" class="metadata-badge">仅元数据</span>
+            <span v-if="item.indexStatus !== 'ready'" class="metadata-badge">{{ itemStatusLabel(item.indexStatus) }}</span>
           </div>
           <p v-if="item.subtitle" class="result-subtitle">{{ item.subtitle }}</p>
           <p class="result-snippet">{{ item.snippet }}</p>
@@ -125,6 +126,7 @@
             <span>{{ locatorLabel(item) }}</span>
             <span v-if="item.author">作者：{{ item.author }}</span>
             <span v-if="item.source?.label">来源：{{ item.source.label }}</span>
+            <span v-if="item.locator?.commit">提交：{{ item.locator.commit.slice(0, 12) }}</span>
             <span v-if="item.matchedFields?.length">匹配：{{ item.matchedFields.join('、') }}</span>
           </div>
           <div v-if="item.tags?.length" class="tag-list">
@@ -294,6 +296,9 @@ function locatorLabel(item) {
 }
 
 function typeLabel(type) { return typeLabels[type] || type }
+function itemStatusLabel(status) {
+  return ({ stale: '索引已过期', partial: '部分索引', metadata_only: '仅元数据' })[status] || status
+}
 function formatTime(value) { return value ? new Date(value).toLocaleString('zh-CN') : '—' }
 function previousPage() { offset.value = Math.max(0, offset.value - pageSize); runSearch(false) }
 function nextPage() { offset.value += pageSize; runSearch(false) }

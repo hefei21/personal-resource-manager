@@ -27,6 +27,7 @@ const {
   createGitNasReadOnlyRunner,
   discoverGitNasRepositories,
   getGitNasRepository,
+  inspectReadOnlyGitSnapshot,
   importGitNasCandidate,
   listGitNasCandidates,
   listGitNasTree,
@@ -276,5 +277,54 @@ test('read-only Git runner validates complete argv and strips inherited Git cont
     assert.equal(calls.length, 1)
   } finally {
     delete process.env.GIT_TEST_INJECTION
+  }
+})
+
+test('inspects a clean full-commit snapshot with tracked files and detached-head semantics', async () => {
+  const rootPath = fs.mkdtempSync(path.join(os.tmpdir(), 'git-snapshot-'))
+  const repositoryPath = path.join(rootPath, 'repository')
+  fs.mkdirSync(path.join(repositoryPath, '.git'), { recursive: true })
+  fs.writeFileSync(path.join(repositoryPath, 'index.js'), 'export function index() {}\n')
+  const calls = []
+  const runGit = async (currentPath, args) => {
+    calls.push(args)
+    assert.equal(currentPath, repositoryPath)
+    if (args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') return { stdout: 'true\n' }
+    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { stdout: `${repositoryPath}\n` }
+    if (args[0] === 'ls-files') return { stdout: `100644 ${'a'.repeat(40)} 0\tindex.js\0` }
+    if (args[0] === 'status') return { stdout: '' }
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: `${'b'.repeat(40)}\n` }
+    if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return { stdout: 'HEAD\n' }
+    throw new Error(`unexpected fake command ${args.join(' ')}`)
+  }
+  try {
+    const snapshot = await inspectReadOnlyGitSnapshot({ repositoryPath, rootPath, runGit })
+    assert.equal(snapshot.commit, 'b'.repeat(40))
+    assert.equal(snapshot.branch, null)
+    assert.deepEqual(snapshot.files, ['index.js'])
+    assert.ok(calls.some((args) => args[0] === 'status'))
+  } finally {
+    fs.rmSync(rootPath, { recursive: true, force: true })
+  }
+})
+
+test('rejects dirty tracked worktrees before exposing a commit snapshot', async () => {
+  const rootPath = fs.mkdtempSync(path.join(os.tmpdir(), 'git-snapshot-dirty-'))
+  const repositoryPath = path.join(rootPath, 'repository')
+  fs.mkdirSync(path.join(repositoryPath, '.git'), { recursive: true })
+  const runGit = async (_currentPath, args) => {
+    if (args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') return { stdout: 'true\n' }
+    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return { stdout: `${repositoryPath}\n` }
+    if (args[0] === 'ls-files') return { stdout: '' }
+    if (args[0] === 'status') return { stdout: ' M index.js\0' }
+    throw new Error(`unexpected fake command ${args.join(' ')}`)
+  }
+  try {
+    await assert.rejects(
+      () => inspectReadOnlyGitSnapshot({ repositoryPath, rootPath, runGit }),
+      (error) => error.code === GIT_NAS_ERROR_CODES.WORKTREE_DIRTY
+    )
+  } finally {
+    fs.rmSync(rootPath, { recursive: true, force: true })
   }
 })
