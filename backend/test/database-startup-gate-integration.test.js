@@ -598,11 +598,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 51 column migrations and nineteen registered table transitions', () => {
+test('application registry freezes 51 column migrations and twenty-two registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 70)
+  assert.equal(applicationMigrationRegistry.migrations.length, 73)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -649,7 +649,10 @@ test('application registry freezes 51 column migrations and nineteen registered 
       '0067_nas_scan_roots',
       '0068_resource_sources',
       '0069_nas_scan_entries',
-      '0070_resource_conflict_candidates'
+      '0070_resource_conflict_candidates',
+      '0071_pc_workers',
+      '0072_pc_worker_enrollments',
+      '0073_pc_worker_credentials'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -906,7 +909,10 @@ test('application registry freezes 51 column migrations and nineteen registered 
       ['0067_nas_scan_roots', 'nas_scan_roots'],
       ['0068_resource_sources', 'resource_sources'],
       ['0069_nas_scan_entries', 'nas_scan_entries'],
-      ['0070_resource_conflict_candidates', 'resource_conflict_candidates']
+      ['0070_resource_conflict_candidates', 'resource_conflict_candidates'],
+      ['0071_pc_workers', 'pc_workers'],
+      ['0072_pc_worker_enrollments', 'pc_worker_enrollments'],
+      ['0073_pc_worker_credentials', 'pc_worker_credentials']
     ].map(([id, table]) => ({
       id,
       table,
