@@ -1,5 +1,9 @@
 import { WorkerApiError } from './apiClient.js'
 import { inspectContent } from './contentInspector.js'
+import {
+  createRagEmbeddingProcessor,
+  embeddingProcessorsForConfig
+} from './ragEmbeddingProcessor.js'
 import { readState, stateFromCredentialResponse, writeState } from './stateStore.js'
 import { collectProfile } from './telemetry.js'
 
@@ -18,6 +22,14 @@ function failureFor(error) {
   if (error?.code === 'WORKER_INPUT_MISMATCH') {
     return { code: 'WORKER_INPUT_MISMATCH', summary: 'Authorized content identity mismatch.', retryable: false }
   }
+  if (error?.code === 'WORKER_PROCESSOR_CANCELLED') {
+    return { code: 'WORKER_PROCESSOR_CANCELLED', summary: 'Worker processing was cancelled.', retryable: false }
+  }
+  if (['WORKER_PROCESSOR_UNSUPPORTED', 'WORKER_EMBEDDING_INPUT_INVALID', 'WORKER_EMBEDDING_INPUT_TOO_LARGE', 'WORKER_EMBEDDING_BATCH_INVALID',
+    'WORKER_EMBEDDING_MODEL_MISMATCH', 'WORKER_EMBEDDING_TASK_INVALID', 'WORKER_EMBEDDING_RESPONSE_INVALID',
+    'WORKER_EMBEDDING_RESULT_INVALID', 'WORKER_EMBEDDING_NOT_CONFIGURED'].includes(error?.code)) {
+    return { code: 'WORKER_PROCESSOR_INPUT_INVALID', summary: 'Worker processor input was rejected.', retryable: false }
+  }
   if (error instanceof WorkerApiError && error.status >= 400 && error.status < 500) {
     return { code: 'WORKER_REQUEST_REJECTED', summary: 'NAS rejected the active task request.', retryable: false }
   }
@@ -25,7 +37,8 @@ function failureFor(error) {
 }
 
 export class PcWorker {
-  constructor({ config, api, logger = console, profileProvider = collectProfile, stateReader = readState, stateWriter = writeState }) {
+  constructor({ config, api, logger = console, profileProvider = collectProfile, stateReader = readState, stateWriter = writeState,
+    embeddingProcessorFactory = createRagEmbeddingProcessor, fetchImpl = fetch }) {
     this.config = config
     this.api = api
     this.logger = logger
@@ -37,6 +50,31 @@ export class PcWorker {
     this.lastProfileAt = 0
     this.stopping = false
     this.statePromise = null
+    this.embeddingProcessor = embeddingProcessorFactory({ config: config?.embedding, fetchImpl })
+    this.activeController = null
+  }
+
+  profileWithConfiguredProcessors(profile) {
+    const extra = embeddingProcessorsForConfig(this.config?.embedding)
+    if (!profile?.capabilities || !Array.isArray(profile.capabilities.processors)) return profile
+    const embeddingTaskTypes = new Set(['rag.embedding.generate', 'rag.query.embed'])
+    const existing = profile.capabilities.processors.filter((item) => !embeddingTaskTypes.has(item?.taskType))
+    if (extra.length === 0 && existing.length === profile.capabilities.processors.length) return profile
+    const keys = new Set(existing.map((item) => `${item.taskType}:${item.processorVersion}:${item.executionClass}:${item.outputSchemaVersion}`))
+    const processors = [...existing]
+    for (const processor of extra) {
+      const key = `${processor.taskType}:${processor.processorVersion}:${processor.executionClass}:${processor.outputSchemaVersion}`
+      if (keys.has(key)) continue
+      keys.add(key)
+      processors.push(processor)
+    }
+    return {
+      ...profile,
+      capabilities: {
+        ...profile.capabilities,
+        processors
+      }
+    }
   }
 
   saveCredentials(data) {
@@ -46,7 +84,7 @@ export class PcWorker {
 
   async ensureStateInternal() {
     this.state ??= this.stateReader(this.config.statePath)
-    if (!this.profile) this.profile = await this.profileProvider(this.config.displayName)
+    if (!this.profile) this.profile = this.profileWithConfiguredProcessors(await this.profileProvider(this.config.displayName))
     if (!this.state) {
       if (!this.config.enrollmentToken) {
         throw Object.assign(new Error('Worker is not paired; PC_WORKER_ENROLLMENT_TOKEN is required once.'), { code: 'WORKER_NOT_ENROLLED' })
@@ -71,7 +109,7 @@ export class PcWorker {
 
   async refreshProfileIfDue() {
     if (Date.now() - this.lastProfileAt < PROFILE_REFRESH_MS) return
-    this.profile = await this.profileProvider(this.config.displayName)
+    this.profile = this.profileWithConfiguredProcessors(await this.profileProvider(this.config.displayName))
     await this.api.updateProfile(this.state.accessToken, this.profile)
     this.lastProfileAt = Date.now()
   }
@@ -79,6 +117,8 @@ export class PcWorker {
   async execute(task) {
     let heartbeatTimer
     let heartbeatBusy = false
+    const controller = new AbortController()
+    this.activeController = controller
     try {
       await this.api.start(this.state.accessToken, task)
       heartbeatTimer = setInterval(() => {
@@ -90,17 +130,29 @@ export class PcWorker {
       }, this.config.heartbeatIntervalMs)
       heartbeatTimer.unref?.()
 
-      await this.ensureState()
-      const response = await this.api.input(this.state.accessToken, task)
-      const headerHash = response.headers.get('x-content-sha256')
-      const headerBytes = Number(response.headers.get('content-length'))
-      if (headerHash !== task.input.sha256 || !Number.isSafeInteger(headerBytes) || headerBytes < 0) {
-        throw Object.assign(new Error('Authorized input headers are inconsistent.'), { code: 'WORKER_INPUT_MISMATCH', retryable: false })
+      let result
+      if (task.taskType === 'content.inspect') {
+        await this.ensureState()
+        const response = await this.api.input(this.state.accessToken, task)
+        const headerHash = response.headers.get('x-content-sha256')
+        const headerBytes = Number(response.headers.get('content-length'))
+        if (headerHash !== task.input.sha256 || !Number.isSafeInteger(headerBytes) || headerBytes < 0) {
+          throw Object.assign(new Error('Authorized input headers are inconsistent.'), { code: 'WORKER_INPUT_MISMATCH', retryable: false })
+        }
+        result = await inspectContent(response.body, { sha256: task.input.sha256, bytes: headerBytes })
+      } else if (this.embeddingProcessor.supports(task.taskType)) {
+        result = await this.embeddingProcessor.process(task, { signal: controller.signal })
+      } else {
+        throw Object.assign(new Error('Worker processor is not configured.'), { code: 'WORKER_PROCESSOR_UNSUPPORTED', retryable: false })
       }
-      const result = await inspectContent(response.body, { sha256: task.input.sha256, bytes: headerBytes })
       await this.ensureState()
       await this.api.complete(this.state.accessToken, task, result)
-      safeLog(this.logger, 'info', 'task_succeeded', { taskId: task.id, bytes: result.output.bytes })
+      safeLog(this.logger, 'info', 'task_succeeded', {
+        taskId: task.id,
+        ...(Number.isSafeInteger(result?.output?.bytes) ? { bytes: result.output.bytes } : {}),
+        ...(Array.isArray(result?.output?.vectors) ? { vectorCount: result.output.vectors.length } : {}),
+        ...(Array.isArray(result?.output?.embedding) ? { dimensions: result.output.embedding.length } : {})
+      })
     } catch (error) {
       const failure = failureFor(error)
       try {
@@ -111,6 +163,7 @@ export class PcWorker {
       throw error
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer)
+      if (this.activeController === controller) this.activeController = null
     }
   }
 
@@ -139,5 +192,6 @@ export class PcWorker {
 
   stop() {
     this.stopping = true
+    this.activeController?.abort()
   }
 }

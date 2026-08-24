@@ -63,3 +63,78 @@ test('Worker enrolls once, persists credentials, and completes an authorized tas
     fs.rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test('Worker declares embedding capabilities only when local configuration is complete', async () => {
+  const profiles = []
+  const embedding = {
+    baseUrl: 'http://127.0.0.1:1234',
+    provider: 'local-provider',
+    modelId: 'embedding-model',
+    modelRevision: 'rev-1',
+    dimensions: 3,
+    inputLimit: 2048,
+    maxBatchItems: 4,
+    maxInputBytes: 1024 * 1024,
+    timeoutMs: 2_000,
+    configHash: 'a'.repeat(64),
+    apiKey: null
+  }
+  const api = {
+    enroll: async (_token, value) => {
+      profiles.push(value)
+      return {
+        worker: { id: 'pcw-embedding' }, accessToken: 'access', accessExpiresAt: '2999-01-01T00:00:00.000Z',
+        refreshToken: 'refresh', refreshExpiresAt: '2999-02-01T00:00:00.000Z'
+      }
+    },
+    updateProfile: async (_token, value) => profiles.push(value),
+    claim: async () => null,
+    refresh: async () => { throw new Error('refresh must not be called') }
+  }
+  const worker = new PcWorker({
+    config: {
+      statePath: path.join(os.tmpdir(), 'pc-worker-embedding-state.json'),
+      enrollmentToken: 'enroll',
+      displayName: 'Worker',
+      heartbeatIntervalMs: 20_000,
+      pollIntervalMs: 1_000,
+      embedding
+    },
+    api,
+    logger: { info() {}, warn() {} },
+    profileProvider: async () => profile(),
+    stateReader: () => null,
+    stateWriter: (_path, state) => state
+  })
+  assert.equal(await worker.runOnce(), false)
+  assert.equal(profiles.length >= 1, true)
+  assert.equal(profiles.every((value) => value.capabilities.processors.some((item) => item.taskType === 'rag.embedding.generate')), true)
+  assert.equal(profiles.every((value) => value.capabilities.processors.some((item) => item.taskType === 'rag.query.embed')), true)
+})
+
+test('Worker removes stale embedding capabilities when local configuration is absent', async () => {
+  const profiles = []
+  const api = {
+    enroll: async (_token, value) => {
+      profiles.push(value)
+      return {
+        worker: { id: 'pcw-no-embedding' }, accessToken: 'access', accessExpiresAt: '2999-01-01T00:00:00.000Z',
+        refreshToken: 'refresh', refreshExpiresAt: '2999-02-01T00:00:00.000Z'
+      }
+    },
+    updateProfile: async (_token, value) => profiles.push(value),
+    claim: async () => null
+  }
+  const staleProfile = profile()
+  staleProfile.capabilities.processors.push({ taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1 })
+  const worker = new PcWorker({
+    config: { statePath: path.join(os.tmpdir(), 'pc-worker-no-embedding-state.json'), enrollmentToken: 'enroll', displayName: 'Worker', heartbeatIntervalMs: 20_000, pollIntervalMs: 1_000 },
+    api,
+    logger: { info() {}, warn() {} },
+    profileProvider: async () => staleProfile,
+    stateReader: () => null,
+    stateWriter: (_path, state) => state
+  })
+  assert.equal(await worker.runOnce(), false)
+  assert.equal(profiles.every((value) => value.capabilities.processors.every((item) => !item.taskType.startsWith('rag.'))), true)
+})

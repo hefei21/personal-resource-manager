@@ -55,3 +55,32 @@ test('Worker validates the hidden wrapper parent process id', () => {
     (error) => error.code === 'WORKER_CONFIG_INVALID'
   )
 })
+
+test('Worker only enables explicit complete embedding configuration', () => {
+  const disabled = loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    LOCALAPPDATA: 'C:\\worker-test'
+  })
+  assert.equal(disabled.embedding, null)
+
+  const enabled = loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_EMBEDDINGS_BASE_URL: 'http://127.0.0.1:1234',
+    PC_WORKER_EMBEDDINGS_PROVIDER: 'local-provider',
+    PC_WORKER_EMBEDDINGS_MODEL_ID: 'embedding-model',
+    PC_WORKER_EMBEDDINGS_MODEL_REVISION: 'rev-1',
+    PC_WORKER_EMBEDDINGS_DIMENSIONS: '3',
+    PC_WORKER_EMBEDDINGS_CONFIG_HASH: 'a'.repeat(64),
+    LOCALAPPDATA: 'C:\\worker-test'
+  })
+  assert.equal(enabled.embedding.baseUrl, 'http://127.0.0.1:1234')
+  assert.equal(enabled.embedding.modelId, 'embedding-model')
+  assert.equal(enabled.embedding.dimensions, 3)
+  assert.equal(Object.isFrozen(enabled.embedding), true)
+  assert.throws(() => loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_EMBEDDINGS_BASE_URL: 'https://worker.example.test',
+    PC_WORKER_EMBEDDINGS_MODEL_ID: 'embedding-model',
+    LOCALAPPDATA: 'C:\\worker-test'
+  }), (error) => error.code === 'WORKER_CONFIG_INVALID')
+})
