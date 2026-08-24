@@ -133,6 +133,43 @@ test('rejects forged citations and returns a stable schema degradation', async (
   assert.equal(result.abstained, true)
 })
 
+test('projects an abstained Worker result without model answer text or citations', async () => {
+  const answer = service()
+  const queued = await answer.generate({ query: 'What is supported?', evidence: [evidence()] })
+  const result = await answer.applyResult({
+    task: queued.task,
+    result: workerResult(queued.task, {
+      answer: 'UNSUPPORTED_SECRET_CONTENT',
+      abstained: true,
+      citations: ['C1'],
+      reasonCode: 'MODEL_ABSTAINED'
+    })
+  })
+  assert.equal(result.status, 'abstained')
+  assert.equal(result.abstained, true)
+  assert.equal(result.answer, null)
+  assert.deepEqual(result.citations, [])
+  assert.doesNotMatch(JSON.stringify(result), /UNSUPPORTED_SECRET_CONTENT/u)
+})
+
+test('does not let an abstained sentinel bypass forged citation validation', async () => {
+  const answer = service()
+  const queued = await answer.generate({ query: 'What is supported?', evidence: [evidence()] })
+  const result = await answer.applyResult({
+    task: queued.task,
+    result: workerResult(queued.task, {
+      answer: 'UNSUPPORTED_SECRET_CONTENT',
+      abstained: true,
+      citations: ['C999'],
+      reasonCode: 'MODEL_ABSTAINED'
+    })
+  })
+  assert.equal(result.status, 'degraded')
+  assert.equal(result.abstained, true)
+  assert.equal(result.answer, null)
+  assert.doesNotMatch(JSON.stringify(result), /UNSUPPORTED_SECRET_CONTENT/u)
+})
+
 test('drops an answer when permission or active snapshot is revoked after generation', async () => {
   let allowed = true
   let active = true

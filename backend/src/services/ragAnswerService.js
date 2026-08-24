@@ -420,7 +420,9 @@ export class RagAnswerService {
       return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), allowed, degradedReason(error))
     }
     const output = normalized.output
-    const selectedCitations = output.citations.map((citation) => byCitation.get(citation)).filter(Boolean)
+    const selectedCitations = output.abstained
+      ? []
+      : output.citations.map((citation) => byCitation.get(citation)).filter(Boolean)
     const after = await this.#authorize(selectedCitations, { phase: 'after_result', task })
     if (after.length !== selectedCitations.length) {
       return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), after, 'evidence_stale')
@@ -432,11 +434,11 @@ export class RagAnswerService {
       status: output.abstained ? 'abstained' : 'complete',
       query: context?.query ?? '',
       language: context?.language ?? detectLanguage(projectedInput.query),
-      answer: output.answer ?? null,
+      answer: output.abstained ? null : output.answer ?? null,
       abstained: output.abstained,
       reasonCode: output.reasonCode ?? (output.abstained ? 'model_abstained' : 'grounded'),
       degraded: false,
-      citations: this.#publicReferences(after),
+      citations: output.abstained ? [] : this.#publicReferences(after),
       task
     })
   }

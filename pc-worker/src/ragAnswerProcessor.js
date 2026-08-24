@@ -327,7 +327,7 @@ function normalizeResult(value, evidence, config, truncated) {
   if (value.answer !== undefined) {
     if (typeof value.answer !== 'string') fail('WORKER_ANSWER_RESULT_INVALID', 'Answer result answer is invalid.')
     const normalizedAnswer = value.answer.normalize('NFKC').trim()
-    if (normalizedAnswer) {
+    if (normalizedAnswer && !value.abstained) {
       const answer = contentText(normalizedAnswer, 'answer.result.answer', config.maxOutputBytes)
       if (EXTERNAL_URL.test(answer)) fail('WORKER_ANSWER_RESULT_INVALID', 'Answer result contains an external URL.')
       output.answer = answer

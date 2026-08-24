@@ -103,9 +103,12 @@ test('answer processor refuses forged citations and unknown result fields', asyn
 
   const abstainedWithCitation = createRagAnswerProcessor({
     config,
-    fetchImpl: async () => response({ answer: '证据不足。', abstained: true, reasonCode: 'insufficient', citations: ['C1'] })
+    fetchImpl: async () => response({ answer: 'UNSUPPORTED_SECRET_CONTENT', abstained: true, reasonCode: 'insufficient', citations: ['C1'] })
   })
-  assert.deepEqual((await abstainedWithCitation.process(task())).output.citations, [])
+  const abstainedResult = (await abstainedWithCitation.process(task())).output
+  assert.deepEqual(abstainedResult.citations, [])
+  assert.equal(Object.hasOwn(abstainedResult, 'answer'), false)
+  assert.doesNotMatch(JSON.stringify(abstainedResult), /UNSUPPORTED_SECRET_CONTENT/u)
 })
 
 test('no evidence abstains without calling the model', async () => {
