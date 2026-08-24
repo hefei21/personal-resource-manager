@@ -598,11 +598,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 51 column migrations and thirty-one registered table transitions', () => {
+test('application registry freezes 51 column migrations and thirty-four registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 82)
+  assert.equal(applicationMigrationRegistry.migrations.length, 85)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -661,7 +661,10 @@ test('application registry freezes 51 column migrations and thirty-one registere
       '0079_rag_source_snapshots',
       '0080_rag_source_state',
       '0081_rag_chunks',
-      '0082_rag_chunks_fts'
+      '0082_rag_chunks_fts',
+      '0083_rag_embedding_models',
+      '0084_rag_chunk_embeddings',
+      '0085_rag_snapshot_embedding_state'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -930,7 +933,10 @@ test('application registry freezes 51 column migrations and thirty-one registere
       ['0079_rag_source_snapshots', 'rag_source_snapshots'],
       ['0080_rag_source_state', 'rag_source_state'],
       ['0081_rag_chunks', 'rag_chunks'],
-      ['0082_rag_chunks_fts', 'rag_chunks_fts_meta']
+      ['0082_rag_chunks_fts', 'rag_chunks_fts_meta'],
+      ['0083_rag_embedding_models', 'rag_embedding_models'],
+      ['0084_rag_chunk_embeddings', 'rag_chunk_embeddings'],
+      ['0085_rag_snapshot_embedding_state', 'rag_snapshot_embedding_state']
     ].map(([id, table]) => ({
       id,
       table,
