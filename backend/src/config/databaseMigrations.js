@@ -50,6 +50,7 @@ import { SEARCH_INDEX_MIGRATIONS } from './searchIndexSchema.js'
 import { CODE_SYMBOL_INDEX_MIGRATIONS } from './codeSymbolIndexSchema.js'
 import { RAG_INDEX_MIGRATIONS } from './ragIndexSchema.js'
 import { RAG_EMBEDDING_MIGRATIONS } from './ragEmbeddingSchema.js'
+import { RAG_QUERY_RUN_MIGRATIONS } from './ragQueryRunSchema.js'
 
 const sha256 = (value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex')
 
@@ -2111,5 +2112,6 @@ export const applicationMigrationRegistry = createMigrationRegistry([
   ...SEARCH_INDEX_MIGRATIONS,
   ...CODE_SYMBOL_INDEX_MIGRATIONS,
   ...RAG_INDEX_MIGRATIONS,
-  ...RAG_EMBEDDING_MIGRATIONS
+  ...RAG_EMBEDDING_MIGRATIONS,
+  ...RAG_QUERY_RUN_MIGRATIONS
 ])
