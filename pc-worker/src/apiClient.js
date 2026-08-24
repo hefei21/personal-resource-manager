@@ -89,6 +89,36 @@ export class WorkerApiClient {
     })
   }
 
+  async uploadArtifact(accessToken, task, { artifact, metadata } = {}) {
+    if (!artifact || !metadata) throw new WorkerApiError('WORKER_ARTIFACT_UPLOAD_FAILED', 'Artifact metadata is missing.', 0)
+    let serialized
+    try { serialized = JSON.stringify(artifact) } catch (error) {
+      throw new WorkerApiError('WORKER_ARTIFACT_UPLOAD_FAILED', 'Artifact cannot be serialized.', 0, { cause: error })
+    }
+    const headers = {
+      accept: 'application/json',
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/octet-stream',
+      'x-worker-lease': task.leaseToken,
+      'x-artifact-sha256': metadata.artifactSha256,
+      'x-artifact-bytes': String(metadata.artifactBytes),
+      'x-artifact-section-count': String(metadata.sectionCount),
+      'x-artifact-format': metadata.format
+    }
+    let response
+    try {
+      response = await this.fetch(`${this.baseUrl}/api/pc-worker-agent/tasks/${task.id}/artifact`, {
+        method: 'POST', headers, body: serialized, signal: AbortSignal.timeout(this.requestTimeoutMs)
+      })
+    } catch (error) {
+      throw new WorkerApiError('WORKER_ARTIFACT_UPLOAD_FAILED', 'Artifact upload failed.', 0, { cause: error })
+    }
+    if (!response.ok) throw new WorkerApiError(await parseError(response), 'NAS rejected the artifact upload.', response.status)
+    if (response.status === 204) return null
+    const payload = await response.json()
+    return payload.data
+  }
+
   fail(accessToken, task, errorCode, errorSummary, retryable) {
     return this.request(`/tasks/${task.id}/fail`, {
       method: 'POST', token: accessToken,

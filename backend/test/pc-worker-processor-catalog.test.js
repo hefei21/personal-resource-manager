@@ -163,7 +163,7 @@ test('content.inspect keeps schema 1 projection, result normalization, and stale
     (error) => error.code === 'PC_WORKER_PROCESSOR_INPUT_INVALID')
 })
 
-test('content extraction accepts PDF/DOCX/EPUB and verifies the inline artifact identity', () => {
+test('content extraction accepts PDF/DOCX/EPUB metadata and rejects inline artifact text', () => {
   const definition = lookupPcWorkerProcessor('rag.content.extract')
   for (const format of ['pdf', 'docx', 'epub']) {
     const input = definition.projectInput({ ...sourceInput(), format })
@@ -181,11 +181,25 @@ test('content extraction accepts PDF/DOCX/EPUB and verifies the inline artifact 
         artifactSha256,
         artifactBytes,
         sectionCount: 1,
-        manifest: { artifactSha256, artifactBytes, sectionCount: 1, format, sections }
+        format
       }
     }, input)
-    assert.equal(result.output.manifest.format, format)
-    assert.equal(result.output.manifest.sections[0].text, 'Grounded text.')
+    assert.equal(result.output.format, format)
+    assert.equal(Object.hasOwn(result.output, 'manifest'), false)
+    assert.throws(() => definition.normalizeResult({
+      schemaVersion: 1,
+      processorVersion: 'v1',
+      output: {
+        sourceVersionId: input.sourceVersionId,
+        sourceContentSha256: input.sourceContentSha256,
+        extractorVersion: 'pc-worker-structured-text.v1',
+        artifactSha256,
+        artifactBytes,
+        sectionCount: 1,
+        format,
+        manifest: { artifactSha256, artifactBytes, sectionCount: 1, format, sections }
+      }
+    }, input), (error) => error.code === 'PC_WORKER_PROCESSOR_INPUT_INVALID')
   }
 })
 

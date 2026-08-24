@@ -64,6 +64,50 @@ test('Worker enrolls once, persists credentials, and completes an authorized tas
   }
 })
 
+test('Worker uploads extracted text through the artifact channel before metadata completion', async () => {
+  const uploaded = []
+  const completed = []
+  const artifact = { schemaVersion: 1, format: 'docx', sections: [{ ordinal: 0, title: 'Document', text: 'private extraction', locator: { paragraphStart: 0, paragraphEnd: 0 } }] }
+  const serialized = JSON.stringify(artifact)
+  const source = Buffer.from('source')
+  const task = {
+    id: 3,
+    leaseToken: 'lease',
+    taskType: 'rag.content.extract',
+    processorVersion: 'v1',
+    executionClass: 'cpu',
+    input: {
+      schemaVersion: 1, sourceType: 'document', sourceId: 7, sourceVersionId: 'version-7',
+      sourceContentSha256: createHash('sha256').update(source).digest('hex'), contentBytes: source.length, format: 'docx'
+    }
+  }
+  const metadata = {
+    sourceVersionId: task.input.sourceVersionId,
+    sourceContentSha256: task.input.sourceContentSha256,
+    extractorVersion: 'pc-worker-structured-text.v1',
+    artifactSha256: createHash('sha256').update(serialized).digest('hex'),
+    artifactBytes: Buffer.byteLength(serialized), sectionCount: 1, format: 'docx'
+  }
+  const api = {
+    enroll: async () => ({ worker: { id: 'pcw-extract' }, accessToken: 'access', accessExpiresAt: '2999-01-01T00:00:00.000Z', refreshToken: 'refresh', refreshExpiresAt: '2999-02-01T00:00:00.000Z' }),
+    updateProfile: async () => {}, claim: async () => task, start: async () => {}, heartbeat: async () => {},
+    input: async () => ({ headers: new Headers({ 'x-content-sha256': task.input.sourceContentSha256, 'content-length': String(source.length) }), body: Readable.from([source]) }),
+    uploadArtifact: async (_token, _task, value) => uploaded.push(value),
+    complete: async (_token, _task, value) => completed.push(value), fail: async () => { throw new Error('must not fail') }
+  }
+  const worker = new PcWorker({
+    config: { statePath: path.join(os.tmpdir(), 'pc-worker-artifact-state.json'), enrollmentToken: 'enroll', displayName: 'Worker', heartbeatIntervalMs: 20_000, pollIntervalMs: 1_000 },
+    api, logger: { info() {}, warn() {} }, profileProvider: async () => profile(), stateReader: () => null, stateWriter: (_path, state) => state,
+    contentExtractProcessorFactory: () => ({ supports: (type) => type === 'rag.content.extract', process: async () => ({ schemaVersion: 1, processorVersion: 'v1', output: metadata, artifact }) })
+  })
+  assert.equal(await worker.runOnce(), true)
+  assert.equal(uploaded.length, 1)
+  assert.equal(uploaded[0].artifact.sections[0].text, 'private extraction')
+  assert.equal(completed.length, 1)
+  assert.equal(Object.hasOwn(completed[0], 'artifact'), false)
+  assert.equal(Object.hasOwn(completed[0].output, 'manifest'), false)
+})
+
 test('Worker declares embedding capabilities only when local configuration is complete', async () => {
   const profiles = []
   const embedding = {

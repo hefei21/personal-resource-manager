@@ -21,6 +21,7 @@ import {
   supportedRemoteProcessors
 } from '../services/pcWorkerContract.js'
 import { lookupPcWorkerProcessor } from '../services/pcWorkerProcessorCatalog.js'
+import { createRagArtifactStore } from '../services/ragArtifactStore.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { getTaskRuntime } from '../services/taskRuntime.js'
 import { projectTask } from '../services/taskTypeCatalog.js'
@@ -62,6 +63,7 @@ function mapError(res, error) {
   const code = error?.code
   if (['PC_WORKER_INPUT_INVALID', 'PC_WORKER_PROTOCOL_UNSUPPORTED', 'PC_WORKER_ID_INVALID',
     'PC_WORKER_PROCESSOR_INPUT_INVALID', 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE',
+    'RAG_ARTIFACT_INVALID', 'RAG_ARTIFACT_UNSUPPORTED',
     'TASK_ID_INVALID', 'TASK_PROGRESS_INVALID', 'TASK_ERROR_INVALID'].includes(code)) {
     return sendCode(res, 400, code)
   }
@@ -79,6 +81,7 @@ function mapError(res, error) {
     'PC_WORKER_PROCESSOR_RESULT_DIMENSIONS_INVALID', 'PC_WORKER_PROCESSOR_RESULT_MODEL_MISMATCH',
     'PC_WORKER_PROCESSOR_RESULT_INVALID', 'PC_WORKER_PROCESSOR_RESULT_TOO_LARGE',
     'PC_WORKER_PROCESSOR_RESULT_STALE', 'PC_WORKER_RESULT_STALE',
+    'RAG_ARTIFACT_STALE', 'RAG_ARTIFACT_MISSING', 'RAG_ARTIFACT_CONFLICT', 'RAG_ARTIFACT_TOO_LARGE',
     'TASK_INVALID_STATE', 'TASK_LEASE_MISMATCH', 'TASK_LEASE_EXPIRED', 'TASK_STATE_CONFLICT',
     'TASK_IDEMPOTENCY_CONFLICT'].includes(code)) {
     return sendCode(res, 409, code)
@@ -327,9 +330,15 @@ export function createPcWorkerAgentRouter({
   enroll = enrollWorker,
   refresh = refreshWorkerCredentials,
   authenticate = authenticateWorkerAccess,
-  updateProfile = updateWorkerProfile
+  updateProfile = updateWorkerProfile,
+  artifactStore = null
 } = {}) {
   const router = express.Router()
+  let resolvedArtifactStore = artifactStore
+  const getArtifactStore = () => {
+    resolvedArtifactStore ??= createRagArtifactStore()
+    return resolvedArtifactStore
+  }
 
   router.post('/enroll', async (req, res) => {
     try {
@@ -450,18 +459,58 @@ export function createPcWorkerAgentRouter({
     } catch (error) { return mapError(res, error) }
   })
 
+  router.post('/tasks/:taskId/artifact', async (req, res) => {
+    try {
+      if (req.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/octet-stream') {
+        return sendCode(res, 400, 'PC_WORKER_INPUT_INVALID')
+      }
+      const store = runtimeStore(runtime)
+      const leaseToken = req.get('x-worker-lease')
+      const task = authorizedTask(store, req.pcWorker, req.params.taskId, leaseToken, ['running'])
+      const input = processorInput(task)
+      if (task.taskType !== 'rag.content.extract') return sendCode(res, 400, 'RAG_ARTIFACT_UNSUPPORTED')
+      const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+      const databaseValue = await database(req)
+      const row = contentRecord(databaseValue, task)
+      if (!row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
+      const current = {
+        sourceVersionId: input.sourceVersionId,
+        sourceContentSha256: row.sha256,
+        contentBytes: row.bytes
+      }
+      if (!definition.staleGuard(current, input)) throw staleResultError()
+      const outcome = await getArtifactStore().stage({
+        task,
+        stream: req,
+        current,
+        metadata: {
+          sourceVersionId: input.sourceVersionId,
+          sourceContentSha256: input.sourceContentSha256,
+          artifactSha256: req.get('x-artifact-sha256'),
+          artifactBytes: req.get('x-artifact-bytes'),
+          sectionCount: req.get('x-artifact-section-count'),
+          format: req.get('x-artifact-format')
+        }
+      })
+      return res.status(201).json({ data: outcome })
+    } catch (error) { return mapError(res, error) }
+  })
+
   router.post('/tasks/:taskId/complete', async (req, res) => {
+    let task
+    let artifactStoreValue
     try {
       if (!isPlainObject(req.body) || Object.keys(req.body).length !== 2 || typeof req.body.leaseToken !== 'string') {
         return sendCode(res, 400, 'PC_WORKER_INPUT_INVALID')
       }
       const store = runtimeStore(runtime)
-      const task = authorizedTask(store, req.pcWorker, req.params.taskId, req.body.leaseToken, ['running'])
+      task = authorizedTask(store, req.pcWorker, req.params.taskId, req.body.leaseToken, ['running'])
       const input = processorInput(task)
       const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
       const databaseValue = await database(req)
-      const row = task.taskType === PC_WORKER_TASK_TYPE ? contentRecord(databaseValue, task) : null
-      if (task.taskType === PC_WORKER_TASK_TYPE && !row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
+      const needsContent = task.taskType === PC_WORKER_TASK_TYPE || task.taskType === 'rag.content.extract'
+      const row = needsContent ? contentRecord(databaseValue, task) : null
+      if (needsContent && !row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
       const current = task.taskType === PC_WORKER_TASK_TYPE
         ? {
             resourceVersionId: row.resource_version_id,
@@ -469,12 +518,22 @@ export function createPcWorkerAgentRouter({
             sha256: row.sha256,
             bytes: row.bytes
           }
+        : task.taskType === 'rag.content.extract'
+          ? { sourceVersionId: input.sourceVersionId, sourceContentSha256: row.sha256, contentBytes: row.bytes }
         : currentSnapshotIdentity(databaseValue, task, input)
       if (!current || !definition.staleGuard(current, task.taskType === PC_WORKER_TASK_TYPE
         ? { ...input, sha256: row.sha256, bytes: row.bytes }
         : input)) throw staleResultError()
       const result = normalizeWorkerTaskResult(task, req.body.result,
         task.taskType === PC_WORKER_TASK_TYPE ? { sha256: row.sha256, bytes: row.bytes } : input)
+      if (task.taskType === 'rag.content.extract') {
+        artifactStoreValue = getArtifactStore()
+        await artifactStoreValue.commit({
+          task,
+          metadata: result.output,
+          current: { sourceVersionId: input.sourceVersionId, sourceContentSha256: row.sha256, contentBytes: row.bytes }
+        })
+      }
       const succeeded = await Promise.resolve(store.succeed({
         id: task.id,
         owner: `pcw:${req.pcWorker.id}`,
@@ -482,7 +541,10 @@ export function createPcWorkerAgentRouter({
         result
       }))
       return res.json({ data: { id: succeeded.id, status: succeeded.status, progress: succeeded.progress } })
-    } catch (error) { return mapError(res, error) }
+    } catch (error) {
+      if (task?.taskType === 'rag.content.extract' && artifactStoreValue) await artifactStoreValue.discardTask(task.id).catch(() => {})
+      return mapError(res, error)
+    }
   })
 
   router.post('/tasks/:taskId/fail', async (req, res) => {
@@ -505,6 +567,7 @@ export function createPcWorkerAgentRouter({
         errorSummary: req.body.errorSummary.trim(),
         ...(req.body.retryable ? { retryAt: new Date(Date.now() + retryDelay).toISOString() } : {})
       }))
+      if (task.taskType === 'rag.content.extract') await getArtifactStore().discardTask(task.id)
       return res.json({ data: { id: outcome.task.id, status: outcome.task.status, retryScheduled: outcome.retryScheduled } })
     } catch (error) { return mapError(res, error) }
   })

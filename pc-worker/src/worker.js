@@ -170,6 +170,18 @@ export class PcWorker {
         throw Object.assign(new Error('Worker processor is not configured.'), { code: 'WORKER_PROCESSOR_UNSUPPORTED', retryable: false })
       }
       await this.ensureState()
+      if (this.contentExtractProcessor.supports(task.taskType)) {
+        const artifact = result?.artifact
+        const metadata = result?.output
+        if (!artifact || !metadata) {
+          throw Object.assign(new Error('Worker extractor did not produce a staged artifact.'), {
+            code: 'WORKER_ARTIFACT_UPLOAD_FAILED', retryable: false
+          })
+        }
+        await this.api.uploadArtifact(this.state.accessToken, task, { artifact, metadata })
+        result = { ...result }
+        delete result.artifact
+      }
       await this.api.complete(this.state.accessToken, task, result)
       safeLog(this.logger, 'info', 'task_succeeded', {
         taskId: task.id,

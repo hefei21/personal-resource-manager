@@ -19,6 +19,7 @@ const MAX_CITATION_ID_BYTES = 128
 
 const SOURCE_TYPES = new Set(['document', 'ebook', 'code_repository'])
 const FORMATS = new Set(['markdown', 'html', 'txt', 'ebook', 'repository_document', 'pdf', 'docx', 'epub'])
+const CONTENT_EXTRACT_FORMATS = new Set(['pdf', 'docx', 'epub'])
 const DISTANCES = new Set(['cosine', 'dot', 'euclid'])
 const NORMALIZATIONS = new Set(['none', 'l2'])
 
@@ -359,10 +360,55 @@ function normalizeModelOutput(output, expectedModel, fieldName = 'result.output.
   return model
 }
 
+export function normalizeRagContentArtifact(value, expected = {}) {
+  exactKeys(value, ['schemaVersion', 'format', 'sections'], 'artifact')
+  if (value.schemaVersion !== 1 || !isPlainObject(expected)) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'artifact schema is invalid.')
+  }
+  const format = token(value.format, 'artifact.format', 64).toLowerCase()
+  if (!CONTENT_EXTRACT_FORMATS.has(format)) fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'artifact.format is invalid.')
+  if (expected.format !== undefined && expected.format !== format) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INPUT_MISMATCH', 'artifact format is stale.')
+  }
+  if (!Array.isArray(value.sections) || value.sections.length < 1 || value.sections.length > 100_000) {
+    fail('PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID', 'artifact sections are invalid.')
+  }
+  if (expected.sectionCount !== undefined && value.sections.length !== expected.sectionCount) {
+    fail('PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID', 'artifact section count does not match metadata.')
+  }
+  const sections = value.sections.map((section, index) => {
+    exactKeys(section, ['ordinal', 'title', 'text', 'locator'], `artifact.sections[${index}]`)
+    if (!isPlainObject(section.locator)) fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'artifact section locator is invalid.')
+    const locatorKeys = Object.keys(section.locator)
+    if (locatorKeys.length === 0 || locatorKeys.some((key) => !['page', 'spineIndex', 'paragraphStart', 'paragraphEnd'].includes(key)) ||
+        Object.values(section.locator).some((item) => !Number.isSafeInteger(item) || item < 0)) {
+      fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'artifact section locator is invalid.')
+    }
+    return freeze({
+      ordinal: nonNegativeInteger(section.ordinal, `artifact.sections[${index}].ordinal`, 100_000),
+      title: boundedOutputText(section.title, `artifact.sections[${index}].title`, 2048),
+      text: boundedOutputText(section.text, `artifact.sections[${index}].text`, LIMITS.contentExtract.outputMaxBytes),
+      locator: freeze({ ...section.locator })
+    })
+  })
+  const artifact = { schemaVersion: 1, format, sections }
+  assertSerializedBytes(artifact, LIMITS.contentExtract.outputMaxBytes, 'PC_WORKER_PROCESSOR_RESULT_TOO_LARGE')
+  const serialized = JSON.stringify(artifact)
+  const artifactBytes = byteLength(serialized)
+  const artifactSha256 = crypto.createHash('sha256').update(serialized).digest('hex')
+  if (expected.artifactBytes !== undefined && expected.artifactBytes !== artifactBytes) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'artifact byte count does not match metadata.')
+  }
+  if (expected.artifactSha256 !== undefined && expected.artifactSha256 !== artifactSha256) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'artifact hash does not match metadata.')
+  }
+  return freeze({ artifact, format, sections, artifactBytes, artifactSha256, sectionCount: sections.length })
+}
+
 function normalizeContentExtractResult(value, expected) {
   exactKeys(value, [
     'sourceVersionId', 'sourceContentSha256', 'extractorVersion', 'artifactSha256',
-    'artifactBytes', 'sectionCount', 'manifest'
+    'artifactBytes', 'sectionCount', 'format'
   ], 'result.output')
   const input = unwrapExpected(expected)
   const sourceVersionId = sourceVersion(value.sourceVersionId, 'result.output.sourceVersionId')
@@ -375,45 +421,12 @@ function normalizeContentExtractResult(value, expected) {
     sourceContentSha256,
     extractorVersion: token(value.extractorVersion, 'result.output.extractorVersion'),
     artifactSha256: hash(value.artifactSha256, 'result.output.artifactSha256'),
-    artifactBytes: nonNegativeInteger(value.artifactBytes, 'result.output.artifactBytes', LIMITS.contentExtract.outputMaxBytes),
-    sectionCount: positiveInteger(value.sectionCount, 'result.output.sectionCount', 100_000)
+    artifactBytes: positiveInteger(value.artifactBytes, 'result.output.artifactBytes', LIMITS.contentExtract.outputMaxBytes),
+    sectionCount: positiveInteger(value.sectionCount, 'result.output.sectionCount', 100_000),
+    format: token(value.format, 'result.output.format', 64).toLowerCase()
   }
-  if (value.manifest !== undefined) {
-    exactKeys(value.manifest, ['artifactSha256', 'artifactBytes', 'sectionCount', 'format', 'sections'], 'result.output.manifest')
-    if (hash(value.manifest.artifactSha256, 'result.output.manifest.artifactSha256') !== normalized.artifactSha256 ||
-        value.manifest.artifactBytes !== normalized.artifactBytes || value.manifest.sectionCount !== normalized.sectionCount) {
-      fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result manifest does not match output.')
-    }
-    const format = token(value.manifest.format, 'result.output.manifest.format', 64).toLowerCase()
-    if (!FORMATS.has(format) || !Array.isArray(value.manifest.sections) || value.manifest.sections.length !== normalized.sectionCount) {
-      fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result manifest sections are invalid.')
-    }
-    const sections = value.manifest.sections.map((section, index) => {
-      exactKeys(section, ['ordinal', 'title', 'text', 'locator'], `result.output.manifest.sections[${index}]`)
-      if (!isPlainObject(section.locator)) fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result section locator is invalid.')
-      const locatorKeys = Object.keys(section.locator)
-      if (locatorKeys.length === 0 || locatorKeys.some((key) => !['page', 'spineIndex', 'paragraphStart', 'paragraphEnd'].includes(key)) ||
-          Object.values(section.locator).some((item) => !Number.isSafeInteger(item) || item < 0)) {
-        fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result section locator is invalid.')
-      }
-      return freeze({
-        ordinal: nonNegativeInteger(section.ordinal, `result.output.manifest.sections[${index}].ordinal`, 100_000),
-        title: boundedOutputText(section.title, `result.output.manifest.sections[${index}].title`, 2048),
-        text: boundedOutputText(section.text, `result.output.manifest.sections[${index}].text`, LIMITS.contentExtract.outputMaxBytes),
-        locator: freeze({ ...section.locator })
-      })
-    })
-    normalized.manifest = freeze({
-      artifactSha256: normalized.artifactSha256,
-      artifactBytes: normalized.artifactBytes,
-      sectionCount: normalized.sectionCount,
-      format,
-      sections
-    })
-    const artifact = JSON.stringify({ schemaVersion: 1, format, sections })
-    if (byteLength(artifact) !== normalized.artifactBytes || crypto.createHash('sha256').update(artifact).digest('hex') !== normalized.artifactSha256) {
-      fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result artifact identity is invalid.')
-    }
+  if (!CONTENT_EXTRACT_FORMATS.has(normalized.format) || (input?.format !== undefined && normalized.format !== input.format)) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INPUT_MISMATCH', 'result format is stale.')
   }
   return freeze(normalized)
 }

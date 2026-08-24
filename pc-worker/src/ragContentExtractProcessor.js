@@ -185,8 +185,11 @@ export function createRagContentExtractProcessor() {
           artifactSha256,
           artifactBytes,
           sectionCount: sections.length,
-          manifest: { artifactSha256, artifactBytes, sectionCount: sections.length, format: input.format, sections }
-        }
+          format: input.format
+        },
+        // The artifact is intentionally kept outside `output`; the Worker uploads
+        // it through the lease-bound binary endpoint before completing the task.
+        artifact
       }
     }
   })

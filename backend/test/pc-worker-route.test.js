@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import express from 'express'
+import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,6 +11,7 @@ import test from 'node:test'
 process.env.DATA_PATH ??= path.join(os.tmpdir(), 'pc-worker-route-test-data')
 
 const { createPcWorkerAgentRouter, createPcWorkerOwnerRouter } = await import('../src/routes/pcWorkers.js')
+const { createRagArtifactStore } = await import('../src/services/ragArtifactStore.js')
 
 const content = Buffer.from('hello\nworker\n', 'utf8')
 const sha256 = createHash('sha256').update(content).digest('hex')
@@ -256,7 +258,7 @@ test('Owner route requires Owner and enqueues only managed content identifiers',
   })
 })
 
-test('RAG content extraction leases only the current managed source and accepts a hash-bound artifact', async () => {
+test('RAG content extraction stages binary artifacts and completes with metadata only', async () => {
   const input = {
     schemaVersion: 1,
     sourceType: 'document',
@@ -299,16 +301,19 @@ test('RAG content extraction leases only the current managed source and accepts 
       artifactSha256,
       artifactBytes,
       sectionCount: 1,
-      manifest: { artifactSha256, artifactBytes, sectionCount: 1, format: 'docx', sections }
+      format: 'docx'
     }
   }
+  const artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-worker-rag-artifact-'))
+  const artifactStore = createRagArtifactStore({ rootPath: artifactRoot })
   const app = express()
   app.use(express.json())
   app.use('/agent', createPcWorkerAgentRouter({
     database: () => fakeDatabase(),
     runtime: () => ({ getStore: () => store }),
     storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
-    authenticate: () => worker
+    authenticate: () => worker,
+    artifactStore
   }))
 
   await withServer(app, async (baseUrl) => {
@@ -318,14 +323,61 @@ test('RAG content extraction leases only the current managed source and accepts 
     assert.equal(leasedInput.status, 200)
     assert.deepEqual(Buffer.from(await leasedInput.arrayBuffer()), content)
 
+    const upload = await fetch(`${baseUrl}/agent/tasks/43/artifact`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer access',
+        'x-worker-lease': 'lease-secret',
+        'content-type': 'application/octet-stream',
+        'x-artifact-sha256': artifactSha256,
+        'x-artifact-bytes': String(artifactBytes),
+        'x-artifact-section-count': '1',
+        'x-artifact-format': 'docx'
+      },
+      body: artifact
+    })
+    assert.equal(upload.status, 201)
+    const retryUpload = await fetch(`${baseUrl}/agent/tasks/43/artifact`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer access',
+        'x-worker-lease': 'lease-secret',
+        'content-type': 'application/octet-stream',
+        'x-artifact-sha256': artifactSha256,
+        'x-artifact-bytes': String(artifactBytes),
+        'x-artifact-section-count': '1',
+        'x-artifact-format': 'docx'
+      },
+      body: artifact
+    })
+    assert.equal(retryUpload.status, 201)
+    const differentArtifact = artifact.replace('Grounded text.', 'Different text.')
+    const differentUpload = await fetch(`${baseUrl}/agent/tasks/43/artifact`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer access',
+        'x-worker-lease': 'lease-secret',
+        'content-type': 'application/octet-stream',
+        'x-artifact-sha256': createHash('sha256').update(differentArtifact).digest('hex'),
+        'x-artifact-bytes': String(Buffer.byteLength(differentArtifact)),
+        'x-artifact-section-count': '1',
+        'x-artifact-format': 'docx'
+      },
+      body: differentArtifact
+    })
+    assert.equal(differentUpload.status, 409)
+
     const complete = await fetch(`${baseUrl}/agent/tasks/43/complete`, {
       method: 'POST',
       headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
       body: JSON.stringify({ leaseToken: 'lease-secret', result })
     })
-    assert.equal(complete.status, 200)
-    assert.equal(succeeded.output.manifest.sections[0].text, 'Grounded text.')
+    assert.equal(complete.status, 200, JSON.stringify(await complete.clone().json()))
+    assert.equal(succeeded.output.format, 'docx')
+    assert.equal(Object.hasOwn(succeeded.output, 'manifest'), false)
+    assert.equal((await artifactStore.readCommitted(43)).sections[0].text, 'Grounded text.')
   })
+  fs.rmSync(artifactRoot, { recursive: true, force: true })
 })
 
 test('RAG embedding completion is catalog-normalized and stale snapshots are rejected', async () => {

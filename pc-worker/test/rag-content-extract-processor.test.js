@@ -60,29 +60,30 @@ function pdf() {
   return Buffer.from(body, 'ascii')
 }
 
-test('extracts bounded DOCX paragraphs into a hash-bound artifact manifest', async () => {
+test('extracts bounded DOCX paragraphs into a hash-bound Worker artifact', async () => {
   const buffer = docx()
   const result = await createRagContentExtractProcessor().process(task('docx', buffer), Readable.from([buffer]))
   assert.equal(result.output.sectionCount, 1)
-  assert.equal(result.output.manifest.format, 'docx')
-  assert.match(result.output.manifest.sections[0].text, /第一段\n\nSecond paragraph/u)
-  assert.equal(result.output.artifactSha256, result.output.manifest.artifactSha256)
+  assert.equal(result.output.format, 'docx')
+  assert.match(result.artifact.sections[0].text, /第一段\n\nSecond paragraph/u)
+  assert.equal(result.output.artifactSha256, crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
+  assert.equal(Object.hasOwn(result.output, 'manifest'), false)
 })
 
 test('extracts EPUB spine order and strips markup', async () => {
   const buffer = epub()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
-  assert.equal(result.output.manifest.sections[0].title, 'Chapter One')
-  assert.match(result.output.manifest.sections[0].text, /Hello Grounded text\./u)
-  assert.deepEqual(result.output.manifest.sections[0].locator, { spineIndex: 0 })
+  assert.equal(result.artifact.sections[0].title, 'Chapter One')
+  assert.match(result.artifact.sections[0].text, /Hello Grounded text\./u)
+  assert.deepEqual(result.artifact.sections[0].locator, { spineIndex: 0 })
 })
 
 test('extracts PDF page text with a page locator', async () => {
   const buffer = pdf()
   const result = await createRagContentExtractProcessor().process(task('pdf', buffer), Readable.from([buffer]))
-  assert.equal(result.output.manifest.sections[0].title, 'Page 1')
-  assert.match(result.output.manifest.sections[0].text, /Hello PDF evidence/u)
-  assert.deepEqual(result.output.manifest.sections[0].locator, { page: 1 })
+  assert.equal(result.artifact.sections[0].title, 'Page 1')
+  assert.match(result.artifact.sections[0].text, /Hello PDF evidence/u)
+  assert.deepEqual(result.artifact.sections[0].locator, { page: 1 })
 })
 
 test('rejects hash mismatch, malformed archives, and unsupported formats', async () => {
