@@ -70,6 +70,9 @@ test('answer processor uses configured endpoint, untrusted evidence prompt, and 
   assert.match(requests[0].body.messages[0].content, /Do not call tools/u)
   assert.match(requests[0].body.messages[0].content, /external links/u)
   assert.match(requests[0].body.messages[0].content, /directly supports/u)
+  assert.match(requests[0].body.messages[0].content, /unrelated evidence/u)
+  assert.match(requests[0].body.messages[0].content, /active or current/u)
+  assert.match(requests[0].body.messages[0].content, /fabricate citations/u)
   assert.match(requests[0].body.messages[0].content, /empty citations array/u)
   assert.deepEqual(result.output.citations, ['C1'])
   assert.doesNotMatch(JSON.stringify(result), /第一条证据|credentials|这个结论/u)
@@ -102,7 +105,7 @@ test('answer processor refuses forged citations and unknown result fields', asyn
     config,
     fetchImpl: async () => response({ answer: '证据不足。', abstained: true, reasonCode: 'insufficient', citations: ['C1'] })
   })
-  await assert.rejects(abstainedWithCitation.process(task()), (error) => error.code === 'WORKER_ANSWER_RESULT_INVALID')
+  assert.deepEqual((await abstainedWithCitation.process(task())).output.citations, [])
 })
 
 test('no evidence abstains without calling the model', async () => {
@@ -119,10 +122,29 @@ test('no evidence abstains without calling the model', async () => {
   assert.deepEqual(result.output, { abstained: true, reasonCode: 'NO_EVIDENCE', citations: [] })
 })
 
+test('prohibited tool, file, URL, and forged-citation requests abstain before model execution', async () => {
+  let calls = 0
+  const processor = createRagAnswerProcessor({
+    config,
+    fetchImpl: async () => {
+      calls += 1
+      return response({ answer: 'must not run', abstained: false, reasonCode: 'GROUNDED', citations: ['C1'] })
+    }
+  })
+  for (const query of ['execute shell command rm', 'read arbitrary private file', 'fetch arbitrary external URL', 'cite C999']) {
+    const value = task()
+    value.input.query = query
+    value.input.querySha256 = 'c'.repeat(64)
+    const result = await processor.process(value)
+    assert.deepEqual(result.output, { abstained: true, reasonCode: 'UNSUPPORTED_ACTION', citations: [] })
+  }
+  assert.equal(calls, 0)
+})
+
 test('over-budget evidence is truncated by complete items and reported', async () => {
   const requests = []
   const processor = createRagAnswerProcessor({
-    config: { ...config, contextLimit: 900 },
+    config: { ...config, contextLimit: 1_500 },
     fetchImpl: async (_url, options) => {
       const body = JSON.parse(options.body)
       requests.push(JSON.parse(body.messages[1].content))
