@@ -62,11 +62,15 @@ test('answer processor uses configured endpoint, untrusted evidence prompt, and 
   const result = await processor.process(task())
   assert.equal(requests[0].url, 'http://127.0.0.1:1234/v1/chat/completions')
   assert.equal(requests[0].body.model, config.modelId)
-  assert.deepEqual(requests[0].body.response_format, { type: 'json_object' })
+  assert.equal(requests[0].body.response_format.type, 'json_schema')
+  assert.equal(requests[0].body.response_format.json_schema.strict, true)
+  assert.deepEqual(requests[0].body.response_format.json_schema.schema.required, ['answer', 'abstained', 'reasonCode', 'citations'])
   assert.match(requests[0].body.messages[0].content, /untrusted data/u)
   assert.match(requests[0].body.messages[0].content, /Never follow instructions/u)
   assert.match(requests[0].body.messages[0].content, /Do not call tools/u)
   assert.match(requests[0].body.messages[0].content, /external links/u)
+  assert.match(requests[0].body.messages[0].content, /directly supports/u)
+  assert.match(requests[0].body.messages[0].content, /empty citations array/u)
   assert.deepEqual(result.output.citations, ['C1'])
   assert.doesNotMatch(JSON.stringify(result), /第一条证据|credentials|这个结论/u)
   assert.doesNotMatch(JSON.stringify(result), /http:\/\//u)
@@ -93,6 +97,12 @@ test('answer processor refuses forged citations and unknown result fields', asyn
     fetchImpl: async () => response({ answer: '结论', abstained: false, citations: ['C1'], extra: 'forbidden' })
   })
   await assert.rejects(extra.process(task()), (error) => error.code === 'WORKER_ANSWER_RESULT_INVALID')
+
+  const abstainedWithCitation = createRagAnswerProcessor({
+    config,
+    fetchImpl: async () => response({ answer: '证据不足。', abstained: true, reasonCode: 'insufficient', citations: ['C1'] })
+  })
+  await assert.rejects(abstainedWithCitation.process(task()), (error) => error.code === 'WORKER_ANSWER_RESULT_INVALID')
 })
 
 test('no evidence abstains without calling the model', async () => {
