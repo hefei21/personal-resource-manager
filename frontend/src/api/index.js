@@ -268,6 +268,12 @@ export default {
     status: () => api.get('/search/status'),
     refreshIndex: (options = {}) => api.post('/search/index/refresh', options)
   },
+  rag: {
+    status: () => api.get('/rag/status'),
+    createQuery: (data) => api.post('/rag/queries', data),
+    getQuery: (id) => api.get(`/rag/queries/${encodeURIComponent(String(id))}`),
+    cancelQuery: (id) => api.post(`/rag/queries/${encodeURIComponent(String(id))}/cancel`)
+  },
   bookSearch: {
     getConfig: () => api.get('/book-search/config'),
     saveConfig: (data) => api.put('/book-search/config', data),
