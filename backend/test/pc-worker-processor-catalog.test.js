@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import test from 'node:test'
 
 import {
@@ -9,6 +10,11 @@ import {
 } from '../src/services/pcWorkerProcessorCatalog.js'
 
 const hash = 'a'.repeat(64)
+
+function vectorHash(vectors) {
+  return crypto.createHash('sha256').update(JSON.stringify(vectors.map((vector) => vector.embedding))).digest('hex')
+}
+
 const model = {
   provider: 'local-provider',
   modelId: 'embedding-model',
@@ -42,7 +48,7 @@ function embeddingInput() {
     sourceContentSha256: hash,
     model,
     chunks: [
-      { chunkId: 101, ordinal: 0, chunkSha256: 'b'.repeat(64), body: '第一段' },
+      { chunkId: 101, ordinal: 0, chunkSha256: 'b'.repeat(64), body: '第一段\r\n\t第二段\n第三段' },
       { chunkId: 102, ordinal: 1, chunkSha256: 'c'.repeat(64), body: '第二段' }
     ]
   }
@@ -52,7 +58,7 @@ function queryInput() {
   return {
     schemaVersion: 1,
     querySha256: 'd'.repeat(64),
-    query: '如何恢复索引？',
+    query: '如何恢复\n\t索引？',
     model
   }
 }
@@ -160,6 +166,16 @@ test('content.inspect keeps schema 1 projection, result normalization, and stale
 test('RAG embedding input/output binds source and model identity with finite, exact vectors', () => {
   const definition = lookupPcWorkerProcessor('rag.embedding.generate')
   const input = definition.projectInput(embeddingInput())
+  const workerData = [
+    { object: 'embedding', index: 0, embedding: [0.1, 0.2, 0.3] },
+    { object: 'embedding', index: 1, embedding: [0.4, 0.5, 0.6] }
+  ]
+  // The catalog receives the Worker final output only; OpenAI-compatible data[].object is handled before this boundary.
+  const vectors = workerData.map((item, index) => ({
+    chunkId: input.chunks[index].chunkId,
+    chunkSha256: input.chunks[index].chunkSha256,
+    embedding: item.embedding
+  }))
   const result = definition.normalizeResult({
     schemaVersion: 1,
     processorVersion: 'v1',
@@ -168,33 +184,53 @@ test('RAG embedding input/output binds source and model identity with finite, ex
       snapshotId: 17,
       sourceVersionId: '11',
       sourceContentSha256: hash,
-      vectors: [
-        { chunkId: 101, chunkSha256: 'b'.repeat(64), embedding: [0.1, 0.2, 0.3] },
-        { chunkId: 102, chunkSha256: 'c'.repeat(64), embedding: [0.4, 0.5, 0.6] }
-      ]
+      vectors,
+      vectorSha256: vectorHash(vectors)
     }
   }, input)
   assert.equal(result.output.vectors.length, 2)
+  assert.equal(result.output.vectorSha256, vectorHash(vectors))
   assert.equal(definition.staleGuard(input, { ...input, model: { ...model, configHash: 'e'.repeat(64) } }), false)
   assert.throws(() => definition.normalizeResult({
     schemaVersion: 1,
     processorVersion: 'v1',
     output: {
       model,
-      vectors: [{ chunkId: 101, chunkSha256: 'b'.repeat(64), embedding: [0.1, Number.NaN, 0.3] }]
+      vectors: [{ chunkId: 101, chunkSha256: 'b'.repeat(64), embedding: [0.1, Number.NaN, 0.3] }],
+      vectorSha256: hash
     }
   }, input), (error) => error.code === 'PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID')
+  assert.throws(() => definition.normalizeResult({
+    schemaVersion: 1,
+    processorVersion: 'v1',
+    output: {
+      model,
+      vectors,
+      vectorSha256: 'f'.repeat(64)
+    }
+  }, input), (error) => error.code === 'PC_WORKER_PROCESSOR_RESULT_INVALID')
+  assert.throws(() => definition.projectInput({
+    ...embeddingInput(),
+    chunks: [{ ...embeddingInput().chunks[0], body: 'bad\u0000text' }]
+  }), (error) => error.code === 'PC_WORKER_PROCESSOR_INPUT_INVALID')
 })
 
 test('query embed, rerank, and answer reject stale identity, invalid numbers, and answer fields', () => {
   const queryDefinition = lookupPcWorkerProcessor('rag.query.embed')
   const query = queryDefinition.projectInput(queryInput())
+  const embedding = [0.1, 0.2, 0.3]
   const queryResult = queryDefinition.normalizeResult({
     schemaVersion: 1,
     processorVersion: 'v1',
-    output: { model, querySha256: query.querySha256, embedding: [0.1, 0.2, 0.3] }
+    output: { model, querySha256: query.querySha256, embedding, vectorSha256: vectorHash([{ embedding }]) }
   }, query)
-  assert.deepEqual(queryResult.output.embedding, [0.1, 0.2, 0.3])
+  assert.deepEqual(queryResult.output.embedding, embedding)
+  assert.equal(queryResult.output.vectorSha256, vectorHash([{ embedding }]))
+  assert.throws(() => queryDefinition.normalizeResult({
+    schemaVersion: 1,
+    processorVersion: 'v1',
+    output: { model, querySha256: query.querySha256, embedding, vectorSha256: 'e'.repeat(64) }
+  }, query), (error) => error.code === 'PC_WORKER_PROCESSOR_RESULT_INVALID')
 
   const rerankDefinition = lookupPcWorkerProcessor('rag.rerank')
   const rerank = rerankDefinition.projectInput(rerankInput())

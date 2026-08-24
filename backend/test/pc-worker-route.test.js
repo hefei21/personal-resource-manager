@@ -327,7 +327,8 @@ test('RAG embedding completion is catalog-normalized and stale snapshots are rej
       snapshotId: 17,
       sourceVersionId: '11',
       sourceContentSha256: 'b'.repeat(64),
-      vectors: [{ chunkId: 101, chunkSha256: 'c'.repeat(64), embedding: [0.1, 0.2, 0.3] }]
+      vectors: [{ chunkId: 101, chunkSha256: 'c'.repeat(64), embedding: [0.1, 0.2, 0.3] }],
+      vectorSha256: createHash('sha256').update(JSON.stringify([[0.1, 0.2, 0.3]])).digest('hex')
     }
   }
   await withServer(app, async (baseUrl) => {

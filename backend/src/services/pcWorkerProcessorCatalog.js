@@ -1,3 +1,5 @@
+import crypto from 'node:crypto'
+
 import { normalizeContentInspectionResult } from './pcWorkerContract.js'
 
 export const PC_WORKER_PROCESSOR_CATALOG_VERSION = 'v1'
@@ -115,6 +117,20 @@ function boundedText(value, fieldName, maxBytes) {
   const normalized = requiredText(value, fieldName, maxBytes)
   if (byteLength(normalized) > maxBytes) fail('PC_WORKER_PROCESSOR_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
   return normalized
+}
+
+function boundedContentText(value, fieldName, maxBytes) {
+  if (typeof value !== 'string') fail('PC_WORKER_PROCESSOR_INPUT_INVALID', `${fieldName} is invalid.`)
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(normalized)) {
+    fail('PC_WORKER_PROCESSOR_INPUT_INVALID', `${fieldName} is invalid.`)
+  }
+  if (byteLength(normalized) > maxBytes) fail('PC_WORKER_PROCESSOR_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
+  return normalized
+}
+
+function vectorSha256(vectors) {
+  return crypto.createHash('sha256').update(JSON.stringify(vectors.map((vector) => vector.embedding))).digest('hex')
 }
 
 function boundedOutputText(value, fieldName, maxBytes) {
@@ -239,7 +255,7 @@ function projectEmbeddingInput(input) {
       chunkId: positiveInteger(chunk.chunkId, `task.input.chunks[${index}].chunkId`),
       ordinal: nonNegativeInteger(chunk.ordinal, `task.input.chunks[${index}].ordinal`),
       chunkSha256: hash(chunk.chunkSha256, `task.input.chunks[${index}].chunkSha256`),
-      body: boundedText(chunk.body, `task.input.chunks[${index}].body`, LIMITS.embeddingGenerate.inputMaxBytes)
+      body: boundedContentText(chunk.body, `task.input.chunks[${index}].body`, LIMITS.embeddingGenerate.inputMaxBytes)
     })
   })
   const ids = new Set(chunks.map((chunk) => chunk.chunkId))
@@ -261,7 +277,7 @@ function projectEmbeddingInput(input) {
 function projectQueryEmbedInput(input) {
   exactKeys(input, ['schemaVersion', 'querySha256', 'query', 'model'], 'task.input')
   if (input.schemaVersion !== 1) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
-  const query = boundedText(input.query, 'task.input.query', MAX_QUERY_BYTES)
+  const query = boundedContentText(input.query, 'task.input.query', MAX_QUERY_BYTES)
   const projected = freeze({ schemaVersion: 1, querySha256: hash(input.querySha256, 'task.input.querySha256'), query, model: modelIdentity(input.model, 'task.input.model') })
   assertSerializedBytes(projected, LIMITS.queryEmbed.inputMaxBytes, 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE')
   return projected
@@ -382,7 +398,7 @@ function expectedModelFrom(expected) {
 }
 
 function normalizeEmbeddingResult(value, expected) {
-  exactKeys(value, ['model', 'snapshotId', 'sourceVersionId', 'sourceContentSha256', 'vectors'], 'result.output')
+  exactKeys(value, ['model', 'snapshotId', 'sourceVersionId', 'sourceContentSha256', 'vectors', 'vectorSha256'], 'result.output')
   const input = unwrapExpected(expected)
   const model = normalizeModelOutput(value.model, expectedModelFrom(expected))
   const vectors = value.vectors
@@ -406,7 +422,11 @@ function normalizeEmbeddingResult(value, expected) {
     return freeze({ chunkId, chunkSha256, embedding })
   })
   if (seen.size !== input.chunks.length) fail('PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID', 'result vectors are incomplete.')
-  const normalized = { model, vectors: normalizedVectors }
+  const vectorHash = hash(value.vectorSha256, 'result.output.vectorSha256')
+  if (vectorHash !== vectorSha256(normalizedVectors)) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result vector hash does not match the ordered vectors.')
+  }
+  const normalized = { model, vectors: normalizedVectors, vectorSha256: vectorHash }
   if (value.snapshotId !== undefined) normalized.snapshotId = positiveInteger(value.snapshotId, 'result.output.snapshotId')
   if (value.sourceVersionId !== undefined) normalized.sourceVersionId = sourceVersion(value.sourceVersionId, 'result.output.sourceVersionId')
   if (value.sourceContentSha256 !== undefined) normalized.sourceContentSha256 = hash(value.sourceContentSha256, 'result.output.sourceContentSha256')
@@ -419,7 +439,7 @@ function normalizeEmbeddingResult(value, expected) {
 }
 
 function normalizeQueryEmbeddingResult(value, expected) {
-  exactKeys(value, ['model', 'querySha256', 'embedding'], 'result.output')
+  exactKeys(value, ['model', 'querySha256', 'embedding', 'vectorSha256'], 'result.output')
   const input = unwrapExpected(expected)
   const model = normalizeModelOutput(value.model, expectedModelFrom(expected))
   const querySha256 = hash(value.querySha256, 'result.output.querySha256')
@@ -428,7 +448,11 @@ function normalizeQueryEmbeddingResult(value, expected) {
     fail('PC_WORKER_PROCESSOR_RESULT_DIMENSIONS_INVALID', 'result embedding dimensions are invalid.')
   }
   const embedding = value.embedding.map((item, index) => finiteNumber(item, `result.output.embedding[${index}]`))
-  return freeze({ model, querySha256, embedding })
+  const vectorHash = hash(value.vectorSha256, 'result.output.vectorSha256')
+  if (vectorHash !== vectorSha256([{ embedding }])) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result vector hash does not match the embedding.')
+  }
+  return freeze({ model, querySha256, embedding, vectorSha256: vectorHash })
 }
 
 function normalizeRerankResult(value, expected) {
