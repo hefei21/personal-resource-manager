@@ -8,7 +8,12 @@ import test from 'node:test'
 
 process.env.DATA_PATH ??= path.join(os.tmpdir(), 'rag-route-test-data')
 
-const { createRagRouter, normalizeQueryBody } = await import('../src/routes/rag.js')
+const {
+  createAuthoritativeChecks,
+  createRagRouter,
+  normalizeQueryBody,
+  normalizeRagIndexRefreshBody
+} = await import('../src/routes/rag.js')
 
 const ANSWER_ENV_KEYS = [
   'PC_WORKER_ANSWER_PROVIDER',
@@ -113,6 +118,36 @@ function retrieval() {
   }
 }
 
+function queryRunStore() {
+  const rows = new Map()
+  return {
+    available: true,
+    upsert(entry) {
+      rows.set(`${entry.ownerScope}:${entry.runId}`, {
+        run_id: entry.runId,
+        owner_scope: entry.ownerScope,
+        task_id: entry.taskKey?.id ?? null,
+        task_idempotency_key: entry.taskKey?.idempotencyKey ?? null,
+        task_type: 'rag.answer.generate',
+        processor_version: 'v1',
+        status: entry.status === 'active' ? 'running' : 'pending',
+        context_json: entry.contextJson,
+        updated_at: new Date().toISOString()
+      })
+      return true
+    },
+    get(runId, ownerScope) {
+      return rows.get(`${ownerScope}:${runId}`) ?? null
+    },
+    updateStatus(runId, ownerScope, status) {
+      const row = rows.get(`${ownerScope}:${runId}`)
+      if (!row) return false
+      row.status = status === 'cancelled' ? 'cancelled' : status === 'failed' ? 'failed' : 'succeeded'
+      return true
+    }
+  }
+}
+
 test('normalizes a bounded query and rejects client-controlled evidence/filter knobs', () => {
   assert.deepEqual(normalizeQueryBody({ query: '  资料问题  ', limit: 2 }), { query: '资料问题', limit: 2 })
   assert.deepEqual(normalizeQueryBody({ q: 'same contract' }), { query: 'same contract', limit: 10 })
@@ -121,10 +156,34 @@ test('normalizes a bounded query and rejects client-controlled evidence/filter k
   assert.throws(() => normalizeQueryBody({ query: 'q', weights: { vector: 100 } }))
 })
 
+test('default final visibility binds document candidates to sourceVersionId and version recycle state', () => {
+  let versionTrashed = true
+  const database = {
+    prepare(sql) {
+      return {
+        get(...parameters) {
+          if (sql.includes('sqlite_master')) return { present: 1 }
+          assert.match(sql, /document_versions/u)
+          assert.match(sql, /document_version/u)
+          assert.ok(parameters.includes(42))
+          return versionTrashed ? null : { visible: 1 }
+        }
+      }
+    }
+  }
+  const checks = createAuthoritativeChecks(database)
+  const candidate = { sourceType: 'document', sourceId: 7, sourceVersionId: '42' }
+  assert.equal(checks.authoritativeVisibility(candidate), false)
+  versionTrashed = false
+  assert.equal(checks.authoritativeVisibility(candidate), true)
+  assert.equal(checks.authoritativeVisibility({ ...candidate, sourceVersionId: 'current:2:hash' }), false)
+})
+
 test('RAG query is Owner-only, uses server evidence, strips internal fields, and returns an opaque run id', async () => {
   const calls = { candidates: [], answers: [] }
   const router = createRagRouter({
     databaseProvider: () => ({ fakeDatabase: true }),
+    queryRunStore: queryRunStore(),
     authoritativeChecksFactory: () => checks(),
     candidateProvider: async (input) => {
       calls.candidates.push(input)
@@ -321,6 +380,7 @@ test('complete answer env plus a fresh capable PC Worker enables the default ans
   }, async () => {
     const router = createRagRouter({
       databaseProvider: () => answerWorkerDatabase(),
+      queryRunStore: queryRunStore(),
       authoritativeChecksFactory: () => checks(),
       taskStoreProvider: () => taskStore,
       candidateProvider: async () => ({ ftsCandidates: [{ serverCandidate: true }] }),
@@ -445,6 +505,7 @@ test('tracked query status/cancel is Owner-scoped and uses TaskStore for pending
   }
   const router = createRagRouter({
     databaseProvider: () => ({ fakeDatabase: true }),
+    queryRunStore: queryRunStore(),
     authoritativeChecksFactory: () => checks(),
     taskStoreProvider: () => store,
     candidateProvider: async () => ({ ftsCandidates: [{ serverCandidate: true }] }),
@@ -510,6 +571,64 @@ test('tracked query status/cancel is Owner-scoped and uses TaskStore for pending
     })
     assert.equal(conflict.status, 409)
     assert.deepEqual(await conflict.json(), { code: 'RAG_QUERY_CANCEL_CONFLICT' })
+  })
+})
+
+test('persisted run mapping survives router reconstruction for the same Owner', async () => {
+  const persistentRuns = queryRunStore()
+  let task = {
+    id: 501,
+    idempotencyKey: 'rebuild-answer-501',
+    status: 'pending',
+    taskType: 'rag.answer.generate',
+    processorVersion: 'v1',
+    input: { private: 'not public' }
+  }
+  const taskStore = {
+    getById(id) {
+      assert.equal(id, 501)
+      return task
+    },
+    cancel(id) {
+      assert.equal(id, 501)
+      task = { ...task, status: 'cancelled' }
+      return task
+    }
+  }
+  const makeRouter = () => createRagRouter({
+    databaseProvider: () => ({ fakeDatabase: true }),
+    queryRunStore: persistentRuns,
+    authoritativeChecksFactory: () => checks(),
+    taskStoreProvider: () => taskStore,
+    candidateProvider: async () => ({ ftsCandidates: [{ serverCandidate: true }] }),
+    hybridRetrieverFactory: () => ({ retrieve: async () => retrieval() }),
+    answerServiceFactory: () => ({
+      generate: async ({ query }) => ({ status: 'queued', query, citations: [], task })
+    }),
+    requestIdFactory: () => 'rebuild-run-1'
+  })
+
+  await withServer(makeRouter(), async (baseUrl) => {
+    const accepted = await fetch(`${baseUrl}/api/rag/queries`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+      body: JSON.stringify({ query: 'rebuild me' })
+    })
+    assert.equal(accepted.status, 202)
+  })
+
+  await withServer(makeRouter(), async (baseUrl) => {
+    const restored = await fetch(`${baseUrl}/api/rag/queries/rebuild-run-1`, {
+      headers: { 'x-test-principal': 'owner' }
+    })
+    assert.equal(restored.status, 200)
+    assert.equal((await restored.json()).data.status, 'pending')
+    const cancelled = await fetch(`${baseUrl}/api/rag/queries/rebuild-run-1/cancel`, {
+      method: 'POST',
+      headers: { 'x-test-principal': 'owner' }
+    })
+    assert.equal(cancelled.status, 200)
+    assert.equal((await cancelled.json()).data.status, 'cancelled')
   })
 })
 
@@ -619,5 +738,126 @@ test('final route authorization drops stale or revoked candidates before answer 
     assert.equal(body.data.status, 'abstained')
     assert.equal(body.data.reasonCode, 'no_evidence')
     assert.equal(modelCalls, 0)
+  })
+})
+
+test('normalizes the Owner RAG refresh input and rejects unscoped controls', () => {
+  assert.deepEqual(normalizeRagIndexRefreshBody({
+    source: { type: 'document', id: 7 },
+    filter: { sourceIds: [7] },
+    rebuild: true
+  }), {
+    source: { type: 'document', id: 7 },
+    filter: { sourceIds: [7] },
+    rebuild: true
+  })
+  assert.deepEqual(normalizeRagIndexRefreshBody({}), {
+    source: { type: 'all', id: null },
+    rebuild: false
+  })
+  assert.throws(() => normalizeRagIndexRefreshBody({ source: { type: 'document', id: 7 }, path: '/tmp/a.md' }))
+  assert.throws(() => normalizeRagIndexRefreshBody({ modelUrl: 'http://127.0.0.1:1234' }))
+})
+
+test('Owner RAG refresh enqueues a persistent task with a mutex and rejects conflicts', async () => {
+  const requests = []
+  let activeConflict = false
+  const task = {
+    id: 12,
+    taskType: 'rag.index.refresh',
+    processorVersion: 'v1',
+    executionClass: 'disk',
+    subjectType: 'rag-index',
+    subjectId: 'owner',
+    subjectVersionId: 'refresh-route-1',
+    status: 'pending',
+    progress: 0,
+    attemptCount: 0,
+    maxAttempts: 3,
+    input: { source: { type: 'document', id: 7 }, filter: { sourceIds: [7] }, rebuild: true },
+    result: null,
+    errorCode: null,
+    availableAt: '2026-08-25T00:00:00.000Z',
+    startedAt: null,
+    finishedAt: null,
+    createdAt: '2026-08-25T00:00:00.000Z',
+    updatedAt: '2026-08-25T00:00:00.000Z'
+  }
+  const store = {
+    enqueueExclusiveRun(request, options) {
+      requests.push({ request, options })
+      return activeConflict ? { activeConflict: true, outcome: 'active-conflict', task } : { task, created: true }
+    }
+  }
+  const router = createRagRouter({
+    databaseProvider: () => ({ database: true }),
+    taskRuntimeProvider: () => ({ getStore: () => store }),
+    requestIdFactory: () => 'refresh-route-1'
+  })
+
+  await withServer(router, async (baseUrl) => {
+    const anonymous = await fetch(`${baseUrl}/api/rag/index/refresh`, { method: 'POST', body: '{}' })
+    assert.equal(anonymous.status, 401)
+    const invalid = await fetch(`${baseUrl}/api/rag/index/refresh`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+      body: JSON.stringify({ source: { type: 'document', id: 7 }, path: '/private/a.md' })
+    })
+    assert.equal(invalid.status, 400)
+    const accepted = await fetch(`${baseUrl}/api/rag/index/refresh`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+      body: JSON.stringify({ source: { type: 'document', id: 7 }, filter: { sourceIds: [7] }, rebuild: true })
+    })
+    assert.equal(accepted.status, 202)
+    assert.equal((await accepted.json()).data.taskType, 'rag.index.refresh')
+    assert.equal(requests.length, 1)
+    assert.deepEqual(requests[0].options, { mutexTaskTypes: ['rag.index.refresh'] })
+    assert.deepEqual(requests[0].request.input, task.input)
+    activeConflict = true
+    const conflict = await fetch(`${baseUrl}/api/rag/index/refresh`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: '{}'
+    })
+    assert.equal(conflict.status, 409)
+  })
+})
+
+test('Owner source status passes only the allowlisted source identity and hides internals', async () => {
+  const seen = []
+  const router = createRagRouter({
+    databaseProvider: () => ({ database: true }),
+    authoritativeChecksFactory: () => ({ authoritativeVisibility: ({ sourceType, sourceId }) => {
+      seen.push([sourceType, sourceId])
+      return sourceType === 'document' && sourceId === 7
+    } }),
+    sourceStatusProvider: ({ sourceType, sourceId }) => sourceType === 'document' && sourceId === 7
+      ? {
+          source: { type: sourceType, id: sourceId },
+          sourceState: { status: 'ready' },
+          snapshot: { id: 9, status: 'ready', chunkCount: 2 },
+          chunks: { status: 'ready', count: 2 },
+          embedding: { status: 'pending', models: [{ modelId: 'nomic', status: 'pending', vectorCount: 0 }] }
+        }
+      : null
+  })
+  await withServer(router, async (baseUrl) => {
+    const anonymous = await fetch(`${baseUrl}/api/rag/sources/document/7/status`)
+    assert.equal(anonymous.status, 401)
+    const invalid = await fetch(`${baseUrl}/api/rag/sources/not-a-source/7/status`, {
+      headers: { 'x-test-principal': 'owner' }
+    })
+    assert.equal(invalid.status, 400)
+    const missing = await fetch(`${baseUrl}/api/rag/sources/document/8/status`, {
+      headers: { 'x-test-principal': 'owner' }
+    })
+    assert.equal(missing.status, 404)
+    const owner = await fetch(`${baseUrl}/api/rag/sources/document/7/status`, {
+      headers: { 'x-test-principal': 'owner' }
+    })
+    assert.equal(owner.status, 200)
+    const body = await owner.json()
+    assert.equal(body.data.snapshot.status, 'ready')
+    assert.equal(body.data.chunks.count, 2)
+    assert.equal(body.data.embedding.status, 'pending')
+    assert.deepEqual(seen, [['document', 8], ['document', 7]])
+    assert.doesNotMatch(JSON.stringify(body), /absolutePath|storageKey|modelUrl|collection|secret|token/iu)
   })
 })

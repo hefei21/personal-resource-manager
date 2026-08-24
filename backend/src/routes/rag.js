@@ -2,14 +2,30 @@ import crypto from 'node:crypto'
 import express from 'express'
 
 import { getDatabase } from '../config/database.js'
-import { requireOwner } from '../middlewares/auth.js'
+import { requireOwner, requireWritePermission } from '../middlewares/auth.js'
 import {
   createRagAnswerService,
   RAG_ANSWER_TASK_TYPE
 } from '../services/ragAnswerService.js'
 import { createRagHybridRetriever } from '../services/ragHybridRetriever.js'
 import { createRagTextIndexService } from '../services/ragTextIndexService.js'
+import {
+  normalizeRagIndexTaskInput,
+  RAG_INDEX_EXECUTION_CLASS,
+  RAG_INDEX_PROCESSOR_VERSION,
+  RAG_INDEX_SUBJECT_ID,
+  RAG_INDEX_SUBJECT_TYPE,
+  RAG_INDEX_TASK_TYPE
+} from '../services/ragIndexTaskProcessor.js'
+import { enqueueExclusiveRun } from '../services/taskStore.js'
 import { getTaskRuntime } from '../services/taskRuntime.js'
+import { projectTask } from '../services/taskTypeCatalog.js'
+import {
+  RAG_QUERY_RUN_CONTEXT_MAX_BYTES,
+  RAG_QUERY_RUN_MAX_ROWS,
+  RAG_QUERY_RUN_TABLE,
+  RAG_QUERY_RUN_TTL_SECONDS
+} from '../config/ragQueryRunSchema.js'
 
 const SOURCE_TABLES = Object.freeze({
   document: 'documents',
@@ -33,14 +49,17 @@ const PUBLIC_LOCATOR_KEYS = new Set([
 const MAX_QUERY_BYTES = 16_384
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 50
-const MAX_TRACKED_QUERIES = 256
-const TRACKED_QUERY_TTL_MS = 15 * 60 * 1000
+const QUERY_RUN_TTL_MS = RAG_QUERY_RUN_TTL_SECONDS * 1000
 const PC_WORKER_ONLINE_WINDOW_MS = 120_000
 const QUERY_PENDING_STATUSES = new Set(['pending', 'leased', 'running', 'queued', 'active'])
 const QUERY_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'canceled', 'complete', 'degraded', 'abstained'])
 const OPAQUE_RUN_ID_PATTERN = /^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._~-]{2,127}$/u
 const ANSWER_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,255}$/u
 const ANSWER_HASH_PATTERN = /^[a-f0-9]{64}$/u
+const RAG_SOURCE_TYPE_PATTERN = /^(?:document|ebook|code_repository)$/u
+const RAG_SOURCE_STATUS_PENDING = new Set(['building', 'indexing', 'embedding_pending', 'pending', 'processing'])
+const RAG_SOURCE_STATUS_READY = new Set(['text_ready', 'ready', 'active'])
+const RAG_SOURCE_STATUS_PARTIAL = new Set(['partial'])
 
 export const RAG_ROUTE_ERROR_CODES = Object.freeze({
   INPUT_INVALID: 'RAG_QUERY_INPUT_INVALID',
@@ -49,7 +68,13 @@ export const RAG_ROUTE_ERROR_CODES = Object.freeze({
   VISIBILITY_FAILED: 'RAG_QUERY_VISIBILITY_FAILED',
   NOT_FOUND: 'RAG_QUERY_NOT_FOUND',
   CANCEL_CONFLICT: 'RAG_QUERY_CANCEL_CONFLICT',
-  CANCEL_FAILED: 'RAG_QUERY_CANCEL_FAILED'
+  CANCEL_FAILED: 'RAG_QUERY_CANCEL_FAILED',
+  INDEX_INPUT_INVALID: 'RAG_INDEX_INPUT_INVALID',
+  INDEX_REFRESH_CONFLICT: 'RAG_INDEX_REFRESH_CONFLICT',
+  INDEX_REFRESH_FAILED: 'RAG_INDEX_REFRESH_FAILED',
+  SOURCE_STATUS_INPUT_INVALID: 'RAG_SOURCE_STATUS_INPUT_INVALID',
+  SOURCE_NOT_FOUND: 'RAG_SOURCE_NOT_FOUND',
+  SOURCE_STATUS_UNAVAILABLE: 'RAG_SOURCE_STATUS_UNAVAILABLE'
 })
 
 function isPlainObject(value) {
@@ -88,23 +113,141 @@ function nowMs() {
   return Date.now()
 }
 
-function pruneTrackedQueries(registry, timestamp = nowMs()) {
-  for (const [runId, entry] of registry) {
-    if (entry.expiresAt <= timestamp) registry.delete(runId)
-  }
+function timestampText(timestamp = nowMs()) {
+  return new Date(timestamp).toISOString()
 }
 
-function rememberTrackedQuery(registry, entry, timestamp = nowMs()) {
-  pruneTrackedQueries(registry, timestamp)
-  while (registry.size >= MAX_TRACKED_QUERIES) {
-    const oldest = registry.keys().next().value
-    if (oldest === undefined) break
-    registry.delete(oldest)
+function serializeRunContext({ query, evidence, retrieval }) {
+  if (typeof query !== 'string' || !Array.isArray(evidence) || !isPlainObject(retrieval)) return null
+  const context = {
+    query,
+    evidence,
+    retrieval: {
+      query,
+      data: evidence,
+      total: Number.isSafeInteger(retrieval.total) ? retrieval.total : evidence.length,
+      limit: Number.isSafeInteger(retrieval.limit) ? retrieval.limit : DEFAULT_LIMIT,
+      offset: Number.isSafeInteger(retrieval.offset) ? retrieval.offset : 0,
+      retrieval: isPlainObject(retrieval.retrieval) ? retrieval.retrieval : { mode: 'fts', degraded: true }
+    }
   }
-  registry.set(entry.runId, Object.assign(entry, {
-    updatedAt: timestamp,
-    expiresAt: timestamp + TRACKED_QUERY_TTL_MS
-  }))
+  let contextJson
+  try { contextJson = JSON.stringify(context) } catch { return null }
+  if (typeof contextJson !== 'string' || Buffer.byteLength(contextJson, 'utf8') > RAG_QUERY_RUN_CONTEXT_MAX_BYTES) return null
+  return Object.freeze({ context, contextJson })
+}
+
+function parseRunContext(row) {
+  const contextJson = typeof row?.context_json === 'string'
+    ? row.context_json
+    : (typeof row?.contextJson === 'string' ? row.contextJson : null)
+  if (!contextJson || Buffer.byteLength(contextJson, 'utf8') > RAG_QUERY_RUN_CONTEXT_MAX_BYTES) return null
+  let context
+  try { context = JSON.parse(contextJson) } catch { return null }
+  if (!isPlainObject(context) || typeof context.query !== 'string' || !Array.isArray(context.evidence) ||
+      !isPlainObject(context.retrieval) || !Array.isArray(context.retrieval.data)) return null
+  return Object.freeze({
+    query: context.query,
+    evidence: Object.freeze([...context.evidence]),
+    retrieval: Object.freeze({ ...context.retrieval, data: Object.freeze([...context.retrieval.data]) })
+  })
+}
+
+function createUnavailableQueryRunStore() {
+  return Object.freeze({
+    available: false,
+    prune: () => 0,
+    get: () => null,
+    upsert: () => false,
+    updateStatus: () => false
+  })
+}
+
+function createSqliteQueryRunStore(database) {
+  if (!database?.prepare || !hasTable(database, RAG_QUERY_RUN_TABLE)) return createUnavailableQueryRunStore()
+  const prune = (timestamp = nowMs()) => {
+    const expiresAt = timestampText(timestamp)
+    database.prepare(`DELETE FROM ${RAG_QUERY_RUN_TABLE} WHERE expires_at <= ?`).run(expiresAt)
+    database.prepare(`
+      DELETE FROM ${RAG_QUERY_RUN_TABLE}
+       WHERE run_id IN (
+         SELECT run_id FROM ${RAG_QUERY_RUN_TABLE}
+          ORDER BY updated_at DESC, run_id DESC
+          LIMIT -1 OFFSET ?
+       )
+    `).run(RAG_QUERY_RUN_MAX_ROWS)
+  }
+  const readAny = (runId) => database.prepare(`
+    SELECT run_id, owner_scope, task_id, task_idempotency_key, task_type,
+           processor_version, status, context_json, created_at, updated_at, expires_at
+      FROM ${RAG_QUERY_RUN_TABLE}
+     WHERE run_id = ?
+  `).get(runId)
+  return {
+    available: true,
+    prune,
+    get(runId, ownerScope) {
+      if (normalizeRunId(runId) === null || typeof ownerScope !== 'string') return null
+      prune()
+      return database.prepare(`
+        SELECT run_id, owner_scope, task_id, task_idempotency_key, task_type,
+               processor_version, status, context_json, created_at, updated_at, expires_at
+          FROM ${RAG_QUERY_RUN_TABLE}
+         WHERE run_id = ? AND owner_scope = ? AND expires_at > ?
+         LIMIT 1
+      `).get(runId, ownerScope, timestampText()) ?? null
+    },
+    upsert(entry) {
+      const runId = normalizeRunId(entry?.runId)
+      const owner = typeof entry?.ownerScope === 'string' ? entry.ownerScope : null
+      const contextJson = typeof entry?.contextJson === 'string' ? entry.contextJson : null
+      const key = entry?.taskKey
+      const taskId = positiveId(key?.id)
+      const idempotencyKey = typeof key?.idempotencyKey === 'string' && key.idempotencyKey.length <= 256
+        ? key.idempotencyKey
+        : null
+      if (!runId || !owner || !contextJson || (taskId === null && idempotencyKey === null)) return false
+      if (Buffer.byteLength(contextJson, 'utf8') > RAG_QUERY_RUN_CONTEXT_MAX_BYTES) return false
+      prune()
+      const existing = readAny(runId)
+      if (existing && existing.owner_scope !== owner) {
+        const error = new Error('RAG query identity conflict.')
+        error.code = 'RAG_QUERY_IDENTITY_CONFLICT'
+        throw error
+      }
+      const now = timestampText()
+      const expires = timestampText(Date.now() + QUERY_RUN_TTL_MS)
+      if (existing) {
+        database.prepare(`
+          UPDATE ${RAG_QUERY_RUN_TABLE}
+             SET task_id = ?, task_idempotency_key = ?, task_type = 'rag.answer.generate',
+                 processor_version = 'v1', status = ?, context_json = ?, updated_at = ?, expires_at = ?
+           WHERE run_id = ? AND owner_scope = ?
+        `).run(taskId, idempotencyKey, entry.status === 'active' ? 'running' : 'pending', contextJson, now, expires, runId, owner)
+      } else {
+        database.prepare(`
+          INSERT INTO ${RAG_QUERY_RUN_TABLE} (
+            run_id, owner_scope, task_id, task_idempotency_key, task_type,
+            processor_version, status, context_json, created_at, updated_at, expires_at
+          ) VALUES (?, ?, ?, ?, 'rag.answer.generate', 'v1', ?, ?, ?, ?, ?)
+        `).run(runId, owner, taskId, idempotencyKey,
+          entry.status === 'active' ? 'running' : 'pending', contextJson, now, now, expires)
+      }
+      prune()
+      return true
+    },
+    updateStatus(runId, ownerScope, status) {
+      if (normalizeRunId(runId) === null || typeof ownerScope !== 'string' || !QUERY_TERMINAL_STATUSES.has(status)) return false
+      const persistedStatus = status === 'cancelled' || status === 'canceled'
+        ? 'cancelled'
+        : status === 'failed' ? 'failed' : 'succeeded'
+      return database.prepare(`
+        UPDATE ${RAG_QUERY_RUN_TABLE}
+           SET status = ?, updated_at = ?
+         WHERE run_id = ? AND owner_scope = ? AND expires_at > ?
+      `).run(persistedStatus, timestampText(), runId, ownerScope, timestampText()).changes > 0
+    }
+  }
 }
 
 function taskKey(task) {
@@ -149,6 +292,206 @@ function normalizeQueryBody(body) {
   const limit = body.limit === undefined ? DEFAULT_LIMIT : body.limit
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) failInput()
   return Object.freeze({ query, limit })
+}
+
+function normalizeRagIndexRefreshBody(body) {
+  const source = body === undefined || body === null ? {} : body
+  const normalized = normalizeRagIndexTaskInput(source)
+  if (normalized === null) {
+    const error = new Error('RAG index refresh input is invalid.')
+    error.code = RAG_ROUTE_ERROR_CODES.INDEX_INPUT_INVALID
+    throw error
+  }
+  return normalized
+}
+
+function normalizeRagSourceParams(type, id) {
+  if (typeof type !== 'string' || !RAG_SOURCE_TYPE_PATTERN.test(type)) return null
+  const sourceId = positiveId(id)
+  return sourceId === null ? null : Object.freeze({ sourceType: type, sourceId })
+}
+
+function safeStatus(value) {
+  return typeof value === 'string' ? value : null
+}
+
+function safeCount(value) {
+  const count = Number(value)
+  return Number.isSafeInteger(count) && count >= 0 ? count : 0
+}
+
+function publicSourceVersionId(value) {
+  if (typeof value !== 'string') return null
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || normalized.length > 128 || /[\u0000-\u001f\u007f]/u.test(normalized) ||
+      /(?:[A-Za-z]:[\\/]|^\\\\|\/(?:home|root|mnt|var|tmp|etc|opt|srv|data)\/|storage[ _-]?key|(?:sha|sha256)[ _-]?hash|[a-f0-9]{64})/iu.test(normalized)) {
+    return null
+  }
+  return normalized
+}
+
+function publicModelId(value) {
+  return typeof value === 'string' && ANSWER_TOKEN_PATTERN.test(value) ? value : null
+}
+
+function sourceStateStatus(value) {
+  const status = safeStatus(value)
+  if (status === null) return 'missing'
+  if (RAG_SOURCE_STATUS_PENDING.has(status)) return 'pending'
+  if (RAG_SOURCE_STATUS_PARTIAL.has(status)) return 'partial'
+  if (RAG_SOURCE_STATUS_READY.has(status)) return 'ready'
+  if (status === 'failed') return 'failed'
+  if (status === 'stale') return 'stale'
+  return 'unknown'
+}
+
+function embeddingOverallStatus(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return 'missing'
+  const statuses = rows.map((row) => safeStatus(row.status)).filter(Boolean)
+  if (statuses.length === 0) return 'missing'
+  if (statuses.some((status) => status === 'failed')) return 'failed'
+  if (statuses.some((status) => status === 'partial')) return 'partial'
+  if (statuses.every((status) => status === 'active' || status === 'ready')) return 'ready'
+  if (statuses.some((status) => status === 'indexing' || status === 'pending')) return 'pending'
+  if (statuses.some((status) => status === 'stale')) return 'stale'
+  return 'unknown'
+}
+
+function embeddingStatus(value) {
+  const status = safeStatus(value)
+  if (status === 'active' || status === 'ready') return 'ready'
+  if (status === 'indexing' || status === 'pending' || status === 'processing') return 'pending'
+  if (status === 'partial') return 'partial'
+  if (status === 'failed') return 'failed'
+  if (status === 'stale') return 'stale'
+  return 'unknown'
+}
+
+function defaultRagSourceStatusProvider({ database, sourceType, sourceId, checks }) {
+  if (!database?.prepare || !SOURCE_TABLES[sourceType]) return null
+  try {
+    const sourceExists = database.prepare(
+      `SELECT 1 AS present FROM ${SOURCE_TABLES[sourceType]} WHERE id = ? LIMIT 1`
+    ).get(sourceId)
+    if (!sourceExists) return null
+
+    const visibilityCandidate = { sourceType, sourceId }
+    if (sourceType === 'document') {
+      if (!hasTable(database, 'document_versions') || !hasTable(database, 'resource_trash_entries')) return null
+      const version = database.prepare(`
+        SELECT version_row.id
+          FROM document_versions version_row
+          JOIN documents document_row ON document_row.id = version_row.document_id
+         WHERE version_row.document_id = ?
+           AND CAST(version_row.version AS REAL) = CAST(document_row.version AS REAL)
+         ORDER BY version_row.id DESC
+         LIMIT 1
+      `).get(sourceId)
+      const versionId = positiveId(version?.id)
+      if (versionId === null) return null
+      visibilityCandidate.sourceVersionId = String(versionId)
+    }
+    if (typeof checks?.authoritativeVisibility !== 'function' ||
+        checks.authoritativeVisibility(visibilityCandidate) !== true) return null
+
+    const base = {
+      source: Object.freeze({ type: sourceType, id: sourceId }),
+      snapshot: Object.freeze({ status: 'missing' }),
+      chunks: Object.freeze({ status: 'missing', count: 0 }),
+      embedding: Object.freeze({ status: 'missing', models: Object.freeze([]) })
+    }
+    if (!hasTable(database, 'rag_source_snapshots') || !hasTable(database, 'rag_source_state') ||
+        !hasTable(database, 'rag_chunks')) return Object.freeze(base)
+
+    const state = database.prepare(`
+      SELECT status, active_snapshot_id, last_attempt_snapshot_id, last_error_code, updated_at
+        FROM rag_source_state
+       WHERE source_type = ? AND source_id = ?
+       LIMIT 1
+    `).get(sourceType, sourceId)
+    const snapshotId = positiveId(state?.active_snapshot_id) ?? positiveId(state?.last_attempt_snapshot_id)
+    if (snapshotId === null) {
+      return Object.freeze({
+        ...base,
+        sourceState: Object.freeze({
+          status: sourceStateStatus(state?.status),
+          errorCode: typeof state?.last_error_code === 'string' ? state.last_error_code : null,
+          updatedAt: typeof state?.updated_at === 'string' ? state.updated_at : null
+        })
+      })
+    }
+
+    const snapshot = database.prepare(`
+      SELECT id, source_version_id, status, chunk_count, error_count,
+             last_error_code, created_at, completed_at
+        FROM rag_source_snapshots
+       WHERE id = ? AND source_type = ? AND source_id = ?
+       LIMIT 1
+    `).get(snapshotId, sourceType, sourceId)
+    if (!snapshot) return Object.freeze(base)
+    const chunkCount = safeCount(database.prepare(
+      'SELECT COUNT(*) AS count FROM rag_chunks WHERE snapshot_id = ?'
+    ).get(snapshot.id)?.count)
+    const snapshotStatus = sourceStateStatus(snapshot.status)
+    const snapshotData = Object.freeze({
+      id: snapshot.id,
+      status: snapshotStatus,
+      sourceVersionId: publicSourceVersionId(snapshot.source_version_id),
+      chunkCount,
+      errorCount: safeCount(snapshot.error_count),
+      errorCode: typeof snapshot.last_error_code === 'string' ? snapshot.last_error_code : null,
+      createdAt: typeof snapshot.created_at === 'string' ? snapshot.created_at : null,
+      completedAt: typeof snapshot.completed_at === 'string' ? snapshot.completed_at : null
+    })
+    const models = []
+    if (hasTable(database, 'rag_snapshot_embedding_state') && hasTable(database, 'rag_embedding_models') &&
+        hasTable(database, 'rag_chunk_embeddings')) {
+      const rows = database.prepare(`
+        SELECT state.embedding_model_id, state.status, state.vector_count, state.error_count,
+               model.provider, model.model_id, model.model_revision,
+               SUM(CASE WHEN embeddings.status = 'ready'
+                          AND embeddings.chunk_sha256 = chunks.chunk_sha256 THEN 1 ELSE 0 END) AS ready_count
+          FROM rag_snapshot_embedding_state state
+          JOIN rag_embedding_models model ON model.id = state.embedding_model_id
+          LEFT JOIN rag_chunks chunks ON chunks.snapshot_id = state.snapshot_id
+          LEFT JOIN rag_chunk_embeddings embeddings
+            ON embeddings.chunk_id = chunks.id
+           AND embeddings.embedding_model_id = state.embedding_model_id
+         WHERE state.snapshot_id = ?
+         GROUP BY state.id, state.embedding_model_id, state.status, state.vector_count,
+                  state.error_count, model.provider, model.model_id, model.model_revision
+         ORDER BY state.embedding_model_id ASC
+      `).all(snapshot.id)
+      for (const row of rows) {
+        models.push(Object.freeze({
+          modelId: publicModelId(row.model_id),
+          status: embeddingStatus(row.status),
+          vectorCount: safeCount(row.vector_count),
+          readyCount: safeCount(row.ready_count),
+          errorCount: safeCount(row.error_count)
+        }))
+      }
+    }
+    const rawRows = models
+    return Object.freeze({
+      source: Object.freeze({ type: sourceType, id: sourceId }),
+      sourceState: Object.freeze({
+        status: sourceStateStatus(state?.status),
+        errorCode: typeof state?.last_error_code === 'string' ? state.last_error_code : null,
+        updatedAt: typeof state?.updated_at === 'string' ? state.updated_at : null
+      }),
+      snapshot: snapshotData,
+      chunks: Object.freeze({ status: snapshotStatus, count: chunkCount }),
+      embedding: Object.freeze({
+        status: embeddingOverallStatus(rawRows),
+        models: Object.freeze(models)
+      })
+    })
+  } catch {
+    const error = new Error('RAG source status is unavailable.')
+    error.code = RAG_ROUTE_ERROR_CODES.SOURCE_STATUS_UNAVAILABLE
+    throw error
+  }
 }
 
 function defaultDatabaseProvider(req) {
@@ -329,6 +672,24 @@ function createAuthoritativeChecks(database) {
       )`)
       parameters.push(sourceType)
     }
+    if (sourceType === 'document') {
+      const versionId = positiveId(candidate?.sourceVersionId)
+      // A document candidate is only authoritative when its exact immutable
+      // version can be checked. Missing identity/schema is fail-closed.
+      if (versionId === null || !hasTable(database, 'document_versions') ||
+          !hasTable(database, 'resource_trash_entries')) return false
+      predicates.push(`EXISTS (
+        SELECT 1 FROM document_versions version_row
+         WHERE version_row.id = ? AND version_row.document_id = domain_source.id
+      )`)
+      parameters.push(versionId)
+      predicates.push(`NOT EXISTS (
+        SELECT 1 FROM resource_trash_entries version_trash
+         WHERE version_trash.resource_type = 'document_version'
+           AND version_trash.resource_id = ?
+      )`)
+      parameters.push(versionId)
+    }
     if (hasTable(database, 'resource_domain_links')) {
       if (hasTable(database, 'resources')) {
         predicates.push(`(
@@ -416,6 +777,14 @@ function defaultHybridRetrieverFactory({ retrievalConfig, checks }) {
 function defaultTaskStoreProvider() {
   try {
     return getTaskRuntime().getStore()
+  } catch {
+    return null
+  }
+}
+
+function defaultTaskRuntimeProvider() {
+  try {
+    return getTaskRuntime()
   } catch {
     return null
   }
@@ -728,6 +1097,74 @@ async function readTrackedTask(entry, { database, req, taskStoreProvider }) {
   return { store, task: entry.task, persistent: false }
 }
 
+function taskKeyFromPersistedRow(row) {
+  const id = positiveId(row?.task_id ?? row?.taskId)
+  const idempotencyKey = typeof (row?.task_idempotency_key ?? row?.taskIdempotencyKey) === 'string' &&
+      (row.task_idempotency_key ?? row.taskIdempotencyKey).length <= 256
+    ? (row.task_idempotency_key ?? row.taskIdempotencyKey)
+    : null
+  if (id === null && idempotencyKey === null) return null
+  return Object.freeze({
+    ...(id === null ? {} : { id }),
+    ...(idempotencyKey === null ? {} : { idempotencyKey })
+  })
+}
+
+async function loadPersistedQueryEntry({
+  row,
+  database,
+  req,
+  authoritativeChecksFactory,
+  resolvedAnswerServiceFactory,
+  taskStoreProvider,
+  workerAvailable,
+  model,
+  answerConfig
+}) {
+  const runId = normalizeRunId(row?.run_id ?? row?.runId)
+  const owner = row?.owner_scope ?? row?.ownerScope
+  const context = parseRunContext(row)
+  const taskKey = taskKeyFromPersistedRow(row)
+  if (runId === null || typeof owner !== 'string' || !context || !taskKey ||
+      row?.task_type !== undefined && row.task_type !== RAG_ANSWER_TASK_TYPE ||
+      row?.processor_version !== undefined && row.processor_version !== 'v1') return null
+
+  const checks = await Promise.resolve(authoritativeChecksFactory({ database, req }))
+  if (!checks || typeof checks.authoritativeVisibility !== 'function' ||
+      typeof checks.authoritativeActiveSnapshot !== 'function') return null
+  let taskStore = null
+  if (typeof taskStoreProvider === 'function') {
+    try { taskStore = await Promise.resolve(taskStoreProvider({ database, req })) } catch {}
+  }
+  let answerService = null
+  try {
+    answerService = await resolveComponent(resolvedAnswerServiceFactory, {
+      database,
+      req,
+      checks,
+      taskStore,
+      workerAvailable: (contextValue) => workerAvailable({ ...contextValue, database, req }),
+      model,
+      answerConfig
+    })
+  } catch {}
+  return {
+    runId,
+    ownerScope: owner,
+    query: context.query,
+    evidence: context.evidence,
+    retrieval: context.retrieval,
+    checks,
+    answerService,
+    taskStore,
+    task: null,
+    taskKey,
+    status: statusValue(row.status ?? 'pending'),
+    initialAnswer: null,
+    updatedAt: Date.parse(row.updated_at ?? row.updatedAt ?? '') || nowMs()
+  }
+}
+
 async function projectTrackedQuery(entry, task, req) {
   const status = statusValue(safeTaskStatus(task?.status) ?? safeTaskStatus(entry.status) ?? 'pending')
   entry.status = status
@@ -777,6 +1214,9 @@ async function projectTrackedQuery(entry, task, req) {
     answer = entry.initialAnswer
   } else {
     answer = referenceFallback(entry.query, retrieval.data, 'model_unavailable')
+  }
+  if (isPlainObject(answer) && (typeof answer.query !== 'string' || answer.query.length === 0)) {
+    answer = { ...answer, query: entry.query }
   }
   return projectAnswer(answer, retrieval, entry.runId)
 }
@@ -832,17 +1272,27 @@ export function createRagRouter({
   answerServiceFactory = defaultAnswerServiceFactory,
   answerService = null,
   taskStoreProvider = defaultTaskStoreProvider,
+  taskRuntimeProvider = defaultTaskRuntimeProvider,
+  enqueue = enqueueExclusiveRun,
+  sourceStatusProvider = defaultRagSourceStatusProvider,
   workerAvailable = defaultWorkerAvailable,
   vectorAvailable = () => false,
   model = undefined,
   retrievalConfig = {},
   answerConfig = {},
-  requestIdFactory = () => crypto.randomUUID()
+  requestIdFactory = () => crypto.randomUUID(),
+  queryRunStore = null
 } = {}) {
   const router = express.Router()
   router.use(requireOwner)
-  const trackedQueries = new Map()
   const resolveConfiguredModel = () => model === undefined ? readRagAnswerModelFromEnv() : model
+  const resolveQueryRunStore = async (database, req) => {
+    if (typeof queryRunStore === 'function') {
+      try { return await Promise.resolve(queryRunStore({ database, req })) } catch { return createUnavailableQueryRunStore() }
+    }
+    if (queryRunStore && typeof queryRunStore === 'object') return queryRunStore
+    return createSqliteQueryRunStore(database)
+  }
 
   const resolvedCandidateProvider = retrieveCandidates ?? candidateProvider ?? ((options) => defaultCandidateProvider({
     ...options,
@@ -864,6 +1314,91 @@ export function createRagRouter({
       return res.json({ data: status })
     } catch {
       return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.UNAVAILABLE)
+    }
+  })
+
+  router.post('/index/refresh', requireWritePermission, async (req, res) => {
+    let input
+    try {
+      input = normalizeRagIndexRefreshBody(req.body)
+    } catch {
+      return sendCode(res, 400, RAG_ROUTE_ERROR_CODES.INDEX_INPUT_INVALID)
+    }
+    try {
+      const database = await Promise.resolve(databaseProvider(req))
+      const runtime = typeof taskRuntimeProvider === 'function' ? taskRuntimeProvider() : null
+      let store = null
+      try { store = runtime?.getStore?.() ?? null } catch {}
+      const enqueueOperation = store && typeof store.enqueueExclusiveRun === 'function'
+        ? (value, options) => store.enqueueExclusiveRun(value, options)
+        : (value, options) => enqueue(database, value, options)
+      const identity = String(requestIdFactory()).normalize('NFKC').trim()
+      if (!identity || identity.length > 128 || /[\u0000-\u001f\u007f]/u.test(identity)) {
+        return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.INDEX_REFRESH_FAILED)
+      }
+      const taskInput = {
+        taskType: RAG_INDEX_TASK_TYPE,
+        processorVersion: RAG_INDEX_PROCESSOR_VERSION,
+        subjectType: RAG_INDEX_SUBJECT_TYPE,
+        subjectId: RAG_INDEX_SUBJECT_ID,
+        subjectVersionId: identity,
+        executionClass: RAG_INDEX_EXECUTION_CLASS,
+        input
+      }
+      const outcome = await Promise.resolve(enqueueOperation(taskInput, {
+        mutexTaskTypes: [RAG_INDEX_TASK_TYPE]
+      }))
+      if (!outcome || outcome.activeConflict === true || outcome.outcome === 'active-conflict') {
+        return sendCode(res, 409, RAG_ROUTE_ERROR_CODES.INDEX_REFRESH_CONFLICT)
+      }
+      const data = projectTask(outcome.task)
+      if (!data || data.taskType !== RAG_INDEX_TASK_TYPE) {
+        return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.INDEX_REFRESH_FAILED)
+      }
+      return res.status(202).json({ data })
+    } catch (error) {
+      if (error?.code === 'TASK_STATE_CONFLICT') {
+        return sendCode(res, 409, RAG_ROUTE_ERROR_CODES.INDEX_REFRESH_CONFLICT)
+      }
+      return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.INDEX_REFRESH_FAILED)
+    }
+  })
+
+  router.get('/sources/:type/:id/status', async (req, res) => {
+    const source = normalizeRagSourceParams(req.params.type, req.params.id)
+    if (source === null) return sendCode(res, 400, RAG_ROUTE_ERROR_CODES.SOURCE_STATUS_INPUT_INVALID)
+    try {
+      const database = await Promise.resolve(databaseProvider(req))
+      const checks = await Promise.resolve(authoritativeChecksFactory({ database, req }))
+      // The built-in document status provider resolves and checks the exact
+      // current document version before returning status. Injected providers
+      // retain the route-level identity check for test/application adapters.
+      const providerDoesVersionCheck = source.sourceType === 'document' &&
+        sourceStatusProvider === defaultRagSourceStatusProvider
+      if (!checks || typeof checks.authoritativeVisibility !== 'function' ||
+          (!providerDoesVersionCheck && checks.authoritativeVisibility({
+            sourceType: source.sourceType,
+            sourceId: source.sourceId
+          }) !== true)) {
+        return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND)
+      }
+      const data = await Promise.resolve(sourceStatusProvider({
+        database,
+        req,
+        checks,
+        sourceType: source.sourceType,
+        sourceId: source.sourceId
+      }))
+      if (data === null || data === undefined) return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND)
+      return res.json({ data })
+    } catch (error) {
+      if (error?.code === RAG_ROUTE_ERROR_CODES.SOURCE_STATUS_INPUT_INVALID) {
+        return sendCode(res, 400, error.code)
+      }
+      if (error?.code === RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND) {
+        return sendCode(res, 404, error.code)
+      }
+      return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.SOURCE_STATUS_UNAVAILABLE)
     }
   })
 
@@ -929,6 +1464,10 @@ export function createRagRouter({
       let answer
       let taskStore = null
       let resolvedAnswerService = null
+      let runStore = null
+      const persistedContext = evidence.length > 0
+        ? serializeRunContext({ query: input.query, evidence, retrieval: authorizedRetrieval })
+        : null
       if (!Array.isArray(evidence) || evidence.length === 0) {
         answer = {
           status: 'abstained',
@@ -940,6 +1479,8 @@ export function createRagRouter({
           degraded: false,
           citations: []
         }
+      } else if (!persistedContext) {
+        answer = referenceFallback(input.query, evidence, 'query_context_too_large')
       } else {
         taskStore = await Promise.resolve(taskStoreProvider({ database, req }))
         const workerAvailability = (context) => workerAvailable({ ...context, database, req })
@@ -972,25 +1513,34 @@ export function createRagRouter({
       if (requiresRunId && runId === null) {
         answer = referenceFallback(input.query, evidence, 'task_store_unavailable')
       }
+      if (requiresRunId && runId !== null &&
+          (answer?.status === 'queued' || answer?.status === 'active')) {
+        runStore = await resolveQueryRunStore(database, req)
+        const binding = taskKey(answer.task)
+        if (!persistedContext || !binding || !runStore || runStore.available === false ||
+            typeof runStore.upsert !== 'function') {
+          answer = referenceFallback(input.query, evidence, 'query_state_unavailable')
+        } else {
+          try {
+            const saved = await Promise.resolve(runStore.upsert({
+              runId,
+              ownerScope: ownerScope(req),
+              query: input.query,
+              evidence,
+              retrieval: authorizedRetrieval,
+              contextJson: persistedContext.contextJson,
+              taskKey: binding,
+              status: answer.status
+            }))
+            if (saved !== true) answer = referenceFallback(input.query, evidence, 'query_state_unavailable')
+          } catch {
+            answer = referenceFallback(input.query, evidence, 'query_state_unavailable')
+          }
+        }
+      }
       const response = projectAnswer(answer, authorizedRetrieval, runId)
       if (requiresRunId && response.cancellable === true) {
         response.cancellable = typeof taskStore?.cancel === 'function'
-      }
-      if ((answer?.status === 'queued' || answer?.status === 'active') && runId !== null) {
-        rememberTrackedQuery(trackedQueries, {
-          runId,
-          ownerScope: ownerScope(req),
-          query: input.query,
-          evidence,
-          retrieval: authorizedRetrieval,
-          checks,
-          answerService: resolvedAnswerService,
-          taskStore,
-          task: isPlainObject(answer.task) ? answer.task : null,
-          taskKey: taskKey(answer.task),
-          initialAnswer: answer,
-          status: answer.status
-        })
       }
       const httpStatus = response.status === 'queued' || response.status === 'active' ? 202 : 200
       return res.status(httpStatus).json({ data: response })
@@ -1001,22 +1551,37 @@ export function createRagRouter({
 
   router.get('/queries/:runId', async (req, res) => {
     const runId = normalizeRunId(req.params.runId)
-    pruneTrackedQueries(trackedQueries)
-    const entry = runId === null ? null : trackedQueries.get(runId)
-    if (!entry || entry.ownerScope !== ownerScope(req)) {
-      return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
-    }
-    entry.expiresAt = nowMs() + TRACKED_QUERY_TTL_MS
+    if (runId === null) return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
     try {
       const database = await Promise.resolve(databaseProvider(req))
+      const store = await resolveQueryRunStore(database, req)
+      if (!store || store.available === false || typeof store.get !== 'function') {
+        return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
+      }
+      const row = await Promise.resolve(store.get(runId, ownerScope(req)))
+      if (!row) return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
+      const entry = await loadPersistedQueryEntry({
+        row,
+        database,
+        req,
+        authoritativeChecksFactory,
+        resolvedAnswerServiceFactory,
+        taskStoreProvider,
+        workerAvailable,
+        model: resolveConfiguredModel(),
+        answerConfig
+      })
+      if (!entry) return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
       const loaded = await readTrackedTask(entry, { database, req, taskStoreProvider })
       if (loaded.persistent && loaded.task === null) {
-        trackedQueries.delete(runId)
         return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
       }
       if (loaded.store) entry.taskStore = loaded.store
       if (loaded.task) entry.task = loaded.task
       const data = await projectTrackedQuery(entry, loaded.task ?? entry.task, req)
+      if (isTaskTerminal(entry.status) && typeof store.updateStatus === 'function') {
+        try { await Promise.resolve(store.updateStatus(runId, ownerScope(req), entry.status)) } catch {}
+      }
       return res.json({ data })
     } catch {
       return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.UNAVAILABLE)
@@ -1025,14 +1590,27 @@ export function createRagRouter({
 
   router.post('/queries/:runId/cancel', async (req, res) => {
     const runId = normalizeRunId(req.params.runId)
-    pruneTrackedQueries(trackedQueries)
-    const entry = runId === null ? null : trackedQueries.get(runId)
-    if (!entry || entry.ownerScope !== ownerScope(req)) {
-      return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
-    }
-    entry.expiresAt = nowMs() + TRACKED_QUERY_TTL_MS
+    if (runId === null) return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
     try {
       const database = await Promise.resolve(databaseProvider(req))
+      const store = await resolveQueryRunStore(database, req)
+      if (!store || store.available === false || typeof store.get !== 'function') {
+        return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
+      }
+      const row = await Promise.resolve(store.get(runId, ownerScope(req)))
+      if (!row) return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
+      const entry = await loadPersistedQueryEntry({
+        row,
+        database,
+        req,
+        authoritativeChecksFactory,
+        resolvedAnswerServiceFactory,
+        taskStoreProvider,
+        workerAvailable,
+        model: resolveConfiguredModel(),
+        answerConfig
+      })
+      if (!entry) return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.NOT_FOUND)
       const loaded = await readTrackedTask(entry, { database, req, taskStoreProvider })
       const task = loaded.task ?? entry.task
       const status = statusValue(safeTaskStatus(task?.status) ?? safeTaskStatus(entry.status) ?? 'pending')
@@ -1045,6 +1623,9 @@ export function createRagRouter({
       }
       entry.task = cancelledTask
       entry.status = 'cancelled'
+      if (typeof store.updateStatus === 'function') {
+        try { await Promise.resolve(store.updateStatus(runId, ownerScope(req), 'cancelled')) } catch {}
+      }
       return res.json({ data: projectCancelledQuery(runId) })
     } catch (error) {
       if (error?.code === RAG_ROUTE_ERROR_CODES.CANCEL_CONFLICT ||
@@ -1058,6 +1639,6 @@ export function createRagRouter({
   return router
 }
 
-export { normalizeQueryBody }
+export { createAuthoritativeChecks, normalizeQueryBody, normalizeRagIndexRefreshBody }
 export const createRagQueryRouter = createRagRouter
 export default createRagRouter()

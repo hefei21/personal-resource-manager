@@ -145,6 +145,12 @@ test('classifies the mounted RAG path from originalUrl and keeps non-RAG compati
   assert.equal(serializeRagLogMetadata({ answer: sentinels.answer }), null)
 })
 
+test('global request console logging uses the path component and never the query', () => {
+  const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
+  assert.match(source, /console\.log\(.*req\.method.*req\.path/u)
+  assert.doesNotMatch(source, /console\.log\(.*req\.method.*req\.url/u)
+})
+
 test('RAG request bodies and content-shaped nested fields never enter access_logs or queryLogs', nativeTestOptions, async () => {
   database.exec('DELETE FROM access_logs')
   const body = {

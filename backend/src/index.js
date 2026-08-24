@@ -31,6 +31,7 @@ import './services/nasScanTaskProcessor.js'
 import './services/resourceDomainImportTaskProcessor.js'
 import './services/gitNasTaskProcessor.js'
 import './services/searchIndexTaskProcessor.js'
+import './services/ragIndexTaskProcessor.js'
 
 // 导入安全中间件
 import {
@@ -178,7 +179,7 @@ app.use((req, res, next) => {
 
 // 请求日志中间件
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`)
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`)
   next()
 })
 

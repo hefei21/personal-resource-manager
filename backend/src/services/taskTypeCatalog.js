@@ -31,6 +31,15 @@ const NAS_RESOURCE_TASK_TYPES = Object.freeze([
 ])
 
 const RESOURCE_DOMAIN_SCOPES = new Set(['all', 'documents', 'ebooks', 'music'])
+const RAG_SOURCE_TYPES = new Set(['document', 'ebook', 'code_repository'])
+const RAG_SOURCE_TYPE_ALIASES = new Map([
+  ['documents', 'document'],
+  ['ebooks', 'ebook'],
+  ['books', 'ebook'],
+  ['repositories', 'code_repository'],
+  ['code', 'code_repository']
+])
+const MAX_RAG_SOURCE_IDS = 500
 
 const CODE_CLONE_RESULT_MESSAGES = new Set(['克隆完成'])
 const CODE_SYNC_RESULT_MESSAGES = new Set([
@@ -171,6 +180,72 @@ function projectSearchIndexInput(input) {
   const includeCodeFiles = input.includeCodeFiles === undefined ? true : input.includeCodeFiles
   if (typeof rebuild !== 'boolean' || typeof includeCodeFiles !== 'boolean') return null
   return Object.freeze({ rebuild, includeCodeFiles })
+}
+
+function projectRagSourceType(value, allowAll = false) {
+  if (typeof value !== 'string') return null
+  const normalized = value.normalize('NFKC').trim().toLowerCase()
+  if (allowAll && normalized === 'all') return 'all'
+  if (RAG_SOURCE_TYPES.has(normalized)) return normalized
+  return RAG_SOURCE_TYPE_ALIASES.get(normalized) ?? null
+}
+
+function projectRagSource(value) {
+  if (value === undefined || value === null || value === 'all') return Object.freeze({ type: 'all', id: null })
+  if (typeof value === 'string') {
+    const type = projectRagSourceType(value, true)
+    return type === null ? null : Object.freeze({ type, id: null })
+  }
+  if (!isPlainObject(value) || Object.keys(value).some((key) => !['type', 'id'].includes(key))) return null
+  const type = projectRagSourceType(value.type, true)
+  if (type === null) return null
+  const id = value.id === undefined || value.id === null ? null : safePositiveInteger(value.id)
+  if (value.id !== undefined && value.id !== null && id === null) return null
+  if (type === 'all' && id !== null) return null
+  return Object.freeze({ type, id })
+}
+
+function projectRagIndexFilter(value) {
+  if (value === undefined || value === null) return null
+  if (!isPlainObject(value)) return null
+  const keys = Object.keys(value)
+  if (keys.some((key) => !['sourceType', 'sourceIds', 'ids'].includes(key)) ||
+      (Object.hasOwn(value, 'sourceIds') && Object.hasOwn(value, 'ids'))) return null
+  const sourceType = value.sourceType === undefined || value.sourceType === null
+    ? null
+    : projectRagSourceType(value.sourceType)
+  if (value.sourceType !== undefined && value.sourceType !== null && sourceType === null) return null
+  const idsValue = Object.hasOwn(value, 'sourceIds') ? value.sourceIds : value.ids
+  let sourceIds = null
+  if (idsValue !== undefined) {
+    if (!Array.isArray(idsValue) || idsValue.length > MAX_RAG_SOURCE_IDS) return null
+    const seen = new Set()
+    sourceIds = []
+    for (const item of idsValue) {
+      const id = safePositiveInteger(item)
+      if (id === null || seen.has(id)) return null
+      seen.add(id)
+      sourceIds.push(id)
+    }
+  }
+  if (sourceType === null && sourceIds === null) return null
+  return Object.freeze({
+    ...(sourceType === null ? {} : { sourceType }),
+    ...(sourceIds === null ? {} : { sourceIds: Object.freeze(sourceIds) })
+  })
+}
+
+function projectRagIndexInput(input) {
+  if (!isPlainObject(input) || Object.keys(input).some((key) => !['source', 'filter', 'rebuild'].includes(key))) return null
+  const source = projectRagSource(input.source)
+  if (source === null) return null
+  const filter = projectRagIndexFilter(input.filter)
+  if (input.filter !== undefined && input.filter !== null && filter === null) return null
+  const rebuild = input.rebuild === undefined ? false : input.rebuild
+  if (typeof rebuild !== 'boolean') return null
+  if (source.id !== null && filter?.sourceIds && !filter.sourceIds.includes(source.id)) return null
+  if (source.type !== 'all' && filter?.sourceType && filter.sourceType !== source.type) return null
+  return Object.freeze({ source, ...(filter === null ? {} : { filter }), rebuild })
 }
 
 function projectAnimeRefreshInput(input) {
@@ -446,6 +521,19 @@ function projectSearchIndexResult(result) {
   return Object.freeze({ ...projected, ...(status ? { status } : {}) })
 }
 
+function projectRagIndexResult(result) {
+  if (!isPlainObject(result)) return null
+  const projected = projectCounterResult(result, [
+    'sourceCount', 'indexedCount', 'skippedCount', 'failedCount', 'errorCount', 'chunkCount'
+  ])
+  const status = ['ready', 'partial'].includes(result.status) ? result.status : null
+  if (!projected && status === null) return null
+  return Object.freeze({
+    ...(projected ?? {}),
+    ...(status === null ? {} : { status })
+  })
+}
+
 function projectResourceDomainResult(result) {
   return projectCounterResult(result, [
     'processed', 'resourcesCreated', 'resourcesReused', 'sourcesCreated',
@@ -631,6 +719,30 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     cloneInput: cloneSearchIndexInput,
     projectResult: projectSearchIndexResult,
     mutexTaskTypes: ['search.index.refresh']
+  }),
+  'rag.index.refresh': createDefinition({
+    taskType: 'rag.index.refresh',
+    executionClass: 'disk',
+    subjectType: 'rag-index',
+    subjectId: 'owner',
+    projectInput: projectRagIndexInput,
+    cloneInput: (input) => {
+      const projected = projectRagIndexInput(input)
+      return projected === null ? null : Object.freeze({
+        source: Object.freeze({ ...projected.source }),
+        ...(projected.filter === undefined ? {} : {
+          filter: Object.freeze({
+            ...projected.filter,
+            ...(projected.filter.sourceIds === undefined ? {} : {
+              sourceIds: Object.freeze([...projected.filter.sourceIds])
+            })
+          })
+        }),
+        rebuild: projected.rebuild
+      })
+    },
+    projectResult: projectRagIndexResult,
+    mutexTaskTypes: ['rag.index.refresh']
   }),
   'code.repository.git_nas.discover': createDefinition({
     taskType: 'code.repository.git_nas.discover',
