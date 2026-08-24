@@ -525,6 +525,8 @@ export async function runRagVectorHybridEvaluation(options = {}) {
   const vectors = new Map(documentItems.map((item) => [item.id, documents.vectors.get(item.id)]))
   const normalizedQueries = queries
   const fts = await createFtsRanker(corpus.entries)
+  const ftsRanker = (queryText, filters) => capBySource(fts.rank(queryText, filters), 3)
+  const ftsReport = rankReport(corpus.entries, normalizedQueries, ftsRanker, config.iterations)
   const vectorRanker = (queryText, filters) => {
     const query = normalizedQueries.find((item) => item.q === queryText)
     const vector = queryVectors.vectors.get(query.id)
@@ -559,6 +561,7 @@ export async function runRagVectorHybridEvaluation(options = {}) {
     corpus: Object.freeze({ sourceCount: corpus.sourceCount, chunkCount: corpus.entries.length, ftsEngine: fts.engine }),
     cache: Object.freeze({ ...cacheState.stats, documentCalls: documents.calls, queryCalls: queryVectors.calls }),
     modes: Object.freeze({
+      fts: ftsReport,
       vector: vectorReport,
       hybrid: Object.freeze(hybridReports)
     })
@@ -608,7 +611,22 @@ async function main() {
     apiKey: args.apikey ?? process.env.EMBEDDING_API_KEY,
     tokenizer
   })
-  process.stdout.write(`RAG_VECTOR_HYBRID_EVALUATION ${JSON.stringify(report)}\n`)
+  const output = args.output ?? 'full'
+  if (!['full', 'summary'].includes(output)) fail('RAG_EVAL_CONFIG_INVALID', 'output is invalid.')
+  const printable = output === 'summary'
+    ? {
+        ...report,
+        modes: {
+          fts: { ...report.modes.fts, details: undefined },
+          vector: { ...report.modes.vector, details: undefined },
+          hybrid: report.modes.hybrid.map((item) => ({
+            ...item,
+            report: { ...item.report, details: undefined }
+          }))
+        }
+      }
+    : report
+  process.stdout.write(`RAG_VECTOR_HYBRID_EVALUATION ${JSON.stringify(printable)}\n`)
 }
 
 const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url

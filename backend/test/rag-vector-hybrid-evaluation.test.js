@@ -78,6 +78,7 @@ test('runs reproducible vector and RRF/weight evaluation with hash-bound cache',
     assert.equal(first.configuration.docPrefix, 'doc: ')
     assert.equal(first.configuration.queryPrefix, 'query: ')
     assert.equal(first.modes.vector.answerableQueryCount, 51)
+    assert.equal(first.modes.fts.answerableQueryCount, 51)
     assert.equal(first.modes.hybrid.length, 5)
     assert.ok(first.modes.vector.recallAt5 >= 0 && first.modes.vector.recallAt5 <= 1)
     assert.ok(first.modes.vector.p95Ms >= first.modes.vector.p50Ms)
