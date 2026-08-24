@@ -58,6 +58,7 @@ import bookmarksRoutes from './routes/bookmarks.js'
 import animeRoutes from './routes/anime.js'
 import gamesRoutes from './routes/games.js'
 import searchRoutes from './routes/search.js'
+import ragRoutes from './routes/rag.js'
 import bookSearchRoutes from './routes/bookSearch.js'
 import todosRoutes from './routes/todos.js'
 import blogRoutes from './routes/blog.js'
@@ -301,6 +302,7 @@ app.use('/api/bookmarks', ...ownerOnly, bookmarksRoutes)
 app.use('/api/anime', ...ownerOnly, animeRoutes)
 app.use('/api/games', ...ownerOnly, gamesRoutes)
 app.use('/api/search', ...ownerOnly, searchRoutes)
+app.use('/api/rag', ...ownerOnly, ragRoutes)
 app.use('/api/book-search', ...ownerOnly, bookSearchRoutes)
 app.use('/api/todos', ...ownerOnly, todosRoutes)
 app.use('/api/blog', ...ownerOnly, blogRoutes)
