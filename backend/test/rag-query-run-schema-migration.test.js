@@ -88,7 +88,12 @@ test('registers 0086 with a frozen compatible shape and restart-safe indexes', n
       reason: 'matched'
     })
     assert.deepEqual(
-      database.prepare(`SELECT name, type FROM sqlite_schema WHERE name LIKE 'rag_query_runs%' ORDER BY type, name`).all(),
+      database.prepare(`
+        SELECT name, type
+          FROM sqlite_schema
+         WHERE name = ? OR tbl_name = ?
+         ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name
+      `).all(RAG_QUERY_RUN_TABLE, RAG_QUERY_RUN_TABLE),
       [
         { name: RAG_QUERY_RUN_TABLE, type: 'table' },
         { name: 'idx_rag_query_runs_expiry', type: 'index' },

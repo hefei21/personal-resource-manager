@@ -993,6 +993,7 @@ test('static contract runs the startup gate once after base tables and before al
   const persistedBaseCodeRepositoryDdl = databaseSource
     .slice(baseCodeRepositoryStart, baseCodeRepositoryEnd + '    )'.length)
     .replace('CREATE TABLE IF NOT EXISTS', 'CREATE TABLE')
+    .replace(/\r\n/gu, '\n')
   assert.equal(
     createHash('sha256').update(Buffer.from(persistedBaseCodeRepositoryDdl, 'utf8')).digest('hex'),
     applicationMigrationRegistry.migrations[36].compatibility.targetProof.createTableSqlSha256

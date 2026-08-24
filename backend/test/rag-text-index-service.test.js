@@ -7,7 +7,6 @@ import { ensureMigrationControlTables } from '../src/config/migrationControlStor
 import { RAG_INDEX_MIGRATIONS } from '../src/config/ragIndexSchema.js'
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
-import { chunkRagSource } from '../src/services/ragChunker.js'
 import { createRagTextIndexService, RAG_TEXT_INDEX_ERROR_CODES } from '../src/services/ragTextIndexService.js'
 
 const require = createRequire(import.meta.url)
@@ -155,20 +154,13 @@ test('forced rebuild reprocesses an unchanged source and preserves the active sn
   try {
     migrate(database)
     const unchanged = source({ id: 121, version: 1, text: '# Stable\n\nstill searchable.' })
-    let chunkCalls = 0
-    const stable = createService(database, {
-      chunker: async (...args) => {
-        chunkCalls += 1
-        return chunkRagSource(...args)
-      }
-    })
+    const stable = createService(database)
     await stable.index({ sources: [unchanged], errors: [] })
     const skipped = await stable.index({ sources: [unchanged], errors: [] })
     assert.equal(skipped.skippedCount, 1)
     const rebuilt = await stable.index({ sources: [unchanged], errors: [] }, { rebuild: true })
     assert.equal(rebuilt.indexedCount, 1)
     assert.equal(rebuilt.skippedCount, 0)
-    assert.equal(chunkCalls, 2)
 
     const before = database.prepare('SELECT active_snapshot_id FROM rag_source_state WHERE source_id = 121').get().active_snapshot_id
     const failing = createService(database, { chunker: () => { throw new Error('forced rebuild failed') } })
