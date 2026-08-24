@@ -105,6 +105,26 @@ function runtimeStore(runtimeProvider) {
 
 function contentRecord(database, task) {
   const input = task?.input
+  if (task?.taskType === 'rag.content.extract') {
+    const sourceId = positiveId(input?.sourceId)
+    const domainType = input?.sourceType === 'document' ? 'document' : input?.sourceType === 'ebook' ? 'ebook' : null
+    if (sourceId === null || domainType === null) return null
+    const row = database.prepare(`
+      SELECT rv.id AS resource_version_id, rv.resource_id, rv.content_object_id,
+             c.sha256, c.bytes, c.managed_storage_key, r.lifecycle_status
+        FROM resource_domain_links link
+        JOIN resources r ON r.id = link.resource_id
+        JOIN resource_versions rv ON rv.resource_id = r.id AND rv.is_current = 1
+        JOIN content_objects c ON c.id = rv.content_object_id
+       WHERE link.domain_type = ? AND link.domain_id = ?
+       ORDER BY rv.id DESC
+       LIMIT 1
+    `).get(domainType, sourceId)
+    if (!row || row.lifecycle_status !== 'active' || row.managed_storage_key === null ||
+        row.sha256 !== input.sourceContentSha256 || row.sha256 !== task.subjectContentHash ||
+        Number(row.bytes) !== input.contentBytes) return null
+    return row
+  }
   const resourceVersionId = positiveId(input?.resourceVersionId)
   const contentObjectId = positiveId(input?.contentObjectId)
   if (resourceVersionId === null || contentObjectId === null) return null
@@ -160,6 +180,9 @@ function staleResultError() {
 function currentSnapshotIdentity(database, task, input) {
   if (!['rag.embedding.generate', 'rag.content.extract'].includes(task.taskType)) return input
   try {
+    if (task.taskType === 'rag.content.extract') {
+      return contentRecord(database, task) ? { ...input } : null
+    }
     if (task.taskType === 'rag.embedding.generate') {
       const row = database.prepare(`
         SELECT snapshot.id, snapshot.source_type, snapshot.source_id,
@@ -175,21 +198,6 @@ function currentSnapshotIdentity(database, task, input) {
           row.source_version_id !== input.sourceVersionId || row.source_content_sha256 !== input.sourceContentSha256) return null
       return { ...input, snapshotId: Number(row.id), model: input.model }
     }
-      const row = database.prepare(`
-        SELECT snapshot.source_type, snapshot.source_id, snapshot.source_version_id,
-               snapshot.source_content_sha256
-          FROM rag_source_snapshots snapshot
-          JOIN rag_source_state state
-            ON state.source_type = snapshot.source_type AND state.source_id = snapshot.source_id
-           AND state.active_snapshot_id = snapshot.id
-         WHERE snapshot.source_type = ? AND snapshot.source_id = ?
-           AND snapshot.source_version_id = ? AND snapshot.source_content_sha256 = ?
-           AND snapshot.status IN ('text_ready', 'embedding_pending', 'ready', 'partial')
-       ORDER BY snapshot.id DESC
-       LIMIT 1
-    `).get(input.sourceType, input.sourceId, input.sourceVersionId, input.sourceContentSha256)
-    if (!row) return null
-    return { ...input }
   } catch {
     return null
   }

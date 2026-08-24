@@ -256,6 +256,78 @@ test('Owner route requires Owner and enqueues only managed content identifiers',
   })
 })
 
+test('RAG content extraction leases only the current managed source and accepts a hash-bound artifact', async () => {
+  const input = {
+    schemaVersion: 1,
+    sourceType: 'document',
+    sourceId: 7,
+    sourceVersionId: 'version-7',
+    sourceContentSha256: sha256,
+    contentBytes: content.length,
+    format: 'docx'
+  }
+  const task = {
+    id: 43,
+    taskType: 'rag.content.extract',
+    processorVersion: 'v1',
+    executionClass: 'cpu',
+    subjectId: '7',
+    subjectContentHash: sha256,
+    input,
+    status: 'running',
+    leaseOwner: `pcw:${worker.id}`,
+    leaseToken: 'lease-secret',
+    leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+    attemptCount: 1
+  }
+  let succeeded
+  const store = {
+    getById(id) { return Number(id) === task.id ? task : null },
+    succeed({ result }) { succeeded = result; task.status = 'succeeded'; return { id: task.id, status: task.status, progress: 100 } }
+  }
+  const sections = [{ ordinal: 0, title: 'Document', text: 'Grounded text.', locator: { paragraphStart: 0, paragraphEnd: 0 } }]
+  const artifact = JSON.stringify({ schemaVersion: 1, format: 'docx', sections })
+  const artifactSha256 = createHash('sha256').update(artifact).digest('hex')
+  const artifactBytes = Buffer.byteLength(artifact)
+  const result = {
+    schemaVersion: 1,
+    processorVersion: 'v1',
+    output: {
+      sourceVersionId: input.sourceVersionId,
+      sourceContentSha256: sha256,
+      extractorVersion: 'pc-worker-structured-text.v1',
+      artifactSha256,
+      artifactBytes,
+      sectionCount: 1,
+      manifest: { artifactSha256, artifactBytes, sectionCount: 1, format: 'docx', sections }
+    }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => fakeDatabase(),
+    runtime: () => ({ getStore: () => store }),
+    storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
+    authenticate: () => worker
+  }))
+
+  await withServer(app, async (baseUrl) => {
+    const leasedInput = await fetch(`${baseUrl}/agent/tasks/43/input`, {
+      headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+    })
+    assert.equal(leasedInput.status, 200)
+    assert.deepEqual(Buffer.from(await leasedInput.arrayBuffer()), content)
+
+    const complete = await fetch(`${baseUrl}/agent/tasks/43/complete`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'lease-secret', result })
+    })
+    assert.equal(complete.status, 200)
+    assert.equal(succeeded.output.manifest.sections[0].text, 'Grounded text.')
+  })
+})
+
 test('RAG embedding completion is catalog-normalized and stale snapshots are rejected', async () => {
   const model = {
     provider: 'local-provider',

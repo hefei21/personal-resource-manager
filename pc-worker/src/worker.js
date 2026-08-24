@@ -8,6 +8,10 @@ import {
   answerProcessorsForConfig,
   createRagAnswerProcessor
 } from './ragAnswerProcessor.js'
+import {
+  createRagContentExtractProcessor,
+  RAG_CONTENT_EXTRACT_PROCESSOR_CAPABILITY
+} from './ragContentExtractProcessor.js'
 import { readState, stateFromCredentialResponse, writeState } from './stateStore.js'
 import { collectProfile } from './telemetry.js'
 
@@ -45,7 +49,8 @@ function failureFor(error) {
 
 export class PcWorker {
   constructor({ config, api, logger = console, profileProvider = collectProfile, stateReader = readState, stateWriter = writeState,
-    embeddingProcessorFactory = createRagEmbeddingProcessor, answerProcessorFactory = createRagAnswerProcessor, fetchImpl = fetch }) {
+    embeddingProcessorFactory = createRagEmbeddingProcessor, answerProcessorFactory = createRagAnswerProcessor,
+    contentExtractProcessorFactory = createRagContentExtractProcessor, fetchImpl = fetch }) {
     this.config = config
     this.api = api
     this.logger = logger
@@ -59,16 +64,18 @@ export class PcWorker {
     this.statePromise = null
     this.embeddingProcessor = embeddingProcessorFactory({ config: config?.embedding, fetchImpl })
     this.answerProcessor = answerProcessorFactory({ config: config?.answer, fetchImpl })
+    this.contentExtractProcessor = contentExtractProcessorFactory()
     this.activeController = null
   }
 
   profileWithConfiguredProcessors(profile) {
     const extra = [
+      RAG_CONTENT_EXTRACT_PROCESSOR_CAPABILITY,
       ...embeddingProcessorsForConfig(this.config?.embedding),
       ...answerProcessorsForConfig(this.config?.answer)
     ]
     if (!profile?.capabilities || !Array.isArray(profile.capabilities.processors)) return profile
-    const localTaskTypes = new Set(['rag.embedding.generate', 'rag.query.embed', 'rag.answer.generate'])
+    const localTaskTypes = new Set(['rag.content.extract', 'rag.embedding.generate', 'rag.query.embed', 'rag.answer.generate'])
     const existing = profile.capabilities.processors.filter((item) => !localTaskTypes.has(item?.taskType))
     if (extra.length === 0 && existing.length === profile.capabilities.processors.length) return profile
     const keys = new Set(existing.map((item) => `${item.taskType}:${item.processorVersion}:${item.executionClass}:${item.outputSchemaVersion}`))
@@ -142,15 +149,19 @@ export class PcWorker {
       heartbeatTimer.unref?.()
 
       let result
-      if (task.taskType === 'content.inspect') {
+      if (task.taskType === 'content.inspect' || this.contentExtractProcessor.supports(task.taskType)) {
         await this.ensureState()
         const response = await this.api.input(this.state.accessToken, task)
         const headerHash = response.headers.get('x-content-sha256')
         const headerBytes = Number(response.headers.get('content-length'))
-        if (headerHash !== task.input.sha256 || !Number.isSafeInteger(headerBytes) || headerBytes < 0) {
+        const expectedHash = task.taskType === 'content.inspect' ? task.input.sha256 : task.input.sourceContentSha256
+        const expectedBytes = task.taskType === 'content.inspect' ? headerBytes : task.input.contentBytes
+        if (headerHash !== expectedHash || headerBytes !== expectedBytes || !Number.isSafeInteger(headerBytes) || headerBytes < 0) {
           throw Object.assign(new Error('Authorized input headers are inconsistent.'), { code: 'WORKER_INPUT_MISMATCH', retryable: false })
         }
-        result = await inspectContent(response.body, { sha256: task.input.sha256, bytes: headerBytes })
+        result = task.taskType === 'content.inspect'
+          ? await inspectContent(response.body, { sha256: task.input.sha256, bytes: headerBytes })
+          : await this.contentExtractProcessor.process(task, response.body, { signal: controller.signal })
       } else if (this.embeddingProcessor.supports(task.taskType)) {
         result = await this.embeddingProcessor.process(task, { signal: controller.signal })
       } else if (this.answerProcessor.supports(task.taskType)) {

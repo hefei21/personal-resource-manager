@@ -18,7 +18,7 @@ const MAX_REASON_BYTES = 128
 const MAX_CITATION_ID_BYTES = 128
 
 const SOURCE_TYPES = new Set(['document', 'ebook', 'code_repository'])
-const FORMATS = new Set(['markdown', 'html', 'txt', 'ebook', 'repository_document'])
+const FORMATS = new Set(['markdown', 'html', 'txt', 'ebook', 'repository_document', 'pdf', 'docx', 'epub'])
 const DISTANCES = new Set(['cosine', 'dot', 'euclid'])
 const NORMALIZATIONS = new Set(['none', 'l2'])
 
@@ -233,7 +233,8 @@ function projectContentExtractInput(input) {
     'schemaVersion', 'sourceType', 'sourceId', 'sourceVersionId', 'sourceContentSha256', 'contentBytes', 'format'
   ], 'task.input')
   if (input.schemaVersion !== 1) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
-  const projected = freeze({ schemaVersion: 1, ...sourceIdentity(input, 'task.input') })
+  const { schemaVersion: _schemaVersion, ...source } = input
+  const projected = freeze({ schemaVersion: 1, ...sourceIdentity(source, 'task.input') })
   assertSerializedBytes(projected, LIMITS.contentExtract.inputMaxBytes, 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE')
   return projected
 }
@@ -378,16 +379,41 @@ function normalizeContentExtractResult(value, expected) {
     sectionCount: positiveInteger(value.sectionCount, 'result.output.sectionCount', 100_000)
   }
   if (value.manifest !== undefined) {
-    exactKeys(value.manifest, ['artifactSha256', 'artifactBytes', 'sectionCount'], 'result.output.manifest')
+    exactKeys(value.manifest, ['artifactSha256', 'artifactBytes', 'sectionCount', 'format', 'sections'], 'result.output.manifest')
     if (hash(value.manifest.artifactSha256, 'result.output.manifest.artifactSha256') !== normalized.artifactSha256 ||
         value.manifest.artifactBytes !== normalized.artifactBytes || value.manifest.sectionCount !== normalized.sectionCount) {
       fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result manifest does not match output.')
     }
+    const format = token(value.manifest.format, 'result.output.manifest.format', 64).toLowerCase()
+    if (!FORMATS.has(format) || !Array.isArray(value.manifest.sections) || value.manifest.sections.length !== normalized.sectionCount) {
+      fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result manifest sections are invalid.')
+    }
+    const sections = value.manifest.sections.map((section, index) => {
+      exactKeys(section, ['ordinal', 'title', 'text', 'locator'], `result.output.manifest.sections[${index}]`)
+      if (!isPlainObject(section.locator)) fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result section locator is invalid.')
+      const locatorKeys = Object.keys(section.locator)
+      if (locatorKeys.length === 0 || locatorKeys.some((key) => !['page', 'spineIndex', 'paragraphStart', 'paragraphEnd'].includes(key)) ||
+          Object.values(section.locator).some((item) => !Number.isSafeInteger(item) || item < 0)) {
+        fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result section locator is invalid.')
+      }
+      return freeze({
+        ordinal: nonNegativeInteger(section.ordinal, `result.output.manifest.sections[${index}].ordinal`, 100_000),
+        title: boundedOutputText(section.title, `result.output.manifest.sections[${index}].title`, 2048),
+        text: boundedOutputText(section.text, `result.output.manifest.sections[${index}].text`, LIMITS.contentExtract.outputMaxBytes),
+        locator: freeze({ ...section.locator })
+      })
+    })
     normalized.manifest = freeze({
       artifactSha256: normalized.artifactSha256,
       artifactBytes: normalized.artifactBytes,
-      sectionCount: normalized.sectionCount
+      sectionCount: normalized.sectionCount,
+      format,
+      sections
     })
+    const artifact = JSON.stringify({ schemaVersion: 1, format, sections })
+    if (byteLength(artifact) !== normalized.artifactBytes || crypto.createHash('sha256').update(artifact).digest('hex') !== normalized.artifactSha256) {
+      fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result artifact identity is invalid.')
+    }
   }
   return freeze(normalized)
 }

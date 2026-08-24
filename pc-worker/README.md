@@ -1,11 +1,13 @@
 # PR Manager PC Worker
 
-阶段 5 的 Windows PC 执行节点。Worker 只主动连接 NAS，不监听端口，不保存 Owner 密码，
-也不能读取任意 NAS 路径。当前只实现模型无关的 `content.inspect` v1 探针。
+Windows PC 执行节点。Worker 只主动连接 NAS，不监听端口，不保存 Owner 密码，也不能读取任意
+NAS 路径。当前支持受租约约束的内容检查、PDF/DOCX/EPUB 结构化文本提取、本地 Embedding、
+查询向量和证据约束回答；未完整配置的模型能力不会上报。
 
 ## 要求
 
 - Windows 11 与 Node.js 22–24；
+- 在本目录执行 `npm ci` 安装锁定依赖；
 - NAS 后端已升级到包含阶段 5 协议的不可变镜像；
 - 正式局域网连接使用受信 HTTPS；纯 HTTP 只允许 loopback，或在隔离验收时显式设置
   `PC_WORKER_ALLOW_INSECURE_HTTP=true`；
@@ -48,5 +50,21 @@ Owner 在 NAS 端吊销 Worker 后，现有凭据立即失效；已领取任务�
 ## 当前能力与后续模型
 
 Worker 使用 `nvidia-smi` 上报 GPU/显存，并用 `lms ps --json` 上报当前已加载模型。两个命令
-失败时均降级为空能力快照，不影响探针任务。Embedding、Reranker、OCR 和 LLM 会作为新的
-处理器版本加入，不改变配对、租约、受控下载和结果提交协议。
+失败时均降级为空能力快照，不影响 CPU 提取任务。`rag.content.extract@v1` 始终可用，并在
+Worker 内校验授权流的字节数与 SHA-256；PDF/DOCX/EPUB 派生制品以大小受限、哈希绑定的章节
+manifest 返回。Embedding 与回答只在端点、模型版本和限制完整配置时上报，继续复用配对、租约、
+受控下载和结果提交协议。模型端点只允许 HTTPS，loopback 调试可使用 HTTP。
+
+阶段 6C 已验证的本地回答模型是 LM Studio 中的
+`qwen3.5-9b-uncensored-hauhaucs-aggressive@q6_k`。关键环境变量为：
+
+```powershell
+$env:PC_WORKER_ANSWER_BASE_URL = 'http://127.0.0.1:1234'
+$env:PC_WORKER_ANSWER_PROVIDER = 'lm-studio'
+$env:PC_WORKER_ANSWER_MODEL_ID = 'qwen3.5-9b-uncensored-hauhaucs-aggressive@q6_k'
+$env:PC_WORKER_ANSWER_MODEL_REVISION = 'Q6_K'
+$env:PC_WORKER_ANSWER_CONTEXT_LIMIT = '32768'
+$env:PC_WORKER_ANSWER_MAX_OUTPUT_BYTES = '16384'
+```
+
+任务不能覆盖本地模型或端点；回答必须通过严格 JSON Schema，并且引用只能来自本次证据集。

@@ -186,7 +186,7 @@ test('Worker executes an answer task through the configured local processor', as
   assert.doesNotMatch(JSON.stringify(logs), /问题|证据|结论/u)
 })
 
-test('Worker removes stale embedding capabilities when local configuration is absent', async () => {
+test('Worker removes stale model capabilities but retains the built-in content extractor', async () => {
   const profiles = []
   const api = {
     enroll: async (_token, value) => {
@@ -211,5 +211,7 @@ test('Worker removes stale embedding capabilities when local configuration is ab
     stateWriter: (_path, state) => state
   })
   assert.equal(await worker.runOnce(), false)
-  assert.equal(profiles.every((value) => value.capabilities.processors.every((item) => !item.taskType.startsWith('rag.'))), true)
+  assert.equal(profiles.every((value) => value.capabilities.processors.some((item) => item.taskType === 'rag.content.extract')), true)
+  assert.equal(profiles.every((value) => value.capabilities.processors.every((item) =>
+    !['rag.embedding.generate', 'rag.query.embed', 'rag.answer.generate'].includes(item.taskType))), true)
 })
