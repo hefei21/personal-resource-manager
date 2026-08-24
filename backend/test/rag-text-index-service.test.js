@@ -7,6 +7,7 @@ import { ensureMigrationControlTables } from '../src/config/migrationControlStor
 import { RAG_INDEX_MIGRATIONS } from '../src/config/ragIndexSchema.js'
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
+import { chunkRagSource, normalizeRagChunkerOptions, RAG_CHUNKER_VERSION } from '../src/services/ragChunker.js'
 import { createRagTextIndexService, RAG_TEXT_INDEX_ERROR_CODES } from '../src/services/ragTextIndexService.js'
 
 const require = createRequire(import.meta.url)
@@ -154,7 +155,16 @@ test('forced rebuild reprocesses an unchanged source and preserves the active sn
   try {
     migrate(database)
     const unchanged = source({ id: 121, version: 1, text: '# Stable\n\nstill searchable.' })
-    const stable = createService(database)
+    let failRebuild = false
+    const chunkerConfig = normalizeRagChunkerOptions()
+    const controlledChunker = {
+      config: { chunkerVersion: RAG_CHUNKER_VERSION, configHash: chunkerConfig.configHash },
+      chunk(input) {
+        if (failRebuild) throw new Error('forced rebuild failed')
+        return chunkRagSource(input)
+      }
+    }
+    const stable = createService(database, { chunker: controlledChunker })
     await stable.index({ sources: [unchanged], errors: [] })
     const skipped = await stable.index({ sources: [unchanged], errors: [] })
     assert.equal(skipped.skippedCount, 1)
@@ -163,8 +173,8 @@ test('forced rebuild reprocesses an unchanged source and preserves the active sn
     assert.equal(rebuilt.skippedCount, 0)
 
     const before = database.prepare('SELECT active_snapshot_id FROM rag_source_state WHERE source_id = 121').get().active_snapshot_id
-    const failing = createService(database, { chunker: () => { throw new Error('forced rebuild failed') } })
-    const failed = await failing.index({ sources: [unchanged], errors: [] }, { rebuild: true })
+    failRebuild = true
+    const failed = await stable.index({ sources: [unchanged], errors: [] }, { rebuild: true })
     const state = database.prepare('SELECT active_snapshot_id, status FROM rag_source_state WHERE source_id = 121').get()
     assert.equal(failed.failedCount, 1)
     assert.equal(state.active_snapshot_id, before)

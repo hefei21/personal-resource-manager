@@ -91,7 +91,8 @@ test('registers 0086 with a frozen compatible shape and restart-safe indexes', n
       database.prepare(`
         SELECT name, type
           FROM sqlite_schema
-         WHERE name = ? OR tbl_name = ?
+         WHERE (name = ? OR tbl_name = ?)
+           AND name NOT LIKE 'sqlite_autoindex_%'
          ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name
       `).all(RAG_QUERY_RUN_TABLE, RAG_QUERY_RUN_TABLE),
       [
