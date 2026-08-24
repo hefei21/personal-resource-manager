@@ -12,13 +12,15 @@ import {
   updateWorkerProfile
 } from '../services/pcWorkerAuth.js'
 import {
-  normalizeContentInspectionResult,
   PC_WORKER_EXECUTION_CLASS,
   PC_WORKER_PROCESSOR_VERSION,
   PC_WORKER_TASK_TYPE,
   projectWorkerTask,
+  normalizeWorkerTaskResult,
+  resolveWorkerTaskInput,
   supportedRemoteProcessors
 } from '../services/pcWorkerContract.js'
+import { lookupPcWorkerProcessor } from '../services/pcWorkerProcessorCatalog.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { getTaskRuntime } from '../services/taskRuntime.js'
 import { projectTask } from '../services/taskTypeCatalog.js'
@@ -59,6 +61,7 @@ function bearerToken(req) {
 function mapError(res, error) {
   const code = error?.code
   if (['PC_WORKER_INPUT_INVALID', 'PC_WORKER_PROTOCOL_UNSUPPORTED', 'PC_WORKER_ID_INVALID',
+    'PC_WORKER_PROCESSOR_INPUT_INVALID', 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE',
     'TASK_ID_INVALID', 'TASK_PROGRESS_INVALID', 'TASK_ERROR_INVALID'].includes(code)) {
     return sendCode(res, 400, code)
   }
@@ -71,6 +74,11 @@ function mapError(res, error) {
   }
   if (['PC_WORKER_REFRESH_REPLAYED', 'PC_WORKER_CAPABILITY_UNAVAILABLE', 'PC_WORKER_CONTENT_UNAVAILABLE',
     'PC_WORKER_RESULT_SCHEMA_INVALID', 'PC_WORKER_RESULT_PROCESSOR_INVALID', 'PC_WORKER_RESULT_INPUT_MISMATCH',
+    'PC_WORKER_PROCESSOR_RESULT_SCHEMA_INVALID', 'PC_WORKER_PROCESSOR_RESULT_PROCESSOR_INVALID',
+    'PC_WORKER_PROCESSOR_RESULT_INPUT_MISMATCH', 'PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID',
+    'PC_WORKER_PROCESSOR_RESULT_DIMENSIONS_INVALID', 'PC_WORKER_PROCESSOR_RESULT_MODEL_MISMATCH',
+    'PC_WORKER_PROCESSOR_RESULT_INVALID', 'PC_WORKER_PROCESSOR_RESULT_TOO_LARGE',
+    'PC_WORKER_PROCESSOR_RESULT_STALE', 'PC_WORKER_RESULT_STALE',
     'TASK_INVALID_STATE', 'TASK_LEASE_MISMATCH', 'TASK_LEASE_EXPIRED', 'TASK_STATE_CONFLICT',
     'TASK_IDEMPOTENCY_CONFLICT'].includes(code)) {
     return sendCode(res, 409, code)
@@ -121,9 +129,9 @@ function authorizedTask(store, worker, taskId, leaseToken, statuses) {
     throw error
   }
   const task = store.getById(id)
+  const definition = lookupPcWorkerProcessor(task?.taskType, task?.processorVersion)
   const owner = `pcw:${worker.id}`
-  if (!task || task.taskType !== PC_WORKER_TASK_TYPE || task.executionClass !== PC_WORKER_EXECUTION_CLASS ||
-    task.processorVersion !== PC_WORKER_PROCESSOR_VERSION || task.leaseOwner !== owner ||
+  if (!task || !definition || task.executionClass !== definition.executionClass || task.leaseOwner !== owner ||
     task.leaseToken !== leaseToken || !statuses.includes(task.status) ||
     typeof task.leaseExpiresAt !== 'string' || task.leaseExpiresAt <= new Date().toISOString()) {
     const error = new Error('Worker task is outside the active lease.')
@@ -131,6 +139,60 @@ function authorizedTask(store, worker, taskId, leaseToken, statuses) {
     throw error
   }
   return task
+}
+
+function processorInput(task) {
+  const input = resolveWorkerTaskInput(task)
+  if (input === null) {
+    const error = new Error('Worker task input is not authorized.')
+    error.code = 'PC_WORKER_PROCESSOR_INPUT_INVALID'
+    throw error
+  }
+  return input
+}
+
+function staleResultError() {
+  const error = new Error('Worker result is stale.')
+  error.code = 'PC_WORKER_RESULT_STALE'
+  return error
+}
+
+function currentSnapshotIdentity(database, task, input) {
+  if (!['rag.embedding.generate', 'rag.content.extract'].includes(task.taskType)) return input
+  try {
+    if (task.taskType === 'rag.embedding.generate') {
+      const row = database.prepare(`
+        SELECT snapshot.id, snapshot.source_type, snapshot.source_id,
+               snapshot.source_version_id, snapshot.source_content_sha256
+          FROM rag_source_snapshots snapshot
+          JOIN rag_source_state state
+            ON state.source_type = snapshot.source_type AND state.source_id = snapshot.source_id
+           AND state.active_snapshot_id = snapshot.id
+         WHERE snapshot.id = ?
+           AND snapshot.status IN ('text_ready', 'embedding_pending', 'ready', 'partial')
+      `).get(input.snapshotId)
+      if (!row || row.source_type !== input.sourceType || Number(row.source_id) !== input.sourceId ||
+          row.source_version_id !== input.sourceVersionId || row.source_content_sha256 !== input.sourceContentSha256) return null
+      return { ...input, snapshotId: Number(row.id), model: input.model }
+    }
+      const row = database.prepare(`
+        SELECT snapshot.source_type, snapshot.source_id, snapshot.source_version_id,
+               snapshot.source_content_sha256
+          FROM rag_source_snapshots snapshot
+          JOIN rag_source_state state
+            ON state.source_type = snapshot.source_type AND state.source_id = snapshot.source_id
+           AND state.active_snapshot_id = snapshot.id
+         WHERE snapshot.source_type = ? AND snapshot.source_id = ?
+           AND snapshot.source_version_id = ? AND snapshot.source_content_sha256 = ?
+           AND snapshot.status IN ('text_ready', 'embedding_pending', 'ready', 'partial')
+       ORDER BY snapshot.id DESC
+       LIMIT 1
+    `).get(input.sourceType, input.sourceId, input.sourceVersionId, input.sourceContentSha256)
+    if (!row) return null
+    return { ...input }
+  } catch {
+    return null
+  }
 }
 
 function workerAuth({ database = databaseProvider, authenticate = authenticateWorkerAccess } = {}) {
@@ -364,6 +426,7 @@ export function createPcWorkerAgentRouter({
       const leaseToken = req.get('x-worker-lease')
       const store = runtimeStore(runtime)
       const task = authorizedTask(store, req.pcWorker, req.params.taskId, leaseToken, ['running'])
+      processorInput(task)
       const row = contentRecord(await database(req), task)
       if (!row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
       const stream = await storageRuntime().storageService.createReadStream(row.managed_storage_key)
@@ -386,9 +449,24 @@ export function createPcWorkerAgentRouter({
       }
       const store = runtimeStore(runtime)
       const task = authorizedTask(store, req.pcWorker, req.params.taskId, req.body.leaseToken, ['running'])
-      const row = contentRecord(await database(req), task)
-      if (!row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
-      const result = normalizeContentInspectionResult(req.body.result, { sha256: row.sha256, bytes: row.bytes })
+      const input = processorInput(task)
+      const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+      const databaseValue = await database(req)
+      const row = task.taskType === PC_WORKER_TASK_TYPE ? contentRecord(databaseValue, task) : null
+      if (task.taskType === PC_WORKER_TASK_TYPE && !row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
+      const current = task.taskType === PC_WORKER_TASK_TYPE
+        ? {
+            resourceVersionId: row.resource_version_id,
+            contentObjectId: row.content_object_id,
+            sha256: row.sha256,
+            bytes: row.bytes
+          }
+        : currentSnapshotIdentity(databaseValue, task, input)
+      if (!current || !definition.staleGuard(current, task.taskType === PC_WORKER_TASK_TYPE
+        ? { ...input, sha256: row.sha256, bytes: row.bytes }
+        : input)) throw staleResultError()
+      const result = normalizeWorkerTaskResult(task, req.body.result,
+        task.taskType === PC_WORKER_TASK_TYPE ? { sha256: row.sha256, bytes: row.bytes } : input)
       const succeeded = await Promise.resolve(store.succeed({
         id: task.id,
         owner: `pcw:${req.pcWorker.id}`,

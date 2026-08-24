@@ -255,3 +255,109 @@ test('Owner route requires Owner and enqueues only managed content identifiers',
     assert.doesNotMatch(JSON.stringify(body), /managed_storage_key|leaseToken|leaseOwner/u)
   })
 })
+
+test('RAG embedding completion is catalog-normalized and stale snapshots are rejected', async () => {
+  const model = {
+    provider: 'local-provider',
+    modelId: 'embedding-model',
+    modelRevision: 'rev-1',
+    dimensions: 3,
+    inputLimit: 2048,
+    distance: 'cosine',
+    normalization: 'l2',
+    configHash: 'a'.repeat(64)
+  }
+  const input = {
+    schemaVersion: 1,
+    snapshotId: 17,
+    sourceType: 'document',
+    sourceId: 7,
+    sourceVersionId: '11',
+    sourceContentSha256: 'b'.repeat(64),
+    model,
+    chunks: [{ chunkId: 101, ordinal: 0, chunkSha256: 'c'.repeat(64), body: '证据正文' }]
+  }
+  const task = {
+    id: 42,
+    taskType: 'rag.embedding.generate',
+    processorVersion: 'v1',
+    executionClass: 'gpu',
+    subjectId: '7',
+    subjectContentSha256: input.sourceContentSha256,
+    input,
+    status: 'running',
+    leaseOwner: `pcw:${worker.id}`,
+    leaseToken: 'lease-secret',
+    leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+    attemptCount: 1
+  }
+  let succeeded
+  const store = {
+    getById(id) { return Number(id) === task.id ? task : null },
+    succeed({ result }) { succeeded = result; task.status = 'succeeded'; return { id: task.id, status: task.status, progress: 100 } }
+  }
+  const database = {
+    prepare(sql) {
+      return {
+        get() {
+          if (!sql.includes('rag_source_snapshots')) return null
+          return {
+            id: 17,
+            source_type: 'document',
+            source_id: 7,
+            source_version_id: '11',
+            source_content_sha256: 'b'.repeat(64)
+          }
+        }
+      }
+    }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => database,
+    runtime: () => ({ getStore: () => store }),
+    authenticate: () => worker
+  }))
+  const result = {
+    schemaVersion: 1,
+    processorVersion: 'v1',
+    output: {
+      model,
+      snapshotId: 17,
+      sourceVersionId: '11',
+      sourceContentSha256: 'b'.repeat(64),
+      vectors: [{ chunkId: 101, chunkSha256: 'c'.repeat(64), embedding: [0.1, 0.2, 0.3] }]
+    }
+  }
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/42/complete`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'lease-secret', result })
+    })
+    assert.equal(response.status, 200)
+    assert.equal(succeeded.output.vectors[0].chunkId, 101)
+
+    database.prepare = (sql) => ({
+      get() {
+        if (!sql.includes('rag_source_snapshots')) return null
+        return {
+          id: 17,
+          source_type: 'document',
+          source_id: 7,
+          source_version_id: '11',
+          source_content_sha256: 'd'.repeat(64)
+        }
+      }
+    })
+    task.status = 'running'
+    const stale = await fetch(`${baseUrl}/agent/tasks/42/complete`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'lease-secret', result })
+    })
+    assert.equal(stale.status, 409)
+    assert.equal((await stale.json()).code, 'PC_WORKER_RESULT_STALE')
+  })
+})

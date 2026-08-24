@@ -1,12 +1,11 @@
-import {
-  normalizeContentInspectionResult,
-  PC_WORKER_EXECUTION_CLASS,
-  PC_WORKER_OUTPUT_SCHEMA_VERSION,
-  PC_WORKER_PROCESSOR_VERSION,
-  PC_WORKER_TASK_TYPE
-} from './pcWorkerContract.js'
+import { normalizeContentInspectionResult } from './pcWorkerContract.js'
 
 export const PC_WORKER_PROCESSOR_CATALOG_VERSION = 'v1'
+
+const PC_WORKER_TASK_TYPE = 'content.inspect'
+const PC_WORKER_PROCESSOR_VERSION = 'v1'
+const PC_WORKER_EXECUTION_CLASS = 'gpu'
+const PC_WORKER_OUTPUT_SCHEMA_VERSION = 1
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$/u

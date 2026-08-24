@@ -1,3 +1,8 @@
+import {
+  lookupPcWorkerProcessor,
+  matchPcWorkerCapabilities
+} from './pcWorkerProcessorCatalog.js'
+
 export const PC_WORKER_PROTOCOL_VERSION = 1
 export const PC_WORKER_TASK_TYPE = 'content.inspect'
 export const PC_WORKER_PROCESSOR_VERSION = 'v1'
@@ -139,25 +144,23 @@ export function normalizeWorkerProfile(value) {
 }
 
 export function supportedRemoteProcessors(capabilities) {
-  const source = capabilities?.processors
-  if (!Array.isArray(source)) return Object.freeze([])
-  return Object.freeze(source
-    .filter((processor) =>
-      processor.taskType === PC_WORKER_TASK_TYPE &&
-      processor.processorVersion === PC_WORKER_PROCESSOR_VERSION &&
-      processor.executionClass === PC_WORKER_EXECUTION_CLASS &&
-      processor.outputSchemaVersion === PC_WORKER_OUTPUT_SCHEMA_VERSION)
-    .map(({ taskType, processorVersion, executionClass }) => Object.freeze({ taskType, processorVersion, executionClass })))
+  return Object.freeze(matchPcWorkerCapabilities(capabilities).map(({ taskType, processorVersion, executionClass }) =>
+    Object.freeze({ taskType, processorVersion, executionClass })))
 }
 
 export function projectWorkerTask(task) {
-  if (!isPlainObject(task) || task.taskType !== PC_WORKER_TASK_TYPE ||
-    task.processorVersion !== PC_WORKER_PROCESSOR_VERSION || task.executionClass !== PC_WORKER_EXECUTION_CLASS) return null
+  if (!isPlainObject(task)) return null
+  const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+  if (!definition || task.executionClass !== definition.executionClass) return null
+  if (task.taskType === PC_WORKER_TASK_TYPE && !HASH_PATTERN.test(task.subjectContentHash ?? '')) return null
   try {
-    const input = task.input
-    exactKeys(input, ['schemaVersion', 'resourceVersionId', 'contentObjectId'], 'task.input')
-    if (input.schemaVersion !== 1 || !Number.isSafeInteger(input.resourceVersionId) || input.resourceVersionId < 1 ||
-      !Number.isSafeInteger(input.contentObjectId) || input.contentObjectId < 1 || !HASH_PATTERN.test(task.subjectContentHash ?? '')) return null
+    const input = definition.resolveInput({
+      input: task.input,
+      ...(task.subjectContentHash === undefined && task.subjectContentSha256 === undefined
+        ? {}
+        : { subjectContentHash: task.subjectContentHash ?? task.subjectContentSha256 }),
+      ...(task.subjectContentBytes === undefined ? {} : { subjectBytes: task.subjectContentBytes })
+    })
     return Object.freeze({
       id: task.id,
       taskType: task.taskType,
@@ -167,17 +170,37 @@ export function projectWorkerTask(task) {
       leaseExpiresAt: task.leaseExpiresAt,
       attemptCount: task.attemptCount,
       maxAttempts: task.maxAttempts,
-      input: Object.freeze({
-        schemaVersion: 1,
-        resourceVersionId: input.resourceVersionId,
-        contentObjectId: input.contentObjectId,
-        sha256: task.subjectContentHash
-      })
+      input
     })
   } catch (error) {
-    if (error instanceof PcWorkerContractError) return null
+    if (error instanceof PcWorkerContractError || String(error?.code ?? '').startsWith('PC_WORKER_PROCESSOR_')) return null
     throw error
   }
+}
+
+export function resolveWorkerTaskInput(task) {
+  if (!isPlainObject(task)) return null
+  const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+  if (!definition || task.executionClass !== definition.executionClass) return null
+  try {
+    return definition.resolveInput({
+      input: task.input,
+      ...(task.subjectContentHash === undefined && task.subjectContentSha256 === undefined
+        ? {}
+        : { subjectContentHash: task.subjectContentHash ?? task.subjectContentSha256 }),
+      ...(task.subjectContentBytes === undefined ? {} : { subjectBytes: task.subjectContentBytes })
+    })
+  } catch (error) {
+    if (error instanceof PcWorkerContractError || String(error?.code ?? '').startsWith('PC_WORKER_PROCESSOR_')) return null
+    throw error
+  }
+}
+
+export function normalizeWorkerTaskResult(task, value, expected) {
+  if (!isPlainObject(task)) return null
+  const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+  if (!definition || task.executionClass !== definition.executionClass) return null
+  return definition.normalizeResult(value, expected)
 }
 
 export function normalizeContentInspectionResult(value, expected) {
