@@ -395,3 +395,31 @@ test('maps unavailable, timeout and cancellation to stable degradable errors and
   assert.equal(recovered.available, true)
   assert.equal(recovered.degraded, false)
 })
+
+test('lists snapshot points with server-owned model filters for restart reconciliation', async () => {
+  const input = pointInput({ chunkId: 21, snapshotId: 9 })
+  const fake = fakeFetch((call) => {
+    assert.equal(new URL(call.url).pathname, `/collections/${COLLECTION}/points/scroll`)
+    assert.equal(call.body.limit, 256)
+    assert.deepEqual(call.body.filter, {
+      must: [
+        { key: 'snapshotId', match: { value: 9 } },
+        { key: 'modelId', match: { value: QWEN_CONFIG.modelId } },
+        { key: 'modelConfigHash', match: { value: QWEN_CONFIG.configHash } }
+      ]
+    })
+    return jsonResponse(200, {
+      result: {
+        points: [{ id: input.chunkId, payload: pointPayload(input) }],
+        next_page_offset: null
+      },
+      status: 'ok'
+    })
+  })
+  const store = createStore(fake.fetch)
+  const result = await store.listBySnapshot(9)
+  assert.equal(result.points.length, 1)
+  assert.equal(result.points[0].chunkId, input.chunkId)
+  assert.equal(result.points[0].vectorSha256, vectorSha256(input.vector))
+  assert.equal(result.nextPageOffset, null)
+})

@@ -241,9 +241,11 @@ function normalizeVector(vector, dimensions, fieldName = 'vector') {
   return Object.freeze([...vector])
 }
 
-function vectorHash(vector) {
+export function ragVectorSha256(vector) {
   return sha256(JSON.stringify(vector))
 }
+
+export const vectorHash = ragVectorSha256
 
 function normalizeSourceType(value) {
   if (typeof value !== 'string' || !SOURCE_TYPES.has(value)) {
@@ -264,7 +266,7 @@ function normalizePointInput(point, index, modelConfig) {
   const sourceId = positiveInteger(point.sourceId)
   const sourceVersionId = normalizeSourceVersionId(point.sourceVersionId)
   const vector = normalizeVector(point.vector, modelConfig.dimensions, `points[${index}].vector`)
-  const computedHash = vectorHash(vector)
+  const computedHash = ragVectorSha256(vector)
   if (point.vectorSha256 !== undefined && point.vectorSha256 !== computedHash) {
     fail(RAG_VECTOR_ERROR_CODES.INPUT_INVALID, { operation: `points[${index}].vectorSha256` })
   }
@@ -757,6 +759,61 @@ export class RagVectorStore {
 
   async deleteSnapshot(snapshotId, options = {}) {
     return this.deleteBySnapshot(snapshotId, options)
+  }
+
+  async listBySnapshot(snapshotId, { limit = RAG_VECTOR_MAX_BATCH_ITEMS, offset = null, signal } = {}) {
+    const normalizedSnapshotId = positiveInteger(snapshotId)
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+      fail(RAG_VECTOR_ERROR_CODES.INPUT_INVALID, { operation: 'listBySnapshot.limit' })
+    }
+    if (offset !== null && offset !== undefined &&
+        ((!Number.isSafeInteger(offset) && typeof offset !== 'string') ||
+          (typeof offset === 'string' && !offset.trim()))) {
+      fail(RAG_VECTOR_ERROR_CODES.INPUT_INVALID, { operation: 'listBySnapshot.offset' })
+    }
+    validateSignal(signal)
+    const body = {
+      limit,
+      with_payload: true,
+      with_vector: false,
+      filter: {
+        must: [
+          { key: 'snapshotId', match: { value: normalizedSnapshotId } },
+          { key: 'modelId', match: { value: this.modelConfig.modelId } },
+          { key: 'modelConfigHash', match: { value: this.modelConfig.configHash } }
+        ]
+      }
+    }
+    if (offset !== null && offset !== undefined) body.offset = offset
+    const response = await this.#request(`${urlPath(this.collection)}/points/scroll`, {
+      method: 'POST',
+      body,
+      signal,
+      operation: 'listBySnapshot',
+      expectedStatuses: [200]
+    })
+    if (!isPlainObject(response.payload) || !isPlainObject(response.payload.result) ||
+        !Array.isArray(response.payload.result.points)) {
+      fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation: 'listBySnapshot' })
+    }
+    const points = response.payload.result.points.map((point, index) => {
+      if (!isPlainObject(point) || !Number.isSafeInteger(point.id) || point.id <= 0) {
+        fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation: `listBySnapshot.points[${index}]` })
+      }
+      const payload = normalizePayload(point.payload, this.modelConfig, `listBySnapshot.points[${index}].payload`)
+      if (payload.snapshotId !== normalizedSnapshotId || payload.chunkId !== point.id) {
+        fail(RAG_VECTOR_ERROR_CODES.RESPONSE_FILTER_VIOLATION, { operation: `listBySnapshot.points[${index}]` })
+      }
+      return Object.freeze({ id: point.id, chunkId: payload.chunkId, vectorSha256: payload.vectorSha256, payload })
+    })
+    const nextPageOffset = response.payload.result.next_page_offset ?? null
+    return Object.freeze({
+      collection: this.collection,
+      snapshotId: normalizedSnapshotId,
+      points: Object.freeze(points),
+      nextPageOffset,
+      degraded: false
+    })
   }
 
   async snapshot({ signal } = {}) {
