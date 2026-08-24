@@ -49,6 +49,8 @@ async function makeStructuredCorpusDirectory() {
       entryKey: 'rag-document:structured-markdown',
       title: 'Structured Markdown',
       resourceType: 'document',
+      resourceId: 7001,
+      domainId: 7001,
       sourceKind: 'structured-test',
       sourceVersionId: 77,
       locator: { route: '/documents', documentId: 7001 },
