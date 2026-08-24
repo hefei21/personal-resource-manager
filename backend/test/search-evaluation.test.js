@@ -7,7 +7,7 @@ import { ensureMigrationControlTables } from '../src/config/migrationControlStor
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
 import { SEARCH_INDEX_MIGRATIONS } from '../src/config/searchIndexSchema.js'
-import { evaluateSearchIndex } from '../src/services/searchEvaluation.js'
+import { evaluateSearchIndex, evaluateSearchModes } from '../src/services/searchEvaluation.js'
 import { createSearchIndexService } from '../src/services/searchIndexService.js'
 
 const require = createRequire(import.meta.url)
@@ -49,7 +49,9 @@ test('computes reproducible Recall@K, latency, and locator accuracy', nativeTest
     if (process.env.SEARCH_EVAL_REPORT === '1') console.log(`SEARCH_EVAL_REPORT ${JSON.stringify(report)}`)
     assert.equal(report.queryCount, 5)
     assert.equal(report.recallAtK, 1)
+    assert.equal(report.mrr, 1)
     assert.equal(report.citationAccuracy, 1)
+    assert.equal(report.locatorAccuracy, 1)
     assert.ok(report.p50Ms >= 0)
     assert.ok(report.p95Ms >= report.p50Ms)
     assert.equal(report.samples, 15)
@@ -57,4 +59,28 @@ test('computes reproducible Recall@K, latency, and locator accuracy', nativeTest
   } finally {
     database.close()
   }
+})
+
+test('compares FTS, symbol, and hybrid with locator-based logical targets', () => {
+  const calls = []
+  const service = {
+    query(input) {
+      calls.push(input.mode)
+      const locator = { route: '/code', repositoryId: 1, path: 'src/search.js', line: 8 }
+      const relevant = { entryKey: `${input.mode}:definition`, locator }
+      const distractor = { entryKey: `${input.mode}:reference`, locator: { ...locator, path: 'src/reference.js' } }
+      const data = input.mode === 'fts' ? [distractor, relevant] : [relevant, distractor]
+      return { data }
+    }
+  }
+  const report = evaluateSearchModes(service, [{
+    id: 'definition',
+    q: 'SearchService.query',
+    expected: [{ targetId: 'definition', locator: { repositoryId: 1, path: 'src/search.js', line: 8 } }]
+  }], { k: 2, iterations: 1 })
+  assert.deepEqual(calls, ['fts', 'symbol', 'hybrid'])
+  assert.equal(report.modes.fts.recallAtK, 1)
+  assert.equal(report.modes.fts.mrr, 0.5)
+  assert.equal(report.modes.hybrid.mrr, 1)
+  assert.equal(report.improvement.mrr, 0.5)
 })

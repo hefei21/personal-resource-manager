@@ -64,6 +64,42 @@ test('runs the NAS-local refresh and forwards bounded progress', async () => {
   assert.deepEqual(progress, [50])
 })
 
+test('refreshes FTS then commit-bound symbols within one persistent task', async () => {
+  const progress = []
+  const processor = createSearchIndexTaskProcessor({
+    database: { prepare() {} },
+    collectEntries: async () => [],
+    collectSnapshots: async () => [],
+    serviceFactory: () => ({
+      refresh: async ({ onProgress }) => {
+        await onProgress(50)
+        await onProgress(100)
+        return { status: 'ready', inserted: 2, updated: 0, skipped: 0, deleted: 0, entryCount: 2, errorCount: 0 }
+      }
+    }),
+    symbolServiceFactory: () => ({
+      refresh: async ({ rebuild, onProgress }) => {
+        assert.equal(rebuild, true)
+        await onProgress(50)
+        await onProgress(100)
+        return {
+          status: 'partial', repositoryCount: 2, refreshed: 1, skipped: 0,
+          fileCount: 3, symbolCount: 7, errorCount: 1
+        }
+      }
+    })
+  })
+  const result = await processor({
+    task: task({ input: { rebuild: true, includeCodeFiles: true } }),
+    progress: async (value) => progress.push(value)
+  })
+  assert.equal(result.status, 'partial')
+  assert.equal(result.errorCount, 1)
+  assert.equal(result.symbolRepositories, 2)
+  assert.equal(result.symbolCount, 7)
+  assert.deepEqual(progress, [35, 70, 85, 100])
+})
+
 test('rejects malformed task input without leaking processor internals', async () => {
   const processor = createSearchIndexTaskProcessor({
     database: { prepare() {} },

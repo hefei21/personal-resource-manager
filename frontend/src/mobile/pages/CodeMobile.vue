@@ -718,13 +718,15 @@ async function previewFile(file) {
   currentFileContent.value = ''
   
   try {
-    const response = await api.code.getFile(currentRepo.value.id, file.path)
+    const response = await api.code.getFile(currentRepo.value.id, file.path, file.commit)
     const fileData = response.data.data
     currentFile.value = { ...file, ...fileData }
     currentFileContent.value = fileData.content || ''
   } catch (error) {
     console.error('加载文件失败:', error)
-    toast.error('加载文件失败')
+    toast.error(error.response?.data?.code === 'CODE_SNAPSHOT_STALE'
+      ? '该搜索结果对应的提交已过期，请刷新搜索索引后重试'
+      : '加载文件失败')
   } finally {
     fileLoading.value = false
   }
@@ -754,7 +756,8 @@ onMounted(async () => {
       name: route.query.path.split('/').pop(),
       path: route.query.path,
       type: 'file',
-      ...(Number.isSafeInteger(line) && line > 0 ? { searchLine: line } : {})
+      ...(Number.isSafeInteger(line) && line > 0 ? { searchLine: line } : {}),
+      ...(typeof route.query.commit === 'string' ? { commit: route.query.commit } : {})
     })
   }
 })

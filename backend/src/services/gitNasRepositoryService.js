@@ -35,7 +35,7 @@ const MAX_TREE_ENTRIES = 5000
 const MAX_COMMIT_LIMIT = 100
 const GIT_TIMEOUT_MS = 30_000
 const GIT_MAX_BUFFER = 5 * 1024 * 1024
-const SAFE_REV_PARSE_ARGUMENTS = new Set(['--is-inside-work-tree', '--show-toplevel'])
+const SAFE_REV_PARSE_ARGUMENTS = new Set(['--is-inside-work-tree', '--show-toplevel', 'HEAD'])
 
 const SAFE_GIT_CONFIG = Object.freeze([
   '--no-pager',
@@ -91,6 +91,7 @@ export const GIT_NAS_ERROR_CODES = Object.freeze({
   SUBMODULE_FORBIDDEN: 'GIT_NAS_SUBMODULE_FORBIDDEN',
   LINKED_WORKTREE_FORBIDDEN: 'GIT_NAS_LINKED_WORKTREE_FORBIDDEN',
   EXTERNAL_ALTERNATES_FORBIDDEN: 'GIT_NAS_EXTERNAL_ALTERNATES_FORBIDDEN',
+  WORKTREE_DIRTY: 'GIT_NAS_WORKTREE_DIRTY',
   COMMAND_FAILED: 'GIT_NAS_COMMAND_FAILED',
   READ_ONLY: 'GIT_NAS_READ_ONLY',
   DATABASE_BUSY: 'GIT_NAS_DATABASE_BUSY',
@@ -280,7 +281,10 @@ function assertReadOnlyCommand(args) {
   }
   const allowed =
     (args.length === 2 && args[0] === 'rev-parse' && SAFE_REV_PARSE_ARGUMENTS.has(args[1])) ||
+    (args.length === 3 && args[0] === 'rev-parse' && args[1] === '--abbrev-ref' && args[2] === 'HEAD') ||
     (args.length === 3 && args[0] === 'ls-files' && args[1] === '--stage' && args[2] === '-z') ||
+    (args.length === 4 && args[0] === 'status' && args[1] === '--short' &&
+      args[2] === '--untracked-files=no' && args[3] === '-z') ||
     (args.length === 5 && args[0] === 'log' && args[1] === '--pretty=format:%H|%an|%ad|%s' &&
       args[2] === '--date=format:%Y-%m-%d %H:%M:%S' && args[3] === '-n' && /^\d{1,3}$/u.test(args[4])) ||
     (args.length === 7 && args[0] === 'show' && args[1] === '--no-ext-diff' &&
@@ -472,7 +476,52 @@ async function inspectGitRepository(repositoryPath, rootPath, runGit, signal) {
   if (String(staged?.stdout ?? '').split('\0').some((entry) => /^160000\s/u.test(entry))) {
     fail(GIT_NAS_ERROR_CODES.SUBMODULE_FORBIDDEN, 'Git submodules are not supported.')
   }
-  return Object.freeze({ rootPath, repositoryPath: checkedPath })
+  return Object.freeze({ rootPath, repositoryPath: checkedPath, staged: String(staged?.stdout ?? '') })
+}
+
+function parseTrackedGitFiles(stagedOutput) {
+  const files = []
+  for (const record of String(stagedOutput ?? '').split('\0')) {
+    if (!record) continue
+    const tab = record.indexOf('\t')
+    const metadata = tab >= 0 ? record.slice(0, tab) : ''
+    const relativePath = tab >= 0 ? record.slice(tab + 1).replaceAll('\\', '/') : ''
+    const match = metadata.match(/^(\d{6}) [0-9a-f]{40,64} (\d)$/iu)
+    if (!match || match[2] !== '0' || !relativePath || isSensitivePath(relativePath)) continue
+    if (match[1] === '160000') fail(GIT_NAS_ERROR_CODES.SUBMODULE_FORBIDDEN, 'Git submodules are not supported.')
+    if (match[1] === '120000') fail(GIT_NAS_ERROR_CODES.SYMLINK_FORBIDDEN, 'Git symbolic links are not supported.')
+    files.push(normalizeRelativePath(relativePath))
+  }
+  return Object.freeze([...new Set(files)].sort((left, right) => left.localeCompare(right)))
+}
+
+export async function inspectReadOnlyGitSnapshot({
+  repositoryPath,
+  rootPath,
+  signal,
+  runGit = createDefaultReadOnlyGitRunner()
+} = {}) {
+  const inspected = await inspectGitRepository(repositoryPath, rootPath, runGit, signal)
+  const status = await runAllowedGit(runGit, inspected.repositoryPath, [
+    'status', '--short', '--untracked-files=no', '-z'
+  ], { signal })
+  if (String(status?.stdout ?? '').length > 0) {
+    fail(GIT_NAS_ERROR_CODES.WORKTREE_DIRTY, 'Dirty Git worktrees cannot be bound to a commit snapshot.')
+  }
+  const head = await runAllowedGit(runGit, inspected.repositoryPath, ['rev-parse', 'HEAD'], { signal })
+  const commit = String(head?.stdout ?? '').trim().toLowerCase()
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(commit)) {
+    fail(GIT_NAS_ERROR_CODES.GIT_METADATA_INVALID, 'The Git HEAD commit is invalid.')
+  }
+  const branchResult = await runAllowedGit(runGit, inspected.repositoryPath, ['rev-parse', '--abbrev-ref', 'HEAD'], { signal })
+  const rawBranch = String(branchResult?.stdout ?? '').trim()
+  const branch = rawBranch && rawBranch !== 'HEAD' ? rawBranch.slice(0, 512) : null
+  return Object.freeze({
+    repositoryPath: inspected.repositoryPath,
+    commit,
+    branch,
+    files: parseTrackedGitFiles(inspected.staged)
+  })
 }
 
 function readRelativeRootPath(rootPath, candidatePath) {
@@ -973,6 +1022,25 @@ export function readGitNasReadme(database, rawRepositoryId) {
   return null
 }
 
+export async function inspectGitNasSnapshot(database, rawRepositoryId, {
+  signal,
+  runGit = createDefaultReadOnlyGitRunner()
+} = {}) {
+  const repository = getGitNasRepository(database, rawRepositoryId)
+  if (repository.state !== 'active') fail(GIT_NAS_ERROR_CODES.CANDIDATE_STATE_INVALID, 'The NAS Git repository is not active.')
+  if (!repository.enabled) fail(GIT_NAS_ERROR_CODES.ROOT_DISABLED, 'The NAS scan root is disabled.')
+  const rootPath = canonicalizeNasScanRoot(repository.rootPath)
+  const repositoryPath = pathFromRoot(rootPath, repository.relativePath, { allowRoot: true }).candidatePath
+  const snapshot = await inspectReadOnlyGitSnapshot({ repositoryPath, rootPath, signal, runGit })
+  return Object.freeze({
+    repositoryId: repository.repositoryId,
+    sourceKind: 'git_nas',
+    branch: snapshot.branch,
+    commit: snapshot.commit,
+    files: snapshot.files
+  })
+}
+
 function parseGitLog(stdout) {
   return String(stdout ?? '').split('\n').filter(Boolean).map((line) => {
     const [hash, author, date, ...messageParts] = line.split('|')
@@ -1056,6 +1124,7 @@ export default Object.freeze({
   listGitNasTree,
   readGitNasFile,
   readGitNasReadme,
+  inspectGitNasSnapshot,
   listGitNasCommits,
   getGitNasCommitDetail,
   getGitNasRepositorySize

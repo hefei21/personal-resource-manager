@@ -32,6 +32,8 @@ import {
   getGitNasCommitDetail,
   getGitNasRepository,
   getGitNasRepositorySize,
+  inspectGitNasSnapshot,
+  inspectReadOnlyGitSnapshot,
   listGitNasCommits,
   listGitNasTree,
   readGitNasFile,
@@ -82,6 +84,36 @@ function sendGitNasReadOnly(res) {
     message: 'NAS Git 仓库为只读来源。',
     code: 'GIT_NAS_READ_ONLY'
   })
+}
+
+function normalizeSnapshotCommit(value) {
+  if (value === undefined || value === null || value === '') return null
+  const commit = String(value).trim().toLowerCase()
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(commit)) {
+    const error = new Error('Commit-bound file request is invalid.')
+    error.code = 'CODE_SNAPSHOT_INPUT_INVALID'
+    throw error
+  }
+  return commit
+}
+
+async function assertRequestedSnapshot(database, repositoryId, repository, requestedCommit) {
+  const commit = normalizeSnapshotCommit(requestedCommit)
+  if (commit === null) return null
+  let current
+  if (isGitNasRepository(repository)) {
+    current = await inspectGitNasSnapshot(database, repositoryId)
+  } else {
+    const repositoryPath = resolveManagedRepositoryPath(CODE_BASE_PATH, repository.local_path, { mustExist: true })
+    const rootPath = (fs.realpathSync.native ?? fs.realpathSync)(CODE_BASE_PATH)
+    current = await inspectReadOnlyGitSnapshot({ repositoryPath, rootPath })
+  }
+  if (current.commit !== commit) {
+    const error = new Error('The indexed repository snapshot is stale.')
+    error.code = 'CODE_SNAPSHOT_STALE'
+    throw error
+  }
+  return commit
 }
 
 // 获取文件原始内容（用于图片等）
@@ -670,7 +702,7 @@ router.get('/:id/tree', authenticateToken, async (req, res) => {
 // 获取文件内容
 router.get('/:id/file', authenticateToken, async (req, res) => {
   try {
-    let { path: relativePath } = req.query
+    const { path: relativePath, commit: requestedCommit } = req.query
     const db = getDatabase()
     const repo = db.prepare('SELECT local_path, type FROM code_repositories WHERE id = ?').get(req.params.id)
     
@@ -681,21 +713,25 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
     if (!relativePath) {
       return res.status(400).json({ message: '路径不能为空' })
     }
+    const verifiedCommit = await assertRequestedSnapshot(db, req.params.id, repo, requestedCommit)
 
     if (isGitNasRepository(repo)) {
       const file = readGitNasFile(db, req.params.id, relativePath)
       const ext = path.extname(relativePath).toLowerCase()
       const isBinary = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.exe', '.dll', '.so', '.dylib', '.zip', '.tar', '.gz', '.rar', '.7z', '.pdf'].includes(ext)
       if (isBinary) {
+        if (verifiedCommit) await assertRequestedSnapshot(db, req.params.id, repo, verifiedCommit)
         return res.json({ data: { type: 'binary', name: file.name, size: file.size } })
       }
+      if (verifiedCommit) await assertRequestedSnapshot(db, req.params.id, repo, verifiedCommit)
       return res.json({
         data: {
           type: 'text',
           name: file.name,
           content: file.buffer.toString('utf8'),
           size: file.size,
-          extension: ext
+          extension: ext,
+          ...(verifiedCommit ? { commit: verifiedCommit } : {})
         }
       })
     }
@@ -721,6 +757,7 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
     const isBinary = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.exe', '.dll', '.so', '.dylib', '.zip', '.tar', '.gz', '.rar', '.7z', '.pdf'].includes(ext)
     
     if (isBinary) {
+      if (verifiedCommit) await assertRequestedSnapshot(db, req.params.id, repo, verifiedCommit)
       return res.json({ 
         data: {
           type: 'binary',
@@ -747,16 +784,24 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
       )
     }
     
+    if (verifiedCommit) await assertRequestedSnapshot(db, req.params.id, repo, verifiedCommit)
     res.json({ 
       data: {
         type: 'text',
         name: path.basename(relativePath),
         content,
         size: stats.size,
-        extension: ext
+          extension: ext,
+          ...(verifiedCommit ? { commit: verifiedCommit } : {})
       }
     })
   } catch (error) {
+    if (error.code === 'CODE_SNAPSHOT_INPUT_INVALID') {
+      return res.status(400).json({ code: error.code })
+    }
+    if (error.code === 'CODE_SNAPSHOT_STALE') {
+      return res.status(409).json({ code: error.code })
+    }
     if (sendGitNasError(res, error)) return
     if (sendRepositorySecurityError(res, error)) return
     if (error.code === 'ENOENT') {

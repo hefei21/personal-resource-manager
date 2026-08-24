@@ -438,7 +438,8 @@ function projectCounterResult(result, keys) {
 
 function projectSearchIndexResult(result) {
   const projected = projectCounterResult(result, [
-    'inserted', 'updated', 'skipped', 'deleted', 'entryCount', 'errorCount'
+    'inserted', 'updated', 'skipped', 'deleted', 'entryCount', 'errorCount',
+    'symbolRepositories', 'symbolRefreshed', 'symbolSkipped', 'symbolFiles', 'symbolCount', 'symbolErrors'
   ])
   if (!projected) return null
   const status = ['ready', 'partial'].includes(result.status) ? result.status : null

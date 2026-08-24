@@ -4,6 +4,7 @@ import express from 'express'
 import { getDatabase } from '../config/database.js'
 import { requireOwner, requireWritePermission } from '../middlewares/auth.js'
 import { createSearchIndexService, SEARCH_INDEX_ERROR_CODES, SearchIndexError } from '../services/searchIndexService.js'
+import { createHybridSearchService } from '../services/hybridSearchService.js'
 import { collectSearchEntries } from '../services/searchSourceCollector.js'
 import {
   SEARCH_INDEX_EXECUTION_CLASS,
@@ -48,6 +49,7 @@ function normalizeRefreshBody(body) {
 }
 
 function queryError(res, error) {
+  if (error?.code === SEARCH_ROUTE_ERROR_CODES.INPUT_INVALID) return sendError(res, 400, SEARCH_ROUTE_ERROR_CODES.INPUT_INVALID)
   if (error instanceof SearchIndexError) {
     if (error.code === SEARCH_INDEX_ERROR_CODES.INPUT_INVALID) return sendError(res, 400, SEARCH_ROUTE_ERROR_CODES.INPUT_INVALID)
     if (error.code === SEARCH_INDEX_ERROR_CODES.INDEX_MISSING) return sendError(res, 503, SEARCH_ROUTE_ERROR_CODES.INDEX_MISSING)
@@ -63,17 +65,20 @@ export function createSearchRouter({
   databaseProvider = defaultDatabaseProvider,
   collectEntries = collectSearchEntries,
   serviceFactory = createSearchIndexService,
+  queryServiceFactory,
   taskRuntimeProvider = defaultGetTaskRuntime,
   enqueue = enqueueExclusiveRun,
   runIdentityFactory = randomUUID
 } = {}) {
   const router = express.Router()
+  const resolvedQueryServiceFactory = queryServiceFactory ??
+    (serviceFactory === createSearchIndexService ? createHybridSearchService : serviceFactory)
   router.use(requireOwner)
 
   router.get('/status', async (req, res) => {
     try {
       const database = await databaseProvider(req)
-      const service = serviceFactory({ database, collectEntries })
+      const service = resolvedQueryServiceFactory({ database, collectEntries })
       return res.json({ data: service.getStatus() })
     } catch (error) {
       return queryError(res, error)
@@ -115,7 +120,7 @@ export function createSearchRouter({
   router.get('/', async (req, res) => {
     try {
       const database = await databaseProvider(req)
-      const service = serviceFactory({ database, collectEntries })
+      const service = resolvedQueryServiceFactory({ database, collectEntries })
       return res.json(service.query({ ...req.query, q: req.query.q ?? req.query.keyword }))
     } catch (error) {
       return queryError(res, error)

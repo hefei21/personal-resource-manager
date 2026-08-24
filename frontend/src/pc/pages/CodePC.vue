@@ -155,6 +155,7 @@
                     <NativeIcon :name="isMarkdownFile(currentFile.name) ? 'file-text' : 'file'" />
                     {{ currentFile.name }}
                     <span v-if="currentFile.searchLine" class="search-line-badge">第 {{ currentFile.searchLine }} 行</span>
+                    <span v-if="currentFile.commit" class="search-line-badge">提交 {{ currentFile.commit.slice(0, 12) }}</span>
                   </span>
                   <NativeButton size="small" theme="default" variant="text" @click="closeFile">
                     <template #icon><NativeIcon name="x" /></template>
@@ -918,12 +919,12 @@ async function onTreeSelect(keys, node) {
 }
 
 // 加载文件内容
-async function loadFile(path, searchLine = null) {
+async function loadFile(path, searchLine = null, commit = null) {
   if (!currentRepo.value) return
   fileLoading.value = true
   console.log('========== 开始加载文件 ==========', path)
   try {
-    const response = await api.code.getFile(currentRepo.value.id, path)
+    const response = await api.code.getFile(currentRepo.value.id, path, commit)
     currentFile.value = {
       ...response.data.data,
       ...(Number.isSafeInteger(searchLine) && searchLine > 0 ? { searchLine } : {})
@@ -953,8 +954,12 @@ async function loadFile(path, searchLine = null) {
       }
     }, 100)
   } catch (error) {
+    if (error.response?.data?.code === 'CODE_SNAPSHOT_STALE') {
+      toast.warning('该搜索结果对应的提交已过期，请刷新搜索索引后重试')
+    } else {
+      toast.error('加载文件失败')
+    }
     console.error('加载文件失败:', error)
-    toast.error('加载文件失败')
   } finally {
     fileLoading.value = false
   }
@@ -1185,7 +1190,8 @@ onMounted(async () => {
   await openRepo(repository)
   if (typeof route.query.path === 'string' && route.query.path) {
     const line = Number(route.query.line)
-    await loadFile(route.query.path, Number.isSafeInteger(line) && line > 0 ? line : null)
+    const commit = typeof route.query.commit === 'string' ? route.query.commit : null
+    await loadFile(route.query.path, Number.isSafeInteger(line) && line > 0 ? line : null, commit)
   }
 })
 </script>
