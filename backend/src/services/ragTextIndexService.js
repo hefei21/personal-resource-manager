@@ -433,7 +433,7 @@ function createSnapshotIdentity(source, identity) {
   }
 }
 
-function beginAttempt(database, source, identity, now) {
+function beginAttempt(database, source, identity, now, { rebuild = false } = {}) {
   const identityValues = createSnapshotIdentity(source, identity)
   let result
   database.transaction(() => {
@@ -452,12 +452,15 @@ function beginAttempt(database, source, identity, now) {
        ORDER BY snapshot.id DESC
        LIMIT 1
     `).get(identityValues)
-    if (existing && existing.active_snapshot_id === existing.id && SNAPSHOT_COMPLETE_STATUSES.has(existing.status)) {
+    const activeComplete = existing && existing.active_snapshot_id === existing.id && SNAPSHOT_COMPLETE_STATUSES.has(existing.status)
+    if (activeComplete && !rebuild) {
       result = Object.freeze({ snapshotId: existing.id, skipped: true })
       return
     }
     let snapshotId
-    if (existing) {
+    if (activeComplete && rebuild) {
+      snapshotId = existing.id
+    } else if (existing) {
       snapshotId = existing.id
       database.prepare(`
         UPDATE ${RAG_SOURCE_SNAPSHOT_TABLE}
@@ -490,7 +493,12 @@ function beginAttempt(database, source, identity, now) {
         last_error_code = NULL,
         updated_at = excluded.updated_at
     `).run({ sourceType: source.sourceType, sourceId: source.sourceId, snapshotId, now })
-    result = Object.freeze({ snapshotId, skipped: false })
+    result = Object.freeze({
+      snapshotId,
+      skipped: false,
+      forcedActiveRebuild: Boolean(activeComplete && rebuild),
+      previousStatus: activeComplete && rebuild ? existing.status : null
+    })
   })()
   return result
 }
@@ -605,6 +613,19 @@ function markFailed(database, source, snapshotId, error, now) {
        WHERE source_type = ? AND source_id = ? AND last_attempt_snapshot_id = ?
     `).run(code, now, source.sourceType, source.sourceId, snapshotId)
   })()
+  return Object.freeze({ code, sourceType: source.sourceType, sourceId: source.sourceId })
+}
+
+function restoreAfterForcedRebuildFailure(database, source, attempt, error, now) {
+  const code = error?.code && /^[A-Z0-9][A-Z0-9_.-]{0,127}$/u.test(error.code)
+    ? error.code
+    : RAG_TEXT_INDEX_ERROR_CODES.SOURCE_FAILED
+  const stateStatus = attempt.previousStatus === 'partial' ? 'partial' : 'active'
+  database.prepare(`
+    UPDATE ${RAG_SOURCE_STATE_TABLE}
+       SET status = ?, last_error_code = ?, updated_at = ?
+     WHERE source_type = ? AND source_id = ? AND last_attempt_snapshot_id = ?
+  `).run(stateStatus, code, now, source.sourceType, source.sourceId, attempt.snapshotId)
   return Object.freeze({ code, sourceType: source.sourceType, sourceId: source.sourceId })
 }
 
@@ -785,8 +806,9 @@ export class RagTextIndexService {
     return this.recoverInterruptedAttempts()
   }
 
-  async refresh({ collected, sources, errors, signal, onProgress = async () => {} } = {}) {
+  async refresh({ collected, sources, errors, rebuild = false, signal, onProgress = async () => {} } = {}) {
     assertDatabase(this.database)
+    if (typeof rebuild !== 'boolean') fail(RAG_TEXT_INDEX_ERROR_CODES.INPUT_INVALID, 'rebuild must be a boolean.')
     this.recoverInterruptedAttempts()
     throwIfAborted(signal)
     let report = collected ?? (sources === undefined ? undefined : { sources, errors: errors ?? [] })
@@ -806,7 +828,7 @@ export class RagTextIndexService {
       const sourceErrors = errorsForSource(source, normalized.errors)
       let attempt
       try {
-        attempt = beginAttempt(this.database, source, this.chunkerIdentity, asIsoTimestamp(this.now()))
+        attempt = beginAttempt(this.database, source, this.chunkerIdentity, asIsoTimestamp(this.now()), { rebuild })
         if (attempt.skipped) {
           results.push(sourceResult(source, attempt, sourceErrors))
         } else {
@@ -825,7 +847,9 @@ export class RagTextIndexService {
         }
       } catch (error) {
         if (!attempt?.snapshotId) throw error
-        const failure = markFailed(this.database, source, attempt.snapshotId, error, asIsoTimestamp(this.now()))
+        const failure = attempt.forcedActiveRebuild
+          ? restoreAfterForcedRebuildFailure(this.database, source, attempt, error, asIsoTimestamp(this.now()))
+          : markFailed(this.database, source, attempt.snapshotId, error, asIsoTimestamp(this.now()))
         allErrors.push(failure)
         results.push(sourceResult(source, { snapshotId: attempt.snapshotId, status: 'failed' }, [failure]))
       }
