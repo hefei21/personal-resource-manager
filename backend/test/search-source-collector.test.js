@@ -3,6 +3,7 @@ import { Readable } from 'node:stream'
 import { createRequire } from 'node:module'
 import test from 'node:test'
 
+import { CREATE_RESOURCE_TRASH_SQL } from '../src/config/resourceTrashSchema.js'
 import { createSearchSourceCollector } from '../src/services/searchSourceCollector.js'
 
 const require = createRequire(import.meta.url)
@@ -24,6 +25,7 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
 function fixtureDatabase() {
   const database = new Database(':memory:')
   database.exec(`
+    ${CREATE_RESOURCE_TRASH_SQL};
     CREATE TABLE resource_domain_links (resource_id INTEGER, domain_type TEXT, domain_id INTEGER);
     CREATE TABLE documents (
       id INTEGER PRIMARY KEY, title TEXT, category TEXT, subcategory TEXT, tags TEXT,
@@ -118,6 +120,50 @@ test('collects all Stage 6A source types with public locators and safe code excl
     const serialized = JSON.stringify(report)
     assert.equal(serialized.includes('/private/'), false)
     assert.equal(serialized.includes('should-not-read'), false)
+  } finally {
+    database.close()
+  }
+})
+
+test('excludes trashed documents, ebooks, and ebook chapters without a caller status filter, then reindexes after restore', nativeTestOptions, async () => {
+  const database = fixtureDatabase()
+  const collector = createSearchSourceCollector({
+    documentRuntimeProvider: () => ({
+      contentService: {
+        stat: async () => ({ bytes: 0 }),
+        createReadStream: async () => ({ stream: Readable.from([]) })
+      }
+    }),
+    resourceRuntimeProvider: () => ({
+      contentServiceFor: () => ({
+        stat: async () => ({ bytes: 0 }),
+        createReadStream: async () => ({ stream: Readable.from([]) })
+      })
+    }),
+    listGitNasTreeFn: () => [],
+    readGitNasFileFn: () => ({ buffer: Buffer.alloc(0) })
+  })
+  try {
+    database.exec(`
+      INSERT INTO resource_trash_entries (resource_type, resource_id, deleted_at)
+      VALUES ('document', 1, '2026-08-25T01:00:00.000Z'),
+             ('ebook', 2, '2026-08-25T01:00:00.000Z')
+    `)
+
+    const trashed = await collector({ database, includeCodeFiles: false })
+    assert.equal(trashed.entries.some((entry) => entry.entryKey === 'document:1'), false)
+    assert.equal(trashed.entries.some((entry) => entry.entryKey.startsWith('ebook:2')), false)
+    assert.equal(trashed.entries.some((entry) => entry.entryKey.startsWith('ebook-chapter:2:')), false)
+
+    database.prepare(`
+      DELETE FROM resource_trash_entries
+       WHERE (resource_type = 'document' AND resource_id = 1)
+          OR (resource_type = 'ebook' AND resource_id = 2)
+    `).run()
+    const restored = await collector({ database, includeCodeFiles: false })
+    assert.equal(restored.entries.some((entry) => entry.entryKey === 'document:1'), true)
+    assert.equal(restored.entries.some((entry) => entry.entryKey === 'ebook:2'), true)
+    assert.equal(restored.entries.some((entry) => entry.entryKey === 'ebook-chapter:2:0'), true)
   } finally {
     database.close()
   }
