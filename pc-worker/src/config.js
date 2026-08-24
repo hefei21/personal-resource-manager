@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -86,6 +87,59 @@ function optionalEmbeddingConfig(env, requestTimeoutMs) {
   })
 }
 
+function optionalAnswerConfig(env, requestTimeoutMs) {
+  const endpoint = env.PC_WORKER_ANSWER_BASE_URL || env.PC_WORKER_LLM_BASE_URL
+  const modelId = env.PC_WORKER_ANSWER_MODEL_ID || env.PC_WORKER_LLM_MODEL_ID
+  const modelRevision = env.PC_WORKER_ANSWER_MODEL_REVISION || env.PC_WORKER_LLM_MODEL_REVISION
+  const contextLimitRaw = env.PC_WORKER_ANSWER_CONTEXT_LIMIT || env.PC_WORKER_ANSWER_CONTEXT_BYTES || env.PC_WORKER_ANSWER_MAX_CONTEXT_BYTES
+  const maxOutputBytesRaw = env.PC_WORKER_ANSWER_MAX_OUTPUT_BYTES || env.PC_WORKER_ANSWER_OUTPUT_LIMIT_BYTES
+  const fields = [endpoint, modelId, modelRevision, contextLimitRaw, maxOutputBytesRaw]
+  if (fields.every((value) => value === undefined || value === '')) return null
+  if (typeof endpoint !== 'string' || endpoint.trim() === '' || typeof modelId !== 'string' || modelId.trim() === '' ||
+      typeof modelRevision !== 'string' || modelRevision.trim() === '' || contextLimitRaw === undefined || contextLimitRaw === '' ||
+      maxOutputBytesRaw === undefined || maxOutputBytesRaw === '') {
+    fail('WORKER_CONFIG_INVALID', 'Answer processor configuration is incomplete.')
+  }
+  let baseUrl
+  try { baseUrl = new URL(endpoint) } catch { fail('WORKER_CONFIG_INVALID', 'Answer endpoint is invalid.') }
+  const loopback = ['localhost', '127.0.0.1', '::1'].includes(baseUrl.hostname)
+  if (baseUrl.protocol !== 'https:' && !(baseUrl.protocol === 'http:' && loopback) &&
+      !(baseUrl.protocol === 'http:' && env.PC_WORKER_ALLOW_INSECURE_HTTP === 'true')) {
+    fail('WORKER_HTTPS_REQUIRED', 'Answer endpoint must use HTTPS outside loopback testing.')
+  }
+  if (baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) {
+    fail('WORKER_CONFIG_INVALID', 'Answer endpoint must not contain credentials, query, or fragment.')
+  }
+  const provider = (env.PC_WORKER_ANSWER_PROVIDER || 'openai-compatible').trim()
+  const normalizedModelId = modelId.trim()
+  const normalizedRevision = modelRevision.trim()
+  if (!TOKEN_PATTERN.test(provider) || !TOKEN_PATTERN.test(normalizedModelId) || !TOKEN_PATTERN.test(normalizedRevision)) {
+    fail('WORKER_CONFIG_INVALID', 'Answer model identity is invalid.')
+  }
+  const contextLimit = integer(contextLimitRaw, 0, 1, 8 * 1024 * 1024, 'PC_WORKER_ANSWER_CONTEXT_LIMIT')
+  const maxOutputBytes = integer(maxOutputBytesRaw, 0, 1, 256 * 1024, 'PC_WORKER_ANSWER_MAX_OUTPUT_BYTES')
+  const maxEvidenceItems = integer(env.PC_WORKER_ANSWER_MAX_EVIDENCE, 64, 1, 64, 'PC_WORKER_ANSWER_MAX_EVIDENCE')
+  const timeoutMs = integer(env.PC_WORKER_ANSWER_TIMEOUT_MS, requestTimeoutMs, 1_000, 5 * 60_000, 'PC_WORKER_ANSWER_TIMEOUT_MS')
+  const configHash = typeof env.PC_WORKER_ANSWER_CONFIG_HASH === 'string' && env.PC_WORKER_ANSWER_CONFIG_HASH !== ''
+    ? env.PC_WORKER_ANSWER_CONFIG_HASH.toLowerCase()
+    : crypto.createHash('sha256').update(JSON.stringify({ provider, modelId: normalizedModelId, modelRevision: normalizedRevision, contextLimit, maxOutputBytes, maxEvidenceItems })).digest('hex')
+  if (!HASH_PATTERN.test(configHash)) fail('WORKER_CONFIG_INVALID', 'Answer configuration hash is invalid.')
+  return Object.freeze({
+    baseUrl: baseUrl.toString().replace(/\/$/u, ''),
+    provider,
+    modelId: normalizedModelId,
+    modelRevision: normalizedRevision,
+    contextLimit,
+    maxOutputBytes,
+    maxEvidenceItems,
+    timeoutMs,
+    configHash,
+    apiKey: typeof env.PC_WORKER_ANSWER_API_KEY === 'string' && env.PC_WORKER_ANSWER_API_KEY !== ''
+      ? env.PC_WORKER_ANSWER_API_KEY
+      : null
+  })
+}
+
 export function ensureNoProxyForUrl(env = process.env, rawUrl) {
   const hostname = new URL(rawUrl).hostname.toLowerCase()
   const entries = [...noProxyEntries(env.NO_PROXY), ...noProxyEntries(env.no_proxy)]
@@ -154,6 +208,7 @@ export function loadConfig(env = process.env) {
     pollIntervalMs: integer(env.PC_WORKER_POLL_INTERVAL_MS, 5_000, 1_000, 60_000, 'PC_WORKER_POLL_INTERVAL_MS'),
     heartbeatIntervalMs: integer(env.PC_WORKER_HEARTBEAT_INTERVAL_MS, 20_000, 5_000, 45_000, 'PC_WORKER_HEARTBEAT_INTERVAL_MS'),
     requestTimeoutMs,
-    embedding: optionalEmbeddingConfig(env, requestTimeoutMs)
+    embedding: optionalEmbeddingConfig(env, requestTimeoutMs),
+    answer: optionalAnswerConfig(env, requestTimeoutMs)
   })
 }

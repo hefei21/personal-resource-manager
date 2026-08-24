@@ -4,6 +4,10 @@ import {
   createRagEmbeddingProcessor,
   embeddingProcessorsForConfig
 } from './ragEmbeddingProcessor.js'
+import {
+  answerProcessorsForConfig,
+  createRagAnswerProcessor
+} from './ragAnswerProcessor.js'
 import { readState, stateFromCredentialResponse, writeState } from './stateStore.js'
 import { collectProfile } from './telemetry.js'
 
@@ -27,7 +31,10 @@ function failureFor(error) {
   }
   if (['WORKER_PROCESSOR_UNSUPPORTED', 'WORKER_EMBEDDING_INPUT_INVALID', 'WORKER_EMBEDDING_INPUT_TOO_LARGE', 'WORKER_EMBEDDING_BATCH_INVALID',
     'WORKER_EMBEDDING_MODEL_MISMATCH', 'WORKER_EMBEDDING_TASK_INVALID', 'WORKER_EMBEDDING_RESPONSE_INVALID',
-    'WORKER_EMBEDDING_RESULT_INVALID', 'WORKER_EMBEDDING_NOT_CONFIGURED'].includes(error?.code)) {
+    'WORKER_EMBEDDING_RESULT_INVALID', 'WORKER_EMBEDDING_NOT_CONFIGURED', 'WORKER_ANSWER_INPUT_INVALID',
+    'WORKER_ANSWER_INPUT_TOO_LARGE', 'WORKER_ANSWER_MODEL_MISMATCH', 'WORKER_ANSWER_TASK_INVALID',
+    'WORKER_ANSWER_RESULT_INVALID', 'WORKER_ANSWER_RESPONSE_INVALID', 'WORKER_ANSWER_NOT_CONFIGURED',
+    'WORKER_ANSWER_BUDGET_INVALID'].includes(error?.code)) {
     return { code: 'WORKER_PROCESSOR_INPUT_INVALID', summary: 'Worker processor input was rejected.', retryable: false }
   }
   if (error instanceof WorkerApiError && error.status >= 400 && error.status < 500) {
@@ -38,7 +45,7 @@ function failureFor(error) {
 
 export class PcWorker {
   constructor({ config, api, logger = console, profileProvider = collectProfile, stateReader = readState, stateWriter = writeState,
-    embeddingProcessorFactory = createRagEmbeddingProcessor, fetchImpl = fetch }) {
+    embeddingProcessorFactory = createRagEmbeddingProcessor, answerProcessorFactory = createRagAnswerProcessor, fetchImpl = fetch }) {
     this.config = config
     this.api = api
     this.logger = logger
@@ -51,14 +58,18 @@ export class PcWorker {
     this.stopping = false
     this.statePromise = null
     this.embeddingProcessor = embeddingProcessorFactory({ config: config?.embedding, fetchImpl })
+    this.answerProcessor = answerProcessorFactory({ config: config?.answer, fetchImpl })
     this.activeController = null
   }
 
   profileWithConfiguredProcessors(profile) {
-    const extra = embeddingProcessorsForConfig(this.config?.embedding)
+    const extra = [
+      ...embeddingProcessorsForConfig(this.config?.embedding),
+      ...answerProcessorsForConfig(this.config?.answer)
+    ]
     if (!profile?.capabilities || !Array.isArray(profile.capabilities.processors)) return profile
-    const embeddingTaskTypes = new Set(['rag.embedding.generate', 'rag.query.embed'])
-    const existing = profile.capabilities.processors.filter((item) => !embeddingTaskTypes.has(item?.taskType))
+    const localTaskTypes = new Set(['rag.embedding.generate', 'rag.query.embed', 'rag.answer.generate'])
+    const existing = profile.capabilities.processors.filter((item) => !localTaskTypes.has(item?.taskType))
     if (extra.length === 0 && existing.length === profile.capabilities.processors.length) return profile
     const keys = new Set(existing.map((item) => `${item.taskType}:${item.processorVersion}:${item.executionClass}:${item.outputSchemaVersion}`))
     const processors = [...existing]
@@ -142,6 +153,8 @@ export class PcWorker {
         result = await inspectContent(response.body, { sha256: task.input.sha256, bytes: headerBytes })
       } else if (this.embeddingProcessor.supports(task.taskType)) {
         result = await this.embeddingProcessor.process(task, { signal: controller.signal })
+      } else if (this.answerProcessor.supports(task.taskType)) {
+        result = await this.answerProcessor.process(task, { signal: controller.signal })
       } else {
         throw Object.assign(new Error('Worker processor is not configured.'), { code: 'WORKER_PROCESSOR_UNSUPPORTED', retryable: false })
       }
@@ -151,7 +164,9 @@ export class PcWorker {
         taskId: task.id,
         ...(Number.isSafeInteger(result?.output?.bytes) ? { bytes: result.output.bytes } : {}),
         ...(Array.isArray(result?.output?.vectors) ? { vectorCount: result.output.vectors.length } : {}),
-        ...(Array.isArray(result?.output?.embedding) ? { dimensions: result.output.embedding.length } : {})
+        ...(Array.isArray(result?.output?.embedding) ? { dimensions: result.output.embedding.length } : {}),
+        ...(Array.isArray(result?.output?.citations) ? { citationCount: result.output.citations.length } : {}),
+        ...(typeof result?.output?.abstained === 'boolean' ? { abstained: result.output.abstained } : {})
       })
     } catch (error) {
       const failure = failureFor(error)

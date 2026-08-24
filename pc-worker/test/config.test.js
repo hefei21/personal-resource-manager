@@ -62,6 +62,7 @@ test('Worker only enables explicit complete embedding configuration', () => {
     LOCALAPPDATA: 'C:\\worker-test'
   })
   assert.equal(disabled.embedding, null)
+  assert.equal(disabled.answer, null)
 
   const enabled = loadConfig({
     PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
@@ -77,10 +78,33 @@ test('Worker only enables explicit complete embedding configuration', () => {
   assert.equal(enabled.embedding.modelId, 'embedding-model')
   assert.equal(enabled.embedding.dimensions, 3)
   assert.equal(Object.isFrozen(enabled.embedding), true)
+  const answerEnabled = loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_ANSWER_BASE_URL: 'http://127.0.0.1:1234',
+    PC_WORKER_ANSWER_MODEL_ID: 'answer-model',
+    PC_WORKER_ANSWER_MODEL_REVISION: 'q6-revision-1',
+    PC_WORKER_ANSWER_CONTEXT_LIMIT: '4096',
+    PC_WORKER_ANSWER_MAX_OUTPUT_BYTES: '8192',
+    LOCALAPPDATA: 'C:\\worker-test'
+  })
+  assert.equal(answerEnabled.answer.baseUrl, 'http://127.0.0.1:1234')
+  assert.equal(answerEnabled.answer.modelId, 'answer-model')
+  assert.equal(answerEnabled.answer.contextLimit, 4096)
+  assert.equal(answerEnabled.answer.maxOutputBytes, 8192)
+  assert.match(answerEnabled.answer.configHash, /^[a-f0-9]{64}$/u)
+  assert.equal(Object.isFrozen(answerEnabled.answer), true)
   assert.throws(() => loadConfig({
     PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
     PC_WORKER_EMBEDDINGS_BASE_URL: 'https://worker.example.test',
     PC_WORKER_EMBEDDINGS_MODEL_ID: 'embedding-model',
+    LOCALAPPDATA: 'C:\\worker-test'
+  }), (error) => error.code === 'WORKER_CONFIG_INVALID')
+  assert.throws(() => loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_ANSWER_BASE_URL: 'https://worker.example.test',
+    PC_WORKER_ANSWER_MODEL_ID: 'answer-model',
+    PC_WORKER_ANSWER_MODEL_REVISION: 'q6-revision-1',
+    PC_WORKER_ANSWER_CONTEXT_LIMIT: '4096',
     LOCALAPPDATA: 'C:\\worker-test'
   }), (error) => error.code === 'WORKER_CONFIG_INVALID')
 })
