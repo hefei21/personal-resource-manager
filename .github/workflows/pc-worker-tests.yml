@@ -39,6 +39,11 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: pc-worker/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
 
       - name: Run Worker tests
         run: npm test
