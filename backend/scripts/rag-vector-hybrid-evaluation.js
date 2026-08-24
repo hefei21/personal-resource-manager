@@ -9,7 +9,7 @@ import { ensureMigrationControlTables } from '../src/config/migrationControlStor
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
 import { SEARCH_INDEX_MIGRATIONS } from '../src/config/searchIndexSchema.js'
-import { chunkTokenizedSections } from '../src/services/ragPreflight.js'
+import { chunkRagSource } from '../src/services/ragChunker.js'
 import { evaluateRagRetrieval, normalizeRagQuerySet } from '../src/services/ragEvaluation.js'
 import { createSearchIndexService } from '../src/services/searchIndexService.js'
 
@@ -173,11 +173,67 @@ function resolveManifestFile(root, file) {
   return resolved
 }
 
+function sourceFormat(source) {
+  const explicit = source.format ?? source.sourceType
+  if (explicit === 'markdown' || explicit === 'html' || explicit === 'txt' || explicit === 'ebook' || explicit === 'repository_document') {
+    return explicit
+  }
+  if (explicit === 'document' || source.entry?.resourceType === 'document') return 'txt'
+  if (source.entry?.resourceType === 'ebook_chapter') return 'ebook'
+  if (source.entry?.resourceType === 'code_file') return 'repository_document'
+  fail('RAG_EVAL_CORPUS_INVALID', 'source format is unsupported.')
+}
+
+function chunkEvaluationSource(source, body, config) {
+  if (!isPlainObject(source) || !isPlainObject(source.entry) || !isPlainObject(source.entry.locator)) {
+    fail('RAG_EVAL_CORPUS_INVALID', 'source entry is invalid.')
+  }
+  const sectionPath = source.sectionPath === undefined ? [source.id] : source.sectionPath
+  let report
+  try {
+    report = chunkRagSource({
+      format: sourceFormat(source),
+      body,
+      locator: source.entry.locator,
+      sectionPath
+    }, { tokenizer: config.tokenizer })
+  } catch {
+    fail('RAG_EVAL_CORPUS_INVALID', 'source could not be structured-chunked.')
+  }
+  return Object.freeze({
+    report,
+    entries: Object.freeze(report.chunks.map((chunk) => {
+      const locator = Object.freeze({ ...source.entry.locator, ...chunk.locatorPatch })
+      const chunkerHash = sha256(stableJson({
+        chunkerVersion: report.chunkerVersion,
+        chunkerConfigHash: report.configHash,
+        locatorPatch: chunk.locatorPatch,
+        bodySha256: chunk.bodySha256
+      }))
+      return Object.freeze({
+        ...source.entry,
+        entryKey: `${source.entry.entryKey}:chunk:${chunk.ordinal}`,
+        title: `${source.entry.title ?? source.title ?? source.id} [${chunk.ordinal + 1}/${report.chunks.length}]`,
+        body: chunk.body,
+        locator,
+        sourceKey: source.id,
+        contentHash: chunk.bodySha256,
+        chunkerVersion: report.chunkerVersion,
+        chunkerConfigHash: report.configHash,
+        chunkerHash,
+        tokenCount: chunk.tokenCount,
+        tokenCountMode: chunk.tokenCountMode,
+        indexStatus: source.entry.indexStatus ?? 'ready'
+      })
+    }))
+  })
+}
+
 async function loadJson(urlOrPath, code) {
   try { return JSON.parse(await fs.readFile(urlOrPath, 'utf8')) } catch { fail(code, 'evaluation input is invalid.') }
 }
 
-async function readManifestCorpus(config, corpusFixture) {
+export async function readManifestCorpus(config, corpusFixture) {
   const fixture = corpusFixture ?? await loadJson(new URL('../test/fixtures/rag-evaluation-corpus.json', import.meta.url), 'RAG_EVAL_CORPUS_INVALID')
   if (!isPlainObject(fixture) || fixture.schemaVersion !== 1 || !Array.isArray(fixture.publicSources) || !Array.isArray(fixture.syntheticSources)) {
     fail('RAG_EVAL_CORPUS_INVALID', 'corpus fixture is invalid.')
@@ -192,6 +248,8 @@ async function readManifestCorpus(config, corpusFixture) {
   }
   const seen = new Set()
   const entries = []
+  let chunkerVersion = null
+  let chunkerConfigHash = null
   for (const manifestSource of manifest.sources) {
     if (!isPlainObject(manifestSource) || typeof manifestSource.id !== 'string' || seen.has(manifestSource.id) ||
         !Number.isSafeInteger(manifestSource.bytes) || manifestSource.bytes < 1 ||
@@ -208,19 +266,16 @@ async function readManifestCorpus(config, corpusFixture) {
       fail('RAG_EVAL_MANIFEST_INVALID', 'corpus source hash is invalid.')
     }
     const body = bytes.toString('utf8')
-    const chunks = chunkTokenizedSections([{ sectionPath: [source.id], text: body }], config.tokenizer, CHUNK_CONFIGURATION)
-    for (const chunk of chunks) {
-      entries.push(Object.freeze({
-        ...source.entry,
-        entryKey: `${source.entry.entryKey}:chunk:${chunk.ordinal}`,
-        title: `${source.entry.title} [${chunk.ordinal + 1}/${chunks.length}]`,
-        body: chunk.body,
-        sourceKey: source.id,
-        sourceHash: String(manifestSource.sha256).toLowerCase(),
-        contentHash: chunk.bodySha256,
-        indexStatus: 'ready'
-      }))
+    const chunked = chunkEvaluationSource(source, body, config)
+    if (chunkerVersion === null) chunkerVersion = chunked.report.chunkerVersion
+    if (chunkerConfigHash === null) chunkerConfigHash = chunked.report.configHash
+    if (chunkerVersion !== chunked.report.chunkerVersion || chunkerConfigHash !== chunked.report.configHash) {
+      fail('RAG_EVAL_CORPUS_INVALID', 'sources use inconsistent chunker configuration.')
     }
+    for (const entry of chunked.entries) entries.push(Object.freeze({
+      ...entry,
+      sourceHash: String(manifestSource.sha256).toLowerCase()
+    }))
   }
   if (seen.size !== publicById.size) fail('RAG_EVAL_MANIFEST_INVALID', 'corpus manifest is incomplete.')
   for (const source of fixture.syntheticSources) {
@@ -228,19 +283,27 @@ async function readManifestCorpus(config, corpusFixture) {
       fail('RAG_EVAL_CORPUS_INVALID', 'synthetic source is invalid.')
     }
     const contentHash = sha256(source.entry.body)
-    entries.push(Object.freeze({
-      ...source.entry,
-      sourceKey: source.id,
-      sourceHash: contentHash,
-      contentHash,
-      indexStatus: source.entry.indexStatus ?? 'ready'
+    const chunked = chunkEvaluationSource(source, source.entry.body, config)
+    if (chunkerVersion === null) chunkerVersion = chunked.report.chunkerVersion
+    if (chunkerConfigHash === null) chunkerConfigHash = chunked.report.configHash
+    if (chunkerVersion !== chunked.report.chunkerVersion || chunkerConfigHash !== chunked.report.configHash) {
+      fail('RAG_EVAL_CORPUS_INVALID', 'sources use inconsistent chunker configuration.')
+    }
+    for (const entry of chunked.entries) entries.push(Object.freeze({
+      ...entry,
+      sourceHash: contentHash
     }))
   }
-  return Object.freeze({ entries: Object.freeze(entries), sourceCount: manifest.sources.length + fixture.syntheticSources.length })
+  return Object.freeze({
+    entries: Object.freeze(entries),
+    sourceCount: manifest.sources.length + fixture.syntheticSources.length,
+    chunkerVersion,
+    chunkerConfigHash
+  })
 }
 
-function cacheKey(kind, sourceHash, contentHash, modelConfigHash) {
-  return sha256(stableJson({ kind, sourceHash, contentHash, modelConfigHash }))
+function cacheKey(kind, sourceHash, contentHash, modelConfigHash, chunkerHash = null) {
+  return sha256(stableJson({ kind, sourceHash, contentHash, modelConfigHash, chunkerHash }))
 }
 
 async function loadCache(cachePath) {
@@ -258,10 +321,11 @@ async function loadCache(cachePath) {
 }
 
 function cacheVector(state, item, config, kind) {
-  const key = cacheKey(kind, item.sourceHash, item.contentHash, config.modelConfigHash)
+  const chunkerHash = item.chunkerHash ?? null
+  const key = cacheKey(kind, item.sourceHash, item.contentHash, config.modelConfigHash, chunkerHash)
   const direct = state.entries[key]
   if (direct && direct.kind === kind && direct.sourceHash === item.sourceHash && direct.contentHash === item.contentHash &&
-      direct.modelConfigHash === config.modelConfigHash) {
+      direct.modelConfigHash === config.modelConfigHash && direct.chunkerHash === chunkerHash) {
     try {
       state.stats.hits += 1
       return finiteVector(direct.vector, config.dimensions, 'cache.vector')
@@ -270,19 +334,21 @@ function cacheVector(state, item, config, kind) {
     }
   }
   const stale = Object.values(state.entries).some((entry) => entry.kind === kind && entry.sourceHash === item.sourceHash &&
-    entry.contentHash === item.contentHash && entry.modelConfigHash !== config.modelConfigHash)
+    (entry.contentHash !== item.contentHash || entry.modelConfigHash !== config.modelConfigHash || entry.chunkerHash !== chunkerHash))
   if (stale) state.stats.stale += 1
   state.stats.misses += 1
   return null
 }
 
 function putCacheVector(state, item, config, kind, vector) {
-  const key = cacheKey(kind, item.sourceHash, item.contentHash, config.modelConfigHash)
+  const chunkerHash = item.chunkerHash ?? null
+  const key = cacheKey(kind, item.sourceHash, item.contentHash, config.modelConfigHash, chunkerHash)
   state.entries[key] = {
     kind,
     sourceHash: item.sourceHash,
     contentHash: item.contentHash,
     modelConfigHash: config.modelConfigHash,
+    chunkerHash,
     vector: [...vector]
   }
 }
@@ -413,7 +479,14 @@ async function createFtsRanker(entries) {
     const registry = createMigrationRegistry(SEARCH_INDEX_MIGRATIONS)
     ensureMigrationControlTables(database)
     executeMigrationBatch({ database, registry, plan: createMigrationPlan(registry, []), lock: { state: 'active' } })
-    const service = createSearchIndexService({ database, collectEntries: async () => entries })
+    const allowedLocatorKeys = new Set([
+      'route', 'documentId', 'bookId', 'chapterIndex', 'repositoryId', 'path', 'line', 'postId', 'musicId'
+    ])
+    const indexEntries = entries.map((entry) => ({
+      ...entry,
+      locator: Object.fromEntries(Object.entries(entry.locator).filter(([key]) => allowedLocatorKeys.has(key)))
+    }))
+    const service = createSearchIndexService({ database, collectEntries: async () => indexEntries })
     await service.refresh({ rebuild: true })
     const byKey = new Map(entries.map((entry) => [entry.entryKey, entry]))
     return {
@@ -424,8 +497,9 @@ async function createFtsRanker(entries) {
       },
       close() { database.close() }
     }
-  } catch {
+  } catch (error) {
     try { database?.close() } catch {}
+    if (!/Could not locate the bindings file/u.test(String(error?.message ?? ''))) throw error
     return { engine: 'deterministic-token-overlap', rank: (query, filters) => ftsRank(entries, query, filters), close() {} }
   }
 }
@@ -511,6 +585,7 @@ export async function runRagVectorHybridEvaluation(options = {}) {
     id: entry.entryKey,
     sourceHash: entry.sourceHash,
     contentHash: entry.contentHash,
+    chunkerHash: entry.chunkerHash,
     sourceKey: sourceKey(entry),
     text: entry.body
   }))
@@ -558,7 +633,13 @@ export async function runRagVectorHybridEvaluation(options = {}) {
       queryPrefix: config.queryPrefix,
       modelConfigHash: config.modelConfigHash
     }),
-    corpus: Object.freeze({ sourceCount: corpus.sourceCount, chunkCount: corpus.entries.length, ftsEngine: fts.engine }),
+    corpus: Object.freeze({
+      sourceCount: corpus.sourceCount,
+      chunkCount: corpus.entries.length,
+      ftsEngine: fts.engine,
+      chunkerVersion: corpus.chunkerVersion,
+      chunkerConfigHash: corpus.chunkerConfigHash
+    }),
     cache: Object.freeze({ ...cacheState.stats, documentCalls: documents.calls, queryCalls: queryVectors.calls }),
     modes: Object.freeze({
       fts: ftsReport,

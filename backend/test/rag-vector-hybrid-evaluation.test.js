@@ -5,7 +5,11 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { runRagVectorHybridEvaluation } from '../scripts/rag-vector-hybrid-evaluation.js'
+import {
+  normalizeRagVectorEvaluationConfig,
+  readManifestCorpus,
+  runRagVectorHybridEvaluation
+} from '../scripts/rag-vector-hybrid-evaluation.js'
 
 const corpus = JSON.parse(await fs.readFile(new URL('./fixtures/rag-evaluation-corpus.json', import.meta.url), 'utf8'))
 
@@ -14,6 +18,10 @@ function tokenizer() {
     encode(text) { return [...text].map((character) => character.codePointAt(0)) },
     decode(tokens) { return String.fromCodePoint(...tokens) }
   }
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value, 'utf8').digest('hex')
 }
 
 async function makeCorpusDirectory() {
@@ -27,6 +35,34 @@ async function makeCorpusDirectory() {
   }
   await fs.writeFile(path.join(directory, 'manifest.json'), JSON.stringify({ schemaVersion: 1, sources }), { mode: 0o600 })
   return directory
+}
+
+async function makeStructuredCorpusDirectory() {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rag-structured-corpus-'))
+  const body = '# Guide\n\nIntro paragraph with a stable locator.\n\n```js\nconst answer = 42;\n```\n\n## Details\n\nA second paragraph under the details heading.'
+  const source = {
+    id: 'structured-markdown',
+    format: 'markdown',
+    sourceType: 'document',
+    title: 'Structured Markdown',
+    entry: {
+      entryKey: 'rag-document:structured-markdown',
+      title: 'Structured Markdown',
+      resourceType: 'document',
+      sourceKind: 'structured-test',
+      sourceVersionId: 77,
+      locator: { route: '/documents', documentId: 7001 },
+      resultScope: 'owned',
+      status: 'active'
+    }
+  }
+  const buffer = Buffer.from(body, 'utf8')
+  await fs.writeFile(path.join(directory, 'structured-markdown.txt'), buffer, { mode: 0o600 })
+  await fs.writeFile(path.join(directory, 'manifest.json'), JSON.stringify({
+    schemaVersion: 1,
+    sources: [{ id: source.id, bytes: buffer.length, sha256: sha256(body), file: 'structured-markdown.txt' }]
+  }), { mode: 0o600 })
+  return { directory, fixture: { schemaVersion: 1, publicSources: [source], syntheticSources: [] }, body }
 }
 
 function fakeFetchFactory() {
@@ -48,7 +84,7 @@ function fakeFetchFactory() {
   return { calls, fetchImpl }
 }
 
-function options(corpusDirectory, cachePath, fetchImpl, configHash = 'a'.repeat(64)) {
+function options(corpusDirectory, cachePath, fetchImpl, configHash = 'a'.repeat(64), corpusFixture = undefined) {
   return {
     corpusDirectory,
     cachePath,
@@ -61,7 +97,8 @@ function options(corpusDirectory, cachePath, fetchImpl, configHash = 'a'.repeat(
     queryPrefix: 'query: ',
     configHash,
     tokenizer: tokenizer(),
-    fetchImpl
+    fetchImpl,
+    ...(corpusFixture === undefined ? {} : { corpusFixture })
   }
 }
 
@@ -77,9 +114,14 @@ test('runs reproducible vector and RRF/weight evaluation with hash-bound cache',
     assert.equal(first.configuration.revision, 'test-revision-1')
     assert.equal(first.configuration.docPrefix, 'doc: ')
     assert.equal(first.configuration.queryPrefix, 'query: ')
+    assert.equal(first.corpus.chunkerVersion, 'rag-chunker.v1')
+    assert.match(first.corpus.chunkerConfigHash, /^[a-f0-9]{64}$/u)
     assert.equal(first.modes.vector.answerableQueryCount, 51)
     assert.equal(first.modes.fts.answerableQueryCount, 51)
+    assert.equal(first.modes.fts.queryCount, 64)
+    assert.equal(first.modes.vector.queryCount, 64)
     assert.equal(first.modes.hybrid.length, 5)
+    assert.ok(first.modes.hybrid.every((item) => item.report.answerableQueryCount === 51))
     assert.ok(first.modes.vector.recallAt5 >= 0 && first.modes.vector.recallAt5 <= 1)
     assert.ok(first.modes.vector.p95Ms >= first.modes.vector.p50Ms)
     assert.ok(Object.hasOwn(first.modes.vector.byLanguage, 'en'))
@@ -106,6 +148,55 @@ test('runs reproducible vector and RRF/weight evaluation with hash-bound cache',
     assert.ok(stale.cache.stale > 0)
     assert.ok(stale.cache.documentCalls > 0)
     assert.ok(stale.cache.queryCalls > 0)
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('consumes structured heading, fenced-code, paragraph, and locator chunks', async () => {
+  const { directory, fixture } = await makeStructuredCorpusDirectory()
+  try {
+    const config = normalizeRagVectorEvaluationConfig({
+      corpusDirectory: directory,
+      baseUrl: 'http://127.0.0.1:1234',
+      modelId: 'test-embedding-model',
+      revision: 'test-revision-1',
+      dimensions: 3,
+      batch: 4,
+      tokenizer: tokenizer()
+    })
+    const corpusReport = await readManifestCorpus(config, fixture)
+    assert.equal(corpusReport.chunkerVersion, 'rag-chunker.v1')
+    assert.match(corpusReport.chunkerConfigHash, /^[a-f0-9]{64}$/u)
+
+    const heading = corpusReport.entries.find((entry) => entry.body.includes('Guide'))
+    const code = corpusReport.entries.find((entry) => entry.body.includes('const answer = 42;'))
+    const paragraph = corpusReport.entries.find((entry) => entry.body.includes('second paragraph'))
+    assert.ok(heading)
+    assert.ok(code)
+    assert.ok(paragraph)
+    assert.match(code.body, /^```js[\s\S]*```$/u)
+    assert.equal(code.locator.documentId, 7001)
+    assert.deepEqual(code.locator.sectionPath, ['structured-markdown', 'Guide'])
+    assert.deepEqual([code.locator.startLine, code.locator.endLine], [5, 7])
+    assert.equal(code.locator.paragraphIndex, 2)
+    assert.equal(heading.locator.documentId, 7001)
+    assert.equal(paragraph.locator.sectionPath.at(-1), 'Details')
+    assert.ok(Number.isSafeInteger(paragraph.locator.paragraphIndex))
+    assert.equal(code.sourceVersionId, 77)
+    assert.match(code.chunkerHash, /^[a-f0-9]{64}$/u)
+
+    const cachePath = path.join(directory, 'structured-vectors.json')
+    const firstFetch = fakeFetchFactory()
+    await runRagVectorHybridEvaluation(options(directory, cachePath, firstFetch.fetchImpl, 'c'.repeat(64), fixture))
+    const alternateFixture = {
+      ...fixture,
+      publicSources: [{ ...fixture.publicSources[0], format: 'txt' }]
+    }
+    const secondFetch = fakeFetchFactory()
+    const second = await runRagVectorHybridEvaluation(options(directory, cachePath, secondFetch.fetchImpl, 'c'.repeat(64), alternateFixture))
+    assert.ok(second.cache.stale > 0)
+    assert.ok(second.cache.documentCalls > 0)
   } finally {
     await fs.rm(directory, { recursive: true, force: true })
   }
