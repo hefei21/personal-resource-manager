@@ -1,6 +1,8 @@
 import {
   lookupPcWorkerProcessor,
-  matchPcWorkerCapabilities
+  matchPcWorkerCapabilities,
+  PC_WORKER_MODEL_BOUND_TASK_TYPES,
+  normalizePcWorkerEmbeddingModel
 } from './pcWorkerProcessorCatalog.js'
 
 export const PC_WORKER_PROTOCOL_VERSION = 1
@@ -110,12 +112,20 @@ function normalizeResources(value = {}) {
 }
 
 function normalizeProcessor(value, index) {
-  exactKeys(value, ['taskType', 'processorVersion', 'executionClass', 'outputSchemaVersion'], `capabilities.processors[${index}]`)
+  exactKeys(value, ['taskType', 'processorVersion', 'executionClass', 'outputSchemaVersion', 'model'], `capabilities.processors[${index}]`)
+  const taskType = token(value.taskType, `capabilities.processors[${index}].taskType`)
+  const isModelBound = PC_WORKER_MODEL_BOUND_TASK_TYPES.includes(taskType)
+  if (!isModelBound && Object.hasOwn(value, 'model')) {
+    fail('PC_WORKER_INPUT_INVALID', `capabilities.processors[${index}].model is only valid for model-bound processors.`)
+  }
   const normalized = {
-    taskType: token(value.taskType, `capabilities.processors[${index}].taskType`),
+    taskType,
     processorVersion: token(value.processorVersion, `capabilities.processors[${index}].processorVersion`),
     executionClass: token(value.executionClass, `capabilities.processors[${index}].executionClass`),
-    outputSchemaVersion: integer(value.outputSchemaVersion, `capabilities.processors[${index}].outputSchemaVersion`, { min: 1, max: 1000 })
+    outputSchemaVersion: integer(value.outputSchemaVersion, `capabilities.processors[${index}].outputSchemaVersion`, { min: 1, max: 1000 }),
+    ...(isModelBound && value.model !== undefined
+      ? { model: normalizePcWorkerEmbeddingModel(value.model, `capabilities.processors[${index}].model`) }
+      : {})
   }
   return Object.freeze(normalized)
 }
@@ -143,8 +153,10 @@ export function normalizeWorkerProfile(value) {
   })
 }
 
-export function supportedRemoteProcessors(capabilities) {
-  return Object.freeze(matchPcWorkerCapabilities(capabilities).map(({ taskType, processorVersion, executionClass }) =>
+export function supportedRemoteProcessors(capabilities, requirements = {}) {
+  return Object.freeze(matchPcWorkerCapabilities(capabilities, requirements)
+    .filter(({ taskType, model }) => !PC_WORKER_MODEL_BOUND_TASK_TYPES.includes(taskType) || model)
+    .map(({ taskType, processorVersion, executionClass }) =>
     Object.freeze({ taskType, processorVersion, executionClass })))
 }
 

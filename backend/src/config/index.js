@@ -6,6 +6,7 @@
 import dotenv from 'dotenv'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { loadRagVectorConfig } from './ragVector.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -106,6 +107,10 @@ export function validateConfig() {
   console.log('[Config] 配置验证通过')
 }
 
+// Vector search is an optional derived layer. It remains disabled unless the
+// endpoint and a complete, hash-bound embedding identity are explicitly set.
+export const ragVectorConfig = loadRagVectorConfig()
+
 /**
  * 导出所有配置
  */
@@ -118,5 +123,6 @@ export default {
   steam: steamConfig,
   bangumi: bangumiConfig,
   log: logConfig,
-  cache: cacheConfig
+  cache: cacheConfig,
+  ragVector: ragVectorConfig
 }

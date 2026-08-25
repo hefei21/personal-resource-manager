@@ -1,6 +1,7 @@
 import express from 'express'
 
 import { getDatabase } from '../config/database.js'
+import { loadRagRerankerModel } from '../config/ragReranker.js'
 import { requireOwner, requireWritePermission } from '../middlewares/auth.js'
 import {
   authenticateWorkerAccess,
@@ -20,8 +21,14 @@ import {
   resolveWorkerTaskInput,
   supportedRemoteProcessors
 } from '../services/pcWorkerContract.js'
-import { lookupPcWorkerProcessor } from '../services/pcWorkerProcessorCatalog.js'
+import {
+  lookupPcWorkerProcessor,
+  PC_WORKER_EMBEDDING_TASK_TYPES,
+  PC_WORKER_MODEL_BOUND_TASK_TYPES
+} from '../services/pcWorkerProcessorCatalog.js'
 import { createRagArtifactStore } from '../services/ragArtifactStore.js'
+import { createRagEmbeddingRuntime } from '../services/ragEmbeddingRuntime.js'
+import { readActiveRagEmbeddingModel } from '../services/ragQueryRuntime.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { getTaskRuntime } from '../services/taskRuntime.js'
 import { projectTask } from '../services/taskTypeCatalog.js'
@@ -29,6 +36,29 @@ import { projectTask } from '../services/taskTypeCatalog.js'
 const POSITIVE_ID = /^[1-9]\d*$/u
 const WORKER_ERROR_CODE = /^WORKER_[A-Z0-9_.-]{1,56}$/u
 const LEASE_DURATION_MS = 60_000
+
+export function claimableRemoteProcessors(capabilities, {
+  embeddingModel = null,
+  rerankerModel = null
+} = {}) {
+  const processors = supportedRemoteProcessors(capabilities)
+    .filter(({ taskType }) => !PC_WORKER_MODEL_BOUND_TASK_TYPES.includes(taskType))
+
+  if (embeddingModel) {
+    for (const taskType of PC_WORKER_EMBEDDING_TASK_TYPES) {
+      processors.push(...supportedRemoteProcessors(capabilities, { taskType, model: embeddingModel }))
+    }
+  }
+  if (rerankerModel) {
+    processors.push(...supportedRemoteProcessors(capabilities, { taskType: 'rag.rerank', model: rerankerModel }))
+  }
+
+  const unique = new Map(processors.map((processor) => [
+    `${processor.taskType}\u0000${processor.processorVersion}\u0000${processor.executionClass}`,
+    processor
+  ]))
+  return Object.freeze([...unique.values()])
+}
 
 function sendCode(res, status, code) {
   return res.status(status).json({ code })
@@ -82,11 +112,19 @@ function mapError(res, error) {
     'PC_WORKER_PROCESSOR_RESULT_INVALID', 'PC_WORKER_PROCESSOR_RESULT_TOO_LARGE',
     'PC_WORKER_PROCESSOR_RESULT_STALE', 'PC_WORKER_RESULT_STALE',
     'RAG_ARTIFACT_STALE', 'RAG_ARTIFACT_MISSING', 'RAG_ARTIFACT_CONFLICT', 'RAG_ARTIFACT_TOO_LARGE',
+    'RAG_EMBEDDING_TASK_INVALID', 'RAG_EMBEDDING_MODEL_MISMATCH', 'RAG_EMBEDDING_MODEL_NOT_ACTIVE',
+    'RAG_EMBEDDING_SNAPSHOT_NOT_ACTIVE', 'RAG_EMBEDDING_SNAPSHOT_NOT_READY', 'RAG_EMBEDDING_STALE',
     'TASK_INVALID_STATE', 'TASK_LEASE_MISMATCH', 'TASK_LEASE_EXPIRED', 'TASK_STATE_CONFLICT',
     'TASK_IDEMPOTENCY_CONFLICT'].includes(code)) {
     return sendCode(res, 409, code)
   }
-  if (code === 'PC_WORKER_RUNTIME_UNAVAILABLE') return sendCode(res, 503, code)
+  if (['PC_WORKER_RUNTIME_UNAVAILABLE', 'RAG_EMBEDDING_VECTOR_STORE_UNAVAILABLE',
+    'RAG_EMBEDDING_TASK_STORE_UNAVAILABLE', 'RAG_EMBEDDING_WRITE_FAILED',
+    'RAG_VECTOR_UNAVAILABLE', 'RAG_VECTOR_TIMEOUT', 'RAG_VECTOR_COLLECTION_MISSING',
+    'RAG_VECTOR_SCHEMA_MISMATCH', 'RAG_VECTOR_RESPONSE_INVALID', 'RAG_VECTOR_REQUEST_REJECTED',
+    'RAG_VECTOR_RESPONSE_FILTER_VIOLATION'].includes(code)) {
+    return sendCode(res, 503, code)
+  }
   return sendCode(res, 500, 'PC_WORKER_REQUEST_FAILED')
 }
 
@@ -331,7 +369,10 @@ export function createPcWorkerAgentRouter({
   refresh = refreshWorkerCredentials,
   authenticate = authenticateWorkerAccess,
   updateProfile = updateWorkerProfile,
-  artifactStore = null
+  artifactStore = null,
+  embeddingRuntimeFactory = createRagEmbeddingRuntime,
+  embeddingModelProvider = readActiveRagEmbeddingModel,
+  rerankerModelProvider = () => loadRagRerankerModel()
 } = {}) {
   const router = express.Router()
   let resolvedArtifactStore = artifactStore
@@ -375,12 +416,18 @@ export function createPcWorkerAgentRouter({
       if (req.body !== undefined && (!isPlainObject(req.body) || Object.keys(req.body).length !== 0)) {
         return sendCode(res, 400, 'PC_WORKER_INPUT_INVALID')
       }
-      const processors = supportedRemoteProcessors(req.pcWorker.capabilities)
+      const databaseValue = await database(req)
+      const activeEmbeddingModel = await Promise.resolve(embeddingModelProvider(databaseValue))
+      const rerankerModel = await Promise.resolve(rerankerModelProvider({ database: databaseValue, req }))
+      const processors = claimableRemoteProcessors(req.pcWorker.capabilities, {
+        embeddingModel: activeEmbeddingModel?.model ?? null,
+        rerankerModel
+      })
       if (processors.length === 0) return sendCode(res, 409, 'PC_WORKER_CAPABILITY_UNAVAILABLE')
       const task = await Promise.resolve(runtimeStore(runtime).leaseNext({
         owner: `pcw:${req.pcWorker.id}`,
         leaseDurationMs: LEASE_DURATION_MS,
-        executionClass: PC_WORKER_EXECUTION_CLASS,
+        executionClasses: [...new Set(processors.map(({ executionClass }) => executionClass))],
         supportedProcessors: processors
       }))
       if (!task) return res.status(204).end()
@@ -526,6 +573,21 @@ export function createPcWorkerAgentRouter({
         : input)) throw staleResultError()
       const result = normalizeWorkerTaskResult(task, req.body.result,
         task.taskType === PC_WORKER_TASK_TYPE ? { sha256: row.sha256, bytes: row.bytes } : input)
+      if (task.taskType === 'rag.embedding.generate') {
+        const embeddingRuntime = await Promise.resolve(embeddingRuntimeFactory({
+          database: databaseValue,
+          taskStore: store,
+          task,
+          input
+        }))
+        if (!embeddingRuntime || typeof embeddingRuntime.applyWorkerResult !== 'function') {
+          const error = new Error('RAG embedding vector runtime is unavailable.')
+          error.code = 'RAG_EMBEDDING_VECTOR_STORE_UNAVAILABLE'
+          throw error
+        }
+        const applied = await Promise.resolve(embeddingRuntime.applyWorkerResult({ task, result }))
+        if (!applied || applied.applied !== true) throw staleResultError()
+      }
       if (task.taskType === 'rag.content.extract') {
         artifactStoreValue = getArtifactStore()
         await artifactStoreValue.commit({

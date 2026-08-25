@@ -5,8 +5,9 @@ import {
   RagTextIndexError,
   RAG_TEXT_INDEX_ERROR_CODES
 } from './ragTextIndexService.js'
-import { registerTaskProcessor } from './taskRuntime.js'
+import { getTaskRuntime, registerTaskProcessor } from './taskRuntime.js'
 import { TaskProcessorError } from './taskProcessorError.js'
+import { createRagEmbeddingRuntime } from './ragEmbeddingRuntime.js'
 
 export const RAG_INDEX_TASK_TYPE = 'rag.index.refresh'
 export const RAG_INDEX_PROCESSOR_VERSION = 'v1'
@@ -189,12 +190,55 @@ export function createRagIndexTaskProcessor({
   database,
   databaseProvider = getDatabase,
   collectSources = collectRagSources,
-  serviceFactory = createRagTextIndexService
+  serviceFactory = createRagTextIndexService,
+  taskStoreProvider = () => getTaskRuntime().getStore(),
+  embeddingRuntimeFactory = createRagEmbeddingRuntime
 } = {}) {
   const getDatabaseForTask = database === undefined ? databaseProvider : () => database
   if (typeof getDatabaseForTask !== 'function') throw new TypeError('databaseProvider must be a function')
   if (typeof collectSources !== 'function') throw new TypeError('collectSources must be a function')
   if (typeof serviceFactory !== 'function') throw new TypeError('serviceFactory must be a function')
+  if (typeof taskStoreProvider !== 'function') throw new TypeError('taskStoreProvider must be a function')
+  if (typeof embeddingRuntimeFactory !== 'function') throw new TypeError('embeddingRuntimeFactory must be a function')
+
+  const enqueueEmbeddingWork = async (result, databaseConnection, context) => {
+    if (!isPlainObject(result) || !Array.isArray(result.sources) || context.signal?.aborted) return
+    const sources = result.sources.filter((source) =>
+      isPlainObject(source) && source.status !== 'failed' && positiveId(source.snapshotId) !== null
+    )
+    if (sources.length === 0) return
+    let taskStore
+    try {
+      taskStore = await Promise.resolve(taskStoreProvider({ database: databaseConnection, context }))
+    } catch {
+      return
+    }
+    if (!taskStore) return
+    let runtime
+    try {
+      runtime = await Promise.resolve(embeddingRuntimeFactory({
+        database: databaseConnection,
+        taskStore,
+        signal: context.signal
+      }))
+    } catch {
+      return
+    }
+    if (!runtime || typeof runtime.enqueueBatch !== 'function' || !Number.isSafeInteger(runtime.embeddingModelId)) return
+    for (const source of sources) {
+      if (context.signal?.aborted) return
+      try {
+        // Enqueueing is intentionally best-effort for the text path.  An
+        // offline worker leaves the embedding state pending; it never turns a
+        // successfully committed FTS refresh into a failed index task.
+        await Promise.resolve(runtime.enqueueBatch({
+          snapshotId: positiveId(source.snapshotId),
+          embeddingModelId: runtime.embeddingModelId,
+          retryFailed: true
+        }))
+      } catch {}
+    }
+  }
 
   return async function processRagIndexTask(context = {}) {
     const input = normalizeTask(context.task)
@@ -227,6 +271,7 @@ export function createRagIndexTaskProcessor({
         signal: context.signal,
         onProgress: async (value) => progress(50 + Math.round(Number(value) * 0.5))
       })
+      await enqueueEmbeddingWork(result, databaseConnection, context)
       return result
     } catch (error) {
       throw mapError(error, context.signal)

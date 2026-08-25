@@ -31,10 +31,31 @@ services:
       CORS_ORIGIN: ${CORS_ORIGIN}
       BANGUMI_ACCESS_TOKEN: ${BANGUMI_ACCESS_TOKEN:-}
       REDIS_URL: redis://redis:6379
+      # Vector search is an optional derived layer. Keep it disabled unless a
+      # complete embedding identity is supplied and the rag-vector profile is started.
+      RAG_VECTOR_ENABLED: ${RAG_VECTOR_ENABLED:-false}
+      RAG_VECTOR_BASE_URL: ${RAG_VECTOR_BASE_URL:-http://qdrant:6333}
+      RAG_VECTOR_COLLECTION: ${RAG_VECTOR_COLLECTION:-rag_vectors}
+      RAG_VECTOR_TIMEOUT_MS: ${RAG_VECTOR_TIMEOUT_MS:-5000}
+      RAG_VECTOR_EMBEDDING_PROVIDER: ${RAG_VECTOR_EMBEDDING_PROVIDER:-}
+      RAG_VECTOR_EMBEDDING_MODEL_ID: ${RAG_VECTOR_EMBEDDING_MODEL_ID:-}
+      RAG_VECTOR_EMBEDDING_MODEL_REVISION: ${RAG_VECTOR_EMBEDDING_MODEL_REVISION:-}
+      RAG_VECTOR_EMBEDDING_DIMENSIONS: ${RAG_VECTOR_EMBEDDING_DIMENSIONS:-}
+      RAG_VECTOR_EMBEDDING_INPUT_LIMIT: ${RAG_VECTOR_EMBEDDING_INPUT_LIMIT:-}
+      RAG_VECTOR_EMBEDDING_DISTANCE: ${RAG_VECTOR_EMBEDDING_DISTANCE:-}
+      RAG_VECTOR_EMBEDDING_NORMALIZATION: ${RAG_VECTOR_EMBEDDING_NORMALIZATION:-}
+      RAG_VECTOR_EMBEDDING_CONFIG_HASH: ${RAG_VECTOR_EMBEDDING_CONFIG_HASH:-}
+      RAG_RERANKER_ENABLED: ${RAG_RERANKER_ENABLED:-false}
+      RAG_RERANKER_PROVIDER: ${RAG_RERANKER_PROVIDER:-}
+      RAG_RERANKER_MODEL_ID: ${RAG_RERANKER_MODEL_ID:-}
+      RAG_RERANKER_MODEL_REVISION: ${RAG_RERANKER_MODEL_REVISION:-}
+      RAG_RERANKER_DIMENSIONS: ${RAG_RERANKER_DIMENSIONS:-}
+      RAG_RERANKER_INPUT_LIMIT: ${RAG_RERANKER_INPUT_LIMIT:-}
+      RAG_RERANKER_CONFIG_HASH: ${RAG_RERANKER_CONFIG_HASH:-}
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       ALL_PROXY: ${ALL_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,redis,backend}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,redis,backend,qdrant}
     depends_on:
       redis:
         condition: service_healthy
@@ -71,6 +92,30 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # Optional, rebuildable vector index. The profile prevents an ordinary NAS
+  # start from creating or depending on Qdrant. The digest was verified during
+  # the Stage 6C isolated preflight; storage must remain on local POSIX storage.
+  qdrant:
+    image: qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
+    profiles:
+      - rag-vector
+    restart: unless-stopped
+    volumes:
+      - ${RAG_VECTOR_DATA_ROOT:-${DATA_ROOT}/qdrant}/storage:/qdrant/storage
+      - ${RAG_VECTOR_DATA_ROOT:-${DATA_ROOT}/qdrant}/snapshots:/qdrant/snapshots
+    networks:
+      - pr-network
+    healthcheck:
+      # The slim image intentionally has no curl/wget; verify its HTTP port is
+      # listening without adding a package or a mutable sidecar.
+      test:
+        - CMD-SHELL
+        - "grep -q ':18BD ' /proc/net/tcp || exit 1"
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
   frontend:
     image: ghcr.io/hefei21/personal-resource-manager-frontend:${IMAGE_TAG}

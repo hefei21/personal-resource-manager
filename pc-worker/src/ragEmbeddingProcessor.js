@@ -372,10 +372,12 @@ export function createRagEmbeddingProcessor({ config, fetchImpl = fetch } = {}) 
 
 export function embeddingProcessorsForConfig(config) {
   if (!config) return Object.freeze([])
-  try { normalizeConfig(config) } catch { return Object.freeze([]) }
+  let normalizedConfig
+  try { normalizedConfig = normalizeConfig(config) } catch { return Object.freeze([]) }
+  const model = localModelIdentity(normalizedConfig)
   return Object.freeze([
-    Object.freeze({ taskType: RAG_EMBEDDING_TASK_TYPE, processorVersion: RAG_EMBEDDING_PROCESSOR_VERSION, executionClass: RAG_EMBEDDING_EXECUTION_CLASS, outputSchemaVersion: RAG_EMBEDDING_OUTPUT_SCHEMA_VERSION }),
-    Object.freeze({ taskType: RAG_QUERY_EMBED_TASK_TYPE, processorVersion: RAG_EMBEDDING_PROCESSOR_VERSION, executionClass: RAG_EMBEDDING_EXECUTION_CLASS, outputSchemaVersion: RAG_EMBEDDING_OUTPUT_SCHEMA_VERSION })
+    Object.freeze({ taskType: RAG_EMBEDDING_TASK_TYPE, processorVersion: RAG_EMBEDDING_PROCESSOR_VERSION, executionClass: RAG_EMBEDDING_EXECUTION_CLASS, outputSchemaVersion: RAG_EMBEDDING_OUTPUT_SCHEMA_VERSION, model }),
+    Object.freeze({ taskType: RAG_QUERY_EMBED_TASK_TYPE, processorVersion: RAG_EMBEDDING_PROCESSOR_VERSION, executionClass: RAG_EMBEDDING_EXECUTION_CLASS, outputSchemaVersion: RAG_EMBEDDING_OUTPUT_SCHEMA_VERSION, model })
   ])
 }
 

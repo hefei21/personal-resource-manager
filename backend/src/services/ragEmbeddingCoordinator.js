@@ -12,11 +12,13 @@ import {
 } from '../config/ragEmbeddingSchema.js'
 import { lookupPcWorkerProcessor } from './pcWorkerProcessorCatalog.js'
 import { ragVectorSha256 } from './ragVectorStore.js'
+import { deriveTaskIdempotencyKey } from './taskStore.js'
 
 export const RAG_EMBEDDING_COORDINATOR_VERSION = 'rag-embedding-coordinator.v1'
 export const RAG_EMBEDDING_TASK_TYPE = 'rag.embedding.generate'
 export const RAG_EMBEDDING_PROCESSOR_VERSION = 'v1'
 export const RAG_EMBEDDING_MAX_BATCH_ITEMS = 256
+export const RAG_EMBEDDING_DOCUMENT_PREFIX = 'search_document: '
 
 export const RAG_EMBEDDING_COORDINATOR_ERROR_CODES = Object.freeze({
   INPUT_INVALID: 'RAG_EMBEDDING_INPUT_INVALID',
@@ -38,7 +40,10 @@ export const RAG_EMBEDDING_COORDINATOR_ERROR_CODES = Object.freeze({
 })
 
 const SNAPSHOT_COMPLETE_STATUSES = new Set(['text_ready', 'embedding_pending', 'ready', 'partial'])
-const MODEL_USABLE_STATUSES = new Set(['candidate', 'active'])
+// Runtime assembly is driven only by the one explicitly active model.  A
+// candidate model may be evaluated separately, but must never finalize a
+// Worker task into the production vector index.
+const MODEL_USABLE_STATUSES = new Set(['active'])
 const TASK_ACTIVE_STATUSES = ['pending', 'leased', 'running']
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const SOURCE_VERSION_MAX_LENGTH = 256
@@ -138,6 +143,29 @@ function sameModel(left, right) {
     left.configHash === right.configHash
 }
 
+// The PC Worker embedding contract intentionally carries only the model identity
+// it can verify locally. Distance/normalization belong to the NAS/Qdrant model
+// contract and are resolved again from SQLite before vector persistence.
+function workerModelIdentity(model) {
+  return Object.freeze({
+    provider: model.provider,
+    modelId: model.modelId,
+    modelRevision: model.modelRevision,
+    dimensions: model.dimensions,
+    inputLimit: model.inputLimit,
+    configHash: model.configHash
+  })
+}
+
+function taskModelMatchesRow(taskModel, rowModel) {
+  if (!isPlainObject(taskModel) || !isPlainObject(rowModel)) return false
+  const coreFields = ['provider', 'modelId', 'modelRevision', 'dimensions', 'inputLimit', 'configHash']
+  if (!coreFields.every((field) => taskModel[field] === rowModel[field])) return false
+  if (Object.hasOwn(taskModel, 'distance') && taskModel.distance !== rowModel.distance) return false
+  if (Object.hasOwn(taskModel, 'normalization') && taskModel.normalization !== rowModel.normalization) return false
+  return true
+}
+
 function sourceIdentity(row) {
   return Object.freeze({
     sourceType: row.source_type,
@@ -175,6 +203,7 @@ export class RagEmbeddingCoordinator {
     processorCatalog = lookupPcWorkerProcessor,
     workerAvailable = () => true,
     modelConfigResolver = null,
+    activeModelIdResolver = null,
     now = () => new Date(),
     maxBatchItems = RAG_EMBEDDING_MAX_BATCH_ITEMS,
     maxAttempts = 3,
@@ -188,12 +217,16 @@ export class RagEmbeddingCoordinator {
     if (modelConfigResolver !== null && typeof modelConfigResolver !== 'function') {
       fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.INPUT_INVALID, 'modelConfigResolver is invalid.')
     }
+    if (activeModelIdResolver !== null && typeof activeModelIdResolver !== 'function') {
+      fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.INPUT_INVALID, 'activeModelIdResolver is invalid.')
+    }
     this.database = database
     this.taskStore = taskStore
     this.vectorStore = vectorStore
     this.processorCatalog = processorCatalog
     this.workerAvailable = workerAvailable
     this.modelConfigResolver = modelConfigResolver
+    this.activeModelIdResolver = activeModelIdResolver
     this.now = now
     this.maxBatchItems = boundedInteger(maxBatchItems, 'maxBatchItems', 1, RAG_EMBEDDING_MAX_BATCH_ITEMS, RAG_EMBEDDING_MAX_BATCH_ITEMS)
     this.maxAttempts = boundedInteger(maxAttempts, 'maxAttempts', 1, 10, 3)
@@ -210,6 +243,11 @@ export class RagEmbeddingCoordinator {
       fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.PROCESSOR_INVALID, 'embedding processor is unavailable.')
     }
     return processor
+  }
+
+  #activeModelMatches(row) {
+    if (!this.activeModelIdResolver) return true
+    try { return this.activeModelIdResolver() === row?.embedding_model_id } catch { return false }
   }
 
   #readTarget(snapshotId, embeddingModelId) {
@@ -246,6 +284,9 @@ export class RagEmbeddingCoordinator {
     if (!MODEL_USABLE_STATUSES.has(row.model_status)) {
       fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.MODEL_NOT_ACTIVE, 'embedding model is not usable.')
     }
+    if (!this.#activeModelMatches(row)) {
+      fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.MODEL_NOT_ACTIVE, 'embedding model is no longer active.')
+    }
     if (!SNAPSHOT_COMPLETE_STATUSES.has(row.snapshot_status)) {
       fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.SNAPSHOT_NOT_READY, 'snapshot is not text-ready.')
     }
@@ -271,12 +312,12 @@ export class RagEmbeddingCoordinator {
       snapshotId: row.id,
       ...row.source,
       contentBytes: chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk.body, 'utf8'), 0),
-      model,
+      model: workerModelIdentity(model),
       chunks: chunks.map((chunk) => ({
         chunkId: chunk.id,
         ordinal: chunk.ordinal,
         chunkSha256: chunk.chunk_sha256,
-        body: chunk.body
+        body: `${RAG_EMBEDDING_DOCUMENT_PREFIX}${chunk.body}`
       }))
     }
   }
@@ -332,8 +373,8 @@ export class RagEmbeddingCoordinator {
       `).run(snapshotId, embeddingModelId, errorCode, now)
       this.database.prepare(`
         UPDATE ${RAG_SOURCE_SNAPSHOT_TABLE}
-           SET status = CASE WHEN status IN ('embedding_pending', 'partial') THEN 'embedding_pending' ELSE status END
-         WHERE id = ? AND status <> 'stale'
+           SET status = CASE WHEN status IN ('text_ready', 'embedding_pending', 'partial') THEN 'embedding_pending' ELSE status END
+          WHERE id = ? AND status <> 'stale'
       `).run(snapshotId)
       this.database.prepare(`
         UPDATE ${RAG_CHUNK_EMBEDDING_TABLE}
@@ -447,14 +488,27 @@ export class RagEmbeddingCoordinator {
   }
 
   async enqueueBatch(options = {}) {
-    const availability = normalizeWorkerAvailability(await this.workerAvailable({ taskType: RAG_EMBEDDING_TASK_TYPE }))
-    if (!availability.available) {
-      return Object.freeze({ status: 'offline', task: null, batch: null, errorCode: availability.reason })
-    }
     const snapshotId = positiveInteger(options.snapshotId, 'snapshotId')
     const embeddingModelId = positiveInteger(options.embeddingModelId, 'embeddingModelId')
     const activeTask = this.#activeTask(snapshotId, embeddingModelId)
     if (activeTask) return Object.freeze({ status: 'active', task: activeTask, batch: null })
+    let targetForAvailability = null
+    try { targetForAvailability = this.#readTarget(snapshotId, embeddingModelId) } catch {}
+    const availability = normalizeWorkerAvailability(await this.workerAvailable({
+      taskType: RAG_EMBEDDING_TASK_TYPE,
+      model: targetForAvailability?.model ?? null
+    }))
+    if (!availability.available) {
+      // Preserve a durable pending marker for a valid active snapshot even
+      // when no GPU worker is online.  The text/FTS commit remains complete,
+      // while a later reconcile or refresh can resume this model explicitly.
+      try {
+        const row = this.#readTarget(snapshotId, embeddingModelId)
+        this.#assertTarget(row)
+        this.#setPending(snapshotId, embeddingModelId, availability.reason)
+      } catch {}
+      return Object.freeze({ status: 'offline', task: null, batch: null, errorCode: availability.reason })
+    }
     let prepared
     try {
       prepared = await this.prepareBatch(options)
@@ -463,6 +517,31 @@ export class RagEmbeddingCoordinator {
         fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.TASK_STORE_UNAVAILABLE, 'taskStore enqueue API is unavailable.')
       }
       const request = this.#taskRequest(prepared)
+      if (options.retryFailed && typeof this.taskStore.retryTerminalTask === 'function' &&
+          typeof this.taskStore.getByIdempotencyKey === 'function') {
+        const idempotencyKey = deriveTaskIdempotencyKey(request)
+        const existing = await Promise.resolve(this.taskStore.getByIdempotencyKey(idempotencyKey))
+        if (existing && ['failed', 'cancelled'].includes(existing.status)) {
+          const retryOutcome = await Promise.resolve(this.taskStore.retryTerminalTask({ id: existing.id, maxRetries: 1 }))
+          const retryTask = retryOutcome?.task ?? retryOutcome
+          if (retryTask && retryTask.id !== existing.id) {
+            if (retryOutcome?.exhausted && ['failed', 'cancelled'].includes(retryTask.status)) {
+              try {
+                this.#setPending(prepared.snapshotId, prepared.embeddingModelId, 'RAG_EMBEDDING_RETRY_EXHAUSTED')
+              } catch {}
+            }
+            const retryStatus = ['pending', 'leased', 'running'].includes(retryTask.status)
+              ? 'enqueued'
+              : retryTask.status ?? 'enqueued'
+            return Object.freeze({
+              status: retryStatus,
+              task: retryTask,
+              batch: prepared,
+              created: retryOutcome?.created ?? false
+            })
+          }
+        }
+      }
       const result = typeof this.taskStore.enqueueExclusiveRun === 'function'
         ? await this.taskStore.enqueueExclusiveRun(request, { taskTypes: [RAG_EMBEDDING_TASK_TYPE] })
         : await this.taskStore.enqueue(request)
@@ -485,6 +564,28 @@ export class RagEmbeddingCoordinator {
     if (!isPlainObject(model) || typeof model.modelId !== 'string' || typeof model.configHash !== 'string') {
       fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.TASK_INVALID, 'task.input.model is invalid.')
     }
+    const hasDistance = Object.hasOwn(model, 'distance')
+    const hasNormalization = Object.hasOwn(model, 'normalization')
+    const modelPredicates = [
+      'model.provider = ?',
+      'model.model_id = ?',
+      'model.model_revision = ?',
+      'model.dimensions = ?',
+      'model.input_limit = ?',
+      'model.config_hash = ?'
+    ]
+    const modelParameters = [
+      model.provider, model.modelId, model.modelRevision,
+      model.dimensions, model.inputLimit, model.configHash
+    ]
+    if (hasDistance) {
+      modelPredicates.push('model.distance = ?')
+      modelParameters.push(model.distance)
+    }
+    if (hasNormalization) {
+      modelPredicates.push('model.normalization = ?')
+      modelParameters.push(model.normalization)
+    }
     const row = this.database.prepare(`
       SELECT snapshot.id, snapshot.source_type, snapshot.source_id,
              snapshot.source_version_id, snapshot.source_content_sha256,
@@ -497,24 +598,14 @@ export class RagEmbeddingCoordinator {
         LEFT JOIN ${RAG_SOURCE_STATE_TABLE} source_state
           ON source_state.source_type = snapshot.source_type
          AND source_state.source_id = snapshot.source_id
-        JOIN ${RAG_EMBEDDING_MODEL_TABLE} model
-          ON model.provider = ?
-         AND model.model_id = ?
-         AND model.model_revision = ?
-         AND model.dimensions = ?
-         AND model.distance = ?
-         AND model.normalization = ?
-         AND model.input_limit = ?
-         AND model.config_hash = ?
-       WHERE snapshot.id = ?
-    `).get(
-      model.provider, model.modelId, model.modelRevision, model.dimensions,
-      model.distance, model.normalization, model.inputLimit, model.configHash, snapshotId
-    )
+         JOIN ${RAG_EMBEDDING_MODEL_TABLE} model
+           ON ${modelPredicates.join(' AND ')}
+        WHERE snapshot.id = ?
+    `).get(...modelParameters, snapshotId)
     if (!row) fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.TASK_INVALID, 'task target no longer exists.')
     row.model = modelIdentityFromRow(row)
     row.source = sourceIdentity(row)
-    if (!sameModel(model, row.model)) fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.MODEL_MISMATCH, 'task model identity is stale.')
+    if (!taskModelMatchesRow(model, row.model)) fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.MODEL_MISMATCH, 'task model identity is stale.')
     return row
   }
 
@@ -581,7 +672,9 @@ export class RagEmbeddingCoordinator {
     const afterUpsert = this.#readTarget(row.id, row.embedding_model_id)
     if (!afterUpsert || afterUpsert.active_snapshot_id !== row.id ||
         afterUpsert.source_version_id !== row.source_version_id ||
-        afterUpsert.source_content_sha256 !== row.source_content_sha256) {
+        afterUpsert.source_content_sha256 !== row.source_content_sha256 ||
+        !MODEL_USABLE_STATUSES.has(afterUpsert.model_status) ||
+        !this.#activeModelMatches(afterUpsert)) {
       return this.#staleResult(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.STALE, true)
     }
 
@@ -589,6 +682,7 @@ export class RagEmbeddingCoordinator {
     let completed = false
     this.#transaction(() => {
       const current = this.#readTarget(row.id, row.embedding_model_id)
+      this.#assertTarget(current)
       if (!current || current.active_snapshot_id !== row.id ||
           current.source_version_id !== row.source_version_id ||
           current.source_content_sha256 !== row.source_content_sha256 ||
@@ -738,7 +832,8 @@ export class RagEmbeddingCoordinator {
       const current = this.#readTarget(state.snapshot_id, state.embedding_model_id)
       if (!current || current.active_snapshot_id !== state.snapshot_id ||
           !SNAPSHOT_COMPLETE_STATUSES.has(current.snapshot_status) ||
-          !MODEL_USABLE_STATUSES.has(current.model_status)) {
+          !MODEL_USABLE_STATUSES.has(current.model_status) ||
+          !this.#activeModelMatches(current)) {
         this.#markStale(state.snapshot_id, state.embedding_model_id)
         result.stale += 1
         try {

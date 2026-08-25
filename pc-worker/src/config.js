@@ -30,6 +30,15 @@ function noProxyEntries(value) {
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,255}$/u
 
+const RERANKER_MODEL_ID = 'BAAI/bge-reranker-v2-m3'
+const RERANKER_MODEL_REVISION = '953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e'
+const RERANKER_PROVIDER = 'hugging-face-tei'
+const RERANKER_DIMENSIONS = 1
+const RERANKER_INPUT_LIMIT = 512
+const RERANKER_CONFIG_HASH = '5d456e4278f50b53df3cd788abcda2fccb91c65104b1f5063fd12eb741b2440a'
+const RERANKER_MAX_LENGTH = 512
+const RERANKER_SCORE_TYPE = 'raw_logit'
+
 function optionalEmbeddingConfig(env, requestTimeoutMs) {
   const endpoint = env.PC_WORKER_EMBEDDINGS_BASE_URL || env.PC_WORKER_EMBEDDINGS_URL
   const fields = [
@@ -140,6 +149,85 @@ function optionalAnswerConfig(env, requestTimeoutMs) {
   })
 }
 
+function optionalRerankerConfig(env, requestTimeoutMs) {
+  const endpoint = env.PC_WORKER_RERANKER_BASE_URL || env.PC_WORKER_RERANKER_URL
+  const identityValues = [
+    env.PC_WORKER_RERANKER_PROVIDER,
+    env.PC_WORKER_RERANKER_MODEL_ID,
+    env.PC_WORKER_RERANKER_MODEL_REVISION,
+    env.PC_WORKER_RERANKER_DIMENSIONS,
+    env.PC_WORKER_RERANKER_INPUT_LIMIT,
+    env.PC_WORKER_RERANKER_CONFIG_HASH
+  ]
+  if ((endpoint === undefined || endpoint === '') && identityValues.every((value) => value === undefined || value === '')) return null
+  if (typeof endpoint !== 'string' || endpoint.trim() === '') {
+    fail('WORKER_CONFIG_INVALID', 'Reranker processor configuration is incomplete.')
+  }
+  let baseUrl
+  try { baseUrl = new URL(endpoint) } catch { fail('WORKER_CONFIG_INVALID', 'Reranker endpoint is invalid.') }
+  const loopback = ['localhost', '127.0.0.1', '::1'].includes(baseUrl.hostname)
+  if (baseUrl.protocol !== 'https:' && !(baseUrl.protocol === 'http:' && loopback)) {
+    fail('WORKER_HTTPS_REQUIRED', 'Reranker endpoint must use HTTPS outside loopback testing.')
+  }
+  if (baseUrl.username || baseUrl.password || baseUrl.search || baseUrl.hash) {
+    fail('WORKER_CONFIG_INVALID', 'Reranker endpoint must not contain credentials, query, or fragment.')
+  }
+  const configuredIdentity = [
+    ['PC_WORKER_RERANKER_PROVIDER', env.PC_WORKER_RERANKER_PROVIDER, RERANKER_PROVIDER],
+    ['PC_WORKER_RERANKER_MODEL_ID', env.PC_WORKER_RERANKER_MODEL_ID, RERANKER_MODEL_ID],
+    ['PC_WORKER_RERANKER_MODEL_REVISION', env.PC_WORKER_RERANKER_MODEL_REVISION, RERANKER_MODEL_REVISION],
+    ['PC_WORKER_RERANKER_CONFIG_HASH', env.PC_WORKER_RERANKER_CONFIG_HASH, RERANKER_CONFIG_HASH]
+  ]
+  for (const [fieldName, value, expected] of configuredIdentity) {
+    if (value !== undefined && value !== '' && value.trim() !== expected) {
+      fail('WORKER_CONFIG_INVALID', `${fieldName} is fixed for the configured reranker.`)
+    }
+  }
+  if (env.PC_WORKER_RERANKER_DIMENSIONS !== undefined && env.PC_WORKER_RERANKER_DIMENSIONS !== '' &&
+      integer(env.PC_WORKER_RERANKER_DIMENSIONS, 0, 1, 65_536, 'PC_WORKER_RERANKER_DIMENSIONS') !== RERANKER_DIMENSIONS) {
+    fail('WORKER_CONFIG_INVALID', 'PC_WORKER_RERANKER_DIMENSIONS is fixed for the configured reranker.')
+  }
+  if (env.PC_WORKER_RERANKER_INPUT_LIMIT !== undefined && env.PC_WORKER_RERANKER_INPUT_LIMIT !== '' &&
+      integer(env.PC_WORKER_RERANKER_INPUT_LIMIT, 0, 1, 1_048_576, 'PC_WORKER_RERANKER_INPUT_LIMIT') !== RERANKER_INPUT_LIMIT) {
+    fail('WORKER_CONFIG_INVALID', 'PC_WORKER_RERANKER_INPUT_LIMIT is fixed for the configured reranker.')
+  }
+  const timeoutMs = integer(env.PC_WORKER_RERANKER_TIMEOUT_MS, requestTimeoutMs, 1_000, 5 * 60_000, 'PC_WORKER_RERANKER_TIMEOUT_MS')
+  const root = new URL(baseUrl.toString())
+  const pathname = root.pathname.replace(/\/+$/u, '')
+  const servicePath = pathname.endsWith('/rerank') ? pathname.slice(0, -'/rerank'.length) : pathname
+  const serviceUrl = new URL(root.toString())
+  serviceUrl.pathname = servicePath || '/'
+  serviceUrl.search = ''
+  serviceUrl.hash = ''
+  const endpointUrl = new URL(serviceUrl.toString())
+  endpointUrl.pathname = `${servicePath || ''}/rerank` || '/rerank'
+  const infoUrl = new URL(serviceUrl.toString())
+  infoUrl.pathname = `${servicePath || ''}/info` || '/info'
+  const healthUrl = new URL(serviceUrl.toString())
+  healthUrl.pathname = `${servicePath || ''}/health` || '/health'
+  return Object.freeze({
+    baseUrl: serviceUrl.toString().replace(/\/$/u, ''),
+    endpoint: endpointUrl.toString().replace(/\/$/u, ''),
+    infoEndpoint: infoUrl.toString().replace(/\/$/u, ''),
+    healthEndpoint: healthUrl.toString().replace(/\/$/u, ''),
+    provider: RERANKER_PROVIDER,
+    modelId: RERANKER_MODEL_ID,
+    modelRevision: RERANKER_MODEL_REVISION,
+    dimensions: RERANKER_DIMENSIONS,
+    inputLimit: RERANKER_INPUT_LIMIT,
+    configHash: RERANKER_CONFIG_HASH,
+    maxLength: RERANKER_MAX_LENGTH,
+    scoreType: RERANKER_SCORE_TYPE,
+    maxBatchItems: 10,
+    maxInputBytes: 2 * 1024 * 1024,
+    maxOutputBytes: 512 * 1024,
+    timeoutMs,
+    apiKey: typeof env.PC_WORKER_RERANKER_API_KEY === 'string' && env.PC_WORKER_RERANKER_API_KEY !== ''
+      ? env.PC_WORKER_RERANKER_API_KEY
+      : null
+  })
+}
+
 export function ensureNoProxyForUrl(env = process.env, rawUrl) {
   const hostname = new URL(rawUrl).hostname.toLowerCase()
   const entries = [...noProxyEntries(env.NO_PROXY), ...noProxyEntries(env.no_proxy)]
@@ -200,6 +288,20 @@ export function loadConfig(env = process.env) {
   const localData = env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share')
   const statePath = path.resolve(env.PC_WORKER_STATE_PATH || path.join(localData, 'PRManagerWorker', 'state.json'))
   const requestTimeoutMs = integer(env.PC_WORKER_REQUEST_TIMEOUT_MS, 30_000, 5_000, 5 * 60_000, 'PC_WORKER_REQUEST_TIMEOUT_MS')
+  const modelReadinessIntervalMs = integer(
+    env.PC_WORKER_MODEL_READINESS_INTERVAL_MS,
+    15_000,
+    1_000,
+    60_000,
+    'PC_WORKER_MODEL_READINESS_INTERVAL_MS'
+  )
+  const modelReadinessMaxBackoffMs = integer(
+    env.PC_WORKER_MODEL_READINESS_MAX_BACKOFF_MS,
+    60_000,
+    modelReadinessIntervalMs,
+    5 * 60_000,
+    'PC_WORKER_MODEL_READINESS_MAX_BACKOFF_MS'
+  )
   return Object.freeze({
     baseUrl: baseUrl.toString().replace(/\/$/u, ''),
     statePath,
@@ -208,7 +310,10 @@ export function loadConfig(env = process.env) {
     pollIntervalMs: integer(env.PC_WORKER_POLL_INTERVAL_MS, 5_000, 1_000, 60_000, 'PC_WORKER_POLL_INTERVAL_MS'),
     heartbeatIntervalMs: integer(env.PC_WORKER_HEARTBEAT_INTERVAL_MS, 20_000, 5_000, 45_000, 'PC_WORKER_HEARTBEAT_INTERVAL_MS'),
     requestTimeoutMs,
+    modelReadinessIntervalMs,
+    modelReadinessMaxBackoffMs,
     embedding: optionalEmbeddingConfig(env, requestTimeoutMs),
-    answer: optionalAnswerConfig(env, requestTimeoutMs)
+    answer: optionalAnswerConfig(env, requestTimeoutMs),
+    reranker: optionalRerankerConfig(env, requestTimeoutMs)
   })
 }

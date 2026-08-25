@@ -1,9 +1,10 @@
 import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { ensureMigrationControlTables } from '../src/config/migrationControlStore.js'
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
@@ -23,6 +24,7 @@ const MAX_CACHE_ENTRIES = 200_000
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const DANGEROUS_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 const DEFAULT_FUSION_GRID = Object.freeze([
   Object.freeze({ rrfK: 20, ftsWeight: 0.25, vectorWeight: 0.75, maxPerSource: 3 }),
@@ -101,19 +103,70 @@ function endpointFor(baseUrl) {
   return endpoint.toString()
 }
 
+function normalizeFusionItem(item, fieldName) {
+  if (!isPlainObject(item)) fail('RAG_EVAL_CONFIG_INVALID', `${fieldName} is invalid.`)
+  const rrfK = positiveInteger(item.rrfK, `${fieldName}.rrfK`, 10_000)
+  const ftsWeight = Number(item.ftsWeight)
+  const vectorWeight = Number(item.vectorWeight)
+  const maxPerSource = positiveInteger(item.maxPerSource, `${fieldName}.maxPerSource`, 100)
+  if (!Number.isFinite(ftsWeight) || ftsWeight < 0 || !Number.isFinite(vectorWeight) || vectorWeight < 0 ||
+      ftsWeight + vectorWeight <= 0) fail('RAG_EVAL_CONFIG_INVALID', `${fieldName} weights are invalid.`)
+  return Object.freeze({ rrfK, ftsWeight, vectorWeight, maxPerSource })
+}
+
 function normalizeFusionGrid(value) {
   const grid = value ?? DEFAULT_FUSION_GRID
   if (!Array.isArray(grid) || grid.length === 0 || grid.length > 32) fail('RAG_EVAL_CONFIG_INVALID', 'fusionGrid is invalid.')
-  return Object.freeze(grid.map((item, index) => {
-    if (!isPlainObject(item)) fail('RAG_EVAL_CONFIG_INVALID', `fusionGrid[${index}] is invalid.`)
-    const rrfK = positiveInteger(item.rrfK, `fusionGrid[${index}].rrfK`, 10_000)
-    const ftsWeight = Number(item.ftsWeight)
-    const vectorWeight = Number(item.vectorWeight)
-    const maxPerSource = positiveInteger(item.maxPerSource, `fusionGrid[${index}].maxPerSource`, 100)
-    if (!Number.isFinite(ftsWeight) || ftsWeight < 0 || !Number.isFinite(vectorWeight) || vectorWeight < 0 ||
-        ftsWeight + vectorWeight <= 0) fail('RAG_EVAL_CONFIG_INVALID', `fusionGrid[${index}] weights are invalid.`)
-    return Object.freeze({ rrfK, ftsWeight, vectorWeight, maxPerSource })
-  }))
+  return Object.freeze(grid.map((item, index) => normalizeFusionItem(item, `fusionGrid[${index}]`)))
+}
+
+function pathInside(root, target) {
+  const relative = path.relative(root, target)
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+}
+
+function normalizeCandidateOutputPath(value) {
+  const candidatePath = path.resolve(requiredText(value, 'candidateOutputPath', 4096))
+  const tempRoot = path.resolve(os.tmpdir())
+  const tempRelative = path.relative(tempRoot, candidatePath)
+  const tempFirstSegment = tempRelative.split(path.sep)[0] ?? ''
+  const inStageTemp = pathInside(tempRoot, candidatePath) && /^stage6c-/iu.test(tempFirstSegment)
+  const acceptanceRoot = path.resolve(REPO_ROOT, '.codex', 'acceptance', 'stage-6C')
+  const inAcceptance = pathInside(acceptanceRoot, candidatePath)
+  if (!inStageTemp && !inAcceptance) {
+    fail('RAG_EVAL_CANDIDATE_OUTPUT_PATH_INVALID', 'candidateOutputPath must be under stage6c-* temp or .codex/acceptance/stage-6C.')
+  }
+  return candidatePath
+}
+
+async function assertCandidateOutputPath(candidatePath) {
+  const parent = path.dirname(candidatePath)
+  try {
+    await fs.mkdir(parent, { recursive: true, mode: 0o700 })
+    const parentReal = await fs.realpath(parent)
+    const tempRoot = path.resolve(os.tmpdir())
+    const acceptanceRoot = path.resolve(REPO_ROOT, '.codex', 'acceptance', 'stage-6C')
+    const tempRelative = path.relative(tempRoot, parentReal)
+    const tempFirstSegment = tempRelative.split(path.sep)[0] ?? ''
+    const inStageTemp = pathInside(tempRoot, parentReal) && /^stage6c-/iu.test(tempFirstSegment)
+    if ((!inStageTemp && !pathInside(acceptanceRoot, parentReal)) || !pathInside(path.dirname(candidatePath), parentReal)) {
+      fail('RAG_EVAL_CANDIDATE_OUTPUT_PATH_INVALID', 'candidateOutputPath resolves outside the permitted directory.')
+    }
+    try {
+      const existing = await fs.lstat(candidatePath)
+      if (existing.isSymbolicLink()) fail('RAG_EVAL_CANDIDATE_OUTPUT_PATH_INVALID', 'candidateOutputPath must not be a symbolic link.')
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  } catch (error) {
+    if (error?.code === 'RAG_EVAL_CANDIDATE_OUTPUT_PATH_INVALID') throw error
+    fail('RAG_EVAL_CANDIDATE_OUTPUT_PATH_INVALID', 'candidateOutputPath is unavailable.')
+  }
+  return candidatePath
+}
+
+export function normalizeRagCandidateOutputPath(value) {
+  return normalizeCandidateOutputPath(value)
 }
 
 export function normalizeRagVectorEvaluationConfig(options = {}) {
@@ -136,6 +189,21 @@ export function normalizeRagVectorEvaluationConfig(options = {}) {
   const apiKey = options.apiKey === undefined || options.apiKey === null ? null : requiredText(options.apiKey, 'apiKey', 4096)
   const explicitConfigHash = options.configHash === undefined ? null : validateHash(options.configHash, 'configHash')
   const modelConfigHash = explicitConfigHash ?? sha256(stableJson({ modelId, revision, dimensions, docPrefix, queryPrefix }))
+  const includeCandidateOutput = options.includeCandidateOutput === true
+  if (options.includeCandidateOutput !== undefined && typeof options.includeCandidateOutput !== 'boolean') {
+    fail('RAG_EVAL_CANDIDATE_OUTPUT_OPT_IN_REQUIRED', 'includeCandidateOutput must be a boolean.')
+  }
+  if (options.candidateOutputPath !== undefined && !includeCandidateOutput) {
+    fail('RAG_EVAL_CANDIDATE_OUTPUT_OPT_IN_REQUIRED', 'candidate output requires explicit opt-in.')
+  }
+  if (includeCandidateOutput && options.candidateOutputPath === undefined) {
+    fail('RAG_EVAL_CANDIDATE_OUTPUT_PATH_INVALID', 'candidate output path is required when output is enabled.')
+  }
+  const candidateOutputPath = includeCandidateOutput
+    ? normalizeCandidateOutputPath(options.candidateOutputPath)
+    : null
+  const fusionGrid = normalizeFusionGrid(options.fusionGrid)
+  const candidateFusion = normalizeFusionItem(options.candidateFusion ?? fusionGrid.at(-1), 'candidateFusion')
   const cachePath = options.cachePath === undefined || options.cachePath === null || options.cachePath === ''
     ? null
     : path.resolve(String(options.cachePath))
@@ -156,7 +224,10 @@ export function normalizeRagVectorEvaluationConfig(options = {}) {
     modelConfigHash,
     cachePath,
     tokenizer: options.tokenizer,
-    fusionGrid: normalizeFusionGrid(options.fusionGrid),
+    fusionGrid,
+    candidateFusion,
+    includeCandidateOutput,
+    candidateOutputPath,
     iterations: positiveInteger(options.iterations ?? 1, 'iterations', 10),
     fetchImpl: options.fetchImpl ?? fetch,
     corpusDirectory: path.resolve(String(options.corpusDirectory ?? '.rag-evaluation-corpus'))
@@ -537,7 +608,21 @@ function capBySource(entries, maxPerSource, limit = 10) {
   return selected
 }
 
-function fuseRanks(fts, vector, options) {
+function capScoredBySource(items, maxPerSource, limit = 10) {
+  const counts = new Map()
+  const selected = []
+  for (const item of items) {
+    const key = sourceKey(item.entry)
+    const count = counts.get(key) ?? 0
+    if (count >= maxPerSource) continue
+    counts.set(key, count + 1)
+    selected.push(item)
+    if (selected.length >= limit) break
+  }
+  return selected
+}
+
+function fuseRankItems(fts, vector, options) {
   const scores = new Map()
   const add = (entries, weight) => entries.forEach((entry, rank) => {
     scores.set(entry.entryKey, (scores.get(entry.entryKey) ?? 0) + weight / (options.rrfK + rank + 1))
@@ -545,7 +630,13 @@ function fuseRanks(fts, vector, options) {
   add(fts, options.ftsWeight)
   add(vector, options.vectorWeight)
   const byKey = new Map([...fts, ...vector].map((entry) => [entry.entryKey, entry]))
-  return [...scores.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])).map(([key]) => byKey.get(key))
+  return [...scores.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .map(([key, score]) => ({ entry: byKey.get(key), score }))
+}
+
+function fuseRanks(fts, vector, options) {
+  return fuseRankItems(fts, vector, options).map(({ entry }) => entry)
 }
 
 function percentile(values, ratio) {
@@ -573,6 +664,55 @@ function rankReport(entries, normalizedQueries, ranker, iterations) {
     }
   }
   return evaluateRagRetrieval(service, normalizedQueries, { iterations })
+}
+
+function buildCandidateOutput(normalizedQueries, ranker, fusion) {
+  const baselineLatencies = []
+  const candidateSets = normalizedQueries.map((query) => {
+    const started = performance.now()
+    const ranked = capScoredBySource(ranker(query.q, query.filters), fusion.maxPerSource)
+    const baselineLatencyMs = Math.round((performance.now() - started) * 1000) / 1000
+    baselineLatencies.push(baselineLatencyMs)
+    return Object.freeze({
+      queryId: query.id,
+      baselineLatencyMs,
+      candidates: Object.freeze(ranked.map(({ entry, score }) => {
+        // Bind the hash to the exact normalized text consumed by the reranker
+        // contract. Some public chunks contain compatibility characters or
+        // trailing whitespace, so hashing the pre-normalized body makes an
+        // otherwise valid candidate fail closed after JSON round-tripping.
+        const text = entry.body.normalize('NFKC').trim()
+        return Object.freeze({
+          id: entry.entryKey,
+          text,
+          textHash: sha256(text),
+          locator: Object.freeze({ ...entry.locator }),
+          hybridScore: score
+        })
+      }))
+    })
+  })
+  return Object.freeze({
+    schemaVersion: 1,
+    source: 'rag-vector-hybrid-evaluation',
+    configuration: Object.freeze({ candidateLimit: 10, finalLimit: 5, fusion: Object.freeze({ ...fusion }) }),
+    querySet: Object.freeze(normalizedQueries),
+    candidateSets: Object.freeze(candidateSets),
+    baselineP95Ms: Math.round(percentile(baselineLatencies, 0.95) * 1000) / 1000
+  })
+}
+
+async function writeCandidateOutput(outputPath, payload) {
+  const resolved = await assertCandidateOutputPath(outputPath)
+  const temporary = `${resolved}.tmp-${process.pid}-${Date.now()}`
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(payload)}\n`, { mode: 0o600 })
+    await fs.rename(temporary, resolved)
+  } catch {
+    try { await fs.rm(temporary, { force: true }) } catch {}
+    fail('RAG_EVAL_CANDIDATE_OUTPUT_WRITE_FAILED', 'candidate output could not be written.')
+  }
+  return resolved
 }
 
 export async function runRagVectorHybridEvaluation(options = {}) {
@@ -619,9 +759,19 @@ export async function runRagVectorHybridEvaluation(options = {}) {
     const report = addLatency(rankReport(corpus.entries, normalizedQueries, ranker, config.iterations), embeddingLatencies)
     return Object.freeze({ ...fusion, report })
   })
+  const candidateRanker = (queryText, filters) => {
+    const query = normalizedQueries.find((item) => item.q === queryText)
+    const vector = queryVectors.vectors.get(query.id)
+    const lexical = fts.rank(queryText, filters)
+    const semantic = vectorRank(corpus.entries, vector, vectors, filters)
+    return fuseRankItems(lexical, semantic, config.candidateFusion)
+  }
+  const candidatePayload = config.includeCandidateOutput
+    ? buildCandidateOutput(normalizedQueries, candidateRanker, config.candidateFusion)
+    : null
   fts.close()
   await saveCache(config.cachePath, cacheState)
-  return Object.freeze({
+  const report = {
     schemaVersion: 1,
     configuration: Object.freeze({
       chunker: CHUNK_CONFIGURATION,
@@ -646,7 +796,19 @@ export async function runRagVectorHybridEvaluation(options = {}) {
       vector: vectorReport,
       hybrid: Object.freeze(hybridReports)
     })
-  })
+  }
+  if (candidatePayload) {
+    const outputPath = await writeCandidateOutput(config.candidateOutputPath, candidatePayload)
+    report.candidateOutput = Object.freeze({
+      path: outputPath,
+      candidateLimit: candidatePayload.configuration.candidateLimit,
+      finalLimit: candidatePayload.configuration.finalLimit,
+      fusion: candidatePayload.configuration.fusion,
+      queryCount: candidatePayload.querySet.length,
+      baselineP95Ms: candidatePayload.baselineP95Ms
+    })
+  }
+  return Object.freeze(report)
 }
 
 function parseArguments(argv) {
@@ -678,6 +840,10 @@ async function loadTokenizer(modulePath, modelPath) {
 async function main() {
   const args = parseArguments(process.argv.slice(2))
   const tokenizer = await loadTokenizer(args.tokenizermodule ?? process.env.TRANSFORMERS_MODULE, args.tokenizerpath ?? process.env.EMBEDDING_MODEL_PATH)
+  let candidateFusion
+  if (args.candidatefusionjson !== undefined) {
+    try { candidateFusion = JSON.parse(args.candidatefusionjson) } catch { fail('RAG_EVAL_CONFIG_INVALID', 'candidateFusionJson is invalid.') }
+  }
   const report = await runRagVectorHybridEvaluation({
     corpusDirectory: args.corpusdir ?? process.env.RAG_CORPUS_DIRECTORY ?? '.rag-evaluation-corpus',
     cachePath: args.cachepath ?? process.env.RAG_VECTOR_CACHE_PATH ?? '.rag-vector-cache.json',
@@ -690,6 +856,9 @@ async function main() {
     queryPrefix: args.queryprefix ?? process.env.EMBEDDING_QUERY_PREFIX ?? '',
     configHash: args.confighash ?? process.env.EMBEDDING_CONFIG_HASH,
     apiKey: args.apikey ?? process.env.EMBEDDING_API_KEY,
+    includeCandidateOutput: args.includecandidateoutput === 'true',
+    candidateOutputPath: args.candidateoutputpath,
+    candidateFusion,
     tokenizer
   })
   const output = args.output ?? 'full'

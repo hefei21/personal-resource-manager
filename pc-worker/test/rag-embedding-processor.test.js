@@ -4,6 +4,7 @@ import test from 'node:test'
 
 import {
   createRagEmbeddingProcessor,
+  embeddingProcessorsForConfig,
   RAG_EMBEDDING_TASK_TYPE,
   RAG_QUERY_EMBED_TASK_TYPE
 } from '../src/ragEmbeddingProcessor.js'
@@ -170,6 +171,17 @@ test('incomplete local configuration does not declare or execute embedding proce
   assert.equal(processor.supports(RAG_EMBEDDING_TASK_TYPE), false)
   assert.equal(processor.supports(RAG_QUERY_EMBED_TASK_TYPE), false)
   await assert.rejects(processor.process(task()), (error) => error.code === 'WORKER_EMBEDDING_NOT_CONFIGURED')
+})
+
+test('embedding capability advertises the complete strict local model identity', () => {
+  const capabilities = embeddingProcessorsForConfig(config)
+  assert.equal(capabilities.length, 2)
+  for (const capability of capabilities) {
+    assert.deepEqual(capability.model, model)
+    assert.equal(Object.isFrozen(capability.model), true)
+  }
+  assert.deepEqual(embeddingProcessorsForConfig({ ...config, dimensions: undefined }), [])
+  assert.deepEqual(embeddingProcessorsForConfig({ ...config, configHash: undefined }), [])
 })
 
 test('vector hash is deterministic for the returned ordered vectors', async () => {

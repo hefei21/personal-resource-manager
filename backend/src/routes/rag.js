@@ -2,12 +2,20 @@ import crypto from 'node:crypto'
 import express from 'express'
 
 import { getDatabase } from '../config/database.js'
+import { loadRagRerankerModel } from '../config/ragReranker.js'
 import { requireOwner, requireWritePermission } from '../middlewares/auth.js'
 import {
   createRagAnswerService,
   RAG_ANSWER_TASK_TYPE
 } from '../services/ragAnswerService.js'
+import { createRagRerankService } from '../services/ragRerankService.js'
 import { createRagHybridRetriever } from '../services/ragHybridRetriever.js'
+import {
+  createRagQueryRuntime,
+  RAG_QUERY_EMBED_TASK_TYPE,
+  RAG_QUERY_EMBED_PROCESSOR_VERSION,
+  readRagWorkerAvailability
+} from '../services/ragQueryRuntime.js'
 import { createRagTextIndexService } from '../services/ragTextIndexService.js'
 import {
   normalizeRagIndexTaskInput,
@@ -50,7 +58,6 @@ const MAX_QUERY_BYTES = 16_384
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 50
 const QUERY_RUN_TTL_MS = RAG_QUERY_RUN_TTL_SECONDS * 1000
-const PC_WORKER_ONLINE_WINDOW_MS = 120_000
 const QUERY_PENDING_STATUSES = new Set(['pending', 'leased', 'running', 'queued', 'active'])
 const QUERY_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'canceled', 'complete', 'degraded', 'abstained'])
 const OPAQUE_RUN_ID_PATTERN = /^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._~-]{2,127}$/u
@@ -567,36 +574,17 @@ export function readRagAnswerModelFromEnv(env = process.env) {
   })
 }
 
-function answerProcessorConfigured(capabilities) {
-  return Array.isArray(capabilities?.processors) && capabilities.processors.some((processor) =>
-    processor?.taskType === RAG_ANSWER_TASK_TYPE &&
-    processor?.processorVersion === 'v1' &&
-    processor?.executionClass === 'gpu' &&
-    processor?.outputSchemaVersion === 1
-  )
+export function readRagRerankerModelFromEnv(env = process.env) {
+  return loadRagRerankerModel(env)
 }
 
-function defaultWorkerAvailable({ database } = {}) {
-  if (!database?.prepare) return false
-  try {
-    const rows = database.prepare(`
-      SELECT status, protocol_version, last_seen_at, capabilities_json
-        FROM pc_workers
-       WHERE status = 'active'
-    `).all()
-    const now = Date.now()
-    const cutoff = now - PC_WORKER_ONLINE_WINDOW_MS
-    for (const row of rows) {
-      if (row.status !== 'active') continue
-      if (row.protocol_version !== 1) continue
-      const lastSeen = Date.parse(row.last_seen_at ?? '')
-      if (!Number.isFinite(lastSeen) || lastSeen < cutoff || lastSeen > now + 5_000) continue
-      let capabilities
-      try { capabilities = JSON.parse(row.capabilities_json) } catch { continue }
-      if (answerProcessorConfigured(capabilities)) return Object.freeze({ available: true })
-    }
-  } catch {}
-  return Object.freeze({ available: false })
+function defaultWorkerAvailable({ database, taskType = RAG_ANSWER_TASK_TYPE, model = null } = {}) {
+  return readRagWorkerAvailability({
+    database,
+    taskType,
+    processorVersion: taskType === RAG_QUERY_EMBED_TASK_TYPE ? RAG_QUERY_EMBED_PROCESSOR_VERSION : 'v1',
+    model
+  }).available
 }
 
 function hasTable(database, name) {
@@ -735,10 +723,15 @@ function createAuthoritativeChecks(database) {
 
 async function defaultCandidateProvider({
   database,
+  req,
   query,
   limit,
   authoritativeVisibility,
-  textIndexServiceFactory
+  authoritativeActiveSnapshot,
+  textIndexServiceFactory,
+  queryRuntimeFactory,
+  taskStoreProvider,
+  workerAvailable
 }) {
   const service = await Promise.resolve(textIndexServiceFactory({
     database,
@@ -755,10 +748,32 @@ async function defaultCandidateProvider({
     error.code = RAG_ROUTE_ERROR_CODES.CANDIDATES_INVALID
     throw error
   }
+  let vectorOutput = null
+  try {
+    const taskStore = typeof taskStoreProvider === 'function'
+      ? await Promise.resolve(taskStoreProvider({ database, req }))
+      : null
+    const runtime = await resolveComponent(queryRuntimeFactory, {
+      database,
+      req,
+      taskStore,
+      workerAvailable: (context) => workerAvailable({ ...context, database, req }),
+      authoritativeVisibility,
+      authoritativeActiveSnapshot
+    })
+    if (runtime && typeof runtime.query === 'function') {
+      vectorOutput = await runtime.query({ query, limit })
+    }
+  } catch (error) {
+    vectorOutput = { vectorCandidates: [], vectorError: Object.freeze({ code: error?.code ?? 'VECTOR_UNAVAILABLE' }) }
+  }
   return Object.freeze({
     ftsCandidates: result.data,
-    vectorCandidates: [],
-    vectorError: Object.freeze({ code: 'VECTOR_UNAVAILABLE' })
+    ...(vectorOutput?.vectorCandidates === undefined
+      ? { vectorCandidates: [], vectorError: Object.freeze({ code: 'VECTOR_UNAVAILABLE' }) }
+      : { vectorCandidates: vectorOutput.vectorCandidates }),
+    ...(vectorOutput?.vectorError === undefined ? {} : { vectorError: vectorOutput.vectorError }),
+    ...(typeof vectorOutput?.candidateResolver === 'function' ? { candidateResolver: vectorOutput.candidateResolver } : {})
   })
 }
 
@@ -766,11 +781,16 @@ function defaultTextIndexServiceFactory(options) {
   return createRagTextIndexService(options)
 }
 
-function defaultHybridRetrieverFactory({ retrievalConfig, checks }) {
+function defaultQueryRuntimeFactory(options) {
+  return createRagQueryRuntime(options)
+}
+
+function defaultHybridRetrieverFactory({ retrievalConfig, checks, candidateResolver }) {
   return createRagHybridRetriever({
     config: retrievalConfig,
     authoritativeVisibility: checks.authoritativeVisibility,
-    authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot
+    authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot,
+    candidateResolver
   })
 }
 
@@ -798,6 +818,16 @@ function defaultAnswerServiceFactory({ answerConfig, checks, taskStore, workerAv
     model,
     authoritativeVisibility: checks.authoritativeVisibility,
     authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot
+  })
+}
+
+function defaultRerankerServiceFactory({ rerankerConfig, taskStore, workerAvailable, model }) {
+  return createRagRerankService({
+    ...rerankerConfig,
+    enabled: model !== null,
+    taskStore,
+    workerAvailable,
+    model
   })
 }
 
@@ -1021,7 +1051,17 @@ function projectAnswer(answer, retrieval, runId) {
       : {}),
     fusion: 'rrf',
     total: Number.isSafeInteger(retrieval?.total) ? retrieval.total : projected.citations.length,
-    limit: Number.isSafeInteger(retrieval?.limit) ? retrieval.limit : undefined
+    limit: Number.isSafeInteger(retrieval?.limit) ? retrieval.limit : undefined,
+    ...(isPlainObject(retrieval?.retrieval?.reranker)
+      ? {
+          reranker: {
+            status: retrieval.retrieval.reranker.status === 'applied' ? 'applied' : 'unavailable',
+            ...(typeof retrieval.retrieval.reranker.reason === 'string'
+              ? { reason: retrieval.retrieval.reranker.reason }
+              : {})
+          }
+        }
+      : {})
   }
   if (projected.retrieval.limit === undefined) delete projected.retrieval.limit
   return projected
@@ -1267,25 +1307,33 @@ export function createRagRouter({
   textIndexServiceFactory = defaultTextIndexServiceFactory,
   candidateProvider = null,
   retrieveCandidates = null,
+  queryRuntimeFactory = defaultQueryRuntimeFactory,
   hybridRetrieverFactory = defaultHybridRetrieverFactory,
   hybridRetriever = null,
   answerServiceFactory = defaultAnswerServiceFactory,
   answerService = null,
+  rerankerServiceFactory = defaultRerankerServiceFactory,
+  rerankerService = null,
   taskStoreProvider = defaultTaskStoreProvider,
   taskRuntimeProvider = defaultTaskRuntimeProvider,
   enqueue = enqueueExclusiveRun,
   sourceStatusProvider = defaultRagSourceStatusProvider,
   workerAvailable = defaultWorkerAvailable,
-  vectorAvailable = () => false,
+  vectorAvailable = null,
   model = undefined,
+  rerankerModel = undefined,
   retrievalConfig = {},
   answerConfig = {},
+  rerankerConfig = {},
   requestIdFactory = () => crypto.randomUUID(),
   queryRunStore = null
 } = {}) {
   const router = express.Router()
   router.use(requireOwner)
   const resolveConfiguredModel = () => model === undefined ? readRagAnswerModelFromEnv() : model
+  const resolveConfiguredRerankerModel = () => rerankerModel === undefined
+    ? readRagRerankerModelFromEnv()
+    : rerankerModel
   const resolveQueryRunStore = async (database, req) => {
     if (typeof queryRunStore === 'function') {
       try { return await Promise.resolve(queryRunStore({ database, req })) } catch { return createUnavailableQueryRunStore() }
@@ -1296,10 +1344,33 @@ export function createRagRouter({
 
   const resolvedCandidateProvider = retrieveCandidates ?? candidateProvider ?? ((options) => defaultCandidateProvider({
     ...options,
-    textIndexServiceFactory
+    textIndexServiceFactory,
+    queryRuntimeFactory,
+    taskStoreProvider,
+    workerAvailable
   }))
   const resolvedHybridRetrieverFactory = hybridRetriever ?? hybridRetrieverFactory
   const resolvedAnswerServiceFactory = answerService ?? answerServiceFactory
+  const resolvedRerankerServiceFactory = rerankerService ?? rerankerServiceFactory
+  const resolvedVectorAvailable = vectorAvailable ?? (async ({ database, req, phase } = {}) => {
+    try {
+      const taskStore = typeof taskStoreProvider === 'function'
+        ? await Promise.resolve(taskStoreProvider({ database, req }))
+        : null
+      const runtime = await resolveComponent(queryRuntimeFactory, {
+        database,
+        req,
+        taskStore,
+        workerAvailable: (context) => workerAvailable({ ...context, database, req }),
+        phase
+      })
+      return runtime && typeof runtime.availability === 'function'
+        ? await runtime.availability()
+        : false
+    } catch {
+      return false
+    }
+  })
 
   router.get('/status', async (req, res) => {
     try {
@@ -1308,7 +1379,7 @@ export function createRagRouter({
         database,
         req,
         workerAvailable: (context) => workerAvailable({ ...context, database, req }),
-        vectorAvailable: (context) => vectorAvailable({ ...context, database, req }),
+        vectorAvailable: (context) => resolvedVectorAvailable({ ...context, database, req }),
         model: resolveConfiguredModel()
       })
       return res.json({ data: status })
@@ -1437,7 +1508,10 @@ export function createRagRouter({
         database,
         req,
         checks,
-        retrievalConfig
+        retrievalConfig,
+        candidateResolver: typeof providerOutput.candidateResolver === 'function'
+          ? providerOutput.candidateResolver
+          : null
       })
       if (!retriever || typeof retriever.retrieve !== 'function') {
         const error = new Error('RAG retriever is unavailable.')
@@ -1460,13 +1534,52 @@ export function createRagRouter({
         req
       })
 
-      const evidence = authorizedRetrieval.data
-      let answer
       let taskStore = null
+      try { taskStore = await Promise.resolve(taskStoreProvider({ database, req })) } catch {}
+      let rankedRetrieval = authorizedRetrieval
+      if (authorizedRetrieval.data.length > 0) {
+        try {
+          const resolvedReranker = await resolveComponent(resolvedRerankerServiceFactory, {
+            database,
+            req,
+            taskStore,
+            workerAvailable: (context) => workerAvailable({ ...context, database, req }),
+            model: resolveConfiguredRerankerModel(),
+            rerankerConfig
+          })
+          if (resolvedReranker && typeof resolvedReranker.rerank === 'function') {
+            const window = authorizedRetrieval.data.slice(0, 10)
+            const reranked = await resolvedReranker.rerank({ query: input.query, candidates: window })
+            if (Array.isArray(reranked?.candidates) && reranked.candidates.length === window.length) {
+              const combined = [...reranked.candidates, ...authorizedRetrieval.data.slice(window.length)]
+              rankedRetrieval = Object.freeze({
+                ...authorizedRetrieval,
+                data: Object.freeze(combined),
+                total: combined.length,
+                retrieval: Object.freeze({
+                  ...authorizedRetrieval.retrieval,
+                  reranker: Object.freeze({
+                    status: reranked.applied === true ? 'applied' : 'unavailable',
+                    ...(typeof reranked.reason === 'string' ? { reason: reranked.reason } : {})
+                  })
+                })
+              })
+            }
+          }
+        } catch {}
+      }
+      rankedRetrieval = await authorizeReturnedEvidence(rankedRetrieval, checks, {
+        phase: 'route_post_rerank',
+        query: input.query,
+        req
+      })
+
+      const evidence = rankedRetrieval.data
+      let answer
       let resolvedAnswerService = null
       let runStore = null
       const persistedContext = evidence.length > 0
-        ? serializeRunContext({ query: input.query, evidence, retrieval: authorizedRetrieval })
+        ? serializeRunContext({ query: input.query, evidence, retrieval: rankedRetrieval })
         : null
       if (!Array.isArray(evidence) || evidence.length === 0) {
         answer = {
@@ -1482,7 +1595,6 @@ export function createRagRouter({
       } else if (!persistedContext) {
         answer = referenceFallback(input.query, evidence, 'query_context_too_large')
       } else {
-        taskStore = await Promise.resolve(taskStoreProvider({ database, req }))
         const workerAvailability = (context) => workerAvailable({ ...context, database, req })
         resolvedAnswerService = await resolveComponent(resolvedAnswerServiceFactory, {
           database,
@@ -1527,7 +1639,7 @@ export function createRagRouter({
               ownerScope: ownerScope(req),
               query: input.query,
               evidence,
-              retrieval: authorizedRetrieval,
+              retrieval: rankedRetrieval,
               contextJson: persistedContext.contextJson,
               taskKey: binding,
               status: answer.status
@@ -1538,7 +1650,7 @@ export function createRagRouter({
           }
         }
       }
-      const response = projectAnswer(answer, authorizedRetrieval, runId)
+      const response = projectAnswer(answer, rankedRetrieval, runId)
       if (requiresRunId && response.cancellable === true) {
         response.cancellable = typeof taskStore?.cancel === 'function'
       }

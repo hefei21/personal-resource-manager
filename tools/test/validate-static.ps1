@@ -173,6 +173,30 @@ Assert-Condition 'compose.nas.public-origin' `
   'NAS test Compose accepts an explicit HTTPS tunnel Origin.' `
   'NAS test Compose cannot declare the browser-visible public Origin.'
 
+$rerankerEnvironmentKeys = @(
+  'RAG_RERANKER_ENABLED',
+  'RAG_RERANKER_PROVIDER',
+  'RAG_RERANKER_MODEL_ID',
+  'RAG_RERANKER_MODEL_REVISION',
+  'RAG_RERANKER_DIMENSIONS',
+  'RAG_RERANKER_INPUT_LIMIT',
+  'RAG_RERANKER_CONFIG_HASH'
+)
+$missingRerankerEnvironment = @()
+foreach ($compose in @(
+  @{ Name = 'nas-test'; Content = $nasCompose },
+  @{ Name = 'production'; Content = $productionCompose }
+)) {
+  foreach ($key in $rerankerEnvironmentKeys) {
+    if ($compose.Content -notmatch "(?m)^\s+$([regex]::Escape($key)):\s*\$\{$([regex]::Escape($key))") {
+      $missingRerankerEnvironment += "$($compose.Name):$key"
+    }
+  }
+}
+Assert-Condition 'compose.reranker.environment' ($missingRerankerEnvironment.Count -eq 0) `
+  'NAS Compose files explicitly inject the complete Reranker identity into the backend container.' `
+  "Missing backend Reranker environment bindings: $($missingRerankerEnvironment -join ', ')"
+
 # Frontend active-content boundaries.
 $vueFiles = @(
   Get-ChildItem -LiteralPath (Get-ProjectFile 'frontend\src') -Filter '*.vue' -File -Recurse

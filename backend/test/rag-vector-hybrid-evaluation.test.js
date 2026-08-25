@@ -6,10 +6,12 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
+  normalizeRagCandidateOutputPath,
   normalizeRagVectorEvaluationConfig,
   readManifestCorpus,
   runRagVectorHybridEvaluation
 } from '../scripts/rag-vector-hybrid-evaluation.js'
+import { normalizeRagRerankerEvaluationConfig } from '../scripts/rag-reranker-evaluation.js'
 
 const corpus = JSON.parse(await fs.readFile(new URL('./fixtures/rag-evaluation-corpus.json', import.meta.url), 'utf8'))
 
@@ -231,6 +233,83 @@ test('requires explicit model, dimensions, batch, and tokenizer configuration', 
         fetchImpl: async () => { throw new Error('must not call') }
       }),
       (error) => error.code === 'RAG_EVAL_MANIFEST_INVALID'
+    )
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('emits opt-in Hybrid top10 candidate input only under the permitted stage6c output roots', async () => {
+  const directory = await makeCorpusDirectory()
+  const outputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'stage6c-reranker-candidates-'))
+  const outputPath = path.join(outputDirectory, 'candidate-input.json')
+  const cachePath = path.join(directory, 'candidate-vectors.json')
+  try {
+    const fetchResult = fakeFetchFactory()
+    const report = await runRagVectorHybridEvaluation({
+      ...options(directory, cachePath, fetchResult.fetchImpl),
+      includeCandidateOutput: true,
+      candidateOutputPath: outputPath
+    })
+    const payload = JSON.parse(await fs.readFile(outputPath, 'utf8'))
+    assert.equal(report.candidateOutput.path, outputPath)
+    assert.equal(payload.schemaVersion, 1)
+    assert.equal(payload.source, 'rag-vector-hybrid-evaluation')
+    assert.deepEqual(payload.configuration.fusion, {
+      rrfK: 60,
+      ftsWeight: 0.75,
+      vectorWeight: 0.25,
+      maxPerSource: 2
+    })
+    assert.equal(payload.configuration.candidateLimit, 10)
+    assert.equal(payload.configuration.finalLimit, 5)
+    assert.equal(payload.querySet.length, 64)
+    assert.equal(payload.candidateSets.length, payload.querySet.length)
+    assert.ok(payload.candidateSets.every((candidateSet) => {
+      return Number.isFinite(candidateSet.baselineLatencyMs) && candidateSet.candidates.length >= 1 && candidateSet.candidates.length <= 10 &&
+        candidateSet.candidates.every((candidate) => {
+          return typeof candidate.id === 'string' && typeof candidate.text === 'string' && /^[a-f0-9]{64}$/u.test(candidate.textHash) &&
+            candidate.textHash === crypto.createHash('sha256').update(candidate.text, 'utf8').digest('hex') &&
+            candidate.locator && Number.isFinite(candidate.hybridScore)
+        })
+    }))
+    const rerankerConfig = normalizeRagRerankerEvaluationConfig({
+      querySet: payload.querySet,
+      candidateSets: payload.candidateSets,
+      baselineP95Ms: payload.baselineP95Ms,
+      reranker: async () => []
+    })
+    assert.equal(rerankerConfig.candidateSets.length, payload.candidateSets.length)
+    assert.match(JSON.stringify(payload), /HTTP is a stateless application/u)
+    assert.doesNotMatch(JSON.stringify(report), /HTTP is a stateless application/u)
+  } finally {
+    await fs.rm(outputDirectory, { recursive: true, force: true })
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('rejects sensitive candidate output without explicit opt-in or outside the permitted roots', async () => {
+  const directory = await makeCorpusDirectory()
+  const cachePath = path.join(directory, 'vectors.json')
+  try {
+    assert.throws(
+      () => normalizeRagVectorEvaluationConfig({
+        ...options(directory, cachePath, fakeFetchFactory().fetchImpl),
+        candidateOutputPath: path.join(os.tmpdir(), 'stage6c-should-reject.json')
+      }),
+      (error) => error.code === 'RAG_EVAL_CANDIDATE_OUTPUT_OPT_IN_REQUIRED'
+    )
+    assert.throws(
+      () => normalizeRagCandidateOutputPath(path.join(os.tmpdir(), 'not-stage6c', 'candidate-input.json')),
+      (error) => error.code === 'RAG_EVAL_CANDIDATE_OUTPUT_PATH_INVALID'
+    )
+    assert.throws(
+      () => normalizeRagVectorEvaluationConfig({
+        ...options(directory, cachePath, fakeFetchFactory().fetchImpl),
+        includeCandidateOutput: true,
+        candidateOutputPath: path.join(directory, 'candidate-input.json')
+      }),
+      (error) => error.code === 'RAG_EVAL_CANDIDATE_OUTPUT_PATH_INVALID'
     )
   } finally {
     await fs.rm(directory, { recursive: true, force: true })

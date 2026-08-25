@@ -6,7 +6,8 @@ import path from 'node:path'
 import { Readable } from 'node:stream'
 import test from 'node:test'
 
-import { PcWorker } from '../src/worker.js'
+import { classifyWorkerFailure, PcWorker } from '../src/worker.js'
+import { createModelReadiness } from '../src/modelReadiness.js'
 
 const content = Buffer.from('worker fixture\n', 'utf8')
 const sha256 = createHash('sha256').update(content).digest('hex')
@@ -161,7 +162,18 @@ test('Worker declares embedding capabilities only when local configuration is co
     logger: { info() {}, warn() {} },
     profileProvider: async () => profile(),
     stateReader: () => null,
-    stateWriter: (_path, state) => state
+    stateWriter: (_path, state) => state,
+    loadedModelsProvider: async () => [{ modelKey: embedding.modelId }, { identifier: answer.modelId }],
+    fetchImpl: async (url, options) => {
+      const parsed = new URL(url)
+      if (parsed.pathname.endsWith('/models')) {
+        return { ok: true, json: async () => ({ data: [{ id: embedding.modelId }, { id: answer.modelId }] }) }
+      }
+      const body = JSON.parse(options.body)
+      return body.model === embedding.modelId
+        ? { ok: true, json: async () => ({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }) }
+        : { ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) }
+    }
   })
   assert.equal(await worker.runOnce(), false)
   assert.equal(profiles.length >= 1, true)
@@ -218,7 +230,11 @@ test('Worker executes an answer task through the configured local processor', as
     profileProvider: async () => profile(),
     stateReader: () => null,
     stateWriter: (_path, state) => state,
+    loadedModelsProvider: async () => [{ modelKey: answer.modelId }],
     fetchImpl: async (_url, options) => {
+      if (new URL(_url).pathname.endsWith('/models')) {
+        return { ok: true, json: async () => ({ data: [{ id: answer.modelId }] }) }
+      }
       const body = JSON.parse(options.body)
       assert.equal(body.model, answer.modelId)
       return { ok: true, json: async () => ({ model: answer.modelId, choices: [{ message: { content: JSON.stringify({ answer: '结论', abstained: false, citations: ['C1'] }) } }] }) }
@@ -258,4 +274,232 @@ test('Worker removes stale model capabilities but retains the built-in content e
   assert.equal(profiles.every((value) => value.capabilities.processors.some((item) => item.taskType === 'rag.content.extract')), true)
   assert.equal(profiles.every((value) => value.capabilities.processors.every((item) =>
     !['rag.embedding.generate', 'rag.query.embed', 'rag.answer.generate'].includes(item.taskType))), true)
+})
+
+test('Worker revokes and restores model capabilities independently while content extraction stays online', async () => {
+  const profiles = []
+  const completed = []
+  const source = Buffer.from('worker content\n', 'utf8')
+  const sourceSha256 = createHash('sha256').update(source).digest('hex')
+  const answer = {
+    baseUrl: 'http://127.0.0.1:1234', provider: 'local-provider', modelId: 'answer-model', modelRevision: 'rev-1',
+    contextLimit: 4096, maxOutputBytes: 8192, maxEvidenceItems: 4, timeoutMs: 2_000, configHash: 'b'.repeat(64), apiKey: null
+  }
+  const embedding = {
+    baseUrl: 'http://127.0.0.1:1234', provider: 'local-provider', modelId: 'embedding-model', modelRevision: 'rev-1',
+    dimensions: 3, inputLimit: 2048, maxBatchItems: 4, maxInputBytes: 1024 * 1024, timeoutMs: 2_000, configHash: 'a'.repeat(64), apiKey: null
+  }
+  const serverState = { answerLoaded: true, embeddingLoaded: true }
+  let now = 0
+  const tasks = []
+  const api = {
+    enroll: async (_token, value) => {
+      profiles.push(value)
+      return {
+        worker: { id: 'pcw-readiness' }, accessToken: 'access', accessExpiresAt: '2999-01-01T00:00:00.000Z',
+        refreshToken: 'refresh', refreshExpiresAt: '2999-02-01T00:00:00.000Z'
+      }
+    },
+    updateProfile: async (_token, value) => profiles.push(value),
+    claim: async () => tasks.shift() ?? null,
+    start: async () => {},
+    input: async () => ({ headers: new Headers({ 'x-content-sha256': sourceSha256, 'content-length': String(source.length) }), body: Readable.from([source]) }),
+    uploadArtifact: async () => {},
+    complete: async (_token, _task, result) => completed.push(result),
+    fail: async (_token, _task, code) => { throw new Error(`unexpected failure ${code}`) }
+  }
+  const worker = new PcWorker({
+    config: {
+      statePath: path.join(os.tmpdir(), 'pc-worker-readiness-state.json'), enrollmentToken: 'enroll', displayName: 'Worker',
+      heartbeatIntervalMs: 20_000, pollIntervalMs: 1_000, modelReadinessIntervalMs: 1_000,
+      modelReadinessMaxBackoffMs: 4_000, answer, embedding
+    },
+    api,
+    logger: { info() {}, warn() {} },
+    profileProvider: async () => profile(),
+    stateReader: () => null,
+    stateWriter: (_path, state) => state,
+    modelReadinessFactory: (options) => createModelReadiness({ ...options, now: () => now, random: () => 0.5 }),
+    loadedModelsProvider: async () => [
+      ...(serverState.answerLoaded ? [{ modelKey: answer.modelId }] : []),
+      ...(serverState.embeddingLoaded ? [{ identifier: embedding.modelId }] : [])
+    ],
+    fetchImpl: async (url, options) => {
+      const parsed = new URL(url)
+      if (parsed.pathname.endsWith('/models')) {
+        return { ok: true, json: async () => ({ data: [
+          ...(serverState.answerLoaded ? [{ id: answer.modelId }] : []),
+          ...(serverState.embeddingLoaded ? [{ id: embedding.modelId }] : [])
+        ] }) }
+      }
+      const body = JSON.parse(options.body)
+      if (body.model === embedding.modelId) {
+        return serverState.embeddingLoaded
+          ? { ok: true, json: async () => ({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }) }
+          : { ok: false, json: async () => ({}) }
+      }
+      return serverState.answerLoaded
+        ? { ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) }
+        : { ok: false, json: async () => ({}) }
+    },
+    contentExtractProcessorFactory: () => ({
+      supports: (type) => type === 'rag.content.extract',
+      process: async () => ({ schemaVersion: 1, processorVersion: 'v1', output: { bytes: source.length }, artifact: { sections: [] } })
+    })
+  })
+
+  assert.equal(await worker.runOnce(), false)
+  assert.equal(profiles.at(-1).capabilities.processors.some((item) => item.taskType === 'rag.answer.generate'), true)
+  assert.equal(profiles.at(-1).capabilities.processors.some((item) => item.taskType === 'rag.embedding.generate'), true)
+
+  serverState.answerLoaded = false
+  now = 1_001
+  tasks.push({
+    id: 10, leaseToken: 'lease', taskType: 'rag.content.extract', processorVersion: 'v1', executionClass: 'cpu',
+    input: { schemaVersion: 1, sourceType: 'document', sourceId: 1, sourceVersionId: 'v1', sourceContentSha256: sourceSha256, contentBytes: source.length, format: 'txt' }
+  })
+  assert.equal(await worker.runOnce(), true)
+  assert.equal(completed.length, 1)
+  assert.equal(profiles.at(-1).capabilities.processors.some((item) => item.taskType === 'rag.answer.generate'), false)
+  assert.equal(profiles.at(-1).capabilities.processors.some((item) => item.taskType === 'rag.embedding.generate'), true)
+
+  serverState.answerLoaded = true
+  now = 2_002
+  assert.equal(await worker.runOnce(), false)
+  assert.equal(profiles.at(-1).capabilities.processors.some((item) => item.taskType === 'rag.answer.generate'), true)
+})
+
+test('Worker immediately revokes a model after an in-flight endpoint failure and recovers later', async () => {
+  const profiles = []
+  const failures = []
+  let answerLoaded = true
+  let now = 0
+  let claimCount = 0
+  const answer = {
+    baseUrl: 'http://127.0.0.1:1234', provider: 'local-provider', modelId: 'answer-model', modelRevision: 'rev-1',
+    contextLimit: 4096, maxOutputBytes: 8192, maxEvidenceItems: 4, timeoutMs: 2_000, configHash: 'b'.repeat(64), apiKey: null
+  }
+  const task = {
+    id: 11, leaseToken: 'lease', taskType: 'rag.answer.generate', processorVersion: 'v1', executionClass: 'gpu',
+    input: {
+      schemaVersion: 1, querySha256: 'c'.repeat(64), query: '问题',
+      model: { provider: answer.provider, modelId: answer.modelId, modelRevision: answer.modelRevision, dimensions: 3, configHash: answer.configHash },
+      evidence: [{ citationId: 'C1', text: '证据' }]
+    }
+  }
+  const api = {
+    enroll: async (_token, value) => {
+      profiles.push(value)
+      return {
+        worker: { id: 'pcw-eject' }, accessToken: 'access', accessExpiresAt: '2999-01-01T00:00:00.000Z',
+        refreshToken: 'refresh', refreshExpiresAt: '2999-02-01T00:00:00.000Z'
+      }
+    },
+    updateProfile: async (_token, value) => profiles.push(value),
+    claim: async () => {
+      if (claimCount++ === 0) {
+        answerLoaded = false
+        return task
+      }
+      return null
+    },
+    start: async () => {},
+    fail: async (_token, _task, code, _summary, retryable) => failures.push({ code, retryable })
+  }
+  const worker = new PcWorker({
+    config: {
+      statePath: path.join(os.tmpdir(), 'pc-worker-inflight-eject-state.json'), enrollmentToken: 'enroll', displayName: 'Worker',
+      heartbeatIntervalMs: 20_000, pollIntervalMs: 1_000, modelReadinessIntervalMs: 1_000,
+      modelReadinessMaxBackoffMs: 4_000, answer
+    },
+    api,
+    logger: { info() {}, warn() {} },
+    profileProvider: async () => profile(),
+    stateReader: () => null,
+    stateWriter: (_path, state) => state,
+    modelReadinessFactory: (options) => createModelReadiness({ ...options, now: () => now, random: () => 0.5 }),
+    loadedModelsProvider: async () => (answerLoaded ? [{ modelKey: answer.modelId }] : []),
+    fetchImpl: async (url, options) => {
+      const parsed = new URL(url)
+      if (parsed.pathname.endsWith('/models')) {
+        return { ok: true, json: async () => ({ data: answerLoaded ? [{ id: answer.modelId }] : [] }) }
+      }
+      return answerLoaded
+        ? { ok: true, json: async () => ({ model: answer.modelId, choices: [{ message: { content: JSON.stringify({ answer: '结论', abstained: false, citations: ['C1'] }) } }] }) }
+        : { ok: false, json: async () => ({}) }
+    }
+  })
+
+  now = 500
+  await assert.rejects(worker.runOnce(), /endpoint rejected|unavailable|model/i)
+  assert.deepEqual(failures, [{ code: 'WORKER_MODEL_NOT_READY', retryable: true }])
+  assert.equal(profiles.at(-1).capabilities.processors.some((item) => item.taskType === 'rag.answer.generate'), false)
+
+  answerLoaded = true
+  now = 1_501
+  assert.equal(await worker.runOnce(), false)
+  assert.equal(profiles.at(-1).capabilities.processors.some((item) => item.taskType === 'rag.answer.generate'), true)
+})
+
+test('Worker reports an actively stopped processor as retryable', async () => {
+  const failures = []
+  let started
+  const startPromise = new Promise((resolve) => { started = resolve })
+  const answer = {
+    baseUrl: 'http://127.0.0.1:1234', provider: 'local-provider', modelId: 'answer-model', modelRevision: 'rev-1',
+    contextLimit: 4096, maxOutputBytes: 8192, maxEvidenceItems: 4, timeoutMs: 2_000, configHash: 'b'.repeat(64), apiKey: null
+  }
+  const task = {
+    id: 12, leaseToken: 'lease', taskType: 'rag.answer.generate', processorVersion: 'v1', executionClass: 'gpu',
+    input: {
+      schemaVersion: 1, querySha256: 'c'.repeat(64), query: '问题',
+      model: { provider: answer.provider, modelId: answer.modelId, modelRevision: answer.modelRevision, dimensions: 3, configHash: answer.configHash },
+      evidence: [{ citationId: 'C1', text: '证据' }]
+    }
+  }
+  const api = {
+    enroll: async () => ({ worker: { id: 'pcw-stop' }, accessToken: 'access', accessExpiresAt: '2999-01-01T00:00:00.000Z', refreshToken: 'refresh', refreshExpiresAt: '2999-02-01T00:00:00.000Z' }),
+    updateProfile: async () => {},
+    claim: async () => task,
+    start: async () => started(),
+    complete: async () => { throw new Error('stopped task must not complete') },
+    fail: async (_token, _task, code, _summary, retryable) => failures.push({ code, retryable })
+  }
+  const worker = new PcWorker({
+    config: { statePath: path.join(os.tmpdir(), 'pc-worker-stop-state.json'), enrollmentToken: 'enroll', displayName: 'Worker', heartbeatIntervalMs: 20_000, pollIntervalMs: 1_000, answer },
+    api,
+    logger: { info() {}, warn() {} },
+    profileProvider: async () => profile(),
+    stateReader: () => null,
+    stateWriter: (_path, state) => state,
+    loadedModelsProvider: async () => [{ modelKey: answer.modelId }],
+    answerProcessorFactory: () => ({
+      supports: (taskType) => taskType === 'rag.answer.generate',
+      process: async (_task, { signal }) => new Promise((_resolve, reject) => {
+        const cancel = () => reject(Object.assign(new Error('cancelled'), { code: 'WORKER_PROCESSOR_CANCELLED' }))
+        if (signal.aborted) return cancel()
+        signal.addEventListener('abort', cancel, { once: true })
+      })
+    })
+  })
+  const running = worker.runOnce()
+  await startPromise
+  worker.stop()
+  await assert.rejects(running, /cancelled/u)
+  assert.deepEqual(failures, [{ code: 'WORKER_PROCESSOR_CANCELLED', retryable: true }])
+})
+
+test('Worker does not retry deterministic reranker contract failures', () => {
+  for (const code of [
+    'WORKER_RERANK_RESPONSE_INVALID',
+    'WORKER_RERANK_RESPONSE_INPUT_MISMATCH',
+    'WORKER_RERANK_RESPONSE_COUNT_INVALID'
+  ]) {
+    assert.deepEqual(classifyWorkerFailure({ code }), {
+      code: 'WORKER_PROCESSOR_INPUT_INVALID',
+      summary: 'Worker processor input was rejected.',
+      retryable: false
+    })
+  }
+  assert.equal(classifyWorkerFailure({ code: 'WORKER_RERANK_TIMEOUT' }).retryable, true)
 })

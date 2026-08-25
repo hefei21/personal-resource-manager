@@ -93,6 +93,8 @@ test('Worker only enables explicit complete embedding configuration', () => {
   assert.equal(answerEnabled.answer.maxOutputBytes, 8192)
   assert.match(answerEnabled.answer.configHash, /^[a-f0-9]{64}$/u)
   assert.equal(Object.isFrozen(answerEnabled.answer), true)
+  assert.equal(answerEnabled.modelReadinessIntervalMs, 15_000)
+  assert.equal(answerEnabled.modelReadinessMaxBackoffMs, 60_000)
   assert.throws(() => loadConfig({
     PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
     PC_WORKER_EMBEDDINGS_BASE_URL: 'https://worker.example.test',
@@ -105,6 +107,24 @@ test('Worker only enables explicit complete embedding configuration', () => {
     PC_WORKER_ANSWER_MODEL_ID: 'answer-model',
     PC_WORKER_ANSWER_MODEL_REVISION: 'q6-revision-1',
     PC_WORKER_ANSWER_CONTEXT_LIMIT: '4096',
+    LOCALAPPDATA: 'C:\\worker-test'
+  }), (error) => error.code === 'WORKER_CONFIG_INVALID')
+})
+
+test('Worker keeps model readiness probes fast and bounds their backoff', () => {
+  const config = loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_MODEL_READINESS_INTERVAL_MS: '10000',
+    PC_WORKER_MODEL_READINESS_MAX_BACKOFF_MS: '45000',
+    LOCALAPPDATA: 'C:\\worker-test'
+  })
+
+  assert.equal(config.modelReadinessIntervalMs, 10_000)
+  assert.equal(config.modelReadinessMaxBackoffMs, 45_000)
+  assert.throws(() => loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_MODEL_READINESS_INTERVAL_MS: '60000',
+    PC_WORKER_MODEL_READINESS_MAX_BACKOFF_MS: '59999',
     LOCALAPPDATA: 'C:\\worker-test'
   }), (error) => error.code === 'WORKER_CONFIG_INVALID')
 })

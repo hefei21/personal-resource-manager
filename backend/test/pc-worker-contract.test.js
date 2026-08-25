@@ -81,6 +81,59 @@ test('claimed task projection exposes lease-scoped identifiers but no NAS path',
   }), null)
 })
 
+test('embedding capability identity is required for remote scheduling and must match the active model', () => {
+  const model = {
+    provider: 'lmstudio', modelId: 'nomic-embed-text-v1.5', modelRevision: 'gguf-r1',
+    dimensions: 768, inputLimit: 8192, configHash: 'a'.repeat(64)
+  }
+  const withEmbedding = profile()
+  withEmbedding.capabilities.processors.push({
+    taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu',
+    outputSchemaVersion: 1, model
+  })
+  const normalized = normalizeWorkerProfile(withEmbedding)
+  assert.deepEqual(supportedRemoteProcessors(normalized.capabilities, { model: { ...model, distance: 'cosine', normalization: 'l2' } }), [
+    { taskType: 'content.inspect', processorVersion: 'v1', executionClass: 'gpu' },
+    { taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu' }
+  ])
+  assert.deepEqual(supportedRemoteProcessors(normalized.capabilities, { model: { ...model, configHash: 'b'.repeat(64) } }), [
+    { taskType: 'content.inspect', processorVersion: 'v1', executionClass: 'gpu' }
+  ])
+
+  const legacy = profile()
+  legacy.capabilities.processors.push({
+    taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1
+  })
+  assert.deepEqual(supportedRemoteProcessors(normalizeWorkerProfile(legacy).capabilities, { model }), [
+    { taskType: 'content.inspect', processorVersion: 'v1', executionClass: 'gpu' }
+  ])
+})
+
+test('reranker capability is model-bound and rejects an unversioned or mismatched BGE runtime', () => {
+  const model = {
+    provider: 'hugging-face-tei', modelId: 'BAAI/bge-reranker-v2-m3',
+    modelRevision: '953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e', dimensions: 1, inputLimit: 512,
+    configHash: '5d456e4278f50b53df3cd788abcda2fccb91c65104b1f5063fd12eb741b2440a'
+  }
+  const capable = profile()
+  capable.capabilities.processors.push({
+    taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1, model
+  })
+  const normalized = normalizeWorkerProfile(capable)
+  assert.deepEqual(supportedRemoteProcessors(normalized.capabilities, { taskType: 'rag.rerank', model }), [
+    { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu' }
+  ])
+  assert.deepEqual(supportedRemoteProcessors(normalized.capabilities, {
+    taskType: 'rag.rerank', model: { ...model, configHash: 'b'.repeat(64) }
+  }), [])
+
+  const missingModel = profile()
+  missingModel.capabilities.processors.push({
+    taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1
+  })
+  assert.deepEqual(supportedRemoteProcessors(normalizeWorkerProfile(missingModel).capabilities, { taskType: 'rag.rerank', model }), [])
+})
+
 test('content result binds input hash, byte count, processor and schema', () => {
   const result = {
     schemaVersion: PC_WORKER_OUTPUT_SCHEMA_VERSION,

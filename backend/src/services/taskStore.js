@@ -8,6 +8,8 @@ const TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
 const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const SUBJECT_ID_MAX_LENGTH = 512
 const DEFAULT_MAX_ATTEMPTS = 3
+const DEFAULT_TERMINAL_RETRY_BUDGET = 1
+const MAX_TERMINAL_RETRY_BUDGET = 3
 const DEFAULT_LEASE_DURATION_MS = 60_000
 const MAX_LEASE_DURATION_MS = 365 * 24 * 60 * 60 * 1000
 const DEFAULT_LIST_LIMIT = 50
@@ -20,6 +22,7 @@ const TASK_STATUS_SET = new Set(['pending', 'leased', 'running', 'succeeded', 'f
 const EXECUTION_CLASS_SET = new Set(['cpu', 'disk', 'network', 'gpu'])
 const TASK_ORDER_SET = new Set(['asc', 'desc'])
 const TASK_CLEANUP_DAY_MS = 24 * 60 * 60 * 1000
+const TERMINAL_RETRY_MARKER_PATTERN = /^retry:([a-f0-9]{64}):([1-9]\d*)$/u
 
 export const TASK_CLEANUP_RETENTION_DAYS = Object.freeze({
   succeeded: 30,
@@ -35,6 +38,8 @@ export const TASK_STATUS_SUCCEEDED = 'succeeded'
 export const TASK_STATUS_FAILED = 'failed'
 export const TASK_STATUS_CANCELLED = 'cancelled'
 export const TASK_ERROR_LEASE_EXPIRED = 'TASK_LEASE_EXPIRED'
+export const TASK_TERMINAL_RETRY_DEFAULT_BUDGET = DEFAULT_TERMINAL_RETRY_BUDGET
+export const TASK_TERMINAL_RETRY_MAX_BUDGET = MAX_TERMINAL_RETRY_BUDGET
 
 export class TaskStoreError extends Error {
   constructor(code, message, details = {}, options = {}) {
@@ -790,6 +795,21 @@ function normalizeCancelOptions(taskOrOptions, rawOptions) {
   return Object.freeze({ id: source.id, owner: credentials.owner, token: credentials.token, now: source.now })
 }
 
+function normalizeTerminalRetryOptions(taskOrOptions, rawOptions) {
+  const source = normalizeTaskActionOptions(taskOrOptions, rawOptions, new Set([
+    'id', 'taskId', 'maxRetries', 'now'
+  ]), 'terminal retry')
+  return Object.freeze({
+    id: source.id,
+    maxRetries: normalizeInteger(source.maxRetries, 'maxRetries', {
+      min: 0,
+      max: MAX_TERMINAL_RETRY_BUDGET,
+      defaultValue: DEFAULT_TERMINAL_RETRY_BUDGET
+    }),
+    now: source.now
+  })
+}
+
 export function getTaskById(database, value) {
   assertDatabase(database)
   const id = normalizeTaskId(value)
@@ -1496,6 +1516,132 @@ export function cancel(database, taskOrOptions, rawOptions, dependencies = {}) {
   }
 }
 
+function terminalRetryIdentity(row) {
+  const marker = terminalRetryMarker(row.subject_version_id)
+  if (marker) return marker
+  const key = typeof row.idempotency_key === 'string' && GENERATED_KEY_PATTERN.test(row.idempotency_key)
+    ? row.idempotency_key
+    : null
+  if (!key) fail('TASK_STORE_DATA_INVALID', 'Terminal task identity is invalid.')
+  return { rootHash: key.slice(5), ordinal: 0 }
+}
+
+function terminalRetryMarker(value) {
+  if (typeof value !== 'string') return null
+  const match = TERMINAL_RETRY_MARKER_PATTERN.exec(value)
+  if (!match) return null
+  const ordinal = Number(match[2])
+  if (!Number.isSafeInteger(ordinal) || ordinal < 1) {
+    fail('TASK_STORE_DATA_INVALID', 'Terminal retry marker is invalid.')
+  }
+  return { rootHash: match[1], ordinal }
+}
+
+function terminalRetryRows(database, current, rootHash) {
+  const markerPrefix = `retry:${rootHash}:%`
+  return database.prepare(`
+    SELECT ${SELECT_COLUMNS}
+      FROM ${TASK_TABLE}
+     WHERE task_type = ?
+       AND processor_version = ?
+       AND subject_type = ?
+       AND subject_id = ?
+       AND subject_version_id LIKE ?
+     ORDER BY id ASC
+  `).all(
+    current.task_type,
+    current.processor_version,
+    current.subject_type,
+    current.subject_id,
+    markerPrefix
+  ).map((row) => {
+    const marker = terminalRetryMarker(row.subject_version_id)
+    return marker ? { row, ordinal: marker.ordinal } : null
+  }).filter(Boolean)
+}
+
+/**
+ * Start or reuse a bounded terminal retry without reopening the original row.
+ * Retry rows are durable task records whose marker ordinal is the independent
+ * retry budget, so requeue cannot reset the original attempt_count.
+ */
+export function retryTerminalTask(database, taskOrOptions, rawOptions, dependencies = {}) {
+  assertDatabase(database, true)
+  const normalized = normalizeTerminalRetryOptions(taskOrOptions, rawOptions)
+  const timestamp = operationTimestamp(normalized.now, dependencies.now)
+  try {
+    const outcome = runImmediateTransaction(database, () => {
+      const current = readById(database, normalized.id)
+      if (!current) taskNotFound()
+      if (![TASK_STATUS_FAILED, TASK_STATUS_CANCELLED].includes(current.status)) invalidState()
+
+      const { rootHash } = terminalRetryIdentity(current)
+      const retries = terminalRetryRows(database, current, rootHash)
+      const latest = retries.at(-1)
+      if (latest && ['pending', 'leased', 'running', TASK_STATUS_SUCCEEDED].includes(latest.row.status)) {
+        return {
+          row: latest.row,
+          created: false,
+          retryCount: latest.ordinal,
+          reused: true,
+          exhausted: latest.ordinal >= normalized.maxRetries
+        }
+      }
+
+      const nextOrdinal = (latest?.ordinal ?? 0) + 1
+      if (nextOrdinal > normalized.maxRetries) {
+        return {
+          row: latest?.row ?? current,
+          created: false,
+          retryCount: latest?.ordinal ?? 0,
+          reused: true,
+          exhausted: true
+        }
+      }
+
+      const subjectVersionId = `retry:${rootHash}:${nextOrdinal}`
+      const normalizedRetry = normalizeEnqueueInput({
+        taskType: current.task_type,
+        processorVersion: current.processor_version,
+        subjectType: current.subject_type,
+        subjectId: current.subject_id,
+        subjectVersionId,
+        subjectContentSha256: current.subject_content_sha256,
+        input: parseJson(current.input_json, 'input'),
+        executionClass: current.execution_class,
+        priority: current.priority,
+        availableAt: timestamp,
+        maxAttempts: current.max_attempts
+      }, timestamp)
+      const inserted = insertNormalizedTask(database, normalizedRetry)
+      return {
+        row: readById(database, inserted.row.id),
+        created: inserted.created,
+        retryCount: nextOrdinal,
+        reused: !inserted.created,
+        exhausted: false
+      }
+    })
+    return deepFreeze({
+      task: publicTask(outcome.row),
+      created: outcome.created,
+      retryCount: outcome.retryCount,
+      reused: outcome.reused,
+      exhausted: outcome.exhausted
+    })
+  } catch (error) {
+    operationError(error, 'TASK_STORE_WRITE_FAILED', 'Terminal task retry could not be started.')
+  }
+}
+
+/**
+ * Backwards-compatible task-shaped alias. It now creates a durable retry row
+ * instead of resetting the terminal task's attempt_count.
+ */
+export function requeueTask(database, taskOrOptions, rawOptions, dependencies = {}) {
+  return retryTerminalTask(database, taskOrOptions, rawOptions, dependencies).task
+}
+
 export function recoverExpiredLeases(database, options = {}, dependencies = {}) {
   assertDatabase(database, true)
   assertOptionsObject(options, 'recover options')
@@ -1574,6 +1720,9 @@ export const markTaskRunning = markRunning
 export const heartbeatTask = heartbeat
 export const succeedTask = succeed
 export const cancelTask = cancel
+export const retryTerminal = retryTerminalTask
+export const requeue = requeueTask
+export const retryTask = requeueTask
 
 export class TaskStore {
   #database
@@ -1665,6 +1814,25 @@ export class TaskStore {
       ? { owner: rawOptions, token: rawToken }
       : rawOptions
     return cancel(this.#database, taskOrOptions, options, { now: this.now })
+  }
+  requeue(taskOrOptions, rawOptions) {
+    const options = rawOptions === undefined
+      ? (isPlainObject(taskOrOptions) ? taskOrOptions : { id: taskOrOptions })
+      : isPlainObject(taskOrOptions)
+        ? { ...taskOrOptions, ...rawOptions }
+        : { ...rawOptions, id: taskOrOptions }
+    return requeueTask(this.#database, options, undefined, { now: this.now })
+  }
+  retryTerminalTask(taskOrOptions, rawOptions) {
+    const options = rawOptions === undefined
+      ? (isPlainObject(taskOrOptions) ? taskOrOptions : { id: taskOrOptions })
+      : isPlainObject(taskOrOptions)
+        ? { ...taskOrOptions, ...rawOptions }
+        : { ...rawOptions, id: taskOrOptions }
+    return retryTerminalTask(this.#database, options, undefined, { now: this.now })
+  }
+  retry(taskOrOptions, rawOptions) {
+    return this.requeue(taskOrOptions, rawOptions)
   }
   recoverExpiredLeases(options = {}) {
     return recoverExpiredLeases(this.#database, options, { now: this.now })

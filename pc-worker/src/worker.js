@@ -12,8 +12,13 @@ import {
   createRagContentExtractProcessor,
   RAG_CONTENT_EXTRACT_PROCESSOR_CAPABILITY
 } from './ragContentExtractProcessor.js'
+import {
+  createRagRerankProcessor,
+  rerankProcessorsForConfig
+} from './ragRerankProcessor.js'
 import { readState, stateFromCredentialResponse, writeState } from './stateStore.js'
-import { collectProfile } from './telemetry.js'
+import { collectLoadedModels, collectProfile } from './telemetry.js'
+import { createModelReadiness, modelKindForTaskType } from './modelReadiness.js'
 
 const ACCESS_REFRESH_MARGIN_MS = 60_000
 const PROFILE_REFRESH_MS = 5 * 60_000
@@ -31,14 +36,28 @@ function failureFor(error) {
     return { code: 'WORKER_INPUT_MISMATCH', summary: 'Authorized content identity mismatch.', retryable: false }
   }
   if (error?.code === 'WORKER_PROCESSOR_CANCELLED') {
-    return { code: 'WORKER_PROCESSOR_CANCELLED', summary: 'Worker processing was cancelled.', retryable: false }
+    // A local stop aborts the in-flight request. The lease must be offered
+    // again after the worker comes back rather than being lost permanently.
+    return { code: 'WORKER_PROCESSOR_CANCELLED', summary: 'Worker processing was cancelled.', retryable: true }
+  }
+  if (error?.code === 'WORKER_MODEL_NOT_READY') {
+    return { code: 'WORKER_MODEL_NOT_READY', summary: 'The configured local model is not ready.', retryable: true }
+  }
+  if (['WORKER_EMBEDDING_UNAVAILABLE', 'WORKER_EMBEDDING_HTTP_FAILED', 'WORKER_EMBEDDING_TIMEOUT',
+    'WORKER_EMBEDDING_RESPONSE_INVALID', 'WORKER_ANSWER_UNAVAILABLE', 'WORKER_ANSWER_HTTP_FAILED',
+    'WORKER_ANSWER_TIMEOUT', 'WORKER_ANSWER_RESPONSE_INVALID', 'WORKER_RERANK_UNAVAILABLE',
+    'WORKER_RERANK_HTTP_FAILED', 'WORKER_RERANK_TIMEOUT'].includes(error?.code)) {
+    return { code: 'WORKER_MODEL_UNAVAILABLE', summary: 'The configured local model became unavailable.', retryable: true }
   }
   if (['WORKER_PROCESSOR_UNSUPPORTED', 'WORKER_EMBEDDING_INPUT_INVALID', 'WORKER_EMBEDDING_INPUT_TOO_LARGE', 'WORKER_EMBEDDING_BATCH_INVALID',
     'WORKER_EMBEDDING_MODEL_MISMATCH', 'WORKER_EMBEDDING_TASK_INVALID', 'WORKER_EMBEDDING_RESPONSE_INVALID',
     'WORKER_EMBEDDING_RESULT_INVALID', 'WORKER_EMBEDDING_NOT_CONFIGURED', 'WORKER_ANSWER_INPUT_INVALID',
     'WORKER_ANSWER_INPUT_TOO_LARGE', 'WORKER_ANSWER_MODEL_MISMATCH', 'WORKER_ANSWER_TASK_INVALID',
     'WORKER_ANSWER_RESULT_INVALID', 'WORKER_ANSWER_RESPONSE_INVALID', 'WORKER_ANSWER_NOT_CONFIGURED',
-    'WORKER_ANSWER_BUDGET_INVALID'].includes(error?.code)) {
+    'WORKER_ANSWER_BUDGET_INVALID', 'WORKER_RERANK_INPUT_INVALID', 'WORKER_RERANK_INPUT_TOO_LARGE',
+    'WORKER_RERANK_MODEL_MISMATCH', 'WORKER_RERANK_TASK_INVALID', 'WORKER_RERANK_RESULT_INVALID',
+    'WORKER_RERANK_NOT_CONFIGURED', 'WORKER_RERANK_RESPONSE_INVALID',
+    'WORKER_RERANK_RESPONSE_INPUT_MISMATCH', 'WORKER_RERANK_RESPONSE_COUNT_INVALID'].includes(error?.code)) {
     return { code: 'WORKER_PROCESSOR_INPUT_INVALID', summary: 'Worker processor input was rejected.', retryable: false }
   }
   if (error instanceof WorkerApiError && error.status >= 400 && error.status < 500) {
@@ -47,10 +66,28 @@ function failureFor(error) {
   return { code: 'WORKER_PROCESSING_FAILED', summary: 'Worker processing failed.', retryable: true }
 }
 
+export function classifyWorkerFailure(error) {
+  return failureFor(error)
+}
+
+const MODEL_AVAILABILITY_ERRORS = Object.freeze({
+  answer: new Set(['WORKER_ANSWER_UNAVAILABLE', 'WORKER_ANSWER_HTTP_FAILED', 'WORKER_ANSWER_TIMEOUT', 'WORKER_ANSWER_RESPONSE_INVALID']),
+  embedding: new Set(['WORKER_EMBEDDING_UNAVAILABLE', 'WORKER_EMBEDDING_HTTP_FAILED', 'WORKER_EMBEDDING_TIMEOUT', 'WORKER_EMBEDDING_RESPONSE_INVALID']),
+  reranker: new Set(['WORKER_RERANK_UNAVAILABLE', 'WORKER_RERANK_HTTP_FAILED', 'WORKER_RERANK_TIMEOUT',
+    'WORKER_RERANK_RESPONSE_INVALID', 'WORKER_RERANK_RESPONSE_INPUT_MISMATCH',
+    'WORKER_RERANK_RESPONSE_COUNT_INVALID'])
+})
+
+function isModelAvailabilityError(kind, error) {
+  return Boolean(kind && MODEL_AVAILABILITY_ERRORS[kind]?.has(error?.code))
+}
+
 export class PcWorker {
   constructor({ config, api, logger = console, profileProvider = collectProfile, stateReader = readState, stateWriter = writeState,
     embeddingProcessorFactory = createRagEmbeddingProcessor, answerProcessorFactory = createRagAnswerProcessor,
-    contentExtractProcessorFactory = createRagContentExtractProcessor, fetchImpl = fetch }) {
+    contentExtractProcessorFactory = createRagContentExtractProcessor, modelReadinessFactory = createModelReadiness,
+    rerankProcessorFactory = createRagRerankProcessor, loadedModelsProvider = collectLoadedModels,
+    rerankerManifestProvider = null, fetchImpl = fetch }) {
     this.config = config
     this.api = api
     this.logger = logger
@@ -60,22 +97,35 @@ export class PcWorker {
     this.state = null
     this.profile = null
     this.lastProfileAt = 0
+    this.profileDirty = true
     this.stopping = false
     this.statePromise = null
+    this.modelReadiness = modelReadinessFactory({
+      answer: config?.answer,
+      embedding: config?.embedding,
+      reranker: config?.reranker,
+      fetchImpl,
+      intervalMs: config?.modelReadinessIntervalMs,
+      maxBackoffMs: config?.modelReadinessMaxBackoffMs,
+      loadedModelsProvider,
+      rerankerManifestProvider
+    })
     this.embeddingProcessor = embeddingProcessorFactory({ config: config?.embedding, fetchImpl })
     this.answerProcessor = answerProcessorFactory({ config: config?.answer, fetchImpl })
+    this.rerankProcessor = rerankProcessorFactory({ config: config?.reranker, fetchImpl })
     this.contentExtractProcessor = contentExtractProcessorFactory()
     this.activeController = null
   }
 
   profileWithConfiguredProcessors(profile) {
     const extra = [
-      RAG_CONTENT_EXTRACT_PROCESSOR_CAPABILITY,
-      ...embeddingProcessorsForConfig(this.config?.embedding),
-      ...answerProcessorsForConfig(this.config?.answer)
+      RAG_CONTENT_EXTRACT_PROCESSOR_CAPABILITY
     ]
+    if (this.modelReadiness.isReady('embedding')) extra.push(...embeddingProcessorsForConfig(this.config?.embedding))
+    if (this.modelReadiness.isReady('answer')) extra.push(...answerProcessorsForConfig(this.config?.answer))
+    if (this.modelReadiness.isReady('reranker')) extra.push(...rerankProcessorsForConfig(this.config?.reranker))
     if (!profile?.capabilities || !Array.isArray(profile.capabilities.processors)) return profile
-    const localTaskTypes = new Set(['rag.content.extract', 'rag.embedding.generate', 'rag.query.embed', 'rag.answer.generate'])
+    const localTaskTypes = new Set(['rag.content.extract', 'rag.embedding.generate', 'rag.query.embed', 'rag.rerank', 'rag.answer.generate'])
     const existing = profile.capabilities.processors.filter((item) => !localTaskTypes.has(item?.taskType))
     if (extra.length === 0 && existing.length === profile.capabilities.processors.length) return profile
     const keys = new Set(existing.map((item) => `${item.taskType}:${item.processorVersion}:${item.executionClass}:${item.outputSchemaVersion}`))
@@ -102,13 +152,18 @@ export class PcWorker {
 
   async ensureStateInternal() {
     this.state ??= this.stateReader(this.config.statePath)
-    if (!this.profile) this.profile = this.profileWithConfiguredProcessors(await this.profileProvider(this.config.displayName))
+    if (!this.profile) {
+      await this.modelReadiness.refresh({ force: true })
+      this.profile = this.profileWithConfiguredProcessors(await this.profileProvider(this.config.displayName))
+    }
     if (!this.state) {
       if (!this.config.enrollmentToken) {
         throw Object.assign(new Error('Worker is not paired; PC_WORKER_ENROLLMENT_TOKEN is required once.'), { code: 'WORKER_NOT_ENROLLED' })
       }
       const enrolled = await this.api.enroll(this.config.enrollmentToken, this.profile)
       this.saveCredentials(enrolled)
+      this.lastProfileAt = Date.now()
+      this.profileDirty = false
       safeLog(this.logger, 'info', 'worker_enrolled', { workerId: this.state.workerId })
     }
     if (Date.parse(this.state.accessExpiresAt) <= Date.now() + ACCESS_REFRESH_MARGIN_MS) {
@@ -125,11 +180,44 @@ export class PcWorker {
     try { return await this.statePromise } finally { this.statePromise = null }
   }
 
+  async refreshModelReadinessIfDue({ force = false } = {}) {
+    const changed = await this.modelReadiness.refresh({ force })
+    if (changed) this.profileDirty = true
+    return changed
+  }
+
   async refreshProfileIfDue() {
-    if (Date.now() - this.lastProfileAt < PROFILE_REFRESH_MS) return
+    if (!this.profileDirty && Date.now() - this.lastProfileAt < PROFILE_REFRESH_MS) return false
     this.profile = this.profileWithConfiguredProcessors(await this.profileProvider(this.config.displayName))
     await this.api.updateProfile(this.state.accessToken, this.profile)
     this.lastProfileAt = Date.now()
+    this.profileDirty = false
+    return true
+  }
+
+  async publishReadinessAfterFailure(kind, error) {
+    if (!isModelAvailabilityError(kind, error)) return
+    if (!this.modelReadiness.markUnavailable(kind, error.code)) return
+    this.profileDirty = true
+    try {
+      await this.refreshProfileIfDue()
+    } catch (profileError) {
+      safeLog(this.logger, 'warn', 'model_readiness_profile_update_failed', {
+        modelKind: kind,
+        code: profileError.code || 'UNKNOWN'
+      })
+    }
+  }
+
+  async rejectNotReadyTask(task, kind) {
+    const error = Object.assign(new Error('Configured local model is not ready.'), { code: 'WORKER_MODEL_NOT_READY', retryable: true })
+    try {
+      await this.api.fail(this.state.accessToken, task, 'WORKER_MODEL_NOT_READY', 'The configured local model is not ready.', true)
+    } catch (reportError) {
+      safeLog(this.logger, 'warn', 'task_failure_report_deferred', { taskId: task.id, code: reportError.code || 'UNKNOWN' })
+    }
+    safeLog(this.logger, 'warn', 'model_task_skipped_not_ready', { taskId: task.id, modelKind: kind })
+    return error
   }
 
   async execute(task) {
@@ -138,6 +226,16 @@ export class PcWorker {
     const controller = new AbortController()
     this.activeController = controller
     try {
+      const modelKind = modelKindForTaskType(task.taskType)
+      if (modelKind) {
+        const readinessChanged = await this.refreshModelReadinessIfDue({ force: true })
+        if (readinessChanged) await this.refreshProfileIfDue()
+      }
+      if (modelKind && !this.modelReadiness.isReady(modelKind)) {
+        throw Object.assign(new Error('Configured local model is not ready.'), {
+          code: 'WORKER_MODEL_NOT_READY', retryable: true
+        })
+      }
       await this.api.start(this.state.accessToken, task)
       heartbeatTimer = setInterval(() => {
         if (heartbeatBusy) return
@@ -164,6 +262,8 @@ export class PcWorker {
           : await this.contentExtractProcessor.process(task, response.body, { signal: controller.signal })
       } else if (this.embeddingProcessor.supports(task.taskType)) {
         result = await this.embeddingProcessor.process(task, { signal: controller.signal })
+      } else if (this.rerankProcessor.supports(task.taskType)) {
+        result = await this.rerankProcessor.process(task, { signal: controller.signal })
       } else if (this.answerProcessor.supports(task.taskType)) {
         result = await this.answerProcessor.process(task, { signal: controller.signal })
       } else {
@@ -192,6 +292,7 @@ export class PcWorker {
         ...(typeof result?.output?.abstained === 'boolean' ? { abstained: result.output.abstained } : {})
       })
     } catch (error) {
+      await this.publishReadinessAfterFailure(modelKindForTaskType(task.taskType), error)
       const failure = failureFor(error)
       try {
         await this.api.fail(this.state.accessToken, task, failure.code, failure.summary, failure.retryable)
@@ -207,9 +308,19 @@ export class PcWorker {
 
   async runOnce() {
     await this.ensureState()
+    await this.refreshModelReadinessIfDue()
+    await this.refreshProfileIfDue()
+    // The readiness/profile pair is published before claiming, so a model eject
+    // cannot leave the server advertising a capability after this point.
+    await this.refreshModelReadinessIfDue()
     await this.refreshProfileIfDue()
     const task = await this.api.claim(this.state.accessToken)
     if (!task) return false
+    const modelKind = modelKindForTaskType(task.taskType)
+    if (modelKind && !this.modelReadiness.isReady(modelKind)) {
+      await this.rejectNotReadyTask(task, modelKind)
+      return true
+    }
     await this.execute(task)
     return true
   }

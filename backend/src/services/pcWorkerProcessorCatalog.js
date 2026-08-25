@@ -28,7 +28,7 @@ const LIMITS = Object.freeze({
   contentExtract: Object.freeze({ inputMaxBytes: 64 * 1024 * 1024, outputMaxBytes: 16 * 1024 * 1024, maxBatchItems: 1 }),
   embeddingGenerate: Object.freeze({ inputMaxBytes: 8 * 1024 * 1024, outputMaxBytes: 16 * 1024 * 1024, maxBatchItems: 256 }),
   queryEmbed: Object.freeze({ inputMaxBytes: MAX_QUERY_BYTES, outputMaxBytes: 512 * 1024, maxBatchItems: 1 }),
-  rerank: Object.freeze({ inputMaxBytes: 2 * 1024 * 1024, outputMaxBytes: 512 * 1024, maxBatchItems: 256 }),
+  rerank: Object.freeze({ inputMaxBytes: 2 * 1024 * 1024, outputMaxBytes: 512 * 1024, maxBatchItems: 10 }),
   answer: Object.freeze({ inputMaxBytes: 2 * 1024 * 1024, outputMaxBytes: 256 * 1024, maxBatchItems: 1 })
 })
 
@@ -134,6 +134,17 @@ function vectorSha256(vectors) {
   return crypto.createHash('sha256').update(JSON.stringify(vectors.map((vector) => vector.embedding))).digest('hex')
 }
 
+export function rerankCandidateSetSha256(candidates) {
+  if (!Array.isArray(candidates)) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'rerank candidates are invalid.')
+  const identity = candidates.map((candidate, index) => ({
+    index,
+    candidateId: candidate.candidateId,
+    textSha256: crypto.createHash('sha256').update(candidate.text, 'utf8').digest('hex'),
+    ...(candidate.score === undefined ? {} : { score: candidate.score })
+  }))
+  return crypto.createHash('sha256').update(JSON.stringify(identity), 'utf8').digest('hex')
+}
+
 function boundedOutputText(value, fieldName, maxBytes) {
   if (typeof value !== 'string' || byteLength(value) > maxBytes || /[\u0000]/u.test(value)) {
     fail('PC_WORKER_PROCESSOR_RESULT_INVALID', `${fieldName} exceeds its limit.`)
@@ -182,6 +193,49 @@ function modelIdentity(value, fieldName = 'model') {
     configHash: hash(value.configHash, `${fieldName}.configHash`)
   }
   return freeze(normalized)
+}
+
+export const PC_WORKER_EMBEDDING_TASK_TYPES = Object.freeze([
+  'rag.embedding.generate',
+  'rag.query.embed'
+])
+
+export const PC_WORKER_MODEL_BOUND_TASK_TYPES = Object.freeze([
+  ...PC_WORKER_EMBEDDING_TASK_TYPES,
+  'rag.rerank'
+])
+const PC_WORKER_MODEL_BOUND_TASK_TYPE_SET = new Set(PC_WORKER_MODEL_BOUND_TASK_TYPES)
+const PC_WORKER_EMBEDDING_MODEL_KEYS = Object.freeze([
+  'provider', 'modelId', 'modelRevision', 'dimensions', 'inputLimit', 'configHash'
+])
+
+/**
+ * Capability identity is intentionally narrower than the full NAS model
+ * contract: the Worker proves which model bytes/config it can execute; the
+ * NAS remains authoritative for distance and normalization.
+ */
+export function normalizePcWorkerEmbeddingModel(value, fieldName = 'model') {
+  exactKeys(value, PC_WORKER_EMBEDDING_MODEL_KEYS, fieldName)
+  if (PC_WORKER_EMBEDDING_MODEL_KEYS.some((key) => !Object.hasOwn(value, key))) {
+    fail('PC_WORKER_PROCESSOR_INPUT_INVALID', `${fieldName} is incomplete.`)
+  }
+  const normalized = modelIdentity(value, fieldName)
+  return freeze(Object.fromEntries(PC_WORKER_EMBEDDING_MODEL_KEYS.map((key) => [key, normalized[key]])))
+}
+
+export const normalizePcWorkerCapabilityModel = normalizePcWorkerEmbeddingModel
+
+export function pcWorkerEmbeddingModelMatches(actual, expected) {
+  try {
+    const left = normalizePcWorkerEmbeddingModel(actual, 'actualModel')
+    const expectedCore = isPlainObject(expected)
+      ? Object.fromEntries(PC_WORKER_EMBEDDING_MODEL_KEYS.map((key) => [key, expected[key]]))
+      : expected
+    const right = normalizePcWorkerEmbeddingModel(expectedCore, 'expectedModel')
+    return PC_WORKER_EMBEDDING_MODEL_KEYS.every((key) => left[key] === right[key])
+  } catch {
+    return false
+  }
 }
 
 function modelMatches(actual, expected) {
@@ -286,7 +340,7 @@ function projectQueryEmbedInput(input) {
 }
 
 function projectRerankInput(input) {
-  exactKeys(input, ['schemaVersion', 'querySha256', 'query', 'model', 'candidates'], 'task.input')
+  exactKeys(input, ['schemaVersion', 'querySha256', 'candidateSetSha256', 'query', 'model', 'candidates'], 'task.input')
   if (input.schemaVersion !== 1) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
   const query = boundedText(input.query, 'task.input.query', MAX_QUERY_BYTES)
   const model = modelIdentity(input.model, 'task.input.model')
@@ -305,7 +359,11 @@ function projectRerankInput(input) {
   if (new Set(candidates.map((candidate) => candidate.candidateId)).size !== candidates.length) {
     fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.candidates contains duplicate IDs.')
   }
-  const projected = freeze({ schemaVersion: 1, querySha256: hash(input.querySha256, 'task.input.querySha256'), query, model, candidates })
+  const candidateSetSha256 = hash(input.candidateSetSha256, 'task.input.candidateSetSha256')
+  if (candidateSetSha256 !== rerankCandidateSetSha256(candidates)) {
+    fail('PC_WORKER_PROCESSOR_INPUT_MISMATCH', 'task.input candidate set hash is invalid.')
+  }
+  const projected = freeze({ schemaVersion: 1, querySha256: hash(input.querySha256, 'task.input.querySha256'), candidateSetSha256, query, model, candidates })
   assertSerializedBytes(projected, LIMITS.rerank.inputMaxBytes, 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE')
   return projected
 }
@@ -495,15 +553,23 @@ function normalizeQueryEmbeddingResult(value, expected) {
 }
 
 function normalizeRerankResult(value, expected) {
-  exactKeys(value, ['querySha256', 'candidates'], 'result.output')
+  exactKeys(value, ['model', 'querySha256', 'candidateSetSha256', 'candidates'], 'result.output')
   const input = unwrapExpected(expected)
+  const model = normalizeModelOutput(value.model, expectedModelFrom(expected))
   const querySha256 = hash(value.querySha256, 'result.output.querySha256')
   if (input && querySha256 !== input.querySha256) fail('PC_WORKER_PROCESSOR_RESULT_STALE', 'result query is stale.')
+  const candidateSetSha256 = hash(value.candidateSetSha256, 'result.output.candidateSetSha256')
+  if (input && candidateSetSha256 !== input.candidateSetSha256) {
+    fail('PC_WORKER_PROCESSOR_RESULT_STALE', 'result candidate set is stale.')
+  }
   if (!Array.isArray(value.candidates) || value.candidates.length > LIMITS.rerank.maxBatchItems) {
     fail('PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID', 'result candidates exceed the batch limit.')
   }
   const allowedIds = new Set(input?.candidates?.map((candidate) => candidate.candidateId) ?? [])
   const seen = new Set()
+  let previousScore = Number.POSITIVE_INFINITY
+  let previousInputIndex = -1
+  const inputIndexes = new Map(input?.candidates?.map((candidate, index) => [candidate.candidateId, index]) ?? [])
   const candidates = value.candidates.map((candidate, index) => {
     exactKeys(candidate, ['candidateId', 'score'], `result.output.candidates[${index}]`)
     const candidateId = token(candidate.candidateId, `result.output.candidates[${index}].candidateId`, 128)
@@ -511,9 +577,19 @@ function normalizeRerankResult(value, expected) {
       fail('PC_WORKER_PROCESSOR_RESULT_INPUT_MISMATCH', 'result candidate identity is invalid.')
     }
     seen.add(candidateId)
-    return freeze({ candidateId, score: finiteNumber(candidate.score, `result.output.candidates[${index}].score`) })
+    const score = finiteNumber(candidate.score, `result.output.candidates[${index}].score`)
+    const inputIndex = inputIndexes.get(candidateId) ?? index
+    if (score > previousScore || (score === previousScore && inputIndex < previousInputIndex)) {
+      fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result candidates are not stably score-sorted.')
+    }
+    previousScore = score
+    previousInputIndex = inputIndex
+    return freeze({ candidateId, score })
   })
-  return freeze({ querySha256, candidates })
+  if (input && candidates.length !== input.candidates.length) {
+    fail('PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID', 'result candidates must be a complete permutation.')
+  }
+  return freeze({ model, querySha256, candidateSetSha256, candidates })
 }
 
 function normalizeAnswerResult(value, expected) {
@@ -620,7 +696,13 @@ function queryStaleGuard(current, expected) {
 }
 
 function rerankStaleGuard(current, expected) {
-  return queryStaleGuard(current, expected)
+  try {
+    const left = isPlainObject(current) && isPlainObject(current.input) ? current.input : current
+    const right = isPlainObject(expected) && isPlainObject(expected.input) ? expected.input : expected
+    return queryStaleGuard(left, right) && left.candidateSetSha256 === right.candidateSetSha256
+  } catch {
+    return false
+  }
 }
 
 function answerStaleGuard(current, expected) {
@@ -639,13 +721,14 @@ function ragInputResolver(project) {
   return (context) => resolveProjectedInput(context, project)
 }
 
-function descriptor(definition) {
+function descriptor(definition, model = null) {
   return freeze({
     taskType: definition.taskType,
     processorVersion: definition.processorVersion,
     executionClass: definition.executionClass,
     outputSchemaVersion: definition.outputSchemaVersion,
-    inputMode: definition.inputMode
+    inputMode: definition.inputMode,
+    ...(model ? { model } : {})
   })
 }
 
@@ -760,19 +843,31 @@ export const getProcessorDefinition = lookupPcWorkerProcessor
 export function matchPcWorkerCapabilities(capabilities, requirements = {}) {
   if (!isPlainObject(capabilities) || !Array.isArray(capabilities.processors)) return Object.freeze([])
   if (!isPlainObject(requirements)) return Object.freeze([])
-  const requirementKeys = new Set(['taskType', 'processorVersion', 'executionClass', 'outputSchemaVersion', 'inputMode'])
+  const requirementKeys = new Set(['taskType', 'processorVersion', 'executionClass', 'outputSchemaVersion', 'inputMode', 'model'])
   if (Object.keys(requirements).some((key) => !requirementKeys.has(key))) return Object.freeze([])
   const matches = []
   for (const processor of capabilities.processors) {
     if (!isPlainObject(processor)) continue
-    if (Object.keys(processor).some((key) => !['taskType', 'processorVersion', 'executionClass', 'outputSchemaVersion'].includes(key))) continue
+    if (Object.keys(processor).some((key) => !['taskType', 'processorVersion', 'executionClass', 'outputSchemaVersion', 'model'].includes(key))) continue
     const definitionValue = lookupPcWorkerProcessor(processor.taskType, processor.processorVersion)
     if (!definitionValue || processor.executionClass !== definitionValue.executionClass ||
         processor.outputSchemaVersion !== definitionValue.outputSchemaVersion) continue
-    if (Object.entries(requirements).some(([key, value]) => processor[key] !== value && definitionValue[key] !== value)) continue
-    matches.push(descriptor(definitionValue))
+    const isModelBound = PC_WORKER_MODEL_BOUND_TASK_TYPE_SET.has(processor.taskType)
+    if (!isModelBound && Object.hasOwn(processor, 'model')) continue
+    let processorModel = null
+    if (isModelBound && Object.hasOwn(processor, 'model')) {
+      try { processorModel = normalizePcWorkerEmbeddingModel(processor.model, 'processor.model') } catch { continue }
+    }
+    if (isModelBound && Object.hasOwn(requirements, 'model') &&
+        (!requirements.model || !processorModel || !pcWorkerEmbeddingModelMatches(processorModel, requirements.model))) continue
+    if (Object.entries(requirements).some(([key, value]) => key !== 'model' &&
+        processor[key] !== value && definitionValue[key] !== value)) continue
+    matches.push(descriptor(definitionValue, processorModel))
   }
-  const unique = new Map(matches.map((item) => [`${item.taskType}:${item.processorVersion}:${item.executionClass}:${item.outputSchemaVersion}`, item]))
+  const unique = new Map(matches.map((item) => [
+    `${item.taskType}:${item.processorVersion}:${item.executionClass}:${item.outputSchemaVersion}:${item.model?.configHash ?? ''}`,
+    item
+  ]))
   return Object.freeze([...unique.values()])
 }
 

@@ -11,6 +11,7 @@ import test from 'node:test'
 process.env.DATA_PATH ??= path.join(os.tmpdir(), 'pc-worker-route-test-data')
 
 const { createPcWorkerAgentRouter, createPcWorkerOwnerRouter } = await import('../src/routes/pcWorkers.js')
+const { RAG_RERANKER_MODEL } = await import('../src/config/ragReranker.js')
 const { createRagArtifactStore } = await import('../src/services/ragArtifactStore.js')
 
 const content = Buffer.from('hello\nworker\n', 'utf8')
@@ -441,7 +442,10 @@ test('RAG embedding completion is catalog-normalized and stale snapshots are rej
   app.use('/agent', createPcWorkerAgentRouter({
     database: () => database,
     runtime: () => ({ getStore: () => store }),
-    authenticate: () => worker
+    authenticate: () => worker,
+    embeddingRuntimeFactory: () => ({
+      applyWorkerResult: async () => ({ applied: true, status: 'active' })
+    })
   }))
   const result = {
     schemaVersion: 1,
@@ -485,4 +489,203 @@ test('RAG embedding completion is catalog-normalized and stale snapshots are rej
     assert.equal(stale.status, 409)
     assert.equal((await stale.json()).code, 'PC_WORKER_RESULT_STALE')
   })
+})
+
+test('Worker claim derives CPU execution classes for content extraction', async () => {
+  const claimWorker = {
+    ...worker,
+    capabilities: {
+      ...worker.capabilities,
+      processors: [{ taskType: 'rag.content.extract', processorVersion: 'v1', executionClass: 'cpu', outputSchemaVersion: 1 }]
+    }
+  }
+  const task = {
+    ...taskFixture(),
+    id: 77,
+    taskType: 'rag.content.extract',
+    executionClass: 'cpu',
+    input: {
+      schemaVersion: 1,
+      sourceType: 'document',
+      sourceId: 7,
+      sourceVersionId: 'version-7',
+      sourceContentSha256: sha256,
+      contentBytes: content.length,
+      format: 'docx'
+    }
+  }
+  let leaseOptions
+  const store = {
+    leaseNext(options) {
+      leaseOptions = options
+      return { ...task, status: 'leased', leaseOwner: options.owner, leaseToken: 'lease-cpu' }
+    },
+    fail() {}
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => fakeDatabase(),
+    runtime: () => ({ getStore: () => store }),
+    authenticate: () => claimWorker,
+    embeddingModelProvider: () => null
+  }))
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/claim`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: '{}'
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(leaseOptions.executionClasses, ['cpu'])
+    assert.equal(Object.hasOwn(leaseOptions, 'executionClass'), false)
+    assert.deepEqual(leaseOptions.supportedProcessors, [{
+      taskType: 'rag.content.extract', processorVersion: 'v1', executionClass: 'cpu'
+    }])
+  })
+})
+
+test('Worker claim independently binds Nomic embedding and BGE reranker capabilities', async () => {
+  const embeddingModel = {
+    provider: 'lm-studio',
+    modelId: 'text-embedding-nomic-embed-text-v1.5',
+    modelRevision: 'gguf-sha256-d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac',
+    dimensions: 768,
+    inputLimit: 2048,
+    distance: 'cosine',
+    normalization: 'l2',
+    configHash: '7d93077b98e4a05746f0de951f9156d9671de74a446a4312b2baaa092eabbdad'
+  }
+  const claimWorker = {
+    ...worker,
+    capabilities: {
+      ...worker.capabilities,
+      processors: [
+        ...worker.capabilities.processors,
+        {
+          taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1,
+          model: Object.fromEntries(['provider', 'modelId', 'modelRevision', 'dimensions', 'inputLimit', 'configHash'].map((key) => [key, embeddingModel[key]]))
+        },
+        {
+          taskType: 'rag.query.embed', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1,
+          model: Object.fromEntries(['provider', 'modelId', 'modelRevision', 'dimensions', 'inputLimit', 'configHash'].map((key) => [key, embeddingModel[key]]))
+        },
+        { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1, model: RAG_RERANKER_MODEL }
+      ]
+    }
+  }
+  const database = {
+    prepare(sql) {
+      return {
+        get(name) {
+          if (sql.includes('sqlite_master')) return { 1: name }
+          if (sql.includes('rag_embedding_models')) {
+            return {
+              embedding_model_id: 19,
+              provider: embeddingModel.provider,
+              model_id: embeddingModel.modelId,
+              model_revision: embeddingModel.modelRevision,
+              dimensions: embeddingModel.dimensions,
+              input_limit: embeddingModel.inputLimit,
+              distance: embeddingModel.distance,
+              normalization: embeddingModel.normalization,
+              config_hash: embeddingModel.configHash,
+              status: 'active'
+            }
+          }
+          return null
+        }
+      }
+    }
+  }
+  let leaseOptions
+  const store = {
+    leaseNext(options) { leaseOptions = options; return null }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => database,
+    runtime: () => ({ getStore: () => store }),
+    authenticate: () => claimWorker,
+    embeddingModelProvider: () => ({ embeddingModelId: 19, model: embeddingModel }),
+    rerankerModelProvider: () => RAG_RERANKER_MODEL
+  }))
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/claim`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: '{}'
+    })
+    assert.equal(response.status, 204)
+    assert.deepEqual(leaseOptions.supportedProcessors, [
+      { taskType: 'content.inspect', processorVersion: 'v1', executionClass: 'gpu' },
+      { taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu' },
+      { taskType: 'rag.query.embed', processorVersion: 'v1', executionClass: 'gpu' },
+      { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu' }
+    ])
+  })
+})
+
+test('Worker claim keeps configured reranker when no embedding model is active', async () => {
+  const rerankerEnvironment = {
+    RAG_RERANKER_ENABLED: 'true',
+    RAG_RERANKER_PROVIDER: RAG_RERANKER_MODEL.provider,
+    RAG_RERANKER_MODEL_ID: RAG_RERANKER_MODEL.modelId,
+    RAG_RERANKER_MODEL_REVISION: RAG_RERANKER_MODEL.modelRevision,
+    RAG_RERANKER_DIMENSIONS: String(RAG_RERANKER_MODEL.dimensions),
+    RAG_RERANKER_INPUT_LIMIT: String(RAG_RERANKER_MODEL.inputLimit),
+    RAG_RERANKER_CONFIG_HASH: RAG_RERANKER_MODEL.configHash
+  }
+  const previousEnvironment = Object.fromEntries(Object.keys(rerankerEnvironment).map((key) => [key, process.env[key]]))
+  Object.assign(process.env, rerankerEnvironment)
+  const claimWorker = {
+    ...worker,
+    capabilities: {
+      ...worker.capabilities,
+      processors: [
+        {
+          taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1,
+          model: {
+            provider: 'lm-studio',
+            modelId: 'text-embedding-nomic-embed-text-v1.5',
+            modelRevision: 'gguf-sha256-d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac',
+            dimensions: 768,
+            inputLimit: 2048,
+            configHash: '7d93077b98e4a05746f0de951f9156d9671de74a446a4312b2baaa092eabbdad'
+          }
+        },
+        { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1, model: RAG_RERANKER_MODEL }
+      ]
+    }
+  }
+  let leaseOptions
+  const store = { leaseNext(options) { leaseOptions = options; return null } }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => fakeDatabase(),
+    runtime: () => ({ getStore: () => store }),
+    authenticate: () => claimWorker
+  }))
+
+  try {
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/agent/tasks/claim`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+        body: '{}'
+      })
+      assert.equal(response.status, 204)
+      assert.deepEqual(leaseOptions.supportedProcessors, [
+        { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu' }
+      ])
+    })
+  } finally {
+    for (const [key, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 })

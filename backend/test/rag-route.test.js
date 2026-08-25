@@ -292,6 +292,57 @@ test('RAG query is Owner-only, uses server evidence, strips internal fields, and
   })
 })
 
+test('optional reranker reorders only authorized evidence and the route rechecks visibility', async () => {
+  const first = retrieval().data[0]
+  const second = {
+    ...first,
+    citationId: 'internal-candidate-id-2',
+    chunkId: 42,
+    body: 'Second authorized evidence.'
+  }
+  const phases = []
+  let answerEvidence = []
+  const router = createRagRouter({
+    databaseProvider: () => ({ fakeDatabase: true }),
+    authoritativeChecksFactory: () => ({
+      authoritativeVisibility: (_candidate, context) => { phases.push(context.phase); return true },
+      authoritativeActiveSnapshot: () => true
+    }),
+    candidateProvider: async () => ({ ftsCandidates: [] }),
+    hybridRetrieverFactory: () => ({
+      retrieve: async () => ({
+        ...retrieval(),
+        data: [first, second],
+        total: 2,
+        retrieval: { mode: 'hybrid', degraded: false, fusion: 'rrf' }
+      })
+    }),
+    rerankerService: {
+      rerank: async ({ candidates }) => ({ candidates: [...candidates].reverse(), applied: true, degraded: false, reason: null })
+    },
+    answerServiceFactory: () => ({
+      generate: async ({ query, evidence }) => {
+        answerEvidence = evidence
+        return { status: 'degraded', query, language: 'en', answer: null, abstained: true, reasonCode: 'test', degraded: true, degradedReason: 'test', citations: [] }
+      }
+    }),
+    taskStoreProvider: () => null
+  })
+
+  await withServer(router, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/rag/queries`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+      body: JSON.stringify({ query: 'RAG query' })
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.deepEqual(answerEvidence.map((item) => item.chunkId), [42, 41])
+    assert.equal(body.data.retrieval.reranker.status, 'applied')
+    assert.equal(phases.includes('route_post_rerank'), true)
+  })
+})
+
 test('RAG status is Owner-only and exposes only aggregate capability/degradation state', async () => {
   const database = {
     prepare(sql) {

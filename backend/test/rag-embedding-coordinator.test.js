@@ -281,7 +281,8 @@ test('offline worker does not enqueue a chunk-level task', nativeTestOptions, as
     const result = await coordinator.enqueueBatch({ snapshotId: fixture.snapshotId, embeddingModelId: fixture.embeddingModelId })
     assert.equal(result.status, 'offline')
     assert.equal(fixture.taskStore.tasks.length, 0)
-    assert.equal(fixture.database.prepare('SELECT COUNT(*) AS count FROM rag_snapshot_embedding_state').get().count, 0)
+    assert.equal(fixture.database.prepare('SELECT status FROM rag_snapshot_embedding_state').get().status, 'pending')
+    assert.equal(fixture.database.prepare('SELECT status FROM rag_source_snapshots').get().status, 'embedding_pending')
   } finally {
     fixture.database.close()
   }

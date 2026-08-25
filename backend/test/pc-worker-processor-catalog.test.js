@@ -6,7 +6,8 @@ import {
   lookupPcWorkerProcessor,
   matchPcWorkerCapabilities,
   PC_WORKER_PROCESSOR_CATALOG,
-  PC_WORKER_PROCESSOR_DEFINITIONS
+  PC_WORKER_PROCESSOR_DEFINITIONS,
+  rerankCandidateSetSha256
 } from '../src/services/pcWorkerProcessorCatalog.js'
 
 const hash = 'a'.repeat(64)
@@ -64,15 +65,17 @@ function queryInput() {
 }
 
 function rerankInput() {
+  const candidates = [
+    { candidateId: 'C1', text: '证据一' },
+    { candidateId: 'C2', text: '证据二' }
+  ]
   return {
     schemaVersion: 1,
     querySha256: 'd'.repeat(64),
+    candidateSetSha256: rerankCandidateSetSha256(candidates),
     query: '如何恢复索引？',
     model,
-    candidates: [
-      { candidateId: 'C1', text: '证据一' },
-      { candidateId: 'C2', text: '证据二' }
-    ]
+    candidates
   }
 }
 
@@ -277,13 +280,13 @@ test('query embed, rerank, and answer reject stale identity, invalid numbers, an
   const rerankResult = rerankDefinition.normalizeResult({
     schemaVersion: 1,
     processorVersion: 'v1',
-    output: { querySha256: rerank.querySha256, candidates: [{ candidateId: 'C2', score: 0.9 }, { candidateId: 'C1', score: 0.4 }] }
+    output: { model, querySha256: rerank.querySha256, candidateSetSha256: rerank.candidateSetSha256, candidates: [{ candidateId: 'C2', score: 0.9 }, { candidateId: 'C1', score: 0.4 }] }
   }, rerank)
   assert.deepEqual(rerankResult.output.candidates.map((item) => item.candidateId), ['C2', 'C1'])
   assert.throws(() => rerankDefinition.normalizeResult({
     schemaVersion: 1,
     processorVersion: 'v1',
-    output: { querySha256: rerank.querySha256, candidates: [{ candidateId: 'C1', score: Infinity }] }
+    output: { model, querySha256: rerank.querySha256, candidateSetSha256: rerank.candidateSetSha256, candidates: [{ candidateId: 'C1', score: Infinity }] }
   }, rerank), (error) => error.code === 'PC_WORKER_PROCESSOR_RESULT_INPUT_MISMATCH' || error.code === 'PC_WORKER_PROCESSOR_RESULT_INVALID')
 
   const answerDefinition = lookupPcWorkerProcessor('rag.answer.generate')
