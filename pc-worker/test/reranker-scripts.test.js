@@ -43,3 +43,14 @@ test('reranker scripts and compose keep runtime data on D and isolate explicit s
   assert.match(compose, /served-model-name/u)
   assert.match(compose, /restart: ["']?no/u)
 })
+
+test('reranker compose uses only supported TEI 1.9 length controls', () => {
+  assert.doesNotMatch(compose, /--max-input-length/u)
+  assert.match(compose, /--max-batch-tokens\s*\r?\n\s*-\s*["']?5120/u)
+  assert.match(compose, /--auto-truncate/u)
+})
+
+test('reranker compose bypasses the TEI cuda-entrypoint for fixed RTX 5080 CUDA 12.0', () => {
+  assert.match(compose, /entrypoint:\s*\r?\n\s*-\s*\/usr\/local\/bin\/text-embeddings-router-120/u)
+  assert.doesNotMatch(compose, /entrypoint:\s*(?:\r?\n\s*-\s*)?\/usr\/local\/bin\/cuda-entrypoint(?:\s|$)/u)
+})

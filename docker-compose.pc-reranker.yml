@@ -6,6 +6,11 @@ services:
     image: ghcr.io/huggingface/text-embeddings-inference:cuda-1.9@sha256:249a0bc87522bfe2f1012b4d194f0225878f47079115ada3aeb0b1ef257b402a
     container_name: ${RERANKER_CONTAINER_NAME:-pr-manager-reranker}
     restart: "no"
+    # Fixed RTX 5080 (compute capability 12.0) / NVIDIA 610.43.02 WSL2 workaround:
+    # bypass TEI 1.9's cuda-entrypoint CUDA-arch parsing bug, which can make Candle
+    # report CUDA_ERROR_NO_DEVICE even though nvidia-smi sees the GPU.
+    entrypoint:
+      - /usr/local/bin/text-embeddings-router-120
     init: true
     read_only: true
     gpus: all
@@ -37,8 +42,6 @@ services:
       - BAAI/bge-reranker-v2-m3
       - --dtype
       - float16
-      - --max-input-length
-      - "512"
       - --max-client-batch-size
       - "10"
       - --max-batch-tokens
