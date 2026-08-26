@@ -39,6 +39,15 @@ function jsonResponse(status, payload) {
   }
 }
 
+function textResponse(status, payload) {
+  return {
+    status,
+    async text() {
+      return payload
+    }
+  }
+}
+
 function fakeFetch(handler) {
   const calls = []
   const fetch = async (url, init = {}) => {
@@ -292,7 +301,7 @@ test('rejects a provider response that violates active snapshot or source allowl
 test('supports health, count, snapshot and snapshot-scoped deletion without content payloads', async () => {
   const fake = fakeFetch((call) => {
     const parsed = new URL(call.url)
-    if (parsed.pathname === '/healthz') return jsonResponse(200, { title: 'qdrant', version: '1.19.0' })
+    if (parsed.pathname === '/healthz') return textResponse(200, 'all is good')
     if (parsed.pathname.endsWith('/snapshots')) {
       return jsonResponse(200, { result: { name: 'snapshot-1', size: 440832, checksum: 'a'.repeat(64) }, status: 'ok' })
     }
@@ -386,7 +395,7 @@ test('maps unavailable, timeout and cancellation to stable degradable errors and
   const recoveringFake = fakeFetch((call) => {
     attempts += 1
     if (attempts === 1) throw new Error('temporary unavailable')
-    if (new URL(call.url).pathname === '/healthz') return jsonResponse(200, { title: 'qdrant' })
+    if (new URL(call.url).pathname === '/healthz') return textResponse(200, 'all is good')
     return jsonResponse(200, collectionPayload(QWEN_CONFIG, 0))
   })
   const recoveringStore = createStore(recoveringFake.fetch)
@@ -394,6 +403,25 @@ test('maps unavailable, timeout and cancellation to stable degradable errors and
   const recovered = await recoveringStore.health()
   assert.equal(recovered.available, true)
   assert.equal(recovered.degraded, false)
+})
+
+test('rejects an empty Qdrant health response while keeping JSON APIs strict', async () => {
+  const store = createStore(fakeFetch((call) => {
+    if (new URL(call.url).pathname === '/healthz') return textResponse(200, '   ')
+    return jsonResponse(200, collectionPayload(QWEN_CONFIG, 0))
+  }).fetch)
+  await assert.rejects(
+    store.health(),
+    (error) => errorCode(error) === RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID
+  )
+})
+
+test('rejects text responses from non-health Qdrant APIs', async () => {
+  const store = createStore(fakeFetch(() => textResponse(200, 'all is good')).fetch)
+  await assert.rejects(
+    store.count(),
+    (error) => errorCode(error) === RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID
+  )
 })
 
 test('lists snapshot points with server-owned model filters for restart reconciliation', async () => {

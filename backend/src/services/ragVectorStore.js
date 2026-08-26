@@ -502,6 +502,10 @@ function normalizeSearchResponse(payload, options, modelConfig) {
 }
 
 function validateHealthPayload(payload) {
+  if (typeof payload === 'string') {
+    if (!payload.trim()) fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation: 'health' })
+    return Object.freeze({ title: null, version: null })
+  }
   if (!isPlainObject(payload)) fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation: 'health' })
   if (payload.title !== undefined && (typeof payload.title !== 'string' || !payload.title.trim())) {
     fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation: 'health' })
@@ -551,7 +555,8 @@ export class RagVectorStore {
     Object.freeze(this)
   }
 
-  async #request(path, { method = 'GET', body, expectedStatuses = [200], signal, operation } = {}) {
+  async #request(path, { method = 'GET', body, expectedStatuses = [200], signal, operation,
+    responseFormat = 'json' } = {}) {
     validateSignal(signal)
     if (signal?.aborted) fail(RAG_VECTOR_ERROR_CODES.CANCELLED, { operation, retryable: false })
     const controller = new AbortController()
@@ -593,8 +598,13 @@ export class RagVectorStore {
       }
       let payload = null
       if (response.status !== 204) {
-        if (typeof response.json !== 'function') fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation })
-        try { payload = await response.json() } catch { fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation }) }
+        if (responseFormat === 'text') {
+          if (typeof response.text !== 'function') fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation })
+          try { payload = await response.text() } catch { fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation }) }
+        } else {
+          if (typeof response.json !== 'function') fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation })
+          try { payload = await response.json() } catch { fail(RAG_VECTOR_ERROR_CODES.RESPONSE_INVALID, { operation }) }
+        }
       }
       if (signal?.aborted) fail(RAG_VECTOR_ERROR_CODES.CANCELLED, { operation, retryable: false })
       if (!expectedStatuses.includes(response.status)) {
@@ -660,7 +670,8 @@ export class RagVectorStore {
     const healthResponse = await this.#request('/healthz', {
       signal,
       operation: 'health',
-      expectedStatuses: [200]
+      expectedStatuses: [200],
+      responseFormat: 'text'
     })
     const health = validateHealthPayload(healthResponse.payload)
     const collection = await this.#getCollection(signal)
