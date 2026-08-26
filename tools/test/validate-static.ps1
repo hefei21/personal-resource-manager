@@ -201,6 +201,24 @@ Assert-Condition 'compose.reranker.environment' ($missingRerankerEnvironment.Cou
   'NAS Compose files explicitly inject the complete Reranker identity into the backend container.' `
   "Missing backend Reranker environment bindings: $($missingRerankerEnvironment -join ', ')"
 
+$artifactRootEnvironmentPattern = '(?m)^\s+RAG_ARTIFACT_ROOT:\s*/app/data/storage/rag-artifacts\s*$'
+$artifactStorageMountPattern = '(?m)^\s*-\s+\$\{DATA_ROOT(?::\?[^}]+)?\}/storage:/app/data/storage\s*$'
+$missingArtifactPersistence = @()
+foreach ($compose in @(
+  @{ Name = 'nas-test'; Content = $nasCompose },
+  @{ Name = 'production'; Content = $productionCompose }
+)) {
+  if ($compose.Content -notmatch $artifactRootEnvironmentPattern) {
+    $missingArtifactPersistence += "$($compose.Name):RAG_ARTIFACT_ROOT"
+  }
+  if ($compose.Content -notmatch $artifactStorageMountPattern) {
+    $missingArtifactPersistence += "$($compose.Name):storage-mount"
+  }
+}
+Assert-Condition 'compose.rag-artifacts.persistence' ($missingArtifactPersistence.Count -eq 0) `
+  'NAS app stacks persist RAG extraction artifacts under the existing DATA_ROOT storage mount.' `
+  "Missing RAG artifact persistence wiring: $($missingArtifactPersistence -join ', ')"
+
 $answerEnvironmentKeys = @(
   'RAG_ANSWER_PROVIDER',
   'RAG_ANSWER_MODEL_ID',

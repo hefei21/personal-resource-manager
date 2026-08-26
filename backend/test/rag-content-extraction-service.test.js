@@ -122,6 +122,75 @@ test('reuses a bounded terminal retry instead of pinning the source to its first
   assert.equal(extracted.taskId, 61)
 })
 
+test('creates one deterministic recovery task when a succeeded extraction lost its committed artifact', async () => {
+  const { input, artifact, result } = fixture()
+  const requests = []
+  const tasks = new Map([
+    ['document:91', { id: 70, status: 'succeeded', input, result }]
+  ])
+  const taskStore = {
+    enqueueExclusiveRun(request) {
+      requests.push(request)
+      const existing = tasks.get(request.subjectVersionId)
+      if (existing) return { task: existing, created: false }
+      const task = { id: 71, status: 'pending', input: request.input, result }
+      tasks.set(request.subjectVersionId, { ...task, status: 'succeeded' })
+      return { task, created: true }
+    },
+    getById(id) {
+      return [...tasks.values()].find((task) => task.id === id) ?? null
+    }
+  }
+  const artifactStore = {
+    async readCommitted(id) {
+      if (id === 70) {
+        const error = new Error('committed artifact is missing')
+        error.code = 'RAG_ARTIFACT_MISSING'
+        throw error
+      }
+      assert.equal(id, 71)
+      return artifact
+    }
+  }
+  const service = createRagContentExtractionService({ taskStore, artifactStore })
+
+  const extracted = await service.extract(input)
+
+  assert.equal(extracted.taskId, 71)
+  assert.deepEqual(extracted.sections, artifact.sections)
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].subjectVersionId, 'document:91')
+  assert.match(requests[1].subjectVersionId, /^artifact-recovery:[a-f0-9]{64}$/u)
+  assert.notEqual(requests[1].subjectVersionId, requests[0].subjectVersionId)
+})
+
+test('does not create a second recovery task after the bounded repair also loses its artifact', async () => {
+  const { input, result } = fixture()
+  const requests = []
+  const taskStore = {
+    enqueueExclusiveRun(request) {
+      requests.push(request)
+      return {
+        task: { id: 72 + requests.length, status: 'succeeded', input: request.input, result },
+        created: true
+      }
+    },
+    getById() { throw new Error('succeeded tasks should not be polled') }
+  }
+  const artifactStore = {
+    async readCommitted() {
+      const error = new Error('committed artifact is missing')
+      error.code = 'RAG_ARTIFACT_MISSING'
+      throw error
+    }
+  }
+  const service = createRagContentExtractionService({ taskStore, artifactStore })
+
+  await assert.rejects(service.extract(input), { code: 'RAG_SOURCE_EXTRACTION_ARTIFACT_MISSING' })
+  assert.equal(requests.length, 2)
+  assert.match(requests[1].subjectVersionId, /^artifact-recovery:[a-f0-9]{64}$/u)
+})
+
 test('task center projects extraction identity and metadata without artifact content', () => {
   const { input, result } = fixture()
   const projected = projectTask({

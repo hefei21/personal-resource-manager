@@ -22,6 +22,7 @@ services:
       DB_PATH: /app/data/database/app.db
       DOCUMENTS_PATH: /app/data/documents
       STORAGE_PATH: /app/data/storage
+      RAG_ARTIFACT_ROOT: /app/data/storage/rag-artifacts
       MUSIC_PATH: /app/data/music
       BOOKS_PATH: /app/data/books
       CODE_PATH: /app/data/code
