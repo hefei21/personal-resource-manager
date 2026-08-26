@@ -264,7 +264,7 @@ test('RAG content extraction stages binary artifacts and completes with metadata
     schemaVersion: 1,
     sourceType: 'document',
     sourceId: 7,
-    sourceVersionId: 'version-7',
+    sourceVersionId: '7',
     sourceContentSha256: sha256,
     contentBytes: content.length,
     format: 'docx'
@@ -284,9 +284,12 @@ test('RAG content extraction stages binary artifacts and completes with metadata
     attemptCount: 1
   }
   let succeeded
+  let followup
+  let followupCount = 0
   const store = {
     getById(id) { return Number(id) === task.id ? task : null },
-    succeed({ result }) { succeeded = result; task.status = 'succeeded'; return { id: task.id, status: task.status, progress: 100 } }
+    succeed({ result }) { succeeded = result; task.status = 'succeeded'; return { id: task.id, status: task.status, progress: 100 } },
+    enqueue(input) { followup = input; followupCount += 1; return { task: { id: 44, ...input }, created: true } }
   }
   const sections = [{ ordinal: 0, title: 'Document', text: 'Grounded text.', locator: { paragraphStart: 0, paragraphEnd: 0 } }]
   const artifact = JSON.stringify({ schemaVersion: 1, format: 'docx', sections })
@@ -323,6 +326,13 @@ test('RAG content extraction stages binary artifacts and completes with metadata
     })
     assert.equal(leasedInput.status, 200)
     assert.deepEqual(Buffer.from(await leasedInput.arrayBuffer()), content)
+
+    input.sourceVersionId = '6'
+    const staleVersion = await fetch(`${baseUrl}/agent/tasks/43/input`, {
+      headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+    })
+    assert.equal(staleVersion.status, 409)
+    input.sourceVersionId = '7'
 
     const upload = await fetch(`${baseUrl}/agent/tasks/43/artifact`, {
       method: 'POST',
@@ -375,10 +385,142 @@ test('RAG content extraction stages binary artifacts and completes with metadata
     })
     assert.equal(complete.status, 200, JSON.stringify(await complete.clone().json()))
     assert.equal(succeeded.output.format, 'docx')
+    assert.equal(followup.taskType, 'rag.index.refresh')
+    assert.deepEqual(followup.input, {
+      source: { type: 'document', id: 7 },
+      filter: { sourceType: 'document', sourceIds: [7] },
+      rebuild: false
+    })
+    const repeatedComplete = await fetch(`${baseUrl}/agent/tasks/43/complete`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'lease-secret', result })
+    })
+    assert.equal(repeatedComplete.status, 403)
+    assert.equal(followupCount, 1)
     assert.equal(Object.hasOwn(succeeded.output, 'manifest'), false)
     assert.equal((await artifactStore.readCommitted(43)).sections[0].text, 'Grounded text.')
   })
   fs.rmSync(artifactRoot, { recursive: true, force: true })
+})
+
+test('RAG extraction streams a newly uploaded legacy document without a resource projection', async () => {
+  const input = {
+    schemaVersion: 1,
+    sourceType: 'document',
+    sourceId: 33,
+    sourceVersionId: '11',
+    sourceContentSha256: sha256,
+    contentBytes: content.length,
+    format: 'pdf'
+  }
+  const task = {
+    id: 44,
+    taskType: 'rag.content.extract',
+    processorVersion: 'v1',
+    executionClass: 'cpu',
+    subjectId: '33',
+    subjectContentHash: sha256,
+    input,
+    status: 'running',
+    leaseOwner: `pcw:${worker.id}`,
+    leaseToken: 'lease-secret',
+    leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+    attemptCount: 1
+  }
+  const database = {
+    prepare(sql) {
+      return {
+        get() {
+          if (sql.includes('FROM resource_domain_links link')) return undefined
+          if (sql.includes('FROM documents domain_source')) {
+            return {
+              legacy_version_id: 11,
+              managed_storage_key: `documents/${sha256.slice(0, 2)}/${sha256}`,
+              sha256,
+              bytes: content.length,
+              legacy_version_number: 1
+            }
+          }
+          return undefined
+        }
+      }
+    }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => database,
+    runtime: () => ({ getStore: () => ({ getById: (id) => Number(id) === task.id ? task : null }) }),
+    storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
+    authenticate: () => worker
+  }))
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/44/input`, {
+      headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), content)
+  })
+})
+
+test('RAG extraction streams a newly uploaded legacy EPUB without a resource projection', async () => {
+  const sourceVersionId = `current:1:${sha256}`
+  const input = {
+    schemaVersion: 1,
+    sourceType: 'ebook',
+    sourceId: 27,
+    sourceVersionId,
+    sourceContentSha256: sha256,
+    contentBytes: content.length,
+    format: 'epub'
+  }
+  const task = {
+    id: 45,
+    taskType: 'rag.content.extract',
+    processorVersion: 'v1',
+    executionClass: 'cpu',
+    subjectId: '27',
+    subjectContentHash: sha256,
+    input,
+    status: 'running',
+    leaseOwner: `pcw:${worker.id}`,
+    leaseToken: 'lease-secret',
+    leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+    attemptCount: 1
+  }
+  const database = {
+    prepare(sql) {
+      return {
+        get() {
+          if (sql.includes('FROM resource_domain_links link')) return undefined
+          if (sql.includes('FROM books domain_source')) {
+            return {
+              managed_storage_key: `ebooks/${sha256.slice(0, 2)}/${sha256}`,
+              sha256,
+              bytes: content.length
+            }
+          }
+          return undefined
+        }
+      }
+    }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => database,
+    runtime: () => ({ getStore: () => ({ getById: (id) => Number(id) === task.id ? task : null }) }),
+    storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
+    authenticate: () => worker
+  }))
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/45/input`, {
+      headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), content)
+  })
 })
 
 test('RAG embedding completion is catalog-normalized and stale snapshots are rejected', async () => {

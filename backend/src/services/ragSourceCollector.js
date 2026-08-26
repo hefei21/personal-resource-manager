@@ -14,6 +14,7 @@ import {
 } from './gitNasRepositoryService.js'
 import { resolveManagedRepositoryPath, resolveRepositoryEntry } from './repositorySecurity.js'
 import { isSensitiveCodeFile, safeCodeText } from './searchSourceCollector.js'
+import { extractRagBinaryContent } from './ragContentExtractionService.js'
 
 export const RAG_SOURCE_EXTRACTOR_VERSION = 'rag-source.v1'
 
@@ -33,6 +34,10 @@ const DOCUMENT_FORMATS = new Map([
   ['.html', 'html'],
   ['.htm', 'html'],
   ['.txt', 'txt']
+])
+const BINARY_DOCUMENT_FORMATS = new Map([
+  ['.pdf', 'pdf'],
+  ['.docx', 'docx']
 ])
 
 class RagSourceFailure extends Error {
@@ -420,14 +425,14 @@ function repositoryBaseLocator(id, commit) {
   return Object.freeze({ route: '/code', repositoryId: id, commit })
 }
 
-function makeSource({ sourceType, sourceId, sourceVersionId, sourceContentSha256, title, sections, baseLocator, errors }) {
+function makeSource({ sourceType, sourceId, sourceVersionId, sourceContentSha256, extractorVersion = RAG_SOURCE_EXTRACTOR_VERSION, title, sections, baseLocator, errors }) {
   const status = errors.length > 0 ? 'partial' : 'ready'
   return Object.freeze({
     sourceType,
     sourceId,
     sourceVersionId,
     sourceContentSha256,
-    extractorVersion: RAG_SOURCE_EXTRACTOR_VERSION,
+    extractorVersion,
     title,
     sections: Object.freeze(sections.map((section) => Object.freeze(section))),
     baseLocator,
@@ -441,6 +446,11 @@ function formatForDocument(row) {
   return DOCUMENT_FORMATS.get(path.extname(name)) ?? null
 }
 
+function binaryFormatForDocument(row) {
+  const name = String(row.original_name ?? row.file_path ?? '').toLocaleLowerCase('und')
+  return BINARY_DOCUMENT_FORMATS.get(path.extname(name)) ?? null
+}
+
 function makeDocumentSection({ id, versionId, format, title, text }) {
   const locator = documentBaseLocator(id, versionId)
   return {
@@ -452,7 +462,23 @@ function makeDocumentSection({ id, versionId, format, title, text }) {
   }
 }
 
-async function collectDocument(row, contentService, signal) {
+function artifactSections({ sourceType, id, versionId, title, extracted }) {
+  const baseLocator = sourceType === 'document'
+    ? documentBaseLocator(id, versionId)
+    : ebookBaseLocator(id, versionId)
+  return extracted.sections.map((section) => {
+    const sectionTitle = safeTitle(section.title, `${title} ${section.ordinal + 1}`)
+    return {
+      format: sourceType === 'document' ? 'txt' : 'ebook',
+      title: sectionTitle,
+      sectionPath: Object.freeze([sectionTitle]),
+      text: section.text,
+      locator: Object.freeze({ ...baseLocator, ...section.locator })
+    }
+  })
+}
+
+async function collectDocument(row, contentService, binaryExtractor, signal) {
   const id = isPositiveId(row.id)
   if (!id) return { source: null, errors: [] }
   const sourceType = 'document'
@@ -462,16 +488,34 @@ async function collectDocument(row, contentService, signal) {
   const fallbackHash = normalizeHash(effective.content_sha256)
   const baseLocator = documentBaseLocator(id, versionId)
   const format = formatForDocument(effective)
+  const binaryFormat = binaryFormatForDocument(effective)
+  const title = safeTitle(row.title, `Document ${id}`)
   let sourceHash = fallbackHash
   let sections = []
-  if (!format) {
+  let extractorVersion = RAG_SOURCE_EXTRACTOR_VERSION
+  if (!format && !binaryFormat) {
     addSourceError(errors, 'RAG_SOURCE_DOCUMENT_FORMAT_UNSUPPORTED', sourceType, id)
   } else {
     try {
       const content = await readVerifiedContent(contentService, effective, { signal })
       sourceHash = content.sha256
-      const text = textFromBuffer(content.buffer, { html: format === 'html' })
-      sections = [makeDocumentSection({ id, versionId, format, title: safeTitle(row.title, `Document ${id}`), text })]
+      const sourceVersionId = sourceVersionForDocument(row, sourceHash)
+      if (binaryFormat) {
+        const extracted = await binaryExtractor({
+          schemaVersion: 1,
+          sourceType,
+          sourceId: id,
+          sourceVersionId,
+          sourceContentSha256: sourceHash,
+          contentBytes: content.bytes,
+          format: binaryFormat
+        }, { signal })
+        extractorVersion = extracted.extractorVersion
+        sections = artifactSections({ sourceType, id, versionId, title, extracted })
+      } else {
+        const text = textFromBuffer(content.buffer, { html: format === 'html' })
+        sections = [makeDocumentSection({ id, versionId, format, title, text })]
+      }
     } catch (error) {
       if (error?.code === 'RAG_SOURCE_CANCELLED') throw error
       addSourceError(errors, errorCode(error, sourceType), sourceType, id)
@@ -480,13 +524,15 @@ async function collectDocument(row, contentService, signal) {
   if (!sourceHash) {
     return { source: null, errors: [sourceError('RAG_SOURCE_DOCUMENT_CONTENT_UNAVAILABLE', sourceType, id)] }
   }
+  if (sections.length === 0) return { source: null, errors }
   return {
     source: makeSource({
       sourceType,
       sourceId: id,
       sourceVersionId: sourceVersionForDocument(row, sourceHash),
       sourceContentSha256: sourceHash,
-      title: safeTitle(row.title, `Document ${id}`),
+      extractorVersion,
+      title,
       sections,
       baseLocator,
       errors
@@ -555,7 +601,7 @@ function parseBookCache(row, expectedHash, chapters) {
   return sections
 }
 
-async function collectEbook(row, contentService, chapters, signal) {
+async function collectEbook(row, contentService, binaryExtractor, chapters, signal) {
   const id = isPositiveId(row.id)
   if (!id) return { source: null, errors: [] }
   const sourceType = 'ebook'
@@ -567,6 +613,7 @@ async function collectEbook(row, contentService, chapters, signal) {
   const baseLocator = ebookBaseLocator(id, versionId)
   let sourceHash = fallbackHash
   let sections = []
+  let extractorVersion = RAG_SOURCE_EXTRACTOR_VERSION
   const fileName = String(effective.original_name ?? effective.file_path ?? effective.file_type ?? '').toLocaleLowerCase('und')
   const isEpub = fileName.includes('epub') || path.extname(fileName) === '.epub'
   const isTxt = path.extname(fileName) === '.txt' || fileName === 'text/plain'
@@ -586,7 +633,21 @@ async function collectEbook(row, contentService, chapters, signal) {
         locator: Object.freeze({ route: '/books', bookId: id, chapterIndex: 0 })
       }]
     } else if (isEpub) {
-      sections = parseBookCache(effective, sourceHash, chapters)
+      try {
+        sections = parseBookCache(effective, sourceHash, chapters)
+      } catch (cacheError) {
+        const extracted = await binaryExtractor({
+          schemaVersion: 1,
+          sourceType,
+          sourceId: id,
+          sourceVersionId: sourceVersionForEbook(row, sourceHash),
+          sourceContentSha256: sourceHash,
+          contentBytes: content.bytes,
+          format: 'epub'
+        }, { signal })
+        extractorVersion = extracted.extractorVersion
+        sections = artifactSections({ sourceType, id, versionId, title, extracted })
+      }
     } else {
       addSourceError(errors, 'RAG_SOURCE_EBOOK_FORMAT_UNSUPPORTED', sourceType, id)
     }
@@ -595,12 +656,14 @@ async function collectEbook(row, contentService, chapters, signal) {
     addSourceError(errors, errorCode(error, sourceType), sourceType, id)
   }
   if (!sourceHash) return { source: null, errors: [sourceError('RAG_SOURCE_EBOOK_CONTENT_UNAVAILABLE', sourceType, id)] }
+  if (sections.length === 0) return { source: null, errors }
   return {
     source: makeSource({
       sourceType,
       sourceId: id,
       sourceVersionId: sourceVersionForEbook(row, sourceHash),
       sourceContentSha256: sourceHash,
+      extractorVersion,
       title,
       sections,
       baseLocator,
@@ -757,11 +820,24 @@ function appendErrors(target, errors) {
   }
 }
 
+function selectedRows(rows, sourceType, source, filter) {
+  if (source?.type && source.type !== 'all' && source.type !== sourceType) return []
+  if (filter?.sourceType && filter.sourceType !== sourceType) return []
+  return rows.filter((row) => {
+    const id = isPositiveId(row.id)
+    if (id === null) return false
+    if (source?.id !== undefined && source.id !== null && id !== Number(source.id)) return false
+    if (Array.isArray(filter?.sourceIds) && !filter.sourceIds.includes(id)) return false
+    return true
+  })
+}
+
 export function createRagSourceCollector({
   documentRuntimeProvider = getDocumentStorageRuntime,
   resourceRuntimeProvider = getResourceStorageRuntime,
   documentContentService,
   ebookContentService,
+  binaryExtractor = extractRagBinaryContent,
   inspectGitNasSnapshotFn = inspectGitNasSnapshot,
   inspectReadOnlyGitSnapshotFn = inspectReadOnlyGitSnapshot,
   readGitNasFileFn = readGitNasFile,
@@ -769,7 +845,8 @@ export function createRagSourceCollector({
   runGit = createGitNasReadOnlyRunner(),
   codeBasePath = process.env.CODE_PATH || path.join(process.env.DATA_PATH || '/data', 'code')
 } = {}) {
-  return async function collectRagSources({ database, signal, onProgress = async () => {} } = {}) {
+  if (typeof binaryExtractor !== 'function') throw new TypeError('binaryExtractor must be a function')
+  return async function collectRagSources({ database, signal, source, filter, onProgress = async () => {} } = {}) {
     if (!database || typeof database.prepare !== 'function') throw new TypeError('database is required')
     throwIfAborted(signal)
     const documentRuntime = documentRuntimeProvider?.() ?? {}
@@ -785,10 +862,10 @@ export function createRagSourceCollector({
       runGit,
       codeBasePath
     }
-    const documents = documentRows(database)
-    const books = ebookRows(database)
+    const documents = selectedRows(documentRows(database), 'document', source, filter)
+    const books = selectedRows(ebookRows(database), 'ebook', source, filter)
     const chapters = chapterRows(database)
-    const repositories = repositoryRows(database)
+    const repositories = selectedRows(repositoryRows(database), 'code_repository', source, filter)
     const total = documents.length + books.length + repositories.length
     const sources = []
     const errors = []
@@ -800,14 +877,14 @@ export function createRagSourceCollector({
     }
     for (const row of documents) {
       throwIfAborted(signal)
-      const result = await collectDocument(row, dependencies.documentContentService, signal)
+      const result = await collectDocument(row, dependencies.documentContentService, binaryExtractor, signal)
       if (result.source) sources.push(result.source)
       appendErrors(errors, result.errors)
       await progress()
     }
     for (const row of books) {
       throwIfAborted(signal)
-      const result = await collectEbook(row, dependencies.ebookContentService, chapters.filter((chapter) => Number(chapter.book_id) === Number(row.id)), signal)
+      const result = await collectEbook(row, dependencies.ebookContentService, binaryExtractor, chapters.filter((chapter) => Number(chapter.book_id) === Number(row.id)), signal)
       if (result.source) sources.push(result.source)
       appendErrors(errors, result.errors)
       await progress()

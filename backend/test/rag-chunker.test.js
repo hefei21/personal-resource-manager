@@ -105,6 +105,23 @@ test('supports html, txt, ebook, and repository_document inputs with safe locato
   }
 })
 
+test('preserves binary extraction page, paragraph and spine locators through chunking', () => {
+  const pdf = chunkRagSource({
+    format: 'txt',
+    body: 'PDF page content.',
+    locator: { ...documentLocator, page: 2, paragraphStart: 0, paragraphEnd: 3 }
+  })
+  assert.deepEqual(pdf.locator, {
+    ...documentLocator, page: 2, paragraphStart: 0, paragraphEnd: 3
+  })
+  const epub = chunkRagSource({
+    format: 'ebook',
+    body: 'EPUB spine content.',
+    locator: { route: '/books', bookId: 42, spineIndex: 4 }
+  })
+  assert.deepEqual(epub.locator, { route: '/books', bookId: 42, spineIndex: 4 })
+})
+
 test('actual tokenizer mode fixes 768/96 and reports real token counts', () => {
   const body = Array.from({ length: 1700 }, (_value, index) => `token-${index}`).join(' ')
   const report = chunkRagSource({ format: 'txt', body, locator: documentLocator }, { tokenizer: whitespaceTokenizer })

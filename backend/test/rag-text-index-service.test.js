@@ -82,6 +82,7 @@ test('indexes collector sources in a transaction and returns exact public locato
     migrate(database)
     let collectorCalls = 0
     const indexedSource = source({ id: 11, version: 3, text: '# Guide\n\nA precise paragraph.' })
+    indexedSource.sections[0].locator = { ...indexedSource.sections[0].locator, page: 2 }
     const service = createService(database, {
       collectSources: async ({ database: receivedDatabase }) => {
         collectorCalls += 1
@@ -108,6 +109,7 @@ test('indexes collector sources in a transaction and returns exact public locato
       route: '/documents',
       documentId: 11,
       versionId: 3,
+      page: 2,
       sectionPath: ['Guide'],
       startLine: 1,
       endLine: 3,

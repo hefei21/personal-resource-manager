@@ -22,7 +22,7 @@ const SOURCE_KEYS = new Set(['format', 'body', 'locator', 'sectionPath'])
 const OPTION_KEYS = new Set(['tokenizer', 'maxTokens', 'overlapTokens', 'maxSourceBytes', 'maxChunkBytes'])
 const LOCATOR_KEYS = new Set([
   'route', 'documentId', 'bookId', 'chapterIndex', 'repositoryId', 'path', 'line',
-  'commit', 'versionId', 'sourceVersionId'
+  'commit', 'versionId', 'sourceVersionId', 'page', 'spineIndex', 'paragraphStart', 'paragraphEnd'
 ])
 const ROUTES = Object.freeze({
   markdown: '/documents',
@@ -132,8 +132,24 @@ function normalizeLocator(locator, format) {
   } else if (format === 'ebook') {
     normalized.bookId = positiveInteger(locator.bookId, 'locator.bookId')
     if (locator.chapterIndex !== undefined) normalized.chapterIndex = nonNegativeInteger(locator.chapterIndex, 'locator.chapterIndex')
+    if (locator.spineIndex !== undefined) normalized.spineIndex = nonNegativeInteger(locator.spineIndex, 'locator.spineIndex')
+    if (locator.page !== undefined) fail('RAG_CHUNKER_LOCATOR_INVALID', 'locator.page is invalid for an ebook')
   } else {
     normalized.documentId = positiveInteger(locator.documentId, 'locator.documentId')
+    if (locator.page !== undefined) normalized.page = positiveInteger(locator.page, 'locator.page')
+    if (locator.spineIndex !== undefined) fail('RAG_CHUNKER_LOCATOR_INVALID', 'locator.spineIndex is invalid for a document')
+  }
+
+  if (format !== 'repository_document') {
+    if (locator.paragraphStart !== undefined) normalized.paragraphStart = nonNegativeInteger(locator.paragraphStart, 'locator.paragraphStart')
+    if (locator.paragraphEnd !== undefined) normalized.paragraphEnd = nonNegativeInteger(locator.paragraphEnd, 'locator.paragraphEnd')
+    if (normalized.paragraphEnd !== undefined && normalized.paragraphStart !== undefined &&
+        normalized.paragraphEnd < normalized.paragraphStart) {
+      fail('RAG_CHUNKER_LOCATOR_INVALID', 'locator paragraph range is invalid')
+    }
+  } else if (locator.page !== undefined || locator.spineIndex !== undefined ||
+      locator.paragraphStart !== undefined || locator.paragraphEnd !== undefined) {
+    fail('RAG_CHUNKER_LOCATOR_INVALID', 'locator contains unsupported repository fields')
   }
 
   for (const key of ['line', 'versionId', 'sourceVersionId']) {

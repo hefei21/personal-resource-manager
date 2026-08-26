@@ -150,20 +150,91 @@ function contentRecord(database, task) {
     const sourceId = positiveId(input?.sourceId)
     const domainType = input?.sourceType === 'document' ? 'document' : input?.sourceType === 'ebook' ? 'ebook' : null
     if (sourceId === null || domainType === null) return null
-    const row = database.prepare(`
-      SELECT rv.id AS resource_version_id, rv.resource_id, rv.content_object_id,
-             c.sha256, c.bytes, c.managed_storage_key, r.lifecycle_status
-        FROM resource_domain_links link
-        JOIN resources r ON r.id = link.resource_id
-        JOIN resource_versions rv ON rv.resource_id = r.id AND rv.is_current = 1
-        JOIN content_objects c ON c.id = rv.content_object_id
-       WHERE link.domain_type = ? AND link.domain_id = ?
-       ORDER BY rv.id DESC
-       LIMIT 1
-    `).get(domainType, sourceId)
-    if (!row || row.lifecycle_status !== 'active' || row.managed_storage_key === null ||
-        row.sha256 !== input.sourceContentSha256 || row.sha256 !== task.subjectContentHash ||
-        Number(row.bytes) !== input.contentBytes) return null
+    let row
+    try {
+      row = database.prepare(`
+        SELECT rv.id AS resource_version_id, rv.resource_id, rv.content_object_id,
+               c.sha256, c.bytes, c.managed_storage_key, r.lifecycle_status
+          FROM resource_domain_links link
+          JOIN resources r ON r.id = link.resource_id
+          JOIN resource_versions rv ON rv.resource_id = r.id AND rv.is_current = 1
+          JOIN content_objects c ON c.id = rv.content_object_id
+         WHERE link.domain_type = ? AND link.domain_id = ?
+         ORDER BY rv.id DESC
+         LIMIT 1
+      `).get(domainType, sourceId)
+    } catch {}
+    if (row) {
+      if (row.lifecycle_status !== 'active' || row.managed_storage_key === null ||
+          row.sha256 !== input.sourceContentSha256 || row.sha256 !== task.subjectContentHash ||
+          Number(row.bytes) !== input.contentBytes) return null
+      let versionMatches = String(row.resource_version_id) === String(input.sourceVersionId)
+      if (!versionMatches && domainType === 'document') {
+        try {
+          const legacyVersion = database.prepare(`
+            SELECT current_version.id
+              FROM documents domain_source
+              JOIN document_versions current_version ON current_version.id = (
+                SELECT candidate.id
+                  FROM document_versions candidate
+                 WHERE candidate.document_id = domain_source.id
+                   AND CAST(candidate.version AS REAL) = CAST(domain_source.version AS REAL)
+                 ORDER BY candidate.id DESC
+                 LIMIT 1
+              )
+             WHERE domain_source.id = ?
+          `).get(sourceId)
+          versionMatches = String(legacyVersion?.id) === String(input.sourceVersionId)
+        } catch {}
+      }
+      if (!versionMatches) return null
+      return row
+    }
+    try {
+      row = domainType === 'document'
+        ? database.prepare(`
+            SELECT current_version.id AS legacy_version_id,
+                   COALESCE(current_version.storage_key, domain_source.storage_key) AS managed_storage_key,
+                   COALESCE(current_version.content_sha256, domain_source.content_sha256) AS sha256,
+                   COALESCE(current_version.content_bytes, domain_source.content_bytes) AS bytes,
+                   domain_source.version AS legacy_version_number
+              FROM documents domain_source
+              LEFT JOIN document_versions current_version ON current_version.id = (
+                SELECT candidate.id
+                  FROM document_versions candidate
+                 WHERE candidate.document_id = domain_source.id
+                   AND CAST(candidate.version AS REAL) = CAST(domain_source.version AS REAL)
+                 ORDER BY candidate.id DESC
+                 LIMIT 1
+              )
+             WHERE domain_source.id = ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM resource_trash_entries trash
+                  WHERE trash.resource_type = 'document' AND trash.resource_id = domain_source.id
+               )
+               AND (current_version.id IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM resource_trash_entries trash
+                  WHERE trash.resource_type = 'document_version' AND trash.resource_id = current_version.id
+               ))
+          `).get(sourceId)
+        : database.prepare(`
+            SELECT domain_source.storage_key AS managed_storage_key,
+                   domain_source.content_sha256 AS sha256,
+                   domain_source.content_bytes AS bytes
+              FROM books domain_source
+             WHERE domain_source.id = ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM resource_trash_entries trash
+                  WHERE trash.resource_type = 'ebook' AND trash.resource_id = domain_source.id
+               )
+          `).get(sourceId)
+    } catch { return null }
+    if (!row || row.managed_storage_key === null || row.sha256 !== input.sourceContentSha256 ||
+        row.sha256 !== task.subjectContentHash || Number(row.bytes) !== input.contentBytes) return null
+    const legacyVersionId = domainType === 'document' && Number.isSafeInteger(Number(row.legacy_version_id))
+      ? String(row.legacy_version_id)
+      : `current:${row.legacy_version_number ?? 1}:${row.sha256}`
+    if (legacyVersionId !== String(input.sourceVersionId)) return null
     return row
   }
   const resourceVersionId = positiveId(input?.resourceVersionId)
@@ -216,6 +287,30 @@ function staleResultError() {
   const error = new Error('Worker result is stale.')
   error.code = 'PC_WORKER_RESULT_STALE'
   return error
+}
+
+async function enqueueRagIndexFollowup(store, task) {
+  if (task?.taskType !== 'rag.content.extract' || typeof store?.enqueue !== 'function') return
+  const input = task.input
+  if (!input || !['document', 'ebook'].includes(input.sourceType) || positiveId(input.sourceId) === null) return
+  try {
+    await Promise.resolve(store.enqueue({
+      taskType: 'rag.index.refresh',
+      processorVersion: 'v1',
+      executionClass: 'disk',
+      subjectType: 'rag-index',
+      subjectId: 'owner',
+      subjectVersionId: `extract:${task.id}`,
+      subjectContentSha256: input.sourceContentSha256,
+      input: {
+        source: { type: input.sourceType, id: input.sourceId },
+        filter: { sourceType: input.sourceType, sourceIds: [input.sourceId] },
+        rebuild: false
+      },
+      priority: 40,
+      maxAttempts: 3
+    }))
+  } catch {}
 }
 
 function currentSnapshotIdentity(database, task, input) {
@@ -602,6 +697,7 @@ export function createPcWorkerAgentRouter({
         token: req.body.leaseToken,
         result
       }))
+      await enqueueRagIndexFollowup(store, task)
       return res.json({ data: { id: succeeded.id, status: succeeded.status, progress: succeeded.progress } })
     } catch (error) {
       if (task?.taskType === 'rag.content.extract' && artifactStoreValue) await artifactStoreValue.discardTask(task.id).catch(() => {})

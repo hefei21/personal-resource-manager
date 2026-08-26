@@ -84,7 +84,7 @@ function fixtureDatabase({ documentBody, ebookBody, ebookCache } = {}) {
   return { database, documentBuffer, ebookBuffer }
 }
 
-function collectorFor({ database, documentBuffer, ebookBuffer, inspect, read, onProgress } = {}) {
+function collectorFor({ database, documentBuffer, ebookBuffer, inspect, read, onProgress, binaryExtractor } = {}) {
   return createRagSourceCollector({
     documentRuntimeProvider: () => ({
       contentService: {
@@ -112,6 +112,7 @@ function collectorFor({ database, documentBuffer, ebookBuffer, inspect, read, on
             ? 'Notice'
             : 'ignored')
     })),
+    ...(binaryExtractor ? { binaryExtractor } : {}),
     ...(onProgress ? { onProgress } : {})
   })
 }
@@ -181,18 +182,77 @@ test('filters inactive, trashed and trashed-current-version sources before conte
   }
 })
 
-test('does not mark an EPUB cache ready without a matching current source hash', nativeTestOptions, async () => {
+test('falls back to the PC extraction artifact when an EPUB cache is not bound', nativeTestOptions, async () => {
   const { database, documentBuffer, ebookBuffer } = fixtureDatabase({
     ebookCache: JSON.stringify({ chapters: [{ index: 0, content: '旧缓存' }] })
   })
   try {
-    const collector = collectorFor({ database, documentBuffer, ebookBuffer })
+    const collector = collectorFor({
+      database,
+      documentBuffer,
+      ebookBuffer,
+      binaryExtractor: async (input) => ({
+        extractorVersion: 'pc-worker-structured-text.v1',
+        sections: [{ ordinal: 0, title: 'Spine 1', text: '新提取正文', locator: { spineIndex: 0 } }]
+      })
+    })
     const report = await collector({ database })
     const ebook = report.sources.find((source) => source.sourceType === 'ebook')
-    assert.equal(ebook.status, 'partial')
-    assert.equal(ebook.sections.length, 0)
-    assert.equal(ebook.errors.some((error) => error.code === 'RAG_SOURCE_EBOOK_CACHE_UNBOUND'), true)
-    assert.equal(report.errors.some((error) => error.code === 'RAG_SOURCE_EBOOK_CACHE_UNBOUND'), true)
+    assert.equal(ebook.status, 'ready')
+    assert.equal(ebook.extractorVersion, 'pc-worker-structured-text.v1')
+    assert.equal(ebook.sections[0].text, '新提取正文')
+    assert.deepEqual(ebook.sections[0].locator, { route: '/books', bookId: 2, spineIndex: 0 })
+    assert.equal(report.errors.length, 0)
+  } finally {
+    database.close()
+  }
+})
+
+test('applies an exact selector before content access and maps PDF artifact locators', nativeTestOptions, async () => {
+  const { database, documentBuffer, ebookBuffer } = fixtureDatabase()
+  let documentReads = 0
+  let ebookReads = 0
+  let repositoryInspections = 0
+  const extractionInputs = []
+  try {
+    database.exec("UPDATE documents SET original_name = 'report.pdf' WHERE id = 1")
+    const collector = createRagSourceCollector({
+      documentRuntimeProvider: () => ({
+        contentService: {
+          stat: async () => { documentReads += 1; return { bytes: documentBuffer.length } },
+          createReadStream: async () => ({ stream: Readable.from([documentBuffer]) })
+        }
+      }),
+      resourceRuntimeProvider: () => ({
+        contentServiceFor: () => ({
+          stat: async () => { ebookReads += 1; return { bytes: ebookBuffer.length } },
+          createReadStream: async () => ({ stream: Readable.from([ebookBuffer]) })
+        })
+      }),
+      inspectGitNasSnapshotFn: async () => { repositoryInspections += 1; throw new Error('excluded') },
+      binaryExtractor: async (input) => {
+        extractionInputs.push(input)
+        return {
+          extractorVersion: 'pc-worker-structured-text.v1',
+          sections: [{ ordinal: 0, title: 'Page 2', text: '精确选择正文', locator: { page: 2 } }]
+        }
+      }
+    })
+    const report = await collector({
+      database,
+      source: { type: 'document', id: 1 },
+      filter: { sourceIds: [1] }
+    })
+    assert.equal(documentReads, 1)
+    assert.equal(ebookReads, 0)
+    assert.equal(repositoryInspections, 0)
+    assert.equal(extractionInputs.length, 1)
+    assert.equal(extractionInputs[0].format, 'pdf')
+    assert.equal(extractionInputs[0].sourceContentSha256, sha256(documentBuffer))
+    assert.deepEqual(report.sources.map((source) => `${source.sourceType}:${source.sourceId}`), ['document:1'])
+    assert.deepEqual(report.sources[0].sections[0].locator, {
+      route: '/documents', documentId: 1, versionId: 11, page: 2
+    })
   } finally {
     database.close()
   }

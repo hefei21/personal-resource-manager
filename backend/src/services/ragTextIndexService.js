@@ -28,7 +28,7 @@ const MAX_SOURCE_SECTIONS = 10_000
 const MAX_SOURCE_CHUNKS = 100_000
 const PUBLIC_LOCATOR_KEYS = new Set([
   'route', 'documentId', 'bookId', 'chapterIndex', 'repositoryId', 'path', 'line',
-  'commit', 'versionId', 'sourceVersionId'
+  'commit', 'versionId', 'sourceVersionId', 'page', 'spineIndex', 'paragraphStart', 'paragraphEnd'
 ])
 const SEARCH_TOKEN = /[\p{L}\p{N}_-]+/gu
 const CJK_SEQUENCE = /\p{Script=Han}+/gu
