@@ -476,13 +476,32 @@ function defaultRagSourceStatusProvider({ database, sourceType, sourceId, checks
          ORDER BY state.embedding_model_id ASC
       `).all(snapshot.id)
       for (const row of rows) {
+        let taskStatus = null
+        let taskErrorCode = null
+        if (hasTable(database, 'tasks')) {
+          const task = database.prepare(`
+            SELECT status, error_code
+              FROM tasks
+             WHERE task_type = 'rag.embedding.generate'
+               AND subject_type = 'rag.embedding.snapshot-model'
+               AND subject_id = ?
+             ORDER BY id DESC
+             LIMIT 1
+          `).get(`${snapshot.id}:${row.embedding_model_id}`)
+          taskStatus = ['pending', 'leased', 'running', 'succeeded', 'failed', 'cancelled'].includes(task?.status)
+            ? task.status
+            : null
+          taskErrorCode = publicErrorCode(task?.error_code)
+        }
         models.push(Object.freeze({
           modelId: publicModelId(row.model_id),
           status: embeddingStatus(row.status),
           vectorCount: safeCount(row.vector_count),
           readyCount: safeCount(row.ready_count),
           errorCount: safeCount(row.error_count),
-          errorCode: publicErrorCode(row.last_error_code)
+          errorCode: publicErrorCode(row.last_error_code),
+          taskStatus,
+          taskErrorCode
         }))
       }
     }
