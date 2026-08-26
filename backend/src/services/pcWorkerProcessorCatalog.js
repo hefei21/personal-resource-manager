@@ -11,6 +11,7 @@ const PC_WORKER_OUTPUT_SCHEMA_VERSION = 1
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$/u
+const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~%!'()*=-]{0,127}$/u
 const SOURCE_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$/u
 const MAX_SAFE_BYTES = Number.MAX_SAFE_INTEGER
 const MAX_QUERY_BYTES = 64 * 1024
@@ -70,6 +71,12 @@ function requiredText(value, fieldName, maxBytes = 512) {
 function token(value, fieldName, maxBytes = 512) {
   const normalized = requiredText(value, fieldName, maxBytes)
   if (!TOKEN_PATTERN.test(normalized)) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', `${fieldName} is invalid.`)
+  return normalized
+}
+
+function opaqueId(value, fieldName) {
+  const normalized = requiredText(value, fieldName, 128)
+  if (!OPAQUE_ID_PATTERN.test(normalized)) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', `${fieldName} is invalid.`)
   return normalized
 }
 
@@ -342,7 +349,7 @@ function projectQueryEmbedInput(input) {
 function projectRerankInput(input) {
   exactKeys(input, ['schemaVersion', 'querySha256', 'candidateSetSha256', 'query', 'model', 'candidates'], 'task.input')
   if (input.schemaVersion !== 1) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
-  const query = boundedText(input.query, 'task.input.query', MAX_QUERY_BYTES)
+  const query = boundedContentText(input.query, 'task.input.query', MAX_QUERY_BYTES)
   const model = modelIdentity(input.model, 'task.input.model')
   if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > LIMITS.rerank.maxBatchItems) {
     fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.candidates exceeds its batch limit.')
@@ -350,7 +357,10 @@ function projectRerankInput(input) {
   const candidates = input.candidates.map((candidate, index) => {
     exactKeys(candidate, ['candidateId', 'text', 'score'], `task.input.candidates[${index}]`)
     const normalized = {
-      candidateId: token(candidate.candidateId, `task.input.candidates[${index}].candidateId`, 128),
+      // Candidate IDs are opaque correlation values. Hybrid retrieval uses
+      // encodeURIComponent, so valid IDs may contain '%' and must not be
+      // constrained to the model/version token alphabet.
+      candidateId: opaqueId(candidate.candidateId, `task.input.candidates[${index}].candidateId`),
       // Retrieved document chunks are content, not single-line tokens. Preserve
       // ordinary tabs/newlines while still rejecting NUL and unsafe controls.
       text: boundedContentText(candidate.text, `task.input.candidates[${index}].text`, LIMITS.rerank.inputMaxBytes)
@@ -574,7 +584,7 @@ function normalizeRerankResult(value, expected) {
   const inputIndexes = new Map(input?.candidates?.map((candidate, index) => [candidate.candidateId, index]) ?? [])
   const candidates = value.candidates.map((candidate, index) => {
     exactKeys(candidate, ['candidateId', 'score'], `result.output.candidates[${index}]`)
-    const candidateId = token(candidate.candidateId, `result.output.candidates[${index}].candidateId`, 128)
+    const candidateId = opaqueId(candidate.candidateId, `result.output.candidates[${index}].candidateId`)
     if (seen.has(candidateId) || (input && !allowedIds.has(candidateId))) {
       fail('PC_WORKER_PROCESSOR_RESULT_INPUT_MISMATCH', 'result candidate identity is invalid.')
     }

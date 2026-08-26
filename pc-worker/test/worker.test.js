@@ -12,6 +12,29 @@ import { createModelReadiness } from '../src/modelReadiness.js'
 const content = Buffer.from('worker fixture\n', 'utf8')
 const sha256 = createHash('sha256').update(content).digest('hex')
 
+test('Worker uses only a bounded follow-up poll burst after completing chained work', async () => {
+  const delays = []
+  let calls = 0
+  const worker = Object.create(PcWorker.prototype)
+  worker.config = { pollIntervalMs: 1_000, followUpPollIntervalMs: 25, followUpPollAttempts: 2 }
+  worker.logger = { info() {}, warn() {} }
+  worker.stopping = false
+  worker.activeController = null
+  worker.runOnce = async () => {
+    calls += 1
+    return calls === 1
+  }
+  worker.sleep = async (milliseconds) => {
+    delays.push(milliseconds)
+    if (delays.length === 2) worker.stop()
+  }
+
+  await worker.run()
+
+  assert.deepEqual(delays, [25, 25])
+  assert.equal(calls, 3)
+})
+
 function profile() {
   return {
     displayName: 'Worker', protocolVersion: 1, agentVersion: '0.1.0', platform: 'win32', architecture: 'x64',

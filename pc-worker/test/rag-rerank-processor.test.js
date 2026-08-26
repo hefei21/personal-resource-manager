@@ -46,9 +46,9 @@ function candidateSetSha256(candidates) {
 }
 
 function task(overrides = {}) {
-  const query = '如何恢复索引？'
+  const query = '如何恢复索引？\n第二个条件\t值'
   const candidates = [
-    { candidateId: 'C1', text: '先检查索引状态。', score: 0.5 },
+    { candidateId: 'rag:document:33:version%3A1:2:3', text: '先检查索引状态。\n第二段\t值', score: 0.5 },
     { candidateId: 'C2', text: '恢复失败任务并重建索引。', score: 0.4 },
     { candidateId: 'C3', text: '确认数据库快照后再切换。', score: 0.3 }
   ]
@@ -98,7 +98,7 @@ test('reranker posts the pinned TEI contract and returns a complete stable permu
   assert.equal(result.output.querySha256, task().input.querySha256)
   assert.equal(result.output.candidateSetSha256, task().input.candidateSetSha256)
   assert.deepEqual(result.output.candidates, [
-    { candidateId: 'C1', score: 0.8 },
+    { candidateId: 'rag:document:33:version%3A1:2:3', score: 0.8 },
     { candidateId: 'C2', score: 0.8 },
     { candidateId: 'C3', score: -0.1 }
   ])
@@ -126,6 +126,13 @@ test('reranker rejects a candidate-set hash mismatch before calling TEI', async 
   invalid.input.candidateSetSha256 = 'a'.repeat(64)
   await assert.rejects(processor.process(invalid), (error) => error.code === 'WORKER_RERANK_INPUT_INVALID')
   assert.equal(calls, 0)
+})
+
+test('reranker accepts encoded opaque candidate IDs but rejects raw whitespace', async () => {
+  const processor = createRagRerankProcessor({ config, fetchImpl: async () => response([]) })
+  const invalid = task()
+  invalid.input.candidates[0].candidateId = 'bad raw id'
+  await assert.rejects(processor.process(invalid), (error) => error.code === 'WORKER_RERANK_INPUT_INVALID')
 })
 
 test('reranker rejects wrong model identity and incomplete or invented responses', async () => {

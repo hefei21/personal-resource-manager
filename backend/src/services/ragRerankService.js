@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 
+import { RAG_RERANKER_MODEL } from '../config/ragReranker.js'
 import {
   lookupPcWorkerProcessor,
   rerankCandidateSetSha256
@@ -16,6 +17,9 @@ export const RAG_RERANK_POLL_MS = 25
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled'])
 const PENDING = new Set(['pending', 'leased', 'running'])
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
+const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~%!'()*=-]{0,127}$/u
+const UNSAFE_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u
+const MAX_CANDIDATE_BYTES = 2 * 1024 * 1024
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -53,13 +57,15 @@ function modelIdentity(value) {
       !Number.isSafeInteger(model.dimensions) || model.dimensions < 1 ||
       !Number.isSafeInteger(model.inputLimit) || model.inputLimit < 1 ||
       typeof model.configHash !== 'string' || !HASH_PATTERN.test(model.configHash)) return null
-  return Object.freeze(model)
+  return Object.entries(RAG_RERANKER_MODEL).every(([key, expected]) => model[key] === expected)
+    ? Object.freeze(model)
+    : null
 }
 
 function normalizedQuery(value) {
   if (typeof value !== 'string') return null
   const query = value.normalize('NFKC').trim()
-  if (!query || Buffer.byteLength(query, 'utf8') > 64 * 1024 || /[\u0000-\u001f\u007f]/u.test(query)) return null
+  if (!query || Buffer.byteLength(query, 'utf8') > 64 * 1024 || UNSAFE_CONTROL_PATTERN.test(query)) return null
   return query
 }
 
@@ -68,14 +74,18 @@ function normalizeCandidates(value, maxCandidates) {
   const seen = new Set()
   const candidates = []
   for (const candidate of value) {
-    const candidateId = candidate?.citationId ?? candidate?.candidateId
-    const text = candidate?.body ?? candidate?.text
-    if (typeof candidateId !== 'string' || !candidateId || Buffer.byteLength(candidateId, 'utf8') > 128 ||
-        typeof text !== 'string' || !text.trim() || seen.has(candidateId)) return null
+    const rawCandidateId = candidate?.citationId ?? candidate?.candidateId
+    const rawText = candidate?.body ?? candidate?.text
+    if (typeof rawCandidateId !== 'string' || typeof rawText !== 'string') return null
+    const candidateId = rawCandidateId.normalize('NFKC').trim()
+    const text = rawText.normalize('NFKC').trim()
+    if (!OPAQUE_ID_PATTERN.test(candidateId) || Buffer.byteLength(candidateId, 'utf8') > 128 ||
+        !text || Buffer.byteLength(text, 'utf8') > MAX_CANDIDATE_BYTES || UNSAFE_CONTROL_PATTERN.test(text) ||
+        seen.has(candidateId)) return null
     seen.add(candidateId)
     candidates.push(Object.freeze({
       candidateId,
-      text: text.normalize('NFKC').trim(),
+      text,
       ...(Number.isFinite(candidate?.score) ? { score: candidate.score } : {}),
       original: candidate
     }))
@@ -129,7 +139,7 @@ export class RagRerankService {
     this.sleep = sleep
     this.waitMs = boundedInteger(waitMs, 'waitMs', 0, 60_000, RAG_RERANK_WAIT_MS)
     this.pollMs = boundedInteger(pollMs, 'pollMs', 1, 5_000, RAG_RERANK_POLL_MS)
-    this.maxCandidates = boundedInteger(maxCandidates, 'maxCandidates', 1, 50, 10)
+    this.maxCandidates = boundedInteger(maxCandidates, 'maxCandidates', 1, 10, 10)
     this.maxAttempts = boundedInteger(maxAttempts, 'maxAttempts', 1, 10, 1)
     this.terminalRetryBudget = boundedInteger(terminalRetryBudget, 'terminalRetryBudget', 0, 3, 1)
   }

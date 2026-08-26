@@ -19,7 +19,7 @@ const MAX_BATCH_ITEMS = 10
 const MAX_LENGTH = 512
 const SCORE_TYPE = 'raw_logit'
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
-const TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,127}$/u
+const OPAQUE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~%!'()*=-]{0,127}$/u
 const CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u
 
 const LOCAL_MODEL = Object.freeze({
@@ -72,9 +72,9 @@ function contentText(value, fieldName, maxBytes) {
   return normalized
 }
 
-function token(value, fieldName) {
+function opaqueId(value, fieldName) {
   const normalized = requiredText(value, fieldName, 128)
-  if (!TOKEN_PATTERN.test(normalized)) fail('WORKER_RERANK_INPUT_INVALID', `${fieldName} is invalid.`)
+  if (!OPAQUE_ID_PATTERN.test(normalized)) fail('WORKER_RERANK_INPUT_INVALID', `${fieldName} is invalid.`)
   return normalized
 }
 
@@ -206,7 +206,7 @@ function normalizeTask(task, config) {
   const ids = new Set()
   const candidates = input.candidates.map((candidate, index) => {
     exactKeys(candidate, ['candidateId', 'text', 'score'], `task.input.candidates[${index}]`)
-    const candidateId = token(candidate.candidateId, `task.input.candidates[${index}].candidateId`)
+    const candidateId = opaqueId(candidate.candidateId, `task.input.candidates[${index}].candidateId`)
     if (ids.has(candidateId)) fail('WORKER_RERANK_INPUT_INVALID', 'Task candidates contain duplicate IDs.')
     ids.add(candidateId)
     const text = contentText(candidate.text, `task.input.candidates[${index}].text`, MAX_CANDIDATE_BYTES)

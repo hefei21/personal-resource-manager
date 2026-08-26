@@ -87,7 +87,7 @@ export class PcWorker {
     embeddingProcessorFactory = createRagEmbeddingProcessor, answerProcessorFactory = createRagAnswerProcessor,
     contentExtractProcessorFactory = createRagContentExtractProcessor, modelReadinessFactory = createModelReadiness,
     rerankProcessorFactory = createRagRerankProcessor, loadedModelsProvider = collectLoadedModels,
-    rerankerManifestProvider = null, fetchImpl = fetch }) {
+    rerankerManifestProvider = null, fetchImpl = fetch, sleepImpl = sleep }) {
     this.config = config
     this.api = api
     this.logger = logger
@@ -115,6 +115,7 @@ export class PcWorker {
     this.rerankProcessor = rerankProcessorFactory({ config: config?.reranker, fetchImpl })
     this.contentExtractProcessor = contentExtractProcessorFactory()
     this.activeController = null
+    this.sleep = sleepImpl
   }
 
   profileWithConfiguredProcessors(profile) {
@@ -327,13 +328,25 @@ export class PcWorker {
 
   async run() {
     safeLog(this.logger, 'info', 'worker_started')
+    let followUpPollsRemaining = 0
     while (!this.stopping) {
       try {
         const worked = await this.runOnce()
-        if (!worked) await sleep(this.config.pollIntervalMs)
+        if (worked) {
+          // A completed query-embedding task is commonly followed immediately
+          // by rerank and answer tasks. Keep a short bounded burst so those
+          // chained tasks meet the route budget without increasing idle load.
+          followUpPollsRemaining = this.config.followUpPollAttempts ?? 8
+        } else if (followUpPollsRemaining > 0) {
+          followUpPollsRemaining -= 1
+          await this.sleep(this.config.followUpPollIntervalMs ?? 25)
+        } else {
+          await this.sleep(this.config.pollIntervalMs)
+        }
       } catch (error) {
         safeLog(this.logger, 'warn', 'worker_iteration_failed', { code: error.code || 'UNKNOWN' })
-        await sleep(this.config.pollIntervalMs)
+        followUpPollsRemaining = 0
+        await this.sleep(this.config.pollIntervalMs)
       }
     }
     safeLog(this.logger, 'info', 'worker_stopped')

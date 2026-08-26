@@ -277,7 +277,7 @@ test('query embed, rerank, and answer reject stale identity, invalid numbers, an
 
   const rerankDefinition = lookupPcWorkerProcessor('rag.rerank')
   const multilineCandidates = [
-    { ...rerankInput().candidates[0], text: '证据一\n第二段\t表格值' },
+    { ...rerankInput().candidates[0], candidateId: 'rag:document:33:version%3A1:2:3', text: '证据一\n第二段\t表格值' },
     rerankInput().candidates[1]
   ]
   const rerank = rerankDefinition.projectInput({
@@ -285,13 +285,18 @@ test('query embed, rerank, and answer reject stale identity, invalid numbers, an
     candidateSetSha256: rerankCandidateSetSha256(multilineCandidates),
     candidates: multilineCandidates
   })
+  assert.equal(rerank.candidates[0].candidateId, 'rag:document:33:version%3A1:2:3')
   assert.equal(rerank.candidates[0].text, '证据一\n第二段\t表格值')
+  assert.throws(() => rerankDefinition.projectInput({
+    ...rerankInput(),
+    candidates: [{ ...rerankInput().candidates[0], candidateId: 'bad raw id' }, rerankInput().candidates[1]]
+  }), (error) => error.code === 'PC_WORKER_PROCESSOR_INPUT_INVALID')
   const rerankResult = rerankDefinition.normalizeResult({
     schemaVersion: 1,
     processorVersion: 'v1',
-    output: { model, querySha256: rerank.querySha256, candidateSetSha256: rerank.candidateSetSha256, candidates: [{ candidateId: 'C2', score: 0.9 }, { candidateId: 'C1', score: 0.4 }] }
+    output: { model, querySha256: rerank.querySha256, candidateSetSha256: rerank.candidateSetSha256, candidates: [{ candidateId: 'C2', score: 0.9 }, { candidateId: 'rag:document:33:version%3A1:2:3', score: 0.4 }] }
   }, rerank)
-  assert.deepEqual(rerankResult.output.candidates.map((item) => item.candidateId), ['C2', 'C1'])
+  assert.deepEqual(rerankResult.output.candidates.map((item) => item.candidateId), ['C2', 'rag:document:33:version%3A1:2:3'])
   assert.throws(() => rerankDefinition.normalizeResult({
     schemaVersion: 1,
     processorVersion: 'v1',

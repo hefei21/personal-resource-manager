@@ -292,7 +292,8 @@ function normalizeQueryBody(body) {
   const rawQuery = body.query ?? body.q
   if (typeof rawQuery !== 'string') failInput()
   const query = rawQuery.normalize('NFKC').trim()
-  if (!query || Buffer.byteLength(query, 'utf8') > MAX_QUERY_BYTES || /[\u0000]/u.test(query)) {
+  if (!query || Buffer.byteLength(query, 'utf8') > MAX_QUERY_BYTES ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(query)) {
     failInput()
   }
 

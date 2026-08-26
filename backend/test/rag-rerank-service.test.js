@@ -56,9 +56,10 @@ test('reranks the complete authorized candidate set and binds task identity', as
   const store = successfulStore()
   const service = createRagRerankService({ taskStore: store, workerAvailable: async () => true, model })
   const input = candidates()
-  const result = await service.rerank({ query: 'How to recover?', candidates: input })
+  const result = await service.rerank({ query: 'How to recover?\nSecond constraint\tvalue', candidates: input })
 
   assert.equal(result.applied, true)
+  assert.equal(store.requests[0].input.query, 'How to recover?\nSecond constraint\tvalue')
   assert.deepEqual(result.candidates.map((item) => item.citationId), ['C2', 'C1'])
   assert.equal(store.requests[0].taskType, RAG_RERANK_TASK_TYPE)
   assert.equal(store.requests[0].subjectContentSha256, store.requests[0].input.candidateSetSha256)
@@ -69,14 +70,46 @@ test('accepts multiline retrieved evidence when projecting a rerank task', async
   const store = successfulStore()
   const service = createRagRerankService({ taskStore: store, workerAvailable: async () => true, model })
   const input = [
-    { citationId: 'C1', body: 'first paragraph\nsecond paragraph\tvalue', score: 0.8 },
+    { citationId: 'rag:document:33:version%3A1:2:3', body: 'first paragraph\nsecond paragraph\tvalue', score: 0.8 },
     { citationId: 'C2', body: 'second evidence', score: 0.7 }
   ]
 
   const result = await service.rerank({ query: 'How to recover?', candidates: input })
 
   assert.equal(result.applied, true)
+  assert.equal(store.requests[0].input.candidates[0].candidateId, 'rag:document:33:version%3A1:2:3')
   assert.equal(store.requests[0].input.candidates[0].text, 'first paragraph\nsecond paragraph\tvalue')
+})
+
+test('normalizes opaque candidate IDs and rejects inputs outside the downstream contract before enqueue', async () => {
+  const store = successfulStore()
+  const service = createRagRerankService({ taskStore: store, workerAvailable: async () => true, model })
+  const normalized = await service.rerank({
+    query: 'query',
+    candidates: [
+      { citationId: ' rag:document:33:version%3A1:2:3 ', body: 'evidence', score: 0.8 },
+      { citationId: 'C2', body: 'second evidence', score: 0.7 }
+    ]
+  })
+  assert.equal(normalized.applied, true)
+  assert.equal(store.requests[0].input.candidates[0].candidateId, 'rag:document:33:version%3A1:2:3')
+
+  const enqueueCount = store.requests.length
+  for (const body of ['bad\u0000text', 'x'.repeat(2 * 1024 * 1024 + 1)]) {
+    const rejected = await service.rerank({ query: 'query', candidates: [{ citationId: 'C1', body }] })
+    assert.equal(rejected.reason, 'reranker_input_invalid')
+  }
+  assert.equal(store.requests.length, enqueueCount)
+})
+
+test('service bounds candidates to the pinned Worker contract and disables mismatched models', async () => {
+  assert.throws(() => createRagRerankService({ model, maxCandidates: 11 }), { code: 'RAG_RERANK_CONFIG_INVALID' })
+  const mismatched = createRagRerankService({
+    taskStore: successfulStore(), workerAvailable: async () => true,
+    model: { ...model, modelId: 'BAAI/other' }
+  })
+  const result = await mismatched.rerank({ query: 'query', candidates: candidates() })
+  assert.equal(result.reason, 'reranker_disabled')
 })
 
 test('offline or disabled reranker preserves Hybrid order without enqueueing', async () => {

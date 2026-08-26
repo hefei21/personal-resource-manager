@@ -93,7 +93,8 @@ function boundedInteger(value, fieldName, min, max, fallback) {
 function normalizeQueryText(value) {
   if (typeof value !== 'string') throw fail(RAG_QUERY_RUNTIME_ERROR_CODES.INPUT_INVALID, 'query is invalid.')
   const query = value.normalize('NFKC').trim()
-  if (!query || Buffer.byteLength(query, 'utf8') > 64 * 1024 || /[\u0000-\u001f\u007f]/u.test(query)) {
+  if (!query || Buffer.byteLength(query, 'utf8') > 64 * 1024 ||
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(query)) {
     throw fail(RAG_QUERY_RUNTIME_ERROR_CODES.INPUT_INVALID, 'query is invalid.')
   }
   return query

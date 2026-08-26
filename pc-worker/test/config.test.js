@@ -95,6 +95,8 @@ test('Worker only enables explicit complete embedding configuration', () => {
   assert.equal(Object.isFrozen(answerEnabled.answer), true)
   assert.equal(answerEnabled.modelReadinessIntervalMs, 15_000)
   assert.equal(answerEnabled.modelReadinessMaxBackoffMs, 60_000)
+  assert.equal(answerEnabled.followUpPollIntervalMs, 25)
+  assert.equal(answerEnabled.followUpPollAttempts, 8)
   assert.throws(() => loadConfig({
     PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
     PC_WORKER_EMBEDDINGS_BASE_URL: 'https://worker.example.test',

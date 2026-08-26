@@ -71,7 +71,8 @@ function taskFor(query, { stale = false } = {}) {
   }
 }
 
-function runtime({ database = fakeDatabase(), task = null, vectorStore = null, workerAvailable = true, modelResolver = null } = {}) {
+function runtime({ database = fakeDatabase(), task = null, vectorStore = null, workerAvailable = true, modelResolver = null,
+  queryText = 'find the document' } = {}) {
   const activeModelResolver = modelResolver ?? (() => ({ embeddingModelId: 3, model: MODEL }))
   const store = vectorStore ?? {
     modelConfig: MODEL,
@@ -92,7 +93,7 @@ function runtime({ database = fakeDatabase(), task = null, vectorStore = null, w
       }
     }
   }
-  const query = 'find the document'
+  const query = queryText
   return { query, runtime: createRagQueryRuntime({
     database,
     modelResolver: activeModelResolver,
@@ -159,6 +160,13 @@ test('query runtime validates the active model, queues query embedding, and retu
   assert.equal(retrieval.retrieval.mode, 'hybrid')
   assert.equal(retrieval.retrieval.degraded, false)
   assert.equal(retrieval.data[0].body, 'authorized body')
+})
+
+test('query runtime preserves ordinary multiline query whitespace across task identity', async () => {
+  const { query, runtime: service } = runtime({ queryText: 'find the document\nsecond constraint\tvalue' })
+  const result = await service.query({ query, limit: 5 })
+  assert.equal(result.vectorError, undefined)
+  assert.equal(result.vectorCandidates.length, 1)
 })
 
 test('query runtime rejects stale query results and active snapshot drift before using vectors', async () => {

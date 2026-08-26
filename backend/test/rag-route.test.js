@@ -151,6 +151,8 @@ function queryRunStore() {
 test('normalizes a bounded query and rejects client-controlled evidence/filter knobs', () => {
   assert.deepEqual(normalizeQueryBody({ query: '  资料问题  ', limit: 2 }), { query: '资料问题', limit: 2 })
   assert.deepEqual(normalizeQueryBody({ q: 'same contract' }), { query: 'same contract', limit: 10 })
+  assert.deepEqual(normalizeQueryBody({ query: '第一行\n第二行\t值' }), { query: '第一行\n第二行\t值', limit: 10 })
+  assert.throws(() => normalizeQueryBody({ query: 'bad\u0001query' }))
   assert.throws(() => normalizeQueryBody({ query: 'q', evidence: [] }))
   assert.throws(() => normalizeQueryBody({ query: 'q', filter: { sourceType: 'document' } }))
   assert.throws(() => normalizeQueryBody({ query: 'q', weights: { vector: 100 } }))
