@@ -175,8 +175,9 @@ const EMBEDDING_ENQUEUE_ERROR_CODES = Object.freeze({
   ENQUEUE_FAILED: 'RAG_EMBEDDING_ENQUEUE_FAILED'
 })
 
-function recordEmbeddingEnqueueError(database, snapshotId, errorCode) {
+function recordEmbeddingEnqueueError(database, snapshotId, errorCode, embeddingModelId = null) {
   if (!database?.prepare || positiveId(snapshotId) === null ||
+      (embeddingModelId !== null && positiveId(embeddingModelId) === null) ||
       typeof errorCode !== 'string' || !/^[A-Z][A-Z0-9_.-]{0,127}$/u.test(errorCode)) return
   try {
     database.prepare(`
@@ -184,10 +185,15 @@ function recordEmbeddingEnqueueError(database, snapshotId, errorCode) {
          SET status = 'pending', last_error_code = ?, updated_at = ?
        WHERE snapshot_id = ?
          AND status <> 'active'
-         AND embedding_model_id = (
-           SELECT id FROM rag_embedding_models WHERE status = 'active' ORDER BY id ASC LIMIT 1
+         AND snapshot_id IN (
+           SELECT active_snapshot_id FROM rag_source_state WHERE active_snapshot_id = ?
          )
-    `).run(errorCode, new Date().toISOString(), snapshotId)
+         AND embedding_model_id = COALESCE(?, (
+           SELECT CASE WHEN COUNT(*) = 1 THEN MIN(id) ELSE NULL END
+             FROM rag_embedding_models
+            WHERE status = 'active'
+         ))
+    `).run(errorCode, new Date().toISOString(), snapshotId, snapshotId, embeddingModelId)
   } catch {}
 }
 
@@ -286,7 +292,8 @@ export function createRagIndexTaskProcessor({
         recordEmbeddingEnqueueError(
           databaseConnection,
           source.snapshotId,
-          typeof error?.code === 'string' ? error.code : EMBEDDING_ENQUEUE_ERROR_CODES.ENQUEUE_FAILED
+          typeof error?.code === 'string' ? error.code : EMBEDDING_ENQUEUE_ERROR_CODES.ENQUEUE_FAILED,
+          runtime.embeddingModelId
         )
       }
     }

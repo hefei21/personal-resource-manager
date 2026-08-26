@@ -193,6 +193,72 @@ test('text refresh records an owner-safe embedding error when runtime assembly i
   assert.equal(writes.length, 1)
   assert.equal(writes[0][0], 'RAG_EMBEDDING_RUNTIME_UNAVAILABLE')
   assert.equal(writes[0][2], 21)
+  assert.equal(writes[0][3], 21)
+  assert.equal(writes[0][4], null)
+})
+
+test('embedding enqueue diagnostics update only the current snapshot and one unambiguous active model', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const snapshotId = Number(database.prepare(`
+      INSERT INTO rag_source_snapshots (
+        source_type, source_id, source_version_id, source_content_sha256,
+        extractor_version, chunker_version, chunker_config_hash, status, chunk_count
+      ) VALUES ('document', 1, 'v1', ?, 'extractor-v1', 'chunker-v1', ?, 'text_ready', 0)
+    `).run(SOURCE_HASH, CHUNK_HASH).lastInsertRowid)
+    database.prepare(`
+      INSERT INTO rag_source_state (
+        source_type, source_id, active_snapshot_id, last_attempt_snapshot_id, status
+      ) VALUES ('document', 1, ?, ?, 'active')
+    `).run(snapshotId, snapshotId)
+    const modelId = Number(database.prepare(`
+      INSERT INTO rag_embedding_models (
+        provider, model_id, model_revision, dimensions, distance,
+        normalization, input_limit, config_hash, status
+      ) VALUES ('lmstudio', 'model-a', 'revision-a', 768, 'cosine', 'l2', 2048, ?, 'active')
+    `).run(MODEL_HASH).lastInsertRowid)
+    database.prepare(`
+      INSERT INTO rag_snapshot_embedding_state (
+        snapshot_id, embedding_model_id, status, vector_count, error_count
+      ) VALUES (?, ?, 'pending', 0, 0)
+    `).run(snapshotId, modelId)
+    const result = {
+      status: 'succeeded',
+      sources: [{ sourceType: 'document', sourceId: 1, snapshotId, status: 'skipped' }]
+    }
+    const processor = createRagIndexTaskProcessor({
+      database,
+      serviceFactory: () => ({ refresh: async () => result }),
+      taskStoreProvider: () => ({}),
+      embeddingRuntimeFactory: () => null
+    })
+    const task = { taskType: 'rag.index.refresh', input: { source: { type: 'all' }, rebuild: false } }
+
+    await processor({ task })
+    assert.equal(database.prepare(`
+      SELECT last_error_code FROM rag_snapshot_embedding_state
+       WHERE snapshot_id = ? AND embedding_model_id = ?
+    `).get(snapshotId, modelId).last_error_code, 'RAG_EMBEDDING_RUNTIME_UNAVAILABLE')
+
+    database.prepare(`UPDATE rag_snapshot_embedding_state SET last_error_code = NULL WHERE snapshot_id = ?`).run(snapshotId)
+    database.prepare(`UPDATE rag_source_state SET active_snapshot_id = NULL WHERE source_type = 'document' AND source_id = 1`).run()
+    await processor({ task })
+    assert.equal(database.prepare(`
+      SELECT last_error_code FROM rag_snapshot_embedding_state
+       WHERE snapshot_id = ? AND embedding_model_id = ?
+    `).get(snapshotId, modelId).last_error_code, null)
+
+    database.prepare(`UPDATE rag_source_state SET active_snapshot_id = ? WHERE source_type = 'document' AND source_id = 1`).run(snapshotId)
+    database.prepare(`UPDATE rag_snapshot_embedding_state SET status = 'active' WHERE snapshot_id = ?`).run(snapshotId)
+    await processor({ task })
+    assert.deepEqual(database.prepare(`
+      SELECT status, last_error_code FROM rag_snapshot_embedding_state
+       WHERE snapshot_id = ? AND embedding_model_id = ?
+    `).get(snapshotId, modelId), { status: 'active', last_error_code: null })
+  } finally {
+    database.close()
+  }
 })
 
 function workerTask(worker) {
