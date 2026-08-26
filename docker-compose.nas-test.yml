@@ -1,19 +1,20 @@
 services:
-  backend:
+  stage6-backend:
     image: ghcr.io/hefei21/personal-resource-manager-backend:${IMAGE_TAG:?IMAGE_TAG is required}
-    container_name: pr-test-backend
+    container_name: pr-manager-stage6-backend
     restart: unless-stopped
     ports:
-      - "13000:3000"
+      - "${BACKEND_PORT:?BACKEND_PORT is required}:3000"
     volumes:
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/db:/app/data/database
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/documents:/app/data/documents
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/storage:/app/data/storage
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/music:/app/data/music
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/books:/app/data/books
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/code:/app/data/code
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/uploads:/app/data/uploads
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/logs:/app/data/logs
+      - ${DATA_ROOT:?DATA_ROOT is required}/db:/app/data/database
+      - ${DATA_ROOT:?DATA_ROOT is required}/docs:/app/data/documents
+      - ${DATA_ROOT:?DATA_ROOT is required}/storage:/app/data/storage
+      - ${DATA_ROOT:?DATA_ROOT is required}/music:/app/data/music
+      - ${DATA_ROOT:?DATA_ROOT is required}/books:/app/data/books
+      - ${DATA_ROOT:?DATA_ROOT is required}/code:/app/data/code
+      - ${DATA_ROOT:?DATA_ROOT is required}/uploads:/app/data/uploads
+      - ${DATA_ROOT:?DATA_ROOT is required}/logs:/app/data/logs
+      - ${SCAN_ROOT:?SCAN_ROOT is required}:/app/data/stage6-nas:ro
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -26,14 +27,14 @@ services:
       CODE_PATH: /app/data/code
       UPLOADS_PATH: /app/data/uploads
       LOGS_PATH: /app/data/logs
-      DEFAULT_USERNAME: ${TEST_ADMIN_USERNAME:?TEST_ADMIN_USERNAME is required}
-      DEFAULT_PASSWORD: ${TEST_ADMIN_PASSWORD:?TEST_ADMIN_PASSWORD is required}
-      # HTTPS 内网穿透在容器外终止 TLS，必须显式信任浏览器看到的精确 Origin。
-      CORS_ORIGIN: ${TEST_PUBLIC_ORIGIN:-}
-      REDIS_URL: redis://redis:6379
+      DEFAULT_USERNAME: ${DEFAULT_USERNAME:?DEFAULT_USERNAME is required}
+      DEFAULT_PASSWORD: ${DEFAULT_PASSWORD:?DEFAULT_PASSWORD is required}
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN is required}
+      BANGUMI_ACCESS_TOKEN: ${BANGUMI_ACCESS_TOKEN:-}
+      REDIS_URL: redis://stage6-redis:6379
       RAG_VECTOR_ENABLED: ${RAG_VECTOR_ENABLED:-false}
-      RAG_VECTOR_BASE_URL: ${RAG_VECTOR_BASE_URL:-http://qdrant:6333}
-      RAG_VECTOR_COLLECTION: ${RAG_VECTOR_COLLECTION:-rag_vectors_test}
+      RAG_VECTOR_BASE_URL: ${RAG_VECTOR_BASE_URL:-http://stage6-qdrant:6333}
+      RAG_VECTOR_COLLECTION: ${RAG_VECTOR_COLLECTION:-rag_vectors_stage6c}
       RAG_VECTOR_TIMEOUT_MS: ${RAG_VECTOR_TIMEOUT_MS:-5000}
       RAG_VECTOR_EMBEDDING_PROVIDER: ${RAG_VECTOR_EMBEDDING_PROVIDER:-}
       RAG_VECTOR_EMBEDDING_MODEL_ID: ${RAG_VECTOR_EMBEDDING_MODEL_ID:-}
@@ -43,6 +44,15 @@ services:
       RAG_VECTOR_EMBEDDING_DISTANCE: ${RAG_VECTOR_EMBEDDING_DISTANCE:-}
       RAG_VECTOR_EMBEDDING_NORMALIZATION: ${RAG_VECTOR_EMBEDDING_NORMALIZATION:-}
       RAG_VECTOR_EMBEDDING_CONFIG_HASH: ${RAG_VECTOR_EMBEDDING_CONFIG_HASH:-}
+      RAG_ANSWER_PROVIDER: ${RAG_ANSWER_PROVIDER:-}
+      RAG_ANSWER_MODEL_ID: ${RAG_ANSWER_MODEL_ID:-}
+      RAG_ANSWER_MODEL_REVISION: ${RAG_ANSWER_MODEL_REVISION:-}
+      RAG_ANSWER_CONTEXT_LIMIT: ${RAG_ANSWER_CONTEXT_LIMIT:-}
+      RAG_ANSWER_MAX_OUTPUT_BYTES: ${RAG_ANSWER_MAX_OUTPUT_BYTES:-}
+      RAG_ANSWER_MAX_EVIDENCE: ${RAG_ANSWER_MAX_EVIDENCE:-}
+      RAG_ANSWER_DIMENSIONS: ${RAG_ANSWER_DIMENSIONS:-}
+      RAG_ANSWER_INPUT_LIMIT: ${RAG_ANSWER_INPUT_LIMIT:-}
+      RAG_ANSWER_CONFIG_HASH: ${RAG_ANSWER_CONFIG_HASH:-}
       RAG_RERANKER_ENABLED: ${RAG_RERANKER_ENABLED:-false}
       RAG_RERANKER_PROVIDER: ${RAG_RERANKER_PROVIDER:-}
       RAG_RERANKER_MODEL_ID: ${RAG_RERANKER_MODEL_ID:-}
@@ -50,16 +60,18 @@ services:
       RAG_RERANKER_DIMENSIONS: ${RAG_RERANKER_DIMENSIONS:-}
       RAG_RERANKER_INPUT_LIMIT: ${RAG_RERANKER_INPUT_LIMIT:-}
       RAG_RERANKER_CONFIG_HASH: ${RAG_RERANKER_CONFIG_HASH:-}
-      HTTP_PROXY: ""
-      HTTPS_PROXY: ""
-      ALL_PROXY: ""
-      NO_PROXY: localhost,127.0.0.1,redis,backend,qdrant
-      BANGUMI_ACCESS_TOKEN: ""
+      HTTP_PROXY: ${HTTP_PROXY:-http://clash:7890}
+      HTTPS_PROXY: ${HTTPS_PROXY:-http://clash:7890}
+      ALL_PROXY: ${ALL_PROXY:-socks5://clash:7891}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,stage6-backend,stage6-redis,stage6-qdrant,backend,qdrant}
     depends_on:
-      redis:
+      stage6-redis:
         condition: service_healthy
     networks:
-      - pr-test-network
+      stage6-network:
+        aliases:
+          - backend
+      pr-network: {}
     healthcheck:
       test:
         - CMD
@@ -71,18 +83,18 @@ services:
       retries: 12
       start_period: 20s
 
-  redis:
+  stage6-redis:
     image: redis:7-alpine
-    container_name: pr-test-redis
+    container_name: pr-manager-stage6-redis
     restart: unless-stopped
     volumes:
-      - ${TEST_DATA_ROOT:?TEST_DATA_ROOT is required}/redis:/data
+      - ${DATA_ROOT:?DATA_ROOT is required}/redis:/data
     command:
       - redis-server
       - --appendonly
       - "yes"
     networks:
-      - pr-test-network
+      - stage6-network
     healthcheck:
       test:
         - CMD
@@ -92,20 +104,19 @@ services:
       timeout: 3s
       retries: 20
 
-  # Isolated vector index for the NAS acceptance stack. It is opt-in via the
-  # rag-vector profile and never shares the production Qdrant data directory.
-  qdrant:
+  stage6-qdrant:
     image: qdrant/qdrant:v1.19.0@sha256:057ee3a8da769fe7310dd3537b4dc7583bf87a95ce8ac43c0af5a46bc580d1fc
-    profiles:
-      - rag-vector
+    container_name: pr-manager-stage6-qdrant
     restart: "no"
     ports:
-      - "127.0.0.1:16333:6333"
+      - "127.0.0.1:${QDRANT_PORT:-16333}:6333"
     volumes:
-      - ${TEST_RAG_VECTOR_DATA_ROOT:-${TEST_DATA_ROOT}/qdrant}/storage:/qdrant/storage
-      - ${TEST_RAG_VECTOR_DATA_ROOT:-${TEST_DATA_ROOT}/qdrant}/snapshots:/qdrant/snapshots
+      - ${RAG_VECTOR_DATA_ROOT:?RAG_VECTOR_DATA_ROOT is required}/storage:/qdrant/storage
+      - ${RAG_VECTOR_DATA_ROOT:?RAG_VECTOR_DATA_ROOT is required}/snapshots:/qdrant/snapshots
     networks:
-      - pr-test-network
+      stage6-network:
+        aliases:
+          - qdrant
     healthcheck:
       test:
         - CMD-SHELL
@@ -115,19 +126,30 @@ services:
       retries: 12
       start_period: 10s
 
-  frontend:
+  stage6-frontend:
     image: ghcr.io/hefei21/personal-resource-manager-frontend:${IMAGE_TAG:?IMAGE_TAG is required}
-    container_name: pr-test-frontend
+    container_name: pr-manager-stage6-frontend
     restart: unless-stopped
     ports:
-      - "15173:80"
+      - "${FRONTEND_PORT:?FRONTEND_PORT is required}:80"
     depends_on:
-      backend:
+      stage6-backend:
         condition: service_healthy
     networks:
-      - pr-test-network
+      - stage6-network
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "wget -q -O /dev/null http://127.0.0.1/ || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
 networks:
-  pr-test-network:
-    name: pr-test-network
+  stage6-network:
+    name: pr-manager-stage6-network
     driver: bridge
+  pr-network:
+    external: true
+    name: ${PROXY_NETWORK_NAME:?PROXY_NETWORK_NAME is required}

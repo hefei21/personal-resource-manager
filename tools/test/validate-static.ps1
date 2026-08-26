@@ -134,10 +134,14 @@ $nasVolumeLines = @(
   $nasCompose -split "`r?`n" |
     Where-Object { $_ -match '^\s*-\s+[^:]+:.+$' -and $_ -match '/app/data/' }
 )
-$unsafeNasMounts = @($nasVolumeLines | Where-Object { $_ -notmatch '\$\{TEST_DATA_ROOT:\?[^}]+\}/' })
-Assert-Condition 'compose.nas.mounts' ($nasVolumeLines.Count -gt 0 -and $unsafeNasMounts.Count -eq 0) `
-  'NAS test mounts require the explicit TEST_DATA_ROOT.' `
-  'NAS test Compose contains a mount outside TEST_DATA_ROOT.'
+$nasScanMounts = @($nasVolumeLines | Where-Object { $_ -match '/app/data/stage6-nas:ro\s*$' })
+$nasWritableMounts = @($nasVolumeLines | Where-Object { $_ -notmatch '/app/data/stage6-nas:ro\s*$' })
+$unsafeNasMounts = @($nasWritableMounts | Where-Object { $_ -notmatch '\$\{DATA_ROOT:\?[^}]+\}/' })
+Assert-Condition 'compose.nas.mounts' `
+  ($nasWritableMounts.Count -gt 0 -and $unsafeNasMounts.Count -eq 0 -and
+    $nasScanMounts.Count -eq 1 -and $nasScanMounts[0] -match '\$\{SCAN_ROOT:\?[^}]+\}') `
+  'NAS test application mounts require the explicit isolated DATA_ROOT.' `
+  'NAS test Compose contains an unsafe writable mount or an invalid scan mount.'
 
 Assert-Condition 'compose.nas.images' `
   ($nasCompose -notmatch '(?m)^\s*build:' -and $nasCompose -match 'ghcr\.io/.+\$\{IMAGE_TAG:\?[^}]+\}') `
@@ -150,7 +154,7 @@ Assert-Condition 'compose.production.images' `
   'Production NAS Compose contains a build or an unversioned application image.'
 
 $composeSecretsAreVariables = (
-  $nasCompose -match 'DEFAULT_PASSWORD:\s*\$\{TEST_ADMIN_PASSWORD:\?[^}]+\}' -and
+  $nasCompose -match 'DEFAULT_PASSWORD:\s*\$\{DEFAULT_PASSWORD:\?[^}]+\}' -and
   $productionCompose -match 'DEFAULT_PASSWORD:\s*\$\{DEFAULT_PASSWORD:\?[^}]+\}' -and
   -not ((@($pcCompose, $nasCompose, $productionCompose, $localCompose) -join "`n") -match 'PRIVATE_PASSWORD')
 )
@@ -169,7 +173,7 @@ Assert-Condition 'compose.cors' ($composeCorsIsExact -notcontains $false) `
   'A Compose file enables CORS_ORIGIN=*.'
 
 Assert-Condition 'compose.nas.public-origin' `
-  ($nasCompose -match 'CORS_ORIGIN:\s*\$\{TEST_PUBLIC_ORIGIN:-\}') `
+  ($nasCompose -match 'CORS_ORIGIN:\s*\$\{CORS_ORIGIN:\?[^}]+\}') `
   'NAS test Compose accepts an explicit HTTPS tunnel Origin.' `
   'NAS test Compose cannot declare the browser-visible public Origin.'
 
@@ -196,6 +200,32 @@ foreach ($compose in @(
 Assert-Condition 'compose.reranker.environment' ($missingRerankerEnvironment.Count -eq 0) `
   'NAS Compose files explicitly inject the complete Reranker identity into the backend container.' `
   "Missing backend Reranker environment bindings: $($missingRerankerEnvironment -join ', ')"
+
+$answerEnvironmentKeys = @(
+  'RAG_ANSWER_PROVIDER',
+  'RAG_ANSWER_MODEL_ID',
+  'RAG_ANSWER_MODEL_REVISION',
+  'RAG_ANSWER_CONTEXT_LIMIT',
+  'RAG_ANSWER_MAX_OUTPUT_BYTES',
+  'RAG_ANSWER_MAX_EVIDENCE',
+  'RAG_ANSWER_DIMENSIONS',
+  'RAG_ANSWER_INPUT_LIMIT',
+  'RAG_ANSWER_CONFIG_HASH'
+)
+$missingAnswerEnvironment = @()
+foreach ($compose in @(
+  @{ Name = 'nas-test'; Content = $nasCompose },
+  @{ Name = 'production'; Content = $productionCompose }
+)) {
+  foreach ($key in $answerEnvironmentKeys) {
+    if ($compose.Content -notmatch "(?m)^\s+$([regex]::Escape($key)):\s*\$\{$([regex]::Escape($key))") {
+      $missingAnswerEnvironment += "$($compose.Name):$key"
+    }
+  }
+}
+Assert-Condition 'compose.answer.environment' ($missingAnswerEnvironment.Count -eq 0) `
+  'NAS Compose files explicitly inject the complete Answer model identity into the backend container.' `
+  "Missing backend Answer environment bindings: $($missingAnswerEnvironment -join ', ')"
 
 # Frontend active-content boundaries.
 $vueFiles = @(
@@ -281,7 +311,16 @@ if ($node) {
   )
   $nodeFailures = @()
   foreach ($file in $javascriptFiles) {
-    & $node.Source --check $file.FullName 2>$null
+    # Windows PowerShell 5.1 promotes native stderr (including Node runtime
+    # warnings) to ErrorRecord. Keep stderr non-terminating here and continue
+    # to use the native exit code as the syntax verdict.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+      $ErrorActionPreference = 'Continue'
+      & $node.Source --check $file.FullName 2>$null
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($LASTEXITCODE -ne 0) {
       $nodeFailures += $file.Name
     }
