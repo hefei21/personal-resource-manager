@@ -161,7 +161,7 @@ test('cold reranker work is queued but the synchronous query budget stays bounde
   assert.equal(result.applied, false)
   assert.equal(result.reason, 'reranker_timeout')
   assert.equal(elapsed, RAG_RERANK_WAIT_MS)
-  assert.ok(elapsed <= 250)
+  assert.ok(elapsed <= 1_000)
   assert.equal(pending.status, 'pending')
 
   pending.status = 'succeeded'

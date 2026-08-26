@@ -218,6 +218,21 @@ test('returns only authorized citations for a valid grounded answer and handles 
   assert.equal('sourceId' in result.citations[0], false)
 })
 
+test('immediately consumes an idempotently reused succeeded answer task', async () => {
+  const taskStore = {
+    async enqueueExclusiveRun(request) {
+      const task = { id: 77, status: 'succeeded', ...request }
+      task.result = workerResult(task)
+      return { task, created: false, activeConflict: false }
+    }
+  }
+  const answer = service({ taskStore })
+  const result = await answer.generate({ query: 'What is supported?', evidence: [evidence()] })
+  assert.equal(result.status, 'complete')
+  assert.equal(result.answer, '基于证据的回答。')
+  assert.deepEqual(result.citations.map((item) => item.citationId), ['C1'])
+})
+
 test('requires authoritative checks and rejects malformed query/model input', async () => {
   const noChecks = createRagAnswerService({ model: MODEL })
   await assert.rejects(

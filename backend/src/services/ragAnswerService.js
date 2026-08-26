@@ -366,6 +366,9 @@ export class RagAnswerService {
         projectedInput,
         omitted: budget.omitted
       })
+      if (task?.status === 'succeeded' && isPlainObject(task.result)) {
+        return await this.applyResult({ task, result: task.result, evidence: budget.selected })
+      }
       return freezeResult({
         status: outcome?.activeConflict ? 'active' : 'queued',
         query: normalizedQuery,

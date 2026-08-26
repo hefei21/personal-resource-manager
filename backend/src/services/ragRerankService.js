@@ -11,7 +11,10 @@ export const RAG_RERANK_PROCESSOR_VERSION = 'v1'
 export const RAG_RERANK_EXECUTION_CLASS = 'gpu'
 // The query route remains responsive: a cold Reranker task is allowed to finish
 // asynchronously and can be reused by a later identical query.
-export const RAG_RERANK_WAIT_MS = 250
+// Real TEI cold calls on the target RTX 5080 measured ~571 ms. Keep a bounded
+// one-second budget so enabled reranking can succeed without turning model
+// startup into an unbounded query stall.
+export const RAG_RERANK_WAIT_MS = 1_000
 export const RAG_RERANK_POLL_MS = 25
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled'])
