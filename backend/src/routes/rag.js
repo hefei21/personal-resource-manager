@@ -341,6 +341,10 @@ function publicModelId(value) {
   return typeof value === 'string' && ANSWER_TOKEN_PATTERN.test(value) ? value : null
 }
 
+function publicErrorCode(value) {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_.-]{0,127}$/u.test(value) ? value : null
+}
+
 function sourceStateStatus(value) {
   const status = safeStatus(value)
   if (status === null) return 'missing'
@@ -455,6 +459,7 @@ function defaultRagSourceStatusProvider({ database, sourceType, sourceId, checks
         hasTable(database, 'rag_chunk_embeddings')) {
       const rows = database.prepare(`
         SELECT state.embedding_model_id, state.status, state.vector_count, state.error_count,
+               state.last_error_code,
                model.provider, model.model_id, model.model_revision,
                SUM(CASE WHEN embeddings.status = 'ready'
                           AND embeddings.chunk_sha256 = chunks.chunk_sha256 THEN 1 ELSE 0 END) AS ready_count
@@ -466,7 +471,8 @@ function defaultRagSourceStatusProvider({ database, sourceType, sourceId, checks
            AND embeddings.embedding_model_id = state.embedding_model_id
          WHERE state.snapshot_id = ?
          GROUP BY state.id, state.embedding_model_id, state.status, state.vector_count,
-                  state.error_count, model.provider, model.model_id, model.model_revision
+                  state.error_count, state.last_error_code,
+                  model.provider, model.model_id, model.model_revision
          ORDER BY state.embedding_model_id ASC
       `).all(snapshot.id)
       for (const row of rows) {
@@ -475,7 +481,8 @@ function defaultRagSourceStatusProvider({ database, sourceType, sourceId, checks
           status: embeddingStatus(row.status),
           vectorCount: safeCount(row.vector_count),
           readyCount: safeCount(row.ready_count),
-          errorCount: safeCount(row.error_count)
+          errorCount: safeCount(row.error_count),
+          errorCode: publicErrorCode(row.last_error_code)
         }))
       }
     }

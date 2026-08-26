@@ -169,6 +169,28 @@ function filterCollected(report, input) {
   })
 }
 
+const EMBEDDING_ENQUEUE_ERROR_CODES = Object.freeze({
+  TASK_STORE_UNAVAILABLE: 'RAG_EMBEDDING_TASK_STORE_UNAVAILABLE',
+  RUNTIME_UNAVAILABLE: 'RAG_EMBEDDING_RUNTIME_UNAVAILABLE',
+  ENQUEUE_FAILED: 'RAG_EMBEDDING_ENQUEUE_FAILED'
+})
+
+function recordEmbeddingEnqueueError(database, snapshotId, errorCode) {
+  if (!database?.prepare || positiveId(snapshotId) === null ||
+      typeof errorCode !== 'string' || !/^[A-Z][A-Z0-9_.-]{0,127}$/u.test(errorCode)) return
+  try {
+    database.prepare(`
+      UPDATE rag_snapshot_embedding_state
+         SET status = 'pending', last_error_code = ?, updated_at = ?
+       WHERE snapshot_id = ?
+         AND status <> 'active'
+         AND embedding_model_id = (
+           SELECT id FROM rag_embedding_models WHERE status = 'active' ORDER BY id ASC LIMIT 1
+         )
+    `).run(errorCode, new Date().toISOString(), snapshotId)
+  } catch {}
+}
+
 function mapError(error, signal) {
   if (error instanceof TaskProcessorError) return error
   const code = String(error?.code ?? '')
@@ -211,9 +233,21 @@ export function createRagIndexTaskProcessor({
     try {
       taskStore = await Promise.resolve(taskStoreProvider({ database: databaseConnection, context }))
     } catch {
+      for (const source of sources) recordEmbeddingEnqueueError(
+        databaseConnection,
+        source.snapshotId,
+        EMBEDDING_ENQUEUE_ERROR_CODES.TASK_STORE_UNAVAILABLE
+      )
       return
     }
-    if (!taskStore) return
+    if (!taskStore) {
+      for (const source of sources) recordEmbeddingEnqueueError(
+        databaseConnection,
+        source.snapshotId,
+        EMBEDDING_ENQUEUE_ERROR_CODES.TASK_STORE_UNAVAILABLE
+      )
+      return
+    }
     let runtime
     try {
       runtime = await Promise.resolve(embeddingRuntimeFactory({
@@ -222,9 +256,21 @@ export function createRagIndexTaskProcessor({
         signal: context.signal
       }))
     } catch {
+      for (const source of sources) recordEmbeddingEnqueueError(
+        databaseConnection,
+        source.snapshotId,
+        EMBEDDING_ENQUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE
+      )
       return
     }
-    if (!runtime || typeof runtime.enqueueBatch !== 'function' || !Number.isSafeInteger(runtime.embeddingModelId)) return
+    if (!runtime || typeof runtime.enqueueBatch !== 'function' || !Number.isSafeInteger(runtime.embeddingModelId)) {
+      for (const source of sources) recordEmbeddingEnqueueError(
+        databaseConnection,
+        source.snapshotId,
+        EMBEDDING_ENQUEUE_ERROR_CODES.RUNTIME_UNAVAILABLE
+      )
+      return
+    }
     for (const source of sources) {
       if (context.signal?.aborted) return
       try {
@@ -236,7 +282,13 @@ export function createRagIndexTaskProcessor({
           embeddingModelId: runtime.embeddingModelId,
           retryFailed: true
         }))
-      } catch {}
+      } catch (error) {
+        recordEmbeddingEnqueueError(
+          databaseConnection,
+          source.snapshotId,
+          typeof error?.code === 'string' ? error.code : EMBEDDING_ENQUEUE_ERROR_CODES.ENQUEUE_FAILED
+        )
+      }
     }
   }
 

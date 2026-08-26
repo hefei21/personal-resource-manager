@@ -168,6 +168,33 @@ test('text refresh enqueues active-model embedding work without making FTS fail 
   ])
 })
 
+test('text refresh records an owner-safe embedding error when runtime assembly is unavailable', async () => {
+  const writes = []
+  const database = {
+    prepare(sql) {
+      assert.match(sql, /UPDATE rag_snapshot_embedding_state/u)
+      return { run: (...parameters) => writes.push(parameters) }
+    }
+  }
+  const result = {
+    status: 'succeeded',
+    sources: [{ sourceType: 'document', sourceId: 1, snapshotId: 21, status: 'skipped' }]
+  }
+  const processor = createRagIndexTaskProcessor({
+    database,
+    serviceFactory: () => ({ refresh: async () => result }),
+    taskStoreProvider: () => ({}),
+    embeddingRuntimeFactory: () => null
+  })
+
+  assert.deepEqual(await processor({
+    task: { taskType: 'rag.index.refresh', input: { source: { type: 'all' }, rebuild: false } }
+  }), result)
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0][0], 'RAG_EMBEDDING_RUNTIME_UNAVAILABLE')
+  assert.equal(writes[0][2], 21)
+})
+
 function workerTask(worker) {
   const model = {
     provider: 'lmstudio', modelId: 'nomic-embed-text-v1.5-GGUF', modelRevision: 'q4_k_m',
