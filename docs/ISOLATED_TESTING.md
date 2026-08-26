@@ -109,15 +109,22 @@ whose name starts with `baseline-`.
 Import `docker-compose.nas-test.yml` in the NAS GUI and provide:
 
 - `IMAGE_TAG`
-- `TEST_DATA_ROOT`
-- `TEST_ADMIN_USERNAME`
-- `TEST_ADMIN_PASSWORD`
-- `TEST_PUBLIC_ORIGIN`：可选；通过 HTTPS 内网穿透访问时填写浏览器地址栏中的
-  精确 Origin，例如 `https://remote-access-15173.example.test`，不包含路径和
-  末尾斜杠。仅在局域网 HTTP 同源访问时可留空。
+- `DATA_ROOT`、`SCAN_ROOT`、`RAG_VECTOR_DATA_ROOT`
+- `FRONTEND_PORT`、`BACKEND_PORT`、`QDRANT_PORT`
+- `DEFAULT_USERNAME`、`DEFAULT_PASSWORD`
+- `PROXY_NETWORK_NAME`
+- `CORS_ORIGIN`：填写浏览器地址栏中的一个或多个精确 Origin，例如
+  `http://nas-lan-address:15375,https://stage6c.example.test`，不包含路径和末尾斜杠。
 
-Use a new NAS directory and ports `13000` and `15173`. Never point the test
-Compose file at the production data directory.
+复制 `.env.nas-test.example` 为 NAS 上与 Compose 同目录的 `.env`，再替换路径、Origin
+和随机测试密码；不得提交填写后的文件。该模板保留当前 NAS 测试环境的外部 Clash 网络、
+代理变量和只读扫描目录，并加入 Stage 6C 的可选 Qdrant/Reranker 接线。
+
+`docker-compose.nas-test.yml` 默认启动隔离 Qdrant，共 4 个容器；极空间 GUI 不需要也不应
+额外配置 Compose profile。生产 `docker-compose.nas.yml` 仍通过 `rag-vector` profile 按需启用。
+
+Use a new NAS directory and ports that do not collide with production. Never
+point the test Compose file at the production data directory.
 
 After the isolated baseline succeeds, `docker-compose.nas.yml` is the
 image-based production replacement for the previous NAS source-build Compose.

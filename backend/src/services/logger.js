@@ -1,5 +1,6 @@
 import { getDatabase } from '../config/database.js'
 import { record404AndCheck } from './ipBlacklist.js'
+import { requestBodyForLog } from './logRedaction.js'
 
 // 日志配置
 const LOG_CONFIG = {
@@ -353,28 +354,6 @@ function extractDetails(req) {
   return null
 }
 
-// 脱敏处理请求体
-function sanitizeBody(body) {
-  if (!body || typeof body !== 'object') return null
-
-  const sensitiveKey = /(password|passwd|token|secret|authorization|cookie|api[-_]?key|credential|private[-_]?key)/i
-  const redact = (value, depth = 0) => {
-    if (depth > 4) return '[TRUNCATED]'
-    if (Array.isArray(value)) return value.slice(0, 20).map(item => redact(item, depth + 1))
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(Object.entries(value).slice(0, 50).map(([key, child]) => [
-        key,
-        sensitiveKey.test(key) ? '[REDACTED]' : redact(child, depth + 1)
-      ]))
-    }
-    if (typeof value === 'string' && value.length > 500) return `${value.slice(0, 500)}[TRUNCATED]`
-    return value
-  }
-
-  const safe = redact(body)
-  return Object.keys(safe).length > 0 ? JSON.stringify(safe) : null
-}
-
 // 获取真实 IP
 function getClientIP(req) {
   return req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
@@ -414,7 +393,7 @@ export function accessLogger(req, res, next) {
       ip_address: ipAddress,
       ip_location: ipLocation,
       user_agent: req.get('user-agent') || '',
-      request_body: sanitizeBody(req.body),
+      request_body: requestBodyForLog(req),
       response_status: res.statusCode,
       duration,
       details

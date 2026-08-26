@@ -1,0 +1,58 @@
+services:
+  reranker:
+    # Explicit profile: ordinary compose up never starts this GPU service.
+    profiles:
+      - reranker
+    image: ghcr.io/huggingface/text-embeddings-inference:cuda-1.9@sha256:249a0bc87522bfe2f1012b4d194f0225878f47079115ada3aeb0b1ef257b402a
+    container_name: ${RERANKER_CONTAINER_NAME:-pr-manager-reranker}
+    restart: "no"
+    # Fixed RTX 5080 (compute capability 12.0) / NVIDIA 610.43.02 WSL2 workaround:
+    # bypass TEI 1.9's cuda-entrypoint CUDA-arch parsing bug, which can make Candle
+    # report CUDA_ERROR_NO_DEVICE even though nvidia-smi sees the GPU.
+    entrypoint:
+      - /usr/local/bin/text-embeddings-router-120
+    init: true
+    read_only: true
+    gpus: all
+    shm_size: 1g
+    stop_grace_period: 30s
+    ports:
+      - "127.0.0.1:18081:80"
+    environment:
+      HF_HOME: /cache
+      HUGGINGFACE_HUB_CACHE: /cache/hub
+      TRANSFORMERS_CACHE: /cache/transformers
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_OFFLINE: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      TMPDIR: /runtime/tmp
+      RUST_LOG: ${RERANKER_RUST_LOG:-info}
+      RERANKER_MODEL_ID: BAAI/bge-reranker-v2-m3
+      RERANKER_MODEL_REVISION: 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e
+    volumes:
+      # The model is prepared at the pinned revision and never written by TEI.
+      - ${RERANKER_MODEL_DIR:-D:/PRManagerAI/models/bge-reranker-v2-m3}:/models/reranker:ro
+      - ${RERANKER_CACHE_DIR:-D:/PRManagerAI/cache/huggingface}:/cache
+      - ${RERANKER_RUNTIME_DIR:-D:/PRManagerAI/runtime/tei}:/runtime
+      - ${RERANKER_LOG_DIR:-D:/PRManagerAI/logs/bge-reranker}:/logs
+    command:
+      - --model-id
+      - /models/reranker
+      - --served-model-name
+      - BAAI/bge-reranker-v2-m3
+      - --dtype
+      - float16
+      - --max-client-batch-size
+      - "10"
+      - --max-batch-tokens
+      - "5120"
+      - --auto-truncate
+      - --port
+      - "80"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"

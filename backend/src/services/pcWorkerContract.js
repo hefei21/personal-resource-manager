@@ -1,3 +1,10 @@
+import {
+  lookupPcWorkerProcessor,
+  matchPcWorkerCapabilities,
+  PC_WORKER_MODEL_BOUND_TASK_TYPES,
+  normalizePcWorkerEmbeddingModel
+} from './pcWorkerProcessorCatalog.js'
+
 export const PC_WORKER_PROTOCOL_VERSION = 1
 export const PC_WORKER_TASK_TYPE = 'content.inspect'
 export const PC_WORKER_PROCESSOR_VERSION = 'v1'
@@ -105,12 +112,20 @@ function normalizeResources(value = {}) {
 }
 
 function normalizeProcessor(value, index) {
-  exactKeys(value, ['taskType', 'processorVersion', 'executionClass', 'outputSchemaVersion'], `capabilities.processors[${index}]`)
+  exactKeys(value, ['taskType', 'processorVersion', 'executionClass', 'outputSchemaVersion', 'model'], `capabilities.processors[${index}]`)
+  const taskType = token(value.taskType, `capabilities.processors[${index}].taskType`)
+  const isModelBound = PC_WORKER_MODEL_BOUND_TASK_TYPES.includes(taskType)
+  if (!isModelBound && Object.hasOwn(value, 'model')) {
+    fail('PC_WORKER_INPUT_INVALID', `capabilities.processors[${index}].model is only valid for model-bound processors.`)
+  }
   const normalized = {
-    taskType: token(value.taskType, `capabilities.processors[${index}].taskType`),
+    taskType,
     processorVersion: token(value.processorVersion, `capabilities.processors[${index}].processorVersion`),
     executionClass: token(value.executionClass, `capabilities.processors[${index}].executionClass`),
-    outputSchemaVersion: integer(value.outputSchemaVersion, `capabilities.processors[${index}].outputSchemaVersion`, { min: 1, max: 1000 })
+    outputSchemaVersion: integer(value.outputSchemaVersion, `capabilities.processors[${index}].outputSchemaVersion`, { min: 1, max: 1000 }),
+    ...(isModelBound && value.model !== undefined
+      ? { model: normalizePcWorkerEmbeddingModel(value.model, `capabilities.processors[${index}].model`) }
+      : {})
   }
   return Object.freeze(normalized)
 }
@@ -138,26 +153,26 @@ export function normalizeWorkerProfile(value) {
   })
 }
 
-export function supportedRemoteProcessors(capabilities) {
-  const source = capabilities?.processors
-  if (!Array.isArray(source)) return Object.freeze([])
-  return Object.freeze(source
-    .filter((processor) =>
-      processor.taskType === PC_WORKER_TASK_TYPE &&
-      processor.processorVersion === PC_WORKER_PROCESSOR_VERSION &&
-      processor.executionClass === PC_WORKER_EXECUTION_CLASS &&
-      processor.outputSchemaVersion === PC_WORKER_OUTPUT_SCHEMA_VERSION)
-    .map(({ taskType, processorVersion, executionClass }) => Object.freeze({ taskType, processorVersion, executionClass })))
+export function supportedRemoteProcessors(capabilities, requirements = {}) {
+  return Object.freeze(matchPcWorkerCapabilities(capabilities, requirements)
+    .filter(({ taskType, model }) => !PC_WORKER_MODEL_BOUND_TASK_TYPES.includes(taskType) || model)
+    .map(({ taskType, processorVersion, executionClass }) =>
+    Object.freeze({ taskType, processorVersion, executionClass })))
 }
 
 export function projectWorkerTask(task) {
-  if (!isPlainObject(task) || task.taskType !== PC_WORKER_TASK_TYPE ||
-    task.processorVersion !== PC_WORKER_PROCESSOR_VERSION || task.executionClass !== PC_WORKER_EXECUTION_CLASS) return null
+  if (!isPlainObject(task)) return null
+  const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+  if (!definition || task.executionClass !== definition.executionClass) return null
+  if (task.taskType === PC_WORKER_TASK_TYPE && !HASH_PATTERN.test(task.subjectContentHash ?? '')) return null
   try {
-    const input = task.input
-    exactKeys(input, ['schemaVersion', 'resourceVersionId', 'contentObjectId'], 'task.input')
-    if (input.schemaVersion !== 1 || !Number.isSafeInteger(input.resourceVersionId) || input.resourceVersionId < 1 ||
-      !Number.isSafeInteger(input.contentObjectId) || input.contentObjectId < 1 || !HASH_PATTERN.test(task.subjectContentHash ?? '')) return null
+    const input = definition.resolveInput({
+      input: task.input,
+      ...(task.subjectContentHash === undefined && task.subjectContentSha256 === undefined
+        ? {}
+        : { subjectContentHash: task.subjectContentHash ?? task.subjectContentSha256 }),
+      ...(task.subjectContentBytes === undefined ? {} : { subjectBytes: task.subjectContentBytes })
+    })
     return Object.freeze({
       id: task.id,
       taskType: task.taskType,
@@ -167,17 +182,37 @@ export function projectWorkerTask(task) {
       leaseExpiresAt: task.leaseExpiresAt,
       attemptCount: task.attemptCount,
       maxAttempts: task.maxAttempts,
-      input: Object.freeze({
-        schemaVersion: 1,
-        resourceVersionId: input.resourceVersionId,
-        contentObjectId: input.contentObjectId,
-        sha256: task.subjectContentHash
-      })
+      input
     })
   } catch (error) {
-    if (error instanceof PcWorkerContractError) return null
+    if (error instanceof PcWorkerContractError || String(error?.code ?? '').startsWith('PC_WORKER_PROCESSOR_')) return null
     throw error
   }
+}
+
+export function resolveWorkerTaskInput(task) {
+  if (!isPlainObject(task)) return null
+  const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+  if (!definition || task.executionClass !== definition.executionClass) return null
+  try {
+    return definition.resolveInput({
+      input: task.input,
+      ...(task.subjectContentHash === undefined && task.subjectContentSha256 === undefined
+        ? {}
+        : { subjectContentHash: task.subjectContentHash ?? task.subjectContentSha256 }),
+      ...(task.subjectContentBytes === undefined ? {} : { subjectBytes: task.subjectContentBytes })
+    })
+  } catch (error) {
+    if (error instanceof PcWorkerContractError || String(error?.code ?? '').startsWith('PC_WORKER_PROCESSOR_')) return null
+    throw error
+  }
+}
+
+export function normalizeWorkerTaskResult(task, value, expected) {
+  if (!isPlainObject(task)) return null
+  const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+  if (!definition || task.executionClass !== definition.executionClass) return null
+  return definition.normalizeResult(value, expected)
 }
 
 export function normalizeContentInspectionResult(value, expected) {

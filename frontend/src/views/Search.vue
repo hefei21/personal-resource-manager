@@ -30,22 +30,45 @@
       </button>
     </section>
 
-    <form class="search-form" @submit.prevent="runSearch(true)">
+    <form class="search-form" @submit.prevent="submitForm">
+      <div class="mode-tabs" role="tablist" aria-label="资料操作模式">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="mode === 'search'"
+          :class="{ active: mode === 'search' }"
+          @click="setMode('search')"
+        >
+          搜索
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="mode === 'ask'"
+          :class="{ active: mode === 'ask' }"
+          @click="setMode('ask')"
+        >
+          问资料
+        </button>
+      </div>
+      <p v-if="mode === 'ask'" class="mode-hint">
+        只使用当前 Owner 可见资料回答；证据不足时会明确拒答，PC Worker 离线时保留可打开的引用式结果。
+      </p>
       <div class="search-row">
         <input
           v-model.trim="filters.q"
           class="search-input"
           type="search"
           maxlength="256"
-          placeholder="搜索标题、正文、章节、代码、作者或标签"
+          :placeholder="mode === 'ask' ? '例如：如何恢复搜索索引？' : '搜索标题、正文、章节、代码、作者或标签'"
           autocomplete="off"
         />
-        <button class="primary-button" type="submit" :disabled="loading || !filters.q">
-          {{ loading ? '搜索中…' : '搜索' }}
+        <button class="primary-button" type="submit" :disabled="loading || askLoading || !filters.q">
+          {{ mode === 'ask' ? (askLoading ? '准备回答…' : '提问') : (loading ? '搜索中…' : '搜索') }}
         </button>
       </div>
 
-      <div class="scope-tabs" role="tablist" aria-label="搜索范围">
+      <div v-if="mode === 'search'" class="scope-tabs" role="tablist" aria-label="搜索范围">
         <button
           v-for="option in scopeOptions"
           :key="option.value"
@@ -59,10 +82,10 @@
         </button>
       </div>
 
-      <button class="filter-toggle" type="button" @click="showFilters = !showFilters">
+      <button v-if="mode === 'search'" class="filter-toggle" type="button" @click="showFilters = !showFilters">
         {{ showFilters ? '收起筛选' : '展开筛选' }}
       </button>
-      <div v-if="showFilters" class="filter-grid">
+      <div v-if="mode === 'search' && showFilters" class="filter-grid">
         <label>
           <span>资源类型</span>
           <select v-model="filters.type">
@@ -90,12 +113,69 @@
       </div>
     </form>
 
-    <div v-if="feedback" class="feedback" role="status">
+    <div v-if="mode === 'ask' && ragStatus" class="rag-status-strip" :class="`rag-status-${ragStatusKind}`" role="status">
+      <div>
+        <strong>{{ ragStatusLabel }}</strong>
+        <span>{{ ragStatusDetail }}</span>
+      </div>
+      <span v-if="ragStatusWorkerOffline" class="offline-note">PC Worker 离线；回答会退化为本机检索引用。</span>
+    </div>
+
+    <div v-if="mode === 'search' && feedback" class="feedback" role="status">
       <span>{{ feedback }}</span>
       <button v-if="errorCode === 'SEARCH_INDEX_MISSING'" @click="refreshIndex(true)">建立索引</button>
     </div>
 
-    <section v-if="searched && !loading" class="results-section">
+    <section v-if="mode === 'ask' && askState !== 'idle'" class="answer-panel" aria-live="polite">
+      <header class="answer-heading">
+        <div>
+          <strong>资料回答</strong>
+          <span>{{ askModeLabel }}</span>
+        </div>
+        <button v-if="askLoading" class="inline-button" type="button" @click="cancelAsk">取消</button>
+      </header>
+
+      <div v-if="askLoading" class="answer-loading" role="status">
+        正在检查权限、检索资料并整理引用…
+      </div>
+      <div v-else-if="askState === 'error'" class="answer-feedback" role="alert">
+        {{ askFeedback }}
+      </div>
+      <div v-else-if="askState === 'cancelled'" class="answer-feedback" role="status">
+        已取消本次提问；原有关键词搜索仍可继续使用。
+      </div>
+      <template v-else>
+        <div v-if="askResult?.degraded" class="answer-degraded" role="status">
+          {{ askResult.degradedLabel }}
+        </div>
+        <div v-if="askResult?.answer" class="answer-text">
+          {{ askResult.answer }}
+        </div>
+        <div v-else class="answer-abstained" role="status">
+          <strong>暂不回答</strong>
+          <span>{{ askResult?.reasonLabel || '当前证据不足，未生成未经支持的结论。' }}</span>
+        </div>
+
+        <section v-if="askCitations.length" class="citation-section" aria-label="回答引用">
+          <h3>引用资料</h3>
+          <article v-for="citation in askCitations" :key="citation.label" class="citation-card">
+            <div class="citation-title-row">
+              <span class="citation-label">{{ citation.label }}</span>
+              <strong>{{ citation.title }}</strong>
+              <button v-if="citation.openUrl" type="button" class="citation-link" @click="openCitation(citation)">打开来源</button>
+            </div>
+            <div class="citation-meta">
+              <span v-if="citation.section">章节：{{ citation.section }}</span>
+              <span v-if="citation.version">版本：{{ citation.version }}</span>
+            </div>
+            <blockquote v-if="citation.excerpt">{{ citation.excerpt }}</blockquote>
+          </article>
+        </section>
+        <div v-else class="citation-empty">本次回答没有返回可展示的引用。</div>
+      </template>
+    </section>
+
+    <section v-if="mode === 'search' && searched && !loading" class="results-section">
       <header class="results-heading">
         <div>
           <strong>{{ total }} 个结果</strong>
@@ -151,6 +231,7 @@ import api from '@/api'
 
 const router = useRouter()
 const pageSize = 20
+const mode = ref('search')
 const loading = ref(false)
 const refreshing = ref(false)
 const searched = ref(false)
@@ -161,7 +242,14 @@ const feedback = ref('')
 const errorCode = ref('')
 const elapsedMs = ref(null)
 const offset = ref(0)
+const ragStatus = ref(null)
+const askState = ref('idle')
+const askResult = ref(null)
+const askFeedback = ref('')
+const askQueryId = ref('')
 let pollTimer = null
+let ragPollTimer = null
+let askGeneration = 0
 
 const filters = reactive({
   q: '', scope: 'owned', type: '', tag: '', author: '', status: '', source: '', dateFrom: '', dateTo: ''
@@ -184,10 +272,53 @@ const typeOptions = [
 const typeLabels = Object.freeze(Object.fromEntries(typeOptions.map((item) => [item.value, item.label])))
 const results = computed(() => result.value?.data || [])
 const total = computed(() => result.value?.total || 0)
+const askLoading = computed(() => ['submitting', 'polling'].includes(askState.value))
 const indexStatusLabel = computed(() => ({
   missing: '尚未建立搜索索引', empty: '搜索索引为空', rebuilding: '正在重建索引',
   ready: '索引可用', partial: '索引部分可用', failed: '索引刷新失败'
 }[indexStatus.value?.status] || '索引状态未知'))
+const ragStatusKind = computed(() => {
+  const status = String(ragStatus.value?.status || '').toLowerCase()
+  if (['ready', 'available'].includes(status)) return 'ready'
+  if (['offline', 'degraded', 'partial'].includes(status) || ragStatus.value?.pcWorker?.status === 'offline') return 'degraded'
+  if (['missing', 'failed', 'unavailable'].includes(status)) return 'unavailable'
+  return 'unknown'
+})
+const ragStatusLabel = computed(() => ({
+  ready: '问资料可用', degraded: '问资料可降级', unavailable: '问资料暂不可用', unknown: '问资料状态未知'
+}[ragStatusKind.value]))
+const ragStatusDetail = computed(() => {
+  if (ragStatusKind.value === 'degraded') return '将优先使用 NAS 本机检索并保留引用。'
+  if (ragStatusKind.value === 'unavailable') return '可以继续使用关键词搜索，服务恢复后再提问。'
+  if (ragStatusKind.value === 'ready') return '回答只使用当前权限范围内的资料。'
+  return '提交后会再次检查索引、权限和生成能力。'
+})
+const ragStatusWorkerOffline = computed(() => ragStatus.value?.pcWorker?.status === 'offline')
+const askModeLabel = computed(() => {
+  if (askLoading.value) return '正在检索资料'
+  if (askState.value === 'error') return '请求失败'
+  if (askState.value === 'cancelled') return '已取消'
+  if (askResult.value?.degraded) return '本机检索降级'
+  if (askResult.value?.abstained) return '证据不足，已拒答'
+  return '引用式回答'
+})
+const askCitations = computed(() => askResult.value?.citations || [])
+
+const ASK_REASON_LABELS = Object.freeze({
+  no_evidence: '当前资料不足以支持可靠回答。',
+  evidence_conflict: '资料之间存在冲突，暂不生成未经确认的结论。',
+  worker_offline: '回答模型当前离线，已保留可用的检索引用。',
+  model_unavailable: '回答模型当前不可用，已保留可用的检索引用。',
+  index_missing: '资料索引尚未建立，请先刷新索引。',
+  cancelled: '本次提问已取消。'
+})
+const ASK_ERROR_LABELS = Object.freeze({
+  RAG_QUERY_INVALID: '问题或筛选条件无效。',
+  RAG_INDEX_MISSING: '资料索引尚未建立，请先刷新索引。',
+  RAG_QUERY_UNAVAILABLE: '问资料服务暂时不可用。',
+  RAG_QUERY_FAILED: '问资料任务未完成，请稍后重试。',
+  RAG_QUERY_FORBIDDEN: '当前账号没有问资料权限。'
+})
 
 function buildParams() {
   const params = { q: filters.q, scope: filters.scope, limit: pageSize, offset: offset.value }
@@ -197,6 +328,60 @@ function buildParams() {
   return params
 }
 
+function buildRagPayload() {
+  // The current Owner query contract accepts only q/query and a bounded limit.
+  // Visibility and lifecycle filtering remain authoritative on the NAS.
+  return { q: filters.q, limit: 10 }
+}
+
+function safeText(value, maxLength) {
+  if (typeof value !== 'string') return ''
+  return value.trim().slice(0, maxLength)
+}
+
+function safeCitationUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return ''
+  try {
+    const url = new URL(value, window.location.origin)
+    if (url.origin !== window.location.origin || !url.pathname.startsWith('/')) return ''
+    return `${url.pathname}${url.search}${url.hash}`
+  } catch {
+    return ''
+  }
+}
+
+function normalizeCitation(value, index) {
+  if (!value || typeof value !== 'object') return null
+  const title = safeText(value.title || value.sourceLabel, 160) || `资料来源 ${index + 1}`
+  return Object.freeze({
+    label: `C${index + 1}`,
+    title,
+    section: safeText(value.section || value.chapter || value.chapterTitle || value.locationLabel, 160),
+    version: safeText(value.versionLabel || value.version, 100),
+    excerpt: safeText(value.excerpt || value.snippet, 480),
+    openUrl: safeCitationUrl(value.openUrl || value.href)
+  })
+}
+
+function normalizeAskResult(value) {
+  const source = value?.result && typeof value.result === 'object' ? value.result : value || {}
+  const answer = safeText(source.answer, 12000)
+  const reasonCode = safeText(source.reasonCode, 80).toLowerCase()
+  const citations = Array.isArray(source.citations)
+    ? source.citations.map(normalizeCitation).filter(Boolean).slice(0, 8)
+    : []
+  const abstained = Boolean(source.abstained) || !answer
+  const degraded = Boolean(source.degraded || source.fallback || source.mode === 'fts')
+  return Object.freeze({
+    answer,
+    abstained,
+    degraded,
+    degradedLabel: degraded ? '当前使用本机检索降级；生成模型或向量能力不可用，以下引用仍受权限过滤。' : '',
+    reasonLabel: ASK_REASON_LABELS[reasonCode] || (abstained ? '当前证据不足，未生成未经支持的结论。' : ''),
+    citations: Object.freeze(citations)
+  })
+}
+
 async function loadStatus() {
   try {
     const response = await api.search.status()
@@ -204,6 +389,145 @@ async function loadStatus() {
   } catch {
     indexStatus.value = { status: 'failed', entryCount: 0 }
   }
+}
+
+async function loadRagStatus() {
+  try {
+    const response = await api.rag.status()
+    ragStatus.value = response.data?.data || null
+  } catch (error) {
+    ragStatus.value = {
+      status: error.response?.status === 404 ? 'unavailable' : 'failed',
+      pcWorker: { status: 'unknown' }
+    }
+  }
+}
+
+function submitForm() {
+  if (mode.value === 'ask') runAsk()
+  else runSearch(true)
+}
+
+function stopRagPolling() {
+  if (ragPollTimer) window.clearTimeout(ragPollTimer)
+  ragPollTimer = null
+}
+
+function setMode(nextMode) {
+  if (nextMode === mode.value) return
+  askGeneration += 1
+  if (mode.value === 'ask' && askQueryId.value) {
+    const queryId = askQueryId.value
+    stopRagPolling()
+    askQueryId.value = ''
+    api.rag.cancelQuery(queryId).catch(() => {})
+  }
+  mode.value = nextMode
+  feedback.value = ''
+  if (nextMode === 'ask') {
+    searched.value = false
+    result.value = null
+    askState.value = 'idle'
+    askResult.value = null
+    askFeedback.value = ''
+    loadRagStatus()
+  } else {
+    askState.value = 'idle'
+    askResult.value = null
+    askFeedback.value = ''
+  }
+}
+
+function askErrorLabel(error) {
+  const status = error.response?.status
+  if (status === 401 || status === 403) return '当前账号没有问资料权限。'
+  if (status === 404) return '问资料接口尚未启用，仍可使用关键词搜索。'
+  const code = safeText(error.response?.data?.code, 80)
+  return ASK_ERROR_LABELS[code] || (!error.response ? '问资料服务暂时不可达，可切换到关键词搜索。' : '问资料暂时失败，请稍后重试。')
+}
+
+function finishAsk(value) {
+  stopRagPolling()
+  askQueryId.value = ''
+  askResult.value = normalizeAskResult(value)
+  askState.value = askResult.value.degraded ? 'degraded' : askResult.value.abstained ? 'abstained' : 'answered'
+}
+
+function scheduleRagPoll(generation) {
+  stopRagPolling()
+  ragPollTimer = window.setTimeout(() => pollAsk(generation), 1200)
+}
+
+async function pollAsk(generation = askGeneration) {
+  if (generation !== askGeneration) return
+  const queryId = askQueryId.value
+  if (!queryId) return
+  try {
+    const response = await api.rag.getQuery(queryId)
+    const data = response.data?.data
+    if (!data) throw new Error('missing query result')
+    if (['pending', 'queued', 'leased', 'running'].includes(data.status)) {
+      askState.value = 'polling'
+      scheduleRagPoll(generation)
+      return
+    }
+    if (['cancelled', 'canceled'].includes(data.status)) {
+      stopRagPolling()
+      askQueryId.value = ''
+      askState.value = 'cancelled'
+      askResult.value = null
+      return
+    }
+    if (['failed', 'error'].includes(data.status)) {
+      throw Object.assign(new Error('rag query failed'), { response: { data: { code: data.errorCode || 'RAG_QUERY_FAILED' } } })
+    }
+    finishAsk(data)
+  } catch (error) {
+    if (generation !== askGeneration) return
+    stopRagPolling()
+    askQueryId.value = ''
+    askState.value = 'error'
+    askFeedback.value = askErrorLabel(error)
+  }
+}
+
+async function runAsk() {
+  if (!filters.q || askLoading.value) return
+  const generation = ++askGeneration
+  stopRagPolling()
+  askState.value = 'submitting'
+  askResult.value = null
+  askFeedback.value = ''
+  try {
+    const response = await api.rag.createQuery(buildRagPayload())
+    if (generation !== askGeneration) return
+    const data = response.data?.data
+    if (data?.answer !== undefined || data?.abstained !== undefined || data?.citations) {
+      finishAsk(data)
+      return
+    }
+    const queryId = data?.id ?? data?.queryId ?? data?.runId
+    if (queryId === undefined || queryId === null || String(queryId).trim() === '') throw new Error('missing query id')
+    askQueryId.value = String(queryId)
+    askState.value = 'polling'
+    await pollAsk(generation)
+  } catch (error) {
+    if (generation !== askGeneration) return
+    stopRagPolling()
+    askQueryId.value = ''
+    askState.value = 'error'
+    askFeedback.value = askErrorLabel(error)
+  }
+}
+
+async function cancelAsk() {
+  askGeneration += 1
+  const queryId = askQueryId.value
+  stopRagPolling()
+  askQueryId.value = ''
+  askState.value = 'cancelled'
+  askResult.value = null
+  if (queryId) await api.rag.cancelQuery(queryId).catch(() => {})
 }
 
 async function runSearch(resetPage = false) {
@@ -275,7 +599,7 @@ async function pollTask(taskId) {
 
 function setScope(value) {
   filters.scope = value
-  if (searched.value && filters.q) runSearch(true)
+  if (mode.value === 'search' && searched.value && filters.q) runSearch(true)
 }
 
 function resetAdvancedFilters() {
@@ -286,6 +610,11 @@ function openResult(item) {
   const locator = item.locator || {}
   const { route, ...query } = locator
   if (route) router.push({ path: route, query })
+}
+
+function openCitation(citation) {
+  if (!citation?.openUrl) return
+  router.push(citation.openUrl).catch(() => {})
 }
 
 function locatorLabel(item) {
@@ -304,7 +633,10 @@ function previousPage() { offset.value = Math.max(0, offset.value - pageSize); r
 function nextPage() { offset.value += pageSize; runSearch(false) }
 
 onMounted(loadStatus)
-onBeforeUnmount(() => { if (pollTimer) window.clearTimeout(pollTimer) })
+onBeforeUnmount(() => {
+  if (pollTimer) window.clearTimeout(pollTimer)
+  stopRagPolling()
+})
 </script>
 
 <style scoped>
@@ -320,6 +652,10 @@ onBeforeUnmount(() => { if (pollTimer) window.clearTimeout(pollTimer) })
 .search-form, .result-card { border: 1px solid #e2e8f0; border-radius: 14px; background: #fff; box-shadow: 0 6px 24px rgba(15, 23, 42, .05); }
 .search-form { padding: 18px; }
 .search-row { gap: 10px; }
+.mode-tabs { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 10px; border-radius: 10px; background: #f1f5f9; }
+.mode-tabs button { border: 0; border-radius: 7px; padding: 8px 18px; background: transparent; color: #64748b; }
+.mode-tabs button.active { background: #fff; color: #4338ca; box-shadow: 0 1px 4px rgba(15, 23, 42, .12); font-weight: 600; }
+.mode-hint { margin: 0 0 12px; color: #64748b; font-size: 13px; line-height: 1.5; }
 .search-input, .filter-grid input, .filter-grid select { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 9px; padding: 10px 12px; background: #fff; color: #1f2937; }
 .search-input { min-height: 46px; font-size: 16px; }
 button { cursor: pointer; }
@@ -336,6 +672,32 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .filter-grid label { display: flex; flex-direction: column; gap: 6px; color: #475569; font-size: 13px; }
 .feedback, .external-empty, .empty-state { margin-top: 16px; padding: 16px; border-radius: 10px; background: #fff7ed; color: #9a3412; }
 .feedback { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.rag-status-strip { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin-top: 16px; padding: 12px 16px; border: 1px solid #dbeafe; border-radius: 10px; background: #eff6ff; color: #334155; }
+.rag-status-strip > div { display: flex; flex-wrap: wrap; gap: 12px; }
+.rag-status-degraded { border-color: #fed7aa; background: #fff7ed; }
+.rag-status-unavailable { border-color: #fecaca; background: #fef2f2; }
+.answer-panel { margin-top: 20px; padding: 18px; border: 1px solid #c7d2fe; border-radius: 14px; background: #fff; box-shadow: 0 6px 24px rgba(15, 23, 42, .05); }
+.answer-heading, .citation-title-row { display: flex; align-items: center; gap: 10px; }
+.answer-heading { justify-content: space-between; margin-bottom: 16px; color: #334155; }
+.answer-heading > div { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+.answer-heading > div span { color: #64748b; font-size: 13px; }
+.answer-loading, .answer-feedback, .answer-degraded, .answer-abstained, .citation-empty { padding: 14px; border-radius: 10px; }
+.answer-loading { background: #eff6ff; color: #1d4ed8; }
+.answer-feedback { background: #fff7ed; color: #9a3412; }
+.answer-degraded { margin-bottom: 14px; background: #fff7ed; color: #9a3412; }
+.answer-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; color: #1f2937; }
+.answer-abstained { display: flex; flex-direction: column; gap: 6px; background: #f8fafc; color: #475569; }
+.answer-abstained strong { color: #334155; }
+.citation-section { margin-top: 20px; }
+.citation-section h3 { margin: 0 0 10px; font-size: 16px; color: #334155; }
+.citation-card { margin-top: 10px; padding: 13px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+.citation-title-row { flex-wrap: wrap; }
+.citation-label { display: inline-flex; min-width: 28px; justify-content: center; border-radius: 999px; padding: 3px 7px; background: #e0e7ff; color: #4338ca; font-size: 12px; font-weight: 700; }
+.citation-title-row strong { flex: 1; min-width: 180px; color: #334155; }
+.citation-link { border: 0; padding: 4px 0; background: transparent; color: #4338ca; font-size: 13px; cursor: pointer; }
+.citation-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 7px; color: #64748b; font-size: 13px; }
+.citation-card blockquote { margin: 10px 0 0; padding-left: 12px; border-left: 3px solid #c7d2fe; color: #475569; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+.citation-empty { margin-top: 16px; background: #f8fafc; color: #64748b; }
 .results-section { margin-top: 20px; }
 .results-heading { justify-content: space-between; margin-bottom: 12px; color: #64748b; }
 .results-heading div { display: flex; gap: 12px; }
@@ -360,13 +722,18 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .search-hero h1 { font-size: 22px; }
   .search-row { align-items: stretch; }
   .filter-grid { grid-template-columns: 1fr 1fr; }
-  .status-strip, .feedback { align-items: flex-start; flex-direction: column; }
+  .status-strip, .feedback, .rag-status-strip { align-items: flex-start; flex-direction: column; }
   .result-title-row { align-items: flex-start; flex-wrap: wrap; }
+  .answer-heading { align-items: flex-start; }
 }
 @media (max-width: 480px) {
   .search-hero, .search-row { flex-direction: column; }
   .search-hero .secondary-button, .primary-button { width: 100%; }
   .filter-grid { grid-template-columns: 1fr; }
   .scope-tabs button { flex: 1; padding-inline: 4px; }
+  .mode-tabs { display: flex; width: 100%; }
+  .mode-tabs button { flex: 1; }
+  .answer-panel { padding: 14px; }
+  .citation-title-row strong { min-width: 0; }
 }
 </style>

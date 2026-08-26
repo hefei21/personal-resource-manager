@@ -679,6 +679,66 @@ test('fail schedules a legal retry and then terminates at max attempts', nativeT
   }
 })
 
+test('terminal retry keeps the original attempt count and enforces a durable independent budget', nativeTestOptions, () => {
+  const database = new Database(':memory:')
+  let tokenNumber = 0
+  try {
+    applyTaskMigration(database)
+    const store = createTaskStore({
+      database,
+      now: '2026-08-20T02:10:00.000Z',
+      tokenFactory: () => `terminal-retry-${++tokenNumber}`
+    })
+    const original = store.enqueue(taskInput({ subjectId: 114, maxAttempts: 1 })).task
+    const originalLease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+    const terminal = store.fail({
+      id: original.id,
+      owner: 'worker-a',
+      token: originalLease.leaseToken,
+      errorCode: 'EMBEDDING_FAILED',
+      errorSummary: 'worker unavailable'
+    }).task
+    assert.equal(terminal.status, 'failed')
+    assert.equal(terminal.attemptCount, 1)
+
+    const firstRetry = store.retryTerminalTask({ id: original.id, maxRetries: 1 })
+    assert.equal(firstRetry.created, true)
+    assert.equal(firstRetry.retryCount, 1)
+    assert.equal(firstRetry.exhausted, false)
+    assert.equal(firstRetry.task.status, 'pending')
+    assert.notEqual(firstRetry.task.id, original.id)
+    assert.equal(store.getById(original.id).attemptCount, 1)
+
+    const reusedPending = store.retryTerminalTask({ id: original.id, maxRetries: 1 })
+    assert.equal(reusedPending.created, false)
+    assert.equal(reusedPending.task.id, firstRetry.task.id)
+    assert.equal(database.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 2)
+
+    const retryLease = store.leaseNext({ owner: 'worker-a', leaseDurationMs: 1000 })
+    assert.equal(retryLease.id, firstRetry.task.id)
+    const retryFailure = store.fail({
+      id: retryLease.id,
+      owner: 'worker-a',
+      token: retryLease.leaseToken,
+      errorCode: 'EMBEDDING_FAILED',
+      errorSummary: 'worker unavailable again'
+    }).task
+    assert.equal(retryFailure.status, 'failed')
+    assert.equal(retryFailure.attemptCount, 1)
+
+    const exhausted = store.retryTerminalTask({ id: original.id, maxRetries: 1 })
+    assert.equal(exhausted.created, false)
+    assert.equal(exhausted.exhausted, true)
+    assert.equal(exhausted.retryCount, 1)
+    assert.equal(exhausted.task.id, firstRetry.task.id)
+    assert.equal(store.getById(original.id).status, 'failed')
+    assert.equal(store.getById(original.id).attemptCount, 1)
+    assert.equal(database.prepare('SELECT COUNT(*) FROM tasks').pluck().get(), 2)
+  } finally {
+    database.close()
+  }
+})
+
 test('cancel handles pending and active tasks while rejecting terminal repeats', nativeTestOptions, () => {
   const database = new Database(':memory:')
   try {

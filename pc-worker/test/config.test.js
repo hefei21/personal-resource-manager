@@ -55,3 +55,79 @@ test('Worker validates the hidden wrapper parent process id', () => {
     (error) => error.code === 'WORKER_CONFIG_INVALID'
   )
 })
+
+test('Worker only enables explicit complete embedding configuration', () => {
+  const disabled = loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    LOCALAPPDATA: 'C:\\worker-test'
+  })
+  assert.equal(disabled.embedding, null)
+  assert.equal(disabled.answer, null)
+
+  const enabled = loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_EMBEDDINGS_BASE_URL: 'http://127.0.0.1:1234',
+    PC_WORKER_EMBEDDINGS_PROVIDER: 'local-provider',
+    PC_WORKER_EMBEDDINGS_MODEL_ID: 'embedding-model',
+    PC_WORKER_EMBEDDINGS_MODEL_REVISION: 'rev-1',
+    PC_WORKER_EMBEDDINGS_DIMENSIONS: '3',
+    PC_WORKER_EMBEDDINGS_CONFIG_HASH: 'a'.repeat(64),
+    LOCALAPPDATA: 'C:\\worker-test'
+  })
+  assert.equal(enabled.embedding.baseUrl, 'http://127.0.0.1:1234')
+  assert.equal(enabled.embedding.modelId, 'embedding-model')
+  assert.equal(enabled.embedding.dimensions, 3)
+  assert.equal(Object.isFrozen(enabled.embedding), true)
+  const answerEnabled = loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_ANSWER_BASE_URL: 'http://127.0.0.1:1234',
+    PC_WORKER_ANSWER_MODEL_ID: 'answer-model',
+    PC_WORKER_ANSWER_MODEL_REVISION: 'q6-revision-1',
+    PC_WORKER_ANSWER_CONTEXT_LIMIT: '4096',
+    PC_WORKER_ANSWER_MAX_OUTPUT_BYTES: '8192',
+    LOCALAPPDATA: 'C:\\worker-test'
+  })
+  assert.equal(answerEnabled.answer.baseUrl, 'http://127.0.0.1:1234')
+  assert.equal(answerEnabled.answer.modelId, 'answer-model')
+  assert.equal(answerEnabled.answer.contextLimit, 4096)
+  assert.equal(answerEnabled.answer.maxOutputBytes, 8192)
+  assert.match(answerEnabled.answer.configHash, /^[a-f0-9]{64}$/u)
+  assert.equal(Object.isFrozen(answerEnabled.answer), true)
+  assert.equal(answerEnabled.modelReadinessIntervalMs, 15_000)
+  assert.equal(answerEnabled.modelReadinessMaxBackoffMs, 60_000)
+  assert.equal(answerEnabled.pollIntervalMs, 1_000)
+  assert.equal(answerEnabled.followUpPollIntervalMs, 25)
+  assert.equal(answerEnabled.followUpPollAttempts, 8)
+  assert.throws(() => loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_EMBEDDINGS_BASE_URL: 'https://worker.example.test',
+    PC_WORKER_EMBEDDINGS_MODEL_ID: 'embedding-model',
+    LOCALAPPDATA: 'C:\\worker-test'
+  }), (error) => error.code === 'WORKER_CONFIG_INVALID')
+  assert.throws(() => loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_ANSWER_BASE_URL: 'https://worker.example.test',
+    PC_WORKER_ANSWER_MODEL_ID: 'answer-model',
+    PC_WORKER_ANSWER_MODEL_REVISION: 'q6-revision-1',
+    PC_WORKER_ANSWER_CONTEXT_LIMIT: '4096',
+    LOCALAPPDATA: 'C:\\worker-test'
+  }), (error) => error.code === 'WORKER_CONFIG_INVALID')
+})
+
+test('Worker keeps model readiness probes fast and bounds their backoff', () => {
+  const config = loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_MODEL_READINESS_INTERVAL_MS: '10000',
+    PC_WORKER_MODEL_READINESS_MAX_BACKOFF_MS: '45000',
+    LOCALAPPDATA: 'C:\\worker-test'
+  })
+
+  assert.equal(config.modelReadinessIntervalMs, 10_000)
+  assert.equal(config.modelReadinessMaxBackoffMs, 45_000)
+  assert.throws(() => loadConfig({
+    PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
+    PC_WORKER_MODEL_READINESS_INTERVAL_MS: '60000',
+    PC_WORKER_MODEL_READINESS_MAX_BACKOFF_MS: '59999',
+    LOCALAPPDATA: 'C:\\worker-test'
+  }), (error) => error.code === 'WORKER_CONFIG_INVALID')
+})

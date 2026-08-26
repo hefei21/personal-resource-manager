@@ -1,6 +1,7 @@
 import express from 'express'
 
 import { getDatabase } from '../config/database.js'
+import { loadRagRerankerModel } from '../config/ragReranker.js'
 import { requireOwner, requireWritePermission } from '../middlewares/auth.js'
 import {
   authenticateWorkerAccess,
@@ -12,13 +13,22 @@ import {
   updateWorkerProfile
 } from '../services/pcWorkerAuth.js'
 import {
-  normalizeContentInspectionResult,
   PC_WORKER_EXECUTION_CLASS,
   PC_WORKER_PROCESSOR_VERSION,
   PC_WORKER_TASK_TYPE,
   projectWorkerTask,
+  normalizeWorkerTaskResult,
+  resolveWorkerTaskInput,
   supportedRemoteProcessors
 } from '../services/pcWorkerContract.js'
+import {
+  lookupPcWorkerProcessor,
+  PC_WORKER_EMBEDDING_TASK_TYPES,
+  PC_WORKER_MODEL_BOUND_TASK_TYPES
+} from '../services/pcWorkerProcessorCatalog.js'
+import { createRagArtifactStore } from '../services/ragArtifactStore.js'
+import { createRagEmbeddingRuntime } from '../services/ragEmbeddingRuntime.js'
+import { readActiveRagEmbeddingModel } from '../services/ragQueryRuntime.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { getTaskRuntime } from '../services/taskRuntime.js'
 import { projectTask } from '../services/taskTypeCatalog.js'
@@ -26,6 +36,29 @@ import { projectTask } from '../services/taskTypeCatalog.js'
 const POSITIVE_ID = /^[1-9]\d*$/u
 const WORKER_ERROR_CODE = /^WORKER_[A-Z0-9_.-]{1,56}$/u
 const LEASE_DURATION_MS = 60_000
+
+export function claimableRemoteProcessors(capabilities, {
+  embeddingModel = null,
+  rerankerModel = null
+} = {}) {
+  const processors = supportedRemoteProcessors(capabilities)
+    .filter(({ taskType }) => !PC_WORKER_MODEL_BOUND_TASK_TYPES.includes(taskType))
+
+  if (embeddingModel) {
+    for (const taskType of PC_WORKER_EMBEDDING_TASK_TYPES) {
+      processors.push(...supportedRemoteProcessors(capabilities, { taskType, model: embeddingModel }))
+    }
+  }
+  if (rerankerModel) {
+    processors.push(...supportedRemoteProcessors(capabilities, { taskType: 'rag.rerank', model: rerankerModel }))
+  }
+
+  const unique = new Map(processors.map((processor) => [
+    `${processor.taskType}\u0000${processor.processorVersion}\u0000${processor.executionClass}`,
+    processor
+  ]))
+  return Object.freeze([...unique.values()])
+}
 
 function sendCode(res, status, code) {
   return res.status(status).json({ code })
@@ -59,6 +92,8 @@ function bearerToken(req) {
 function mapError(res, error) {
   const code = error?.code
   if (['PC_WORKER_INPUT_INVALID', 'PC_WORKER_PROTOCOL_UNSUPPORTED', 'PC_WORKER_ID_INVALID',
+    'PC_WORKER_PROCESSOR_INPUT_INVALID', 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE',
+    'RAG_ARTIFACT_INVALID', 'RAG_ARTIFACT_UNSUPPORTED',
     'TASK_ID_INVALID', 'TASK_PROGRESS_INVALID', 'TASK_ERROR_INVALID'].includes(code)) {
     return sendCode(res, 400, code)
   }
@@ -71,11 +106,25 @@ function mapError(res, error) {
   }
   if (['PC_WORKER_REFRESH_REPLAYED', 'PC_WORKER_CAPABILITY_UNAVAILABLE', 'PC_WORKER_CONTENT_UNAVAILABLE',
     'PC_WORKER_RESULT_SCHEMA_INVALID', 'PC_WORKER_RESULT_PROCESSOR_INVALID', 'PC_WORKER_RESULT_INPUT_MISMATCH',
+    'PC_WORKER_PROCESSOR_RESULT_SCHEMA_INVALID', 'PC_WORKER_PROCESSOR_RESULT_PROCESSOR_INVALID',
+    'PC_WORKER_PROCESSOR_RESULT_INPUT_MISMATCH', 'PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID',
+    'PC_WORKER_PROCESSOR_RESULT_DIMENSIONS_INVALID', 'PC_WORKER_PROCESSOR_RESULT_MODEL_MISMATCH',
+    'PC_WORKER_PROCESSOR_RESULT_INVALID', 'PC_WORKER_PROCESSOR_RESULT_TOO_LARGE',
+    'PC_WORKER_PROCESSOR_RESULT_STALE', 'PC_WORKER_RESULT_STALE',
+    'RAG_ARTIFACT_STALE', 'RAG_ARTIFACT_MISSING', 'RAG_ARTIFACT_CONFLICT', 'RAG_ARTIFACT_TOO_LARGE',
+    'RAG_EMBEDDING_TASK_INVALID', 'RAG_EMBEDDING_MODEL_MISMATCH', 'RAG_EMBEDDING_MODEL_NOT_ACTIVE',
+    'RAG_EMBEDDING_SNAPSHOT_NOT_ACTIVE', 'RAG_EMBEDDING_SNAPSHOT_NOT_READY', 'RAG_EMBEDDING_STALE',
     'TASK_INVALID_STATE', 'TASK_LEASE_MISMATCH', 'TASK_LEASE_EXPIRED', 'TASK_STATE_CONFLICT',
     'TASK_IDEMPOTENCY_CONFLICT'].includes(code)) {
     return sendCode(res, 409, code)
   }
-  if (code === 'PC_WORKER_RUNTIME_UNAVAILABLE') return sendCode(res, 503, code)
+  if (['PC_WORKER_RUNTIME_UNAVAILABLE', 'RAG_EMBEDDING_VECTOR_STORE_UNAVAILABLE',
+    'RAG_EMBEDDING_TASK_STORE_UNAVAILABLE', 'RAG_EMBEDDING_WRITE_FAILED',
+    'RAG_VECTOR_UNAVAILABLE', 'RAG_VECTOR_TIMEOUT', 'RAG_VECTOR_COLLECTION_MISSING',
+    'RAG_VECTOR_SCHEMA_MISMATCH', 'RAG_VECTOR_RESPONSE_INVALID', 'RAG_VECTOR_REQUEST_REJECTED',
+    'RAG_VECTOR_RESPONSE_FILTER_VIOLATION'].includes(code)) {
+    return sendCode(res, 503, code)
+  }
   return sendCode(res, 500, 'PC_WORKER_REQUEST_FAILED')
 }
 
@@ -97,6 +146,97 @@ function runtimeStore(runtimeProvider) {
 
 function contentRecord(database, task) {
   const input = task?.input
+  if (task?.taskType === 'rag.content.extract') {
+    const sourceId = positiveId(input?.sourceId)
+    const domainType = input?.sourceType === 'document' ? 'document' : input?.sourceType === 'ebook' ? 'ebook' : null
+    if (sourceId === null || domainType === null) return null
+    let row
+    try {
+      row = database.prepare(`
+        SELECT rv.id AS resource_version_id, rv.resource_id, rv.content_object_id,
+               c.sha256, c.bytes, c.managed_storage_key, r.lifecycle_status
+          FROM resource_domain_links link
+          JOIN resources r ON r.id = link.resource_id
+          JOIN resource_versions rv ON rv.resource_id = r.id AND rv.is_current = 1
+          JOIN content_objects c ON c.id = rv.content_object_id
+         WHERE link.domain_type = ? AND link.domain_id = ?
+         ORDER BY rv.id DESC
+         LIMIT 1
+      `).get(domainType, sourceId)
+    } catch {}
+    if (row) {
+      if (row.lifecycle_status !== 'active' || row.managed_storage_key === null ||
+          row.sha256 !== input.sourceContentSha256 || row.sha256 !== task.subjectContentHash ||
+          Number(row.bytes) !== input.contentBytes) return null
+      let versionMatches = String(row.resource_version_id) === String(input.sourceVersionId)
+      if (!versionMatches && domainType === 'document') {
+        try {
+          const legacyVersion = database.prepare(`
+            SELECT current_version.id
+              FROM documents domain_source
+              JOIN document_versions current_version ON current_version.id = (
+                SELECT candidate.id
+                  FROM document_versions candidate
+                 WHERE candidate.document_id = domain_source.id
+                   AND CAST(candidate.version AS REAL) = CAST(domain_source.version AS REAL)
+                 ORDER BY candidate.id DESC
+                 LIMIT 1
+              )
+             WHERE domain_source.id = ?
+          `).get(sourceId)
+          versionMatches = String(legacyVersion?.id) === String(input.sourceVersionId)
+        } catch {}
+      }
+      if (!versionMatches) return null
+      return row
+    }
+    try {
+      row = domainType === 'document'
+        ? database.prepare(`
+            SELECT current_version.id AS legacy_version_id,
+                   COALESCE(current_version.storage_key, domain_source.storage_key) AS managed_storage_key,
+                   COALESCE(current_version.content_sha256, domain_source.content_sha256) AS sha256,
+                   COALESCE(current_version.content_bytes, domain_source.content_bytes) AS bytes,
+                   domain_source.version AS legacy_version_number
+              FROM documents domain_source
+              LEFT JOIN document_versions current_version ON current_version.id = (
+                SELECT candidate.id
+                  FROM document_versions candidate
+                 WHERE candidate.document_id = domain_source.id
+                   AND CAST(candidate.version AS REAL) = CAST(domain_source.version AS REAL)
+                 ORDER BY candidate.id DESC
+                 LIMIT 1
+              )
+             WHERE domain_source.id = ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM resource_trash_entries trash
+                  WHERE trash.resource_type = 'document' AND trash.resource_id = domain_source.id
+               )
+               AND (current_version.id IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM resource_trash_entries trash
+                  WHERE trash.resource_type = 'document_version' AND trash.resource_id = current_version.id
+               ))
+          `).get(sourceId)
+        : database.prepare(`
+            SELECT domain_source.storage_key AS managed_storage_key,
+                   domain_source.content_sha256 AS sha256,
+                   domain_source.content_bytes AS bytes
+              FROM books domain_source
+             WHERE domain_source.id = ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM resource_trash_entries trash
+                  WHERE trash.resource_type = 'ebook' AND trash.resource_id = domain_source.id
+               )
+          `).get(sourceId)
+    } catch { return null }
+    if (!row || row.managed_storage_key === null || row.sha256 !== input.sourceContentSha256 ||
+        row.sha256 !== task.subjectContentHash || Number(row.bytes) !== input.contentBytes) return null
+    const legacyVersionId = domainType === 'document' && Number.isSafeInteger(Number(row.legacy_version_id))
+      ? String(row.legacy_version_id)
+      : `current:${row.legacy_version_number ?? 1}:${row.sha256}`
+    if (legacyVersionId !== String(input.sourceVersionId)) return null
+    return row
+  }
   const resourceVersionId = positiveId(input?.resourceVersionId)
   const contentObjectId = positiveId(input?.contentObjectId)
   if (resourceVersionId === null || contentObjectId === null) return null
@@ -121,9 +261,9 @@ function authorizedTask(store, worker, taskId, leaseToken, statuses) {
     throw error
   }
   const task = store.getById(id)
+  const definition = lookupPcWorkerProcessor(task?.taskType, task?.processorVersion)
   const owner = `pcw:${worker.id}`
-  if (!task || task.taskType !== PC_WORKER_TASK_TYPE || task.executionClass !== PC_WORKER_EXECUTION_CLASS ||
-    task.processorVersion !== PC_WORKER_PROCESSOR_VERSION || task.leaseOwner !== owner ||
+  if (!task || !definition || task.executionClass !== definition.executionClass || task.leaseOwner !== owner ||
     task.leaseToken !== leaseToken || !statuses.includes(task.status) ||
     typeof task.leaseExpiresAt !== 'string' || task.leaseExpiresAt <= new Date().toISOString()) {
     const error = new Error('Worker task is outside the active lease.')
@@ -131,6 +271,72 @@ function authorizedTask(store, worker, taskId, leaseToken, statuses) {
     throw error
   }
   return task
+}
+
+function processorInput(task) {
+  const input = resolveWorkerTaskInput(task)
+  if (input === null) {
+    const error = new Error('Worker task input is not authorized.')
+    error.code = 'PC_WORKER_PROCESSOR_INPUT_INVALID'
+    throw error
+  }
+  return input
+}
+
+function staleResultError() {
+  const error = new Error('Worker result is stale.')
+  error.code = 'PC_WORKER_RESULT_STALE'
+  return error
+}
+
+async function enqueueRagIndexFollowup(store, task) {
+  if (task?.taskType !== 'rag.content.extract' || typeof store?.enqueue !== 'function') return
+  const input = task.input
+  if (!input || !['document', 'ebook'].includes(input.sourceType) || positiveId(input.sourceId) === null) return
+  try {
+    await Promise.resolve(store.enqueue({
+      taskType: 'rag.index.refresh',
+      processorVersion: 'v1',
+      executionClass: 'disk',
+      subjectType: 'rag-index',
+      subjectId: 'owner',
+      subjectVersionId: `extract:${task.id}`,
+      subjectContentSha256: input.sourceContentSha256,
+      input: {
+        source: { type: input.sourceType, id: input.sourceId },
+        filter: { sourceType: input.sourceType, sourceIds: [input.sourceId] },
+        rebuild: false
+      },
+      priority: 40,
+      maxAttempts: 3
+    }))
+  } catch {}
+}
+
+function currentSnapshotIdentity(database, task, input) {
+  if (!['rag.embedding.generate', 'rag.content.extract'].includes(task.taskType)) return input
+  try {
+    if (task.taskType === 'rag.content.extract') {
+      return contentRecord(database, task) ? { ...input } : null
+    }
+    if (task.taskType === 'rag.embedding.generate') {
+      const row = database.prepare(`
+        SELECT snapshot.id, snapshot.source_type, snapshot.source_id,
+               snapshot.source_version_id, snapshot.source_content_sha256
+          FROM rag_source_snapshots snapshot
+          JOIN rag_source_state state
+            ON state.source_type = snapshot.source_type AND state.source_id = snapshot.source_id
+           AND state.active_snapshot_id = snapshot.id
+         WHERE snapshot.id = ?
+           AND snapshot.status IN ('text_ready', 'embedding_pending', 'ready', 'partial')
+      `).get(input.snapshotId)
+      if (!row || row.source_type !== input.sourceType || Number(row.source_id) !== input.sourceId ||
+          row.source_version_id !== input.sourceVersionId || row.source_content_sha256 !== input.sourceContentSha256) return null
+      return { ...input, snapshotId: Number(row.id), model: input.model }
+    }
+  } catch {
+    return null
+  }
 }
 
 function workerAuth({ database = databaseProvider, authenticate = authenticateWorkerAccess } = {}) {
@@ -257,9 +463,18 @@ export function createPcWorkerAgentRouter({
   enroll = enrollWorker,
   refresh = refreshWorkerCredentials,
   authenticate = authenticateWorkerAccess,
-  updateProfile = updateWorkerProfile
+  updateProfile = updateWorkerProfile,
+  artifactStore = null,
+  embeddingRuntimeFactory = createRagEmbeddingRuntime,
+  embeddingModelProvider = readActiveRagEmbeddingModel,
+  rerankerModelProvider = () => loadRagRerankerModel()
 } = {}) {
   const router = express.Router()
+  let resolvedArtifactStore = artifactStore
+  const getArtifactStore = () => {
+    resolvedArtifactStore ??= createRagArtifactStore()
+    return resolvedArtifactStore
+  }
 
   router.post('/enroll', async (req, res) => {
     try {
@@ -296,12 +511,18 @@ export function createPcWorkerAgentRouter({
       if (req.body !== undefined && (!isPlainObject(req.body) || Object.keys(req.body).length !== 0)) {
         return sendCode(res, 400, 'PC_WORKER_INPUT_INVALID')
       }
-      const processors = supportedRemoteProcessors(req.pcWorker.capabilities)
+      const databaseValue = await database(req)
+      const activeEmbeddingModel = await Promise.resolve(embeddingModelProvider(databaseValue))
+      const rerankerModel = await Promise.resolve(rerankerModelProvider({ database: databaseValue, req }))
+      const processors = claimableRemoteProcessors(req.pcWorker.capabilities, {
+        embeddingModel: activeEmbeddingModel?.model ?? null,
+        rerankerModel
+      })
       if (processors.length === 0) return sendCode(res, 409, 'PC_WORKER_CAPABILITY_UNAVAILABLE')
       const task = await Promise.resolve(runtimeStore(runtime).leaseNext({
         owner: `pcw:${req.pcWorker.id}`,
         leaseDurationMs: LEASE_DURATION_MS,
-        executionClass: PC_WORKER_EXECUTION_CLASS,
+        executionClasses: [...new Set(processors.map(({ executionClass }) => executionClass))],
         supportedProcessors: processors
       }))
       if (!task) return res.status(204).end()
@@ -364,6 +585,7 @@ export function createPcWorkerAgentRouter({
       const leaseToken = req.get('x-worker-lease')
       const store = runtimeStore(runtime)
       const task = authorizedTask(store, req.pcWorker, req.params.taskId, leaseToken, ['running'])
+      processorInput(task)
       const row = contentRecord(await database(req), task)
       if (!row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
       const stream = await storageRuntime().storageService.createReadStream(row.managed_storage_key)
@@ -379,24 +601,108 @@ export function createPcWorkerAgentRouter({
     } catch (error) { return mapError(res, error) }
   })
 
+  router.post('/tasks/:taskId/artifact', async (req, res) => {
+    try {
+      if (req.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/octet-stream') {
+        return sendCode(res, 400, 'PC_WORKER_INPUT_INVALID')
+      }
+      const store = runtimeStore(runtime)
+      const leaseToken = req.get('x-worker-lease')
+      const task = authorizedTask(store, req.pcWorker, req.params.taskId, leaseToken, ['running'])
+      const input = processorInput(task)
+      if (task.taskType !== 'rag.content.extract') return sendCode(res, 400, 'RAG_ARTIFACT_UNSUPPORTED')
+      const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+      const databaseValue = await database(req)
+      const row = contentRecord(databaseValue, task)
+      if (!row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
+      const current = {
+        sourceVersionId: input.sourceVersionId,
+        sourceContentSha256: row.sha256,
+        contentBytes: row.bytes
+      }
+      if (!definition.staleGuard(current, input)) throw staleResultError()
+      const outcome = await getArtifactStore().stage({
+        task,
+        stream: req,
+        current,
+        metadata: {
+          sourceVersionId: input.sourceVersionId,
+          sourceContentSha256: input.sourceContentSha256,
+          artifactSha256: req.get('x-artifact-sha256'),
+          artifactBytes: req.get('x-artifact-bytes'),
+          sectionCount: req.get('x-artifact-section-count'),
+          format: req.get('x-artifact-format')
+        }
+      })
+      return res.status(201).json({ data: outcome })
+    } catch (error) { return mapError(res, error) }
+  })
+
   router.post('/tasks/:taskId/complete', async (req, res) => {
+    let task
+    let artifactStoreValue
     try {
       if (!isPlainObject(req.body) || Object.keys(req.body).length !== 2 || typeof req.body.leaseToken !== 'string') {
         return sendCode(res, 400, 'PC_WORKER_INPUT_INVALID')
       }
       const store = runtimeStore(runtime)
-      const task = authorizedTask(store, req.pcWorker, req.params.taskId, req.body.leaseToken, ['running'])
-      const row = contentRecord(await database(req), task)
-      if (!row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
-      const result = normalizeContentInspectionResult(req.body.result, { sha256: row.sha256, bytes: row.bytes })
+      task = authorizedTask(store, req.pcWorker, req.params.taskId, req.body.leaseToken, ['running'])
+      const input = processorInput(task)
+      const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
+      const databaseValue = await database(req)
+      const needsContent = task.taskType === PC_WORKER_TASK_TYPE || task.taskType === 'rag.content.extract'
+      const row = needsContent ? contentRecord(databaseValue, task) : null
+      if (needsContent && !row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
+      const current = task.taskType === PC_WORKER_TASK_TYPE
+        ? {
+            resourceVersionId: row.resource_version_id,
+            contentObjectId: row.content_object_id,
+            sha256: row.sha256,
+            bytes: row.bytes
+          }
+        : task.taskType === 'rag.content.extract'
+          ? { sourceVersionId: input.sourceVersionId, sourceContentSha256: row.sha256, contentBytes: row.bytes }
+        : currentSnapshotIdentity(databaseValue, task, input)
+      if (!current || !definition.staleGuard(current, task.taskType === PC_WORKER_TASK_TYPE
+        ? { ...input, sha256: row.sha256, bytes: row.bytes }
+        : input)) throw staleResultError()
+      const result = normalizeWorkerTaskResult(task, req.body.result,
+        task.taskType === PC_WORKER_TASK_TYPE ? { sha256: row.sha256, bytes: row.bytes } : input)
+      if (task.taskType === 'rag.embedding.generate') {
+        const embeddingRuntime = await Promise.resolve(embeddingRuntimeFactory({
+          database: databaseValue,
+          taskStore: store,
+          task,
+          input
+        }))
+        if (!embeddingRuntime || typeof embeddingRuntime.applyWorkerResult !== 'function') {
+          const error = new Error('RAG embedding vector runtime is unavailable.')
+          error.code = 'RAG_EMBEDDING_VECTOR_STORE_UNAVAILABLE'
+          throw error
+        }
+        const applied = await Promise.resolve(embeddingRuntime.applyWorkerResult({ task, result }))
+        if (!applied || applied.applied !== true) throw staleResultError()
+      }
+      if (task.taskType === 'rag.content.extract') {
+        artifactStoreValue = getArtifactStore()
+        await artifactStoreValue.commit({
+          task,
+          metadata: result.output,
+          current: { sourceVersionId: input.sourceVersionId, sourceContentSha256: row.sha256, contentBytes: row.bytes }
+        })
+      }
       const succeeded = await Promise.resolve(store.succeed({
         id: task.id,
         owner: `pcw:${req.pcWorker.id}`,
         token: req.body.leaseToken,
         result
       }))
+      await enqueueRagIndexFollowup(store, task)
       return res.json({ data: { id: succeeded.id, status: succeeded.status, progress: succeeded.progress } })
-    } catch (error) { return mapError(res, error) }
+    } catch (error) {
+      if (task?.taskType === 'rag.content.extract' && artifactStoreValue) await artifactStoreValue.discardTask(task.id).catch(() => {})
+      return mapError(res, error)
+    }
   })
 
   router.post('/tasks/:taskId/fail', async (req, res) => {
@@ -419,6 +725,7 @@ export function createPcWorkerAgentRouter({
         errorSummary: req.body.errorSummary.trim(),
         ...(req.body.retryable ? { retryAt: new Date(Date.now() + retryDelay).toISOString() } : {})
       }))
+      if (task.taskType === 'rag.content.extract') await getArtifactStore().discardTask(task.id)
       return res.json({ data: { id: outcome.task.id, status: outcome.task.status, retryScheduled: outcome.retryScheduled } })
     } catch (error) { return mapError(res, error) }
   })

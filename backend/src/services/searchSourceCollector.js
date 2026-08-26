@@ -117,7 +117,12 @@ async function collectDocuments(database, dependencies, context) {
       FROM documents d
       LEFT JOIN resource_domain_links l
         ON l.domain_type = 'document' AND l.domain_id = d.id
-     ORDER BY d.id
+     WHERE NOT EXISTS (
+       SELECT 1
+         FROM resource_trash_entries t
+        WHERE t.resource_type = 'document' AND t.resource_id = d.id
+     )
+      ORDER BY d.id
   `).all()
   const entries = []
   for (const row of rows) {
@@ -177,12 +182,22 @@ async function collectBooks(database, dependencies, context) {
       LEFT JOIN book_categories c ON c.id = b.category_id
       LEFT JOIN resource_domain_links l
         ON l.domain_type = 'ebook' AND l.domain_id = b.id
-     ORDER BY b.id
+     WHERE NOT EXISTS (
+       SELECT 1
+         FROM resource_trash_entries t
+        WHERE t.resource_type = 'ebook' AND t.resource_id = b.id
+     )
+      ORDER BY b.id
   `).all()
   const chapterRows = database.prepare(`
     SELECT id, book_id, title, chapter_index, created_at
       FROM book_chapters
-     ORDER BY book_id, chapter_index, id
+     WHERE NOT EXISTS (
+       SELECT 1
+         FROM resource_trash_entries t
+        WHERE t.resource_type = 'ebook' AND t.resource_id = book_chapters.book_id
+     )
+      ORDER BY book_id, chapter_index, id
   `).all()
   const chaptersByBook = new Map()
   for (const chapter of chapterRows) {

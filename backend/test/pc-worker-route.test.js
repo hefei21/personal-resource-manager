@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import express from 'express'
+import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,6 +11,8 @@ import test from 'node:test'
 process.env.DATA_PATH ??= path.join(os.tmpdir(), 'pc-worker-route-test-data')
 
 const { createPcWorkerAgentRouter, createPcWorkerOwnerRouter } = await import('../src/routes/pcWorkers.js')
+const { RAG_RERANKER_MODEL } = await import('../src/config/ragReranker.js')
+const { createRagArtifactStore } = await import('../src/services/ragArtifactStore.js')
 
 const content = Buffer.from('hello\nworker\n', 'utf8')
 const sha256 = createHash('sha256').update(content).digest('hex')
@@ -254,4 +257,577 @@ test('Owner route requires Owner and enqueues only managed content identifiers',
     assert.equal(body.data.subject.id, '7')
     assert.doesNotMatch(JSON.stringify(body), /managed_storage_key|leaseToken|leaseOwner/u)
   })
+})
+
+test('RAG content extraction stages binary artifacts and completes with metadata only', async () => {
+  const input = {
+    schemaVersion: 1,
+    sourceType: 'document',
+    sourceId: 7,
+    sourceVersionId: '7',
+    sourceContentSha256: sha256,
+    contentBytes: content.length,
+    format: 'docx'
+  }
+  const task = {
+    id: 43,
+    taskType: 'rag.content.extract',
+    processorVersion: 'v1',
+    executionClass: 'cpu',
+    subjectId: '7',
+    subjectContentHash: sha256,
+    input,
+    status: 'running',
+    leaseOwner: `pcw:${worker.id}`,
+    leaseToken: 'lease-secret',
+    leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+    attemptCount: 1
+  }
+  let succeeded
+  let followup
+  let followupCount = 0
+  const store = {
+    getById(id) { return Number(id) === task.id ? task : null },
+    succeed({ result }) { succeeded = result; task.status = 'succeeded'; return { id: task.id, status: task.status, progress: 100 } },
+    enqueue(input) { followup = input; followupCount += 1; return { task: { id: 44, ...input }, created: true } }
+  }
+  const sections = [{ ordinal: 0, title: 'Document', text: 'Grounded text.', locator: { paragraphStart: 0, paragraphEnd: 0 } }]
+  const artifact = JSON.stringify({ schemaVersion: 1, format: 'docx', sections })
+  const artifactSha256 = createHash('sha256').update(artifact).digest('hex')
+  const artifactBytes = Buffer.byteLength(artifact)
+  const result = {
+    schemaVersion: 1,
+    processorVersion: 'v1',
+    output: {
+      sourceVersionId: input.sourceVersionId,
+      sourceContentSha256: sha256,
+      extractorVersion: 'pc-worker-structured-text.v1',
+      artifactSha256,
+      artifactBytes,
+      sectionCount: 1,
+      format: 'docx'
+    }
+  }
+  const artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-worker-rag-artifact-'))
+  const artifactStore = createRagArtifactStore({ rootPath: artifactRoot })
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => fakeDatabase(),
+    runtime: () => ({ getStore: () => store }),
+    storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
+    authenticate: () => worker,
+    artifactStore
+  }))
+
+  await withServer(app, async (baseUrl) => {
+    const leasedInput = await fetch(`${baseUrl}/agent/tasks/43/input`, {
+      headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+    })
+    assert.equal(leasedInput.status, 200)
+    assert.deepEqual(Buffer.from(await leasedInput.arrayBuffer()), content)
+
+    input.sourceVersionId = '6'
+    const staleVersion = await fetch(`${baseUrl}/agent/tasks/43/input`, {
+      headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+    })
+    assert.equal(staleVersion.status, 409)
+    input.sourceVersionId = '7'
+
+    const upload = await fetch(`${baseUrl}/agent/tasks/43/artifact`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer access',
+        'x-worker-lease': 'lease-secret',
+        'content-type': 'application/octet-stream',
+        'x-artifact-sha256': artifactSha256,
+        'x-artifact-bytes': String(artifactBytes),
+        'x-artifact-section-count': '1',
+        'x-artifact-format': 'docx'
+      },
+      body: artifact
+    })
+    assert.equal(upload.status, 201)
+    const retryUpload = await fetch(`${baseUrl}/agent/tasks/43/artifact`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer access',
+        'x-worker-lease': 'lease-secret',
+        'content-type': 'application/octet-stream',
+        'x-artifact-sha256': artifactSha256,
+        'x-artifact-bytes': String(artifactBytes),
+        'x-artifact-section-count': '1',
+        'x-artifact-format': 'docx'
+      },
+      body: artifact
+    })
+    assert.equal(retryUpload.status, 201)
+    const differentArtifact = artifact.replace('Grounded text.', 'Different text.')
+    const differentUpload = await fetch(`${baseUrl}/agent/tasks/43/artifact`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer access',
+        'x-worker-lease': 'lease-secret',
+        'content-type': 'application/octet-stream',
+        'x-artifact-sha256': createHash('sha256').update(differentArtifact).digest('hex'),
+        'x-artifact-bytes': String(Buffer.byteLength(differentArtifact)),
+        'x-artifact-section-count': '1',
+        'x-artifact-format': 'docx'
+      },
+      body: differentArtifact
+    })
+    assert.equal(differentUpload.status, 409)
+
+    const complete = await fetch(`${baseUrl}/agent/tasks/43/complete`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'lease-secret', result })
+    })
+    assert.equal(complete.status, 200, JSON.stringify(await complete.clone().json()))
+    assert.equal(succeeded.output.format, 'docx')
+    assert.equal(followup.taskType, 'rag.index.refresh')
+    assert.deepEqual(followup.input, {
+      source: { type: 'document', id: 7 },
+      filter: { sourceType: 'document', sourceIds: [7] },
+      rebuild: false
+    })
+    const repeatedComplete = await fetch(`${baseUrl}/agent/tasks/43/complete`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'lease-secret', result })
+    })
+    assert.equal(repeatedComplete.status, 403)
+    assert.equal(followupCount, 1)
+    assert.equal(Object.hasOwn(succeeded.output, 'manifest'), false)
+    assert.equal((await artifactStore.readCommitted(43)).sections[0].text, 'Grounded text.')
+  })
+  fs.rmSync(artifactRoot, { recursive: true, force: true })
+})
+
+test('RAG extraction streams a newly uploaded legacy document without a resource projection', async () => {
+  const input = {
+    schemaVersion: 1,
+    sourceType: 'document',
+    sourceId: 33,
+    sourceVersionId: '11',
+    sourceContentSha256: sha256,
+    contentBytes: content.length,
+    format: 'pdf'
+  }
+  const task = {
+    id: 44,
+    taskType: 'rag.content.extract',
+    processorVersion: 'v1',
+    executionClass: 'cpu',
+    subjectId: '33',
+    subjectContentHash: sha256,
+    input,
+    status: 'running',
+    leaseOwner: `pcw:${worker.id}`,
+    leaseToken: 'lease-secret',
+    leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+    attemptCount: 1
+  }
+  const database = {
+    prepare(sql) {
+      return {
+        get() {
+          if (sql.includes('FROM resource_domain_links link')) return undefined
+          if (sql.includes('FROM documents domain_source')) {
+            return {
+              legacy_version_id: 11,
+              managed_storage_key: `documents/${sha256.slice(0, 2)}/${sha256}`,
+              sha256,
+              bytes: content.length,
+              legacy_version_number: 1
+            }
+          }
+          return undefined
+        }
+      }
+    }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => database,
+    runtime: () => ({ getStore: () => ({ getById: (id) => Number(id) === task.id ? task : null }) }),
+    storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
+    authenticate: () => worker
+  }))
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/44/input`, {
+      headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), content)
+  })
+})
+
+test('RAG extraction streams a newly uploaded legacy EPUB without a resource projection', async () => {
+  const sourceVersionId = `current:1:${sha256}`
+  const input = {
+    schemaVersion: 1,
+    sourceType: 'ebook',
+    sourceId: 27,
+    sourceVersionId,
+    sourceContentSha256: sha256,
+    contentBytes: content.length,
+    format: 'epub'
+  }
+  const task = {
+    id: 45,
+    taskType: 'rag.content.extract',
+    processorVersion: 'v1',
+    executionClass: 'cpu',
+    subjectId: '27',
+    subjectContentHash: sha256,
+    input,
+    status: 'running',
+    leaseOwner: `pcw:${worker.id}`,
+    leaseToken: 'lease-secret',
+    leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+    attemptCount: 1
+  }
+  const database = {
+    prepare(sql) {
+      return {
+        get() {
+          if (sql.includes('FROM resource_domain_links link')) return undefined
+          if (sql.includes('FROM books domain_source')) {
+            return {
+              managed_storage_key: `ebooks/${sha256.slice(0, 2)}/${sha256}`,
+              sha256,
+              bytes: content.length
+            }
+          }
+          return undefined
+        }
+      }
+    }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => database,
+    runtime: () => ({ getStore: () => ({ getById: (id) => Number(id) === task.id ? task : null }) }),
+    storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
+    authenticate: () => worker
+  }))
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/45/input`, {
+      headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), content)
+  })
+})
+
+test('RAG embedding completion is catalog-normalized and stale snapshots are rejected', async () => {
+  const model = {
+    provider: 'local-provider',
+    modelId: 'embedding-model',
+    modelRevision: 'rev-1',
+    dimensions: 3,
+    inputLimit: 2048,
+    distance: 'cosine',
+    normalization: 'l2',
+    configHash: 'a'.repeat(64)
+  }
+  const input = {
+    schemaVersion: 1,
+    snapshotId: 17,
+    sourceType: 'document',
+    sourceId: 7,
+    sourceVersionId: '11',
+    sourceContentSha256: 'b'.repeat(64),
+    model,
+    chunks: [{ chunkId: 101, ordinal: 0, chunkSha256: 'c'.repeat(64), body: '证据正文' }]
+  }
+  const task = {
+    id: 42,
+    taskType: 'rag.embedding.generate',
+    processorVersion: 'v1',
+    executionClass: 'gpu',
+    subjectId: '7',
+    subjectContentSha256: input.sourceContentSha256,
+    input,
+    status: 'running',
+    leaseOwner: `pcw:${worker.id}`,
+    leaseToken: 'lease-secret',
+    leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+    attemptCount: 1
+  }
+  let succeeded
+  const store = {
+    getById(id) { return Number(id) === task.id ? task : null },
+    succeed({ result }) { succeeded = result; task.status = 'succeeded'; return { id: task.id, status: task.status, progress: 100 } }
+  }
+  const database = {
+    prepare(sql) {
+      return {
+        get() {
+          if (!sql.includes('rag_source_snapshots')) return null
+          return {
+            id: 17,
+            source_type: 'document',
+            source_id: 7,
+            source_version_id: '11',
+            source_content_sha256: 'b'.repeat(64)
+          }
+        }
+      }
+    }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => database,
+    runtime: () => ({ getStore: () => store }),
+    authenticate: () => worker,
+    embeddingRuntimeFactory: () => ({
+      applyWorkerResult: async () => ({ applied: true, status: 'active' })
+    })
+  }))
+  const result = {
+    schemaVersion: 1,
+    processorVersion: 'v1',
+    output: {
+      model,
+      snapshotId: 17,
+      sourceVersionId: '11',
+      sourceContentSha256: 'b'.repeat(64),
+      vectors: [{ chunkId: 101, chunkSha256: 'c'.repeat(64), embedding: [0.1, 0.2, 0.3] }],
+      vectorSha256: createHash('sha256').update(JSON.stringify([[0.1, 0.2, 0.3]])).digest('hex')
+    }
+  }
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/42/complete`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'lease-secret', result })
+    })
+    assert.equal(response.status, 200)
+    assert.equal(succeeded.output.vectors[0].chunkId, 101)
+
+    database.prepare = (sql) => ({
+      get() {
+        if (!sql.includes('rag_source_snapshots')) return null
+        return {
+          id: 17,
+          source_type: 'document',
+          source_id: 7,
+          source_version_id: '11',
+          source_content_sha256: 'd'.repeat(64)
+        }
+      }
+    })
+    task.status = 'running'
+    const stale = await fetch(`${baseUrl}/agent/tasks/42/complete`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: JSON.stringify({ leaseToken: 'lease-secret', result })
+    })
+    assert.equal(stale.status, 409)
+    assert.equal((await stale.json()).code, 'PC_WORKER_RESULT_STALE')
+  })
+})
+
+test('Worker claim derives CPU execution classes for content extraction', async () => {
+  const claimWorker = {
+    ...worker,
+    capabilities: {
+      ...worker.capabilities,
+      processors: [{ taskType: 'rag.content.extract', processorVersion: 'v1', executionClass: 'cpu', outputSchemaVersion: 1 }]
+    }
+  }
+  const task = {
+    ...taskFixture(),
+    id: 77,
+    taskType: 'rag.content.extract',
+    executionClass: 'cpu',
+    input: {
+      schemaVersion: 1,
+      sourceType: 'document',
+      sourceId: 7,
+      sourceVersionId: 'version-7',
+      sourceContentSha256: sha256,
+      contentBytes: content.length,
+      format: 'docx'
+    }
+  }
+  let leaseOptions
+  const store = {
+    leaseNext(options) {
+      leaseOptions = options
+      return { ...task, status: 'leased', leaseOwner: options.owner, leaseToken: 'lease-cpu' }
+    },
+    fail() {}
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => fakeDatabase(),
+    runtime: () => ({ getStore: () => store }),
+    authenticate: () => claimWorker,
+    embeddingModelProvider: () => null
+  }))
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/claim`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: '{}'
+    })
+    assert.equal(response.status, 200)
+    assert.deepEqual(leaseOptions.executionClasses, ['cpu'])
+    assert.equal(Object.hasOwn(leaseOptions, 'executionClass'), false)
+    assert.deepEqual(leaseOptions.supportedProcessors, [{
+      taskType: 'rag.content.extract', processorVersion: 'v1', executionClass: 'cpu'
+    }])
+  })
+})
+
+test('Worker claim independently binds Nomic embedding and BGE reranker capabilities', async () => {
+  const embeddingModel = {
+    provider: 'lm-studio',
+    modelId: 'text-embedding-nomic-embed-text-v1.5',
+    modelRevision: 'gguf-sha256-d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac',
+    dimensions: 768,
+    inputLimit: 2048,
+    distance: 'cosine',
+    normalization: 'l2',
+    configHash: '7d93077b98e4a05746f0de951f9156d9671de74a446a4312b2baaa092eabbdad'
+  }
+  const claimWorker = {
+    ...worker,
+    capabilities: {
+      ...worker.capabilities,
+      processors: [
+        ...worker.capabilities.processors,
+        {
+          taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1,
+          model: Object.fromEntries(['provider', 'modelId', 'modelRevision', 'dimensions', 'inputLimit', 'configHash'].map((key) => [key, embeddingModel[key]]))
+        },
+        {
+          taskType: 'rag.query.embed', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1,
+          model: Object.fromEntries(['provider', 'modelId', 'modelRevision', 'dimensions', 'inputLimit', 'configHash'].map((key) => [key, embeddingModel[key]]))
+        },
+        { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1, model: RAG_RERANKER_MODEL }
+      ]
+    }
+  }
+  const database = {
+    prepare(sql) {
+      return {
+        get(name) {
+          if (sql.includes('sqlite_master')) return { 1: name }
+          if (sql.includes('rag_embedding_models')) {
+            return {
+              embedding_model_id: 19,
+              provider: embeddingModel.provider,
+              model_id: embeddingModel.modelId,
+              model_revision: embeddingModel.modelRevision,
+              dimensions: embeddingModel.dimensions,
+              input_limit: embeddingModel.inputLimit,
+              distance: embeddingModel.distance,
+              normalization: embeddingModel.normalization,
+              config_hash: embeddingModel.configHash,
+              status: 'active'
+            }
+          }
+          return null
+        }
+      }
+    }
+  }
+  let leaseOptions
+  const store = {
+    leaseNext(options) { leaseOptions = options; return null }
+  }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => database,
+    runtime: () => ({ getStore: () => store }),
+    authenticate: () => claimWorker,
+    embeddingModelProvider: () => ({ embeddingModelId: 19, model: embeddingModel }),
+    rerankerModelProvider: () => RAG_RERANKER_MODEL
+  }))
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/agent/tasks/claim`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+      body: '{}'
+    })
+    assert.equal(response.status, 204)
+    assert.deepEqual(leaseOptions.supportedProcessors, [
+      { taskType: 'content.inspect', processorVersion: 'v1', executionClass: 'gpu' },
+      { taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu' },
+      { taskType: 'rag.query.embed', processorVersion: 'v1', executionClass: 'gpu' },
+      { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu' }
+    ])
+  })
+})
+
+test('Worker claim keeps configured reranker when no embedding model is active', async () => {
+  const rerankerEnvironment = {
+    RAG_RERANKER_ENABLED: 'true',
+    RAG_RERANKER_PROVIDER: RAG_RERANKER_MODEL.provider,
+    RAG_RERANKER_MODEL_ID: RAG_RERANKER_MODEL.modelId,
+    RAG_RERANKER_MODEL_REVISION: RAG_RERANKER_MODEL.modelRevision,
+    RAG_RERANKER_DIMENSIONS: String(RAG_RERANKER_MODEL.dimensions),
+    RAG_RERANKER_INPUT_LIMIT: String(RAG_RERANKER_MODEL.inputLimit),
+    RAG_RERANKER_CONFIG_HASH: RAG_RERANKER_MODEL.configHash
+  }
+  const previousEnvironment = Object.fromEntries(Object.keys(rerankerEnvironment).map((key) => [key, process.env[key]]))
+  Object.assign(process.env, rerankerEnvironment)
+  const claimWorker = {
+    ...worker,
+    capabilities: {
+      ...worker.capabilities,
+      processors: [
+        {
+          taskType: 'rag.embedding.generate', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1,
+          model: {
+            provider: 'lm-studio',
+            modelId: 'text-embedding-nomic-embed-text-v1.5',
+            modelRevision: 'gguf-sha256-d4e388894e09cf3816e8b0896d81d265b55e7a9fff9ab03fe8bf4ef5e11295ac',
+            dimensions: 768,
+            inputLimit: 2048,
+            configHash: '7d93077b98e4a05746f0de951f9156d9671de74a446a4312b2baaa092eabbdad'
+          }
+        },
+        { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu', outputSchemaVersion: 1, model: RAG_RERANKER_MODEL }
+      ]
+    }
+  }
+  let leaseOptions
+  const store = { leaseNext(options) { leaseOptions = options; return null } }
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({
+    database: () => fakeDatabase(),
+    runtime: () => ({ getStore: () => store }),
+    authenticate: () => claimWorker
+  }))
+
+  try {
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/agent/tasks/claim`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer access', 'content-type': 'application/json' },
+        body: '{}'
+      })
+      assert.equal(response.status, 204)
+      assert.deepEqual(leaseOptions.supportedProcessors, [
+        { taskType: 'rag.rerank', processorVersion: 'v1', executionClass: 'gpu' }
+      ])
+    })
+  } finally {
+    for (const [key, value] of Object.entries(previousEnvironment)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 })

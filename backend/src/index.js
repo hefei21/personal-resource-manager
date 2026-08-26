@@ -26,11 +26,16 @@ import { ensureDirectories } from './config/storage.js'
 import { initRedis, closeRedis, isRedisConnected } from './utils/redis.js'
 import { migrateCompressCovers } from './utils/migration.js'
 import { migrate as migrateAccessLogs } from '../migrate-access-logs.js'
-import { startTaskRuntime, stopTaskRuntime } from './services/taskRuntime.js'
+import { getTaskRuntime, startTaskRuntime, stopTaskRuntime } from './services/taskRuntime.js'
+import {
+  reconcileRagEmbeddingRuntime,
+  startRagEmbeddingReconcileLoop
+} from './services/ragEmbeddingRuntime.js'
 import './services/nasScanTaskProcessor.js'
 import './services/resourceDomainImportTaskProcessor.js'
 import './services/gitNasTaskProcessor.js'
 import './services/searchIndexTaskProcessor.js'
+import './services/ragIndexTaskProcessor.js'
 
 // 导入安全中间件
 import {
@@ -58,6 +63,7 @@ import bookmarksRoutes from './routes/bookmarks.js'
 import animeRoutes from './routes/anime.js'
 import gamesRoutes from './routes/games.js'
 import searchRoutes from './routes/search.js'
+import ragRoutes from './routes/rag.js'
 import bookSearchRoutes from './routes/bookSearch.js'
 import todosRoutes from './routes/todos.js'
 import blogRoutes from './routes/blog.js'
@@ -81,6 +87,7 @@ import {
 } from './services/ipBlacklist.js'
 
 const app = express()
+let ragEmbeddingReconcileLoop = null
 const PORT = process.env.PORT || 3000
 
 // 信任代理配置
@@ -177,7 +184,7 @@ app.use((req, res, next) => {
 
 // 请求日志中间件
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`)
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`)
   next()
 })
 
@@ -301,6 +308,7 @@ app.use('/api/bookmarks', ...ownerOnly, bookmarksRoutes)
 app.use('/api/anime', ...ownerOnly, animeRoutes)
 app.use('/api/games', ...ownerOnly, gamesRoutes)
 app.use('/api/search', ...ownerOnly, searchRoutes)
+app.use('/api/rag', ...ownerOnly, ragRoutes)
 app.use('/api/book-search', ...ownerOnly, bookSearchRoutes)
 app.use('/api/todos', ...ownerOnly, todosRoutes)
 app.use('/api/blog', ...ownerOnly, blogRoutes)
@@ -443,6 +451,24 @@ app.use((err, req, res, next) => {
 })
 
 // 初始化数据库和目录
+async function reconcileRagEmbeddingStartup(database) {
+  try {
+    const taskStore = getTaskRuntime().getStore()
+    const report = await reconcileRagEmbeddingRuntime({ database, taskStore, enqueue: true, maxBatches: 1 })
+    if (!report || !['recovered', 'stale', 'missing', 'enqueued'].every((field) => Object.hasOwn(report, field))) return
+    console.log('[RAG] embedding startup reconcile completed', {
+      recovered: report.recovered,
+      stale: report.stale,
+      missing: report.missing,
+      enqueued: report.enqueued.length
+    })
+  } catch (error) {
+    // Embeddings are an optional acceleration path.  A Qdrant/Worker outage
+    // must leave the task runtime and FTS path available during boot.
+    console.warn('[RAG] embedding startup reconcile degraded', error?.code ?? 'RAG_EMBEDDING_RECONCILE_FAILED')
+  }
+}
+
 async function initialize() {
   try {
     // 确保必要目录存在
@@ -451,6 +477,11 @@ async function initialize() {
     // 初始化数据库（better-sqlite3 是同步的）
     const database = initDatabase()
     startTaskRuntime({ database })
+    void reconcileRagEmbeddingStartup(database)
+    ragEmbeddingReconcileLoop = startRagEmbeddingReconcileLoop({
+      database,
+      taskStore: getTaskRuntime().getStore()
+    })
 
     console.log('✓ 数据库初始化完成')
 
@@ -492,6 +523,7 @@ async function initialize() {
 // 优雅关闭
 process.on('SIGTERM', async () => {
   console.log('收到 SIGTERM 信号，正在关闭服务器...')
+  ragEmbeddingReconcileLoop?.stop?.()
   await stopTaskRuntime()
   await closeRedis()
   process.exit(0)
@@ -499,6 +531,7 @@ process.on('SIGTERM', async () => {
 
 process.on('SIGINT', async () => {
   console.log('收到 SIGINT 信号，正在关闭服务器...')
+  ragEmbeddingReconcileLoop?.stop?.()
   await stopTaskRuntime()
   await closeRedis()
   process.exit(0)
