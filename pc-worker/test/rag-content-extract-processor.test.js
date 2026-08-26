@@ -1,11 +1,13 @@
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import { Readable } from 'node:stream'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import AdmZip from 'adm-zip'
 
-import { createRagContentExtractProcessor } from '../src/ragContentExtractProcessor.js'
+import { createPdfDocumentOptions, createRagContentExtractProcessor } from '../src/ragContentExtractProcessor.js'
 
 function task(format, buffer) {
   return {
@@ -84,6 +86,16 @@ test('extracts PDF page text with a page locator', async () => {
   assert.equal(result.artifact.sections[0].title, 'Page 1')
   assert.match(result.artifact.sections[0].text, /Hello PDF evidence/u)
   assert.deepEqual(result.artifact.sections[0].locator, { page: 1 })
+})
+
+test('loads bundled PDF.js CMaps and standard fonts from portable filesystem paths', () => {
+  const options = createPdfDocumentOptions(Buffer.from('pdf'))
+  assert.equal(options.cMapPacked, true)
+  assert.equal(options.useSystemFonts, false)
+  assert.equal(options.cMapUrl.endsWith(path.sep), true)
+  assert.equal(options.standardFontDataUrl.endsWith(path.sep), true)
+  assert.equal(fs.statSync(options.cMapUrl).isDirectory(), true)
+  assert.equal(fs.statSync(options.standardFontDataUrl).isDirectory(), true)
 })
 
 test('rejects hash mismatch, malformed archives, and unsupported formats', async () => {

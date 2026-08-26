@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import AdmZip from 'adm-zip'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
@@ -15,6 +16,19 @@ const MAX_ARCHIVE_ENTRIES = 20_000
 const MAX_SECTION_COUNT = 100_000
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const FORMATS = new Set(['pdf', 'docx', 'epub'])
+const PDF_CMAP_URL = fileURLToPath(new URL('../node_modules/pdfjs-dist/cmaps', import.meta.url)) + path.sep
+const PDF_STANDARD_FONT_DATA_URL = fileURLToPath(new URL('../node_modules/pdfjs-dist/standard_fonts', import.meta.url)) + path.sep
+
+export function createPdfDocumentOptions(buffer) {
+  return {
+    data: new Uint8Array(buffer),
+    cMapUrl: PDF_CMAP_URL,
+    cMapPacked: true,
+    standardFontDataUrl: PDF_STANDARD_FONT_DATA_URL,
+    useSystemFonts: false,
+    isEvalSupported: false
+  }
+}
 
 function fail(code, message = code) {
   throw Object.assign(new Error(message), { code, retryable: false })
@@ -113,7 +127,7 @@ function extractEpub(buffer) {
 async function extractPdf(buffer, signal) {
   let document
   try {
-    document = await getDocument({ data: new Uint8Array(buffer), useSystemFonts: false, isEvalSupported: false }).promise
+    document = await getDocument(createPdfDocumentOptions(buffer)).promise
   } catch { fail('WORKER_CONTENT_EXTRACT_PDF_INVALID') }
   const sections = []
   try {
