@@ -519,7 +519,14 @@ export class RagEmbeddingCoordinator {
       const request = this.#taskRequest(prepared)
       if (options.retryFailed && typeof this.taskStore.retryTerminalTask === 'function' &&
           typeof this.taskStore.getByIdempotencyKey === 'function') {
-        const idempotencyKey = deriveTaskIdempotencyKey(request)
+        const idempotencyKey = deriveTaskIdempotencyKey({
+          taskType: request.taskType,
+          processorVersion: request.processorVersion,
+          subjectType: request.subjectType,
+          subjectId: request.subjectId,
+          subjectVersionId: request.subjectVersionId,
+          subjectContentSha256: request.subjectContentSha256
+        })
         const existing = await Promise.resolve(this.taskStore.getByIdempotencyKey(idempotencyKey))
         if (existing && ['failed', 'cancelled'].includes(existing.status)) {
           const retryOutcome = await Promise.resolve(this.taskStore.retryTerminalTask({ id: existing.id, maxRetries: 1 }))

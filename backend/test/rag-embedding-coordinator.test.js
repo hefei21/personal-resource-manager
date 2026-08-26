@@ -8,11 +8,13 @@ import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
 import { RAG_INDEX_MIGRATIONS } from '../src/config/ragIndexSchema.js'
 import { RAG_EMBEDDING_MIGRATIONS } from '../src/config/ragEmbeddingSchema.js'
+import { CREATE_TASK_SCHEMA_SQL } from '../src/config/taskSchema.js'
 import { lookupPcWorkerProcessor } from '../src/services/pcWorkerProcessorCatalog.js'
 import {
   RAG_EMBEDDING_COORDINATOR_ERROR_CODES,
   createRagEmbeddingCoordinator
 } from '../src/services/ragEmbeddingCoordinator.js'
+import { TaskStore } from '../src/services/taskStore.js'
 
 const require = createRequire(import.meta.url)
 let Database
@@ -194,6 +196,33 @@ test('prepares, enqueues and finalizes only after Qdrant upsert, with retry idem
     const repeated = await coordinator.applyWorkerResult(task, workerResult(task, task.input.chunks))
     assert.equal(repeated.status, 'active')
     assert.equal(fixture.vectorStore.calls.length, 2)
+  } finally {
+    fixture.database.close()
+  }
+})
+
+test('enqueues an embedding batch through the real SQLite TaskStore contract', nativeTestOptions, async () => {
+  const fixture = createFixture({ chunkCount: 1 })
+  try {
+    fixture.database.exec(CREATE_TASK_SCHEMA_SQL)
+    fixture.taskStore = new TaskStore({
+      database: fixture.database,
+      now: () => '2026-08-25T00:00:00.000Z'
+    })
+    const coordinator = createCoordinator(fixture, { workerAvailable: () => true })
+
+    const result = await coordinator.enqueueBatch({
+      snapshotId: fixture.snapshotId,
+      embeddingModelId: fixture.embeddingModelId,
+      retryFailed: true
+    })
+
+    assert.equal(result.status, 'enqueued')
+    assert.equal(result.created, true)
+    assert.equal(result.task.taskType, 'rag.embedding.generate')
+    assert.equal(result.task.subjectType, 'rag.embedding.snapshot-model')
+    assert.equal(result.task.subjectId, `${fixture.snapshotId}:${fixture.embeddingModelId}`)
+    assert.equal(fixture.taskStore.list({ taskType: 'rag.embedding.generate' }).length, 1)
   } finally {
     fixture.database.close()
   }
