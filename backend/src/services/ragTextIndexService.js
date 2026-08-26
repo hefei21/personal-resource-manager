@@ -672,8 +672,23 @@ function normalizeQuery(input) {
     sourceType,
     limit,
     offset,
-    ftsQuery: unique.map((token) => `"${token.replaceAll('"', '""')}"*`).join(' AND ')
+    ftsQuery: unique.map((token) => `"${token.replaceAll('"', '""')}"*`).join(' AND '),
+    relaxedFtsQuery: unique.map((token) => `"${token.replaceAll('"', '""')}"*`).join(' OR '),
+    relaxedTokens: Object.freeze([...unique])
   })
+}
+
+function hasRelaxedLexicalSupport(row, tokens) {
+  if (!Array.isArray(tokens) || tokens.length === 0) return false
+  const haystack = `${row?.title ?? ''}\n${row?.body ?? ''}`.normalize('NFKC').toLocaleLowerCase('und')
+  const required = Math.min(2, tokens.length)
+  let matches = 0
+  for (const token of tokens) {
+    if (!haystack.includes(token.toLocaleLowerCase('und'))) continue
+    matches += 1
+    if (matches >= required) return true
+  }
+  return false
 }
 
 function rowToResult(row) {
@@ -884,12 +899,10 @@ export class RagTextIndexService {
       `state.active_snapshot_id = snapshot.id`,
       `snapshot.status IN ('text_ready', 'embedding_pending', 'ready', 'partial')`
     ]
-    const parameters = [query.ftsQuery]
     if (query.sourceType) {
       clauses.push('snapshot.source_type = ?')
-      parameters.push(query.sourceType)
     }
-    const rows = this.database.prepare(`
+    const statement = this.database.prepare(`
       SELECT chunks.id AS chunk_id, chunks.snapshot_id, chunks.ordinal,
              chunks.body, chunks.token_count, chunks.token_count_mode,
              chunks.section_path_json, chunks.locator_json,
@@ -903,7 +916,21 @@ export class RagTextIndexService {
        WHERE ${clauses.join(' AND ')}
        ORDER BY rank ASC, chunks.id ASC
        LIMIT ?
-    `).all(...parameters, candidateLimit)
+    `)
+    const readCandidates = (ftsQuery) => statement.all(
+      ftsQuery,
+      ...(query.sourceType ? [query.sourceType] : []),
+      candidateLimit
+    )
+    let rows = readCandidates(query.ftsQuery)
+    if (rows.length === 0 && query.relaxedFtsQuery !== query.ftsQuery) {
+      // Natural-language questions often contain connective words that are
+      // absent from the evidence. Preserve precise AND ranking when it hits,
+      // then use a bounded BM25-ranked OR pass so FTS remains useful while the
+      // optional vector Worker is offline or still indexing.
+      rows = readCandidates(query.relaxedFtsQuery)
+        .filter((row) => hasRelaxedLexicalSupport(row, query.relaxedTokens))
+    }
     const visible = []
     for (const row of rows) {
       const result = rowToResult(row)

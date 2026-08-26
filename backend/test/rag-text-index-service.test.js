@@ -123,6 +123,45 @@ test('indexes collector sources in a transaction and returns exact public locato
   }
 })
 
+test('falls back to bounded OR recall when a natural-language CJK question has no strict AND hit', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const service = createService(database)
+    await service.index({
+      sources: [source({
+        id: 111,
+        version: 1,
+        title: '北辰灯塔设备运行简报',
+        text: '北辰灯塔应急无线电固定巡检周期为17天。最近一次为2026-07-24，下一次为2026-08-10。'
+      })],
+      errors: []
+    })
+    database.prepare("UPDATE rag_source_snapshots SET status = 'embedding_pending' WHERE source_id = 111").run()
+
+    const result = service.query({
+      q: '北辰灯塔应急无线电的固定巡检周期是多少天？最近一次和下一次计划日期分别是什么？',
+      limit: 10
+    })
+    assert.equal(result.total, 1)
+    assert.equal(result.data[0].sourceId, 111)
+    assert.equal(service.query({ q: '" OR * NEAR(...) foo" NOT bar', limit: 10 }).total, 0)
+
+    await service.index({
+      sources: [
+        source({ id: 112, text: 'alpha beta exact evidence' }),
+        source({ id: 113, text: 'alpha partial evidence' })
+      ],
+      errors: []
+    })
+    const strict = service.query({ q: 'alpha beta', limit: 10 })
+    assert.equal(strict.total, 1)
+    assert.equal(strict.data[0].sourceId, 112)
+  } finally {
+    database.close()
+  }
+})
+
 test('replaces active snapshot atomically and excludes stale FTS rows through the active join', nativeTestOptions, async () => {
   const database = new Database(':memory:')
   try {
