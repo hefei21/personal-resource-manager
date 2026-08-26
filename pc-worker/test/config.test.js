@@ -95,6 +95,7 @@ test('Worker only enables explicit complete embedding configuration', () => {
   assert.equal(Object.isFrozen(answerEnabled.answer), true)
   assert.equal(answerEnabled.modelReadinessIntervalMs, 15_000)
   assert.equal(answerEnabled.modelReadinessMaxBackoffMs, 60_000)
+  assert.equal(answerEnabled.pollIntervalMs, 1_000)
   assert.equal(answerEnabled.followUpPollIntervalMs, 25)
   assert.equal(answerEnabled.followUpPollAttempts, 8)
   assert.throws(() => loadConfig({

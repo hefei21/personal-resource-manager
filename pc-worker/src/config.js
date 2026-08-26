@@ -307,7 +307,7 @@ export function loadConfig(env = process.env) {
     statePath,
     enrollmentToken: env.PC_WORKER_ENROLLMENT_TOKEN || null,
     displayName: (env.PC_WORKER_DISPLAY_NAME || os.hostname()).slice(0, 80),
-    pollIntervalMs: integer(env.PC_WORKER_POLL_INTERVAL_MS, 5_000, 1_000, 60_000, 'PC_WORKER_POLL_INTERVAL_MS'),
+    pollIntervalMs: integer(env.PC_WORKER_POLL_INTERVAL_MS, 1_000, 1_000, 60_000, 'PC_WORKER_POLL_INTERVAL_MS'),
     followUpPollIntervalMs: integer(env.PC_WORKER_FOLLOW_UP_POLL_INTERVAL_MS, 25, 10, 250, 'PC_WORKER_FOLLOW_UP_POLL_INTERVAL_MS'),
     followUpPollAttempts: integer(env.PC_WORKER_FOLLOW_UP_POLL_ATTEMPTS, 8, 1, 20, 'PC_WORKER_FOLLOW_UP_POLL_ATTEMPTS'),
     heartbeatIntervalMs: integer(env.PC_WORKER_HEARTBEAT_INTERVAL_MS, 20_000, 5_000, 45_000, 'PC_WORKER_HEARTBEAT_INTERVAL_MS'),
