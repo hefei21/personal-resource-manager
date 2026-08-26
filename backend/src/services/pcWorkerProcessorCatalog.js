@@ -351,7 +351,9 @@ function projectRerankInput(input) {
     exactKeys(candidate, ['candidateId', 'text', 'score'], `task.input.candidates[${index}]`)
     const normalized = {
       candidateId: token(candidate.candidateId, `task.input.candidates[${index}].candidateId`, 128),
-      text: boundedText(candidate.text, `task.input.candidates[${index}].text`, LIMITS.rerank.inputMaxBytes)
+      // Retrieved document chunks are content, not single-line tokens. Preserve
+      // ordinary tabs/newlines while still rejecting NUL and unsafe controls.
+      text: boundedContentText(candidate.text, `task.input.candidates[${index}].text`, LIMITS.rerank.inputMaxBytes)
     }
     if (candidate.score !== undefined) normalized.score = finiteNumber(candidate.score, `task.input.candidates[${index}].score`)
     return freeze(normalized)

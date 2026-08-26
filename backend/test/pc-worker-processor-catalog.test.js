@@ -276,7 +276,16 @@ test('query embed, rerank, and answer reject stale identity, invalid numbers, an
   }, query), (error) => error.code === 'PC_WORKER_PROCESSOR_RESULT_INVALID')
 
   const rerankDefinition = lookupPcWorkerProcessor('rag.rerank')
-  const rerank = rerankDefinition.projectInput(rerankInput())
+  const multilineCandidates = [
+    { ...rerankInput().candidates[0], text: '证据一\n第二段\t表格值' },
+    rerankInput().candidates[1]
+  ]
+  const rerank = rerankDefinition.projectInput({
+    ...rerankInput(),
+    candidateSetSha256: rerankCandidateSetSha256(multilineCandidates),
+    candidates: multilineCandidates
+  })
+  assert.equal(rerank.candidates[0].text, '证据一\n第二段\t表格值')
   const rerankResult = rerankDefinition.normalizeResult({
     schemaVersion: 1,
     processorVersion: 'v1',

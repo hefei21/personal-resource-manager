@@ -65,6 +65,20 @@ test('reranks the complete authorized candidate set and binds task identity', as
   assert.equal(store.requests[0].input.candidates.every((item) => !Object.hasOwn(item, 'citationId')), true)
 })
 
+test('accepts multiline retrieved evidence when projecting a rerank task', async () => {
+  const store = successfulStore()
+  const service = createRagRerankService({ taskStore: store, workerAvailable: async () => true, model })
+  const input = [
+    { citationId: 'C1', body: 'first paragraph\nsecond paragraph\tvalue', score: 0.8 },
+    { citationId: 'C2', body: 'second evidence', score: 0.7 }
+  ]
+
+  const result = await service.rerank({ query: 'How to recover?', candidates: input })
+
+  assert.equal(result.applied, true)
+  assert.equal(store.requests[0].input.candidates[0].text, 'first paragraph\nsecond paragraph\tvalue')
+})
+
 test('offline or disabled reranker preserves Hybrid order without enqueueing', async () => {
   let enqueueCalls = 0
   const store = { enqueue: async () => { enqueueCalls += 1 } }
