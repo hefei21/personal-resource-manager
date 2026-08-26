@@ -44,6 +44,14 @@ test('reranker scripts and compose keep runtime data on D and isolate explicit s
   assert.match(compose, /restart: ["']?no/u)
 })
 
+test('reranker start does not enumerate a regular env file as a reparse-point child', () => {
+  const start = script('reranker-start.ps1')
+  assert.match(start, /if \(\$item\.PSIsContainer\) \{\s*\$children = @\(Get-ChildItem -LiteralPath \$item\.FullName/u)
+  assert.doesNotMatch(start, /Get-ChildItem -LiteralPath \$Path -Recurse/u)
+  assert.match(start, /\[int\]\$ReadinessTimeoutSeconds = 300/u)
+  assert.match(start, /\$previousErrorActionPreference = \$ErrorActionPreference/u)
+})
+
 test('reranker compose uses only supported TEI 1.9 length controls', () => {
   assert.doesNotMatch(compose, /--max-input-length/u)
   assert.match(compose, /--max-batch-tokens\s*\r?\n\s*-\s*["']?5120/u)

@@ -6,7 +6,7 @@ param(
   [string]$CacheDir = 'D:\PRManagerAI\cache\huggingface',
   [string]$RuntimeDir = 'D:\PRManagerAI\runtime\tei',
   [string]$LogDir = 'D:\PRManagerAI\logs\bge-reranker',
-  [int]$ReadinessTimeoutSeconds = 60
+  [int]$ReadinessTimeoutSeconds = 300
 )
 
 $ErrorActionPreference = 'Stop'
@@ -56,8 +56,13 @@ function Assert-NoReparsePoints {
     if ($null -eq $parent -or $parent.FullName -eq $current.FullName) { break }
     $current = $parent
   }
-  $children = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -Attributes ReparsePoint -ErrorAction Stop)
-  if ($children.Count -gt 0) { throw "$Label contains reparse points/symlinks." }
+  # Windows PowerShell 5.1 ignores -Attributes when Get-ChildItem targets a
+  # single file and returns that file itself. Only directories can contain
+  # descendants, so recursive reparse-point inspection is directory-only.
+  if ($item.PSIsContainer) {
+    $children = @(Get-ChildItem -LiteralPath $item.FullName -Recurse -Force -Attributes ReparsePoint -ErrorAction Stop)
+    if ($children.Count -gt 0) { throw "$Label contains reparse points/symlinks." }
+  }
 }
 
 function Assert-ModelFiles {
@@ -174,8 +179,17 @@ while ([DateTime]::UtcNow -lt $deadline) {
   Start-Sleep -Seconds 1
 }
 if (-not $ready) {
-  & $docker.Source @($composePrefix + @('logs', '--no-color', '--tail', '100', 'reranker')) *> $null
-  & $docker.Source @($composePrefix + @('stop', 'reranker')) *> $null
+  # Docker Compose writes ordinary lifecycle messages to stderr. Windows
+  # PowerShell 5.1 turns redirected native stderr into ErrorRecord objects, so
+  # temporarily keep those messages non-terminating while we perform cleanup.
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = 'Continue'
+    & $docker.Source @($composePrefix + @('logs', '--no-color', '--tail', '100', 'reranker')) *> $null
+    & $docker.Source @($composePrefix + @('stop', 'reranker')) *> $null
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
   throw "Reranker did not publish a pinned /info identity within $timeoutSeconds seconds; service was stopped."
 }
 

@@ -167,3 +167,45 @@ test('local TEI model path requires the pinned manifest and reranker model type'
   assert.equal(wrongType.isReady('reranker'), false)
   assert.equal(wrongType.snapshot().reranker.reason, 'model_type_mismatch')
 })
+
+test('TEI server build sha is not treated as the local model revision', async () => {
+  const readiness = createModelReadiness({
+    reranker: config,
+    fetchImpl: async () => jsonResponse({
+      model_id: '/models/reranker',
+      model_sha: null,
+      served_model_name: config.modelId,
+      model_type: { reranker: { id2label: { 0: 'LABEL_0' } } },
+      version: '1.9.3',
+      sha: '06670157fb6c1523482219bdb2d1660277d38088'
+    }),
+    rerankerManifestProvider: async () => pinnedManifest,
+    intervalMs: 1_000,
+    maxBackoffMs: 4_000,
+    now: () => 0,
+    random: () => 0.5
+  })
+  await readiness.refresh({ force: true })
+  assert.equal(readiness.isReady('reranker'), true)
+  assert.equal(readiness.snapshot().reranker.reason, null)
+})
+
+for (const revisionField of ['model_revision', 'modelRevision', 'model_sha']) {
+  test(`explicit ${revisionField} mismatch remains rejected`, async () => {
+    const readiness = createModelReadiness({
+      reranker: config,
+      fetchImpl: async () => jsonResponse({
+        model_type: { reranker: {} },
+        served_model_name: config.modelId,
+        [revisionField]: 'wrong-model-revision',
+        sha: 'tei-server-build-sha'
+      }),
+      rerankerManifestProvider: async () => pinnedManifest,
+      now: () => 0,
+      random: () => 0.5
+    })
+    await readiness.refresh({ force: true })
+    assert.equal(readiness.isReady('reranker'), false)
+    assert.equal(readiness.snapshot().reranker.reason, 'model_identity_mismatch')
+  })
+}

@@ -99,7 +99,9 @@ function rerankerIdentityStatus(payload, config) {
   const modelId = identityValue(payload, ['model_id', 'modelId', 'model'])
   const localModelPath = '/models/reranker'
   if (modelId !== null && modelId !== config.modelId && modelId !== localModelPath) return 'model_identity_mismatch'
-  const revision = identityValue(payload, ['revision', 'model_revision', 'modelRevision', 'model_sha', 'sha'])
+  // TEI's top-level `sha` identifies the TEI server build, not the locally
+  // mounted model revision. Only model-specific revision fields are binding.
+  const revision = identityValue(payload, ['revision', 'model_revision', 'modelRevision', 'model_sha'])
   if (revision !== null && revision !== config.modelRevision) return 'model_identity_mismatch'
   if (servedModelName === null && modelId === null) return 'unknown'
   return modelId === localModelPath ? 'local_model_path' : 'matched'
