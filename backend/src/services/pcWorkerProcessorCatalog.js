@@ -618,11 +618,11 @@ function normalizeAnswerResult(value, expected) {
   return freeze(normalized)
 }
 
-function resolveProjectedInput(input, project) {
+function resolveProjectedInput(input, project, { bindSourceContent = true } = {}) {
   if (isPlainObject(input) && Object.hasOwn(input, 'input')) {
     exactKeys(input, ['input', 'subjectContentHash', 'subjectBytes'], 'resolveInput context')
     const projected = project(input.input)
-    if (input.subjectContentHash !== undefined && Object.hasOwn(projected, 'sourceContentSha256') &&
+    if (bindSourceContent && input.subjectContentHash !== undefined && Object.hasOwn(projected, 'sourceContentSha256') &&
         hash(input.subjectContentHash, 'subjectContentHash') !== projected.sourceContentSha256) {
       fail('PC_WORKER_PROCESSOR_INPUT_MISMATCH', 'leased content identity does not match input.')
     }
@@ -717,8 +717,8 @@ function contentInputResolver(context) {
   return projected
 }
 
-function ragInputResolver(project) {
-  return (context) => resolveProjectedInput(context, project)
+function ragInputResolver(project, options) {
+  return (context) => resolveProjectedInput(context, project, options)
 }
 
 function descriptor(definition, model = null) {
@@ -780,7 +780,10 @@ const EMBEDDING_GENERATE = definition({
   limits: LIMITS.embeddingGenerate,
   projectInput: projectEmbeddingInput,
   normalizeResult: (value, expected) => normalizeEnvelope(value, normalizeEmbeddingResult, expected, LIMITS.embeddingGenerate.outputMaxBytes),
-  resolveInput: ragInputResolver(projectEmbeddingInput),
+  // Embedding tasks bind task.subjectContentHash to the prepared batch, while
+  // input.sourceContentSha256 remains the immutable source identity.  Unlike
+  // leased source extraction, those two hashes are intentionally different.
+  resolveInput: ragInputResolver(projectEmbeddingInput, { bindSourceContent: false }),
   staleGuard: embeddingStaleGuard
 })
 

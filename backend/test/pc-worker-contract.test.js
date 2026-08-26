@@ -179,7 +179,9 @@ test('RAG embedding tasks are projected through the catalog resolver and reject 
     taskType: 'rag.embedding.generate',
     processorVersion: 'v1',
     executionClass: 'gpu',
-    subjectContentSha256: sourceHash,
+    // The embedding task subject is the prepared batch hash, not the source
+    // content hash carried inside the processor input.
+    subjectContentSha256: 'd'.repeat(64),
     input,
     leaseToken: 'lease-secret',
     leaseExpiresAt: '2999-01-01T00:00:00.000Z',
