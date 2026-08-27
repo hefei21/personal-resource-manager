@@ -79,8 +79,9 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
 
   assert.match(routerSource, /path:\s*'tasks',[\s\S]*?name:\s*'Tasks',[\s\S]*?Tasks\.vue/u)
   assert.match(navigationSource, /routeName:\s*'Tasks'[\s\S]*?value:\s*'tasks'[\s\S]*?label:\s*'任务中心'[\s\S]*?mobile:\s*true/u)
-  assert.match(pcLayoutSource, /PRIMARY_NAVIGATION/u)
-  assert.match(mobileLayoutSource, /PRIMARY_NAVIGATION\.filter\(item\s*=>\s*item\.mobile\)/u)
+  assert.match(pcLayoutSource, /navigationItemsForGroup[\s\S]*menuSections/u)
+  assert.match(mobileLayoutSource, /MOBILE_BOTTOM_NAVIGATION/u)
+  assert.match(mobileLayoutSource, /navigationItemsForGroup\(item\.group,\s*\{\s*mobile:\s*true\s*\}\)/u)
   assert.doesNotMatch(readFrontend('views/DemoWorkspace.vue'), /任务中心|\/tasks/u)
 
   for (const source of [booksPcSource, booksMobileSource]) {

@@ -14,8 +14,9 @@ test('exposes one shared Owner search route in PC and mobile navigation', () => 
   const mobile = readFrontend('src/mobile/layout/Layout.vue')
   assert.match(router, /path:\s*'search'[\s\S]*name:\s*'Search'[\s\S]*views\/Search\.vue/u)
   assert.match(navigation, /routeName:\s*'Search'[\s\S]*?value:\s*'search'[\s\S]*?label:\s*'统一搜索'[\s\S]*?mobile:\s*true/u)
-  assert.match(desktop, /PRIMARY_NAVIGATION/u)
-  assert.match(mobile, /PRIMARY_NAVIGATION\.filter\(item\s*=>\s*item\.mobile\)/u)
+  assert.match(desktop, /navigationItemsForGroup[\s\S]*menuSections/u)
+  assert.match(mobile, /MOBILE_BOTTOM_NAVIGATION/u)
+  assert.match(mobile, /navigationItemsForGroup\(item\.group,\s*\{\s*mobile:\s*true\s*\}\)/u)
 })
 
 test('search UI preserves the Stage 6A scope, feedback, and safe locator contract', () => {
