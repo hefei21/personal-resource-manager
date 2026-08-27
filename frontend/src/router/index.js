@@ -28,6 +28,18 @@ const routes = [
         component: () => import('@/views/Dashboard.vue'),
         meta: routeNavigationMeta('Dashboard')
       },
+      ...[
+        ['library', 'LibraryHub'],
+        ['collection', 'CollectionHub'],
+        ['workspace', 'WorkspaceHub'],
+        ['system', 'SystemHub'],
+        ['more', 'MoreHub']
+      ].map(([path, name]) => ({
+        path,
+        name,
+        component: () => import('@/views/GroupHub.vue'),
+        meta: routeNavigationMeta(name)
+      })),
       {
         path: 'search',
         name: 'Search',

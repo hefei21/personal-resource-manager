@@ -13,26 +13,30 @@
       
       <!-- 原生菜单 -->
       <nav class="native-menu">
-        <div 
-          v-for="item in menuItems" 
-          :key="item.value"
-          class="menu-item"
-          :class="{ active: activeMenu === item.value }"
-          @click="handleMenuChange(item.value)"
-        >
-          <NativeIcon :name="item.pcIcon" class="menu-icon" />
-          <span class="menu-text">{{ item.label }}</span>
-        </div>
-        <div v-if="authStore.isAdmin()" class="menu-divider"></div>
-        <div 
-          v-if="authStore.isAdmin()"
-          class="menu-item"
-          :class="{ active: activeMenu === 'logs' }"
-          @click="handleMenuChange('logs')"
-        >
-          <NativeIcon :name="logsNavigation.pcIcon" class="menu-icon" />
-          <span class="menu-text">{{ logsNavigation.label }}</span>
-        </div>
+        <section v-for="section in menuSections" :key="section.group" class="menu-section">
+          <button
+            v-if="section.landing"
+            type="button"
+            class="menu-group"
+            :class="{ active: activeNavigation?.group === section.group }"
+            @click="navigateTo(section.landing)"
+          >
+            <span>{{ section.label }}</span>
+            <NativeIcon name="chevron-right" size="14" />
+          </button>
+          <span v-else class="menu-group-label">{{ section.label }}</span>
+          <button
+            v-for="item in section.items"
+            :key="item.value"
+            type="button"
+            class="menu-item"
+            :class="{ active: activeNavigation?.routeName === item.routeName }"
+            @click="navigateTo(item)"
+          >
+            <NativeIcon :name="item.pcIcon" class="menu-icon" />
+            <span class="menu-text">{{ item.label }}</span>
+          </button>
+        </section>
       </nav>
     </aside>
 
@@ -67,92 +71,76 @@
     <!-- 音乐播放器 -->
     <MediaPlayer />
 
-    <!-- 修改密码对话框 -->
-    <div v-if="showPasswordDialog" class="pc-dialog-overlay" @click.self="closePasswordDialog">
-      <div class="pc-dialog">
-        <div class="pc-dialog-header">
-          <h3>修改密码</h3>
-          <button class="close-btn" @click="closePasswordDialog">&times;</button>
-        </div>
-        <div class="pc-dialog-body">
-          <div class="form-item">
-            <label>旧密码</label>
-            <input 
-              v-model="passwordForm.oldPassword"
-              type="password"
-              placeholder="请输入旧密码"
-              class="form-input"
-            />
-          </div>
-          <div class="form-item">
-            <label>新密码</label>
-            <input 
-              v-model="passwordForm.newPassword"
-              type="password"
-              placeholder="请输入新密码"
-              class="form-input"
-            />
-          </div>
-          <div class="form-item">
-            <label>确认密码</label>
-            <input 
-              v-model="passwordForm.confirmPassword"
-              type="password"
-              placeholder="请再次输入新密码"
-              class="form-input"
-            />
-          </div>
-          <div v-if="passwordError" class="form-error">{{ passwordError }}</div>
-        </div>
-        <div class="pc-dialog-footer">
-          <button class="btn-cancel" @click="closePasswordDialog">取消</button>
-          <button 
-            class="btn-confirm" 
-            :disabled="passwordLoading"
-            @click="handlePasswordChange"
-          >
-            {{ passwordLoading ? '修改中...' : '确认修改' }}
-          </button>
-        </div>
+    <NativeDialog
+      v-model="showPasswordDialog"
+      title="修改密码"
+      width="400px"
+      confirm-text="确认修改"
+      :confirm-loading="passwordLoading"
+      :confirm-disabled="passwordLoading"
+      :close-on-overlay-click="!passwordLoading"
+      :close-on-esc="!passwordLoading"
+      @confirm="handlePasswordChange"
+      @closed="resetPasswordForm"
+    >
+      <div class="form-item">
+        <label>旧密码</label>
+        <NativeInput v-model="passwordForm.oldPassword" type="password" placeholder="请输入旧密码" />
       </div>
-    </div>
+      <div class="form-item">
+        <label>新密码</label>
+        <NativeInput v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" />
+      </div>
+      <div class="form-item">
+        <label>确认密码</label>
+        <NativeInput v-model="passwordForm.confirmPassword" type="password" placeholder="请再次输入新密码" />
+      </div>
+      <div v-if="passwordError" class="form-error" role="alert">{{ passwordError }}</div>
+    </NativeDialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onUnmounted, watch, onMounted } from 'vue'
+import { ref, computed, onUnmounted, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import MediaPlayer from '@/components/business/media-player/index.vue'
+import { NativeDialog, NativeInput } from '@/components/native'
 import api from '@/api'
-import { navigationForRoute, OWNER_NAVIGATION, pageTitleForRoute, PRIMARY_NAVIGATION } from '@/router/navigation'
+import { useToast } from '@/composables/useToast'
+import {
+  NAVIGATION_GROUPS,
+  navigationForRoute,
+  navigationItemsForGroup,
+  navigationLandingForGroup,
+  pageTitleForRoute
+} from '@/router/navigation'
 import { validateOwnerPasswordChange } from '@/utils/passwordPolicy'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const toast = useToast()
 
-const activeMenu = ref(route.name?.toLowerCase())
 const routeLoading = ref(false)
 const initialLoading = ref(true)
 let routeLoadingTimer = null
 
-// 菜单与标题由集中路由注册表提供，避免 PC/移动端漂移。
-const menuItems = PRIMARY_NAVIGATION
-const logsNavigation = OWNER_NAVIGATION.find(item => item.routeName === 'Logs')
+const activeNavigation = computed(() => navigationForRoute(route.name))
+const menuSections = computed(() => Object.values(NAVIGATION_GROUPS)
+  .sort((a, b) => a.order - b.order)
+  .map(group => ({
+    group: group.key,
+    label: group.label,
+    landing: group.key === 'home' ? null : navigationLandingForGroup(group.key),
+    items: navigationItemsForGroup(group.key, { includeOwner: authStore.isAdmin() })
+  })))
 
 // 组件挂载后关闭初始loading
 onMounted(() => {
   setTimeout(() => {
     initialLoading.value = false
   }, 500)
-})
-
-// 监听路由变化，同步侧边栏状态
-watch(() => route.name, (newName) => {
-  if (newName) {
-    activeMenu.value = newName.toLowerCase()
-  }
 })
 
 // 路由切换前延迟显示全局loading
@@ -182,10 +170,8 @@ onUnmounted(() => {
   }
 })
 
-function handleMenuChange(value) {
-  const item = navigationForRoute(value)
+function navigateTo(item) {
   if (!item) return
-  activeMenu.value = item.value
   router.push(item.path)
 }
 
@@ -374,36 +360,68 @@ async function handlePasswordChange() {
 
 /* 原生菜单样式 */
 .native-menu {
-  padding: 8px 0;
+  padding: 14px 12px 24px;
   background: transparent;
+  height: calc(100vh - 60px);
+  overflow-y: auto;
+}
+
+.menu-section + .menu-section {
+  margin-top: 14px;
+}
+
+.menu-group,
+.menu-group-label {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 10px;
+  color: rgba(226, 232, 240, 0.55);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-align: left;
+}
+
+.menu-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.menu-group:hover,
+.menu-group.active {
+  color: #a5b4fc;
 }
 
 .menu-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 6px 16px;
-  padding: 12px 16px;
-  border-radius: 12px;
+  width: 100%;
+  margin: 2px 0;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.16s ease, color 0.16s ease;
   color: rgba(255, 255, 255, 0.75);
   font-size: 14px;
   font-weight: 500;
 }
 
 .menu-item:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(148, 163, 184, 0.12);
   color: white;
-  transform: translateX(8px);
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
 }
 
 .menu-item.active {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.1) 100%);
+  background: rgba(99, 102, 241, 0.2);
   color: white;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: inset 2px 0 #818cf8;
 }
 
 .menu-item.active .menu-icon {
@@ -523,112 +541,6 @@ async function handlePasswordChange() {
   to { transform: rotate(360deg); }
 }
 
-/* PC端原生对话框 */
-.pc-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-  animation: fadeIn 0.2s ease;
-}
-
-.pc-dialog {
-  background: white;
-  border-radius: 12px;
-  width: 100%;
-  max-width: 400px;
-  overflow: hidden;
-  animation: scaleIn 0.2s ease;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-}
-
-.pc-dialog-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px 24px;
-  border-bottom: 1px solid #eee;
-}
-
-.pc-dialog-header h3 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: #333;
-}
-
-.pc-dialog-header .close-btn {
-  background: none;
-  border: none;
-  font-size: 28px;
-  color: #999;
-  cursor: pointer;
-  padding: 0;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  transition: all 0.2s;
-}
-
-.pc-dialog-header .close-btn:hover {
-  background: #f5f5f5;
-  color: #666;
-}
-
-.pc-dialog-body {
-  padding: 24px;
-}
-
-.pc-dialog-footer {
-  display: flex;
-  gap: 12px;
-  padding: 16px 24px;
-  border-top: 1px solid #eee;
-}
-
-.pc-dialog-footer .btn-cancel,
-.pc-dialog-footer .btn-confirm {
-  flex: 1;
-  padding: 10px;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  border: none;
-}
-
-.pc-dialog-footer .btn-cancel {
-  background: #f5f5f5;
-  color: #666;
-}
-
-.pc-dialog-footer .btn-cancel:hover {
-  background: #e8e8e8;
-}
-
-.pc-dialog-footer .btn-confirm {
-  background: #0052d9;
-  color: white;
-}
-
-.pc-dialog-footer .btn-confirm:hover:not(:disabled) {
-  background: #366ef4;
-}
-
-.pc-dialog-footer .btn-confirm:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-
 .form-item {
   margin-bottom: 16px;
 }
@@ -641,21 +553,6 @@ async function handlePasswordChange() {
   font-weight: 500;
 }
 
-.form-input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-  box-sizing: border-box;
-  transition: border-color 0.2s;
-}
-
-.form-input:focus {
-  outline: none;
-  border-color: #0052d9;
-}
-
 .form-error {
   color: #e34d59;
   font-size: 13px;
@@ -665,13 +562,4 @@ async function handlePasswordChange() {
   border-radius: 4px;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
-}
 </style>

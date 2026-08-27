@@ -75,6 +75,11 @@ api.interceptors.response.use(
 )
 
 export default {
+  system: {
+    health: () => api.get('/health', {
+      validateStatus: status => status === 200 || status === 503
+    })
+  },
   auth: {
     login: (data) => api.post('/auth/login', data),
     logout: () => api.post('/auth/logout'),

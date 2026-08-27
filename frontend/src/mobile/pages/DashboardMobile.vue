@@ -1,5 +1,6 @@
 <template>
   <div class="dashboard mobile-dashboard">
+    <SystemStatusOverview />
     <!-- 统计卡片：使用 CSS Grid 布局 -->
     <div class="stats-grid">
       <!-- 文档 -->
@@ -10,28 +11,28 @@
           <div class="stat-label">文档总数</div>
         </div>
       </div>
-      <!-- 博客 -->
+      <!-- 个人笔记 -->
       <div class="stat-card">
-        <div class="stat-card-title">博客</div>
+        <div class="stat-card-title">个人笔记</div>
         <div class="stat-item">
           <div class="stat-value">{{ stats.blog?.total || 0 }}</div>
-          <div class="stat-label">文章总数</div>
+          <div class="stat-label">笔记总数</div>
         </div>
       </div>
-      <!-- 音乐 -->
+      <!-- 音频 -->
       <div class="stat-card">
-        <div class="stat-card-title">音乐</div>
+        <div class="stat-card-title">音频</div>
         <div class="stat-item">
           <div class="stat-value">{{ stats.music }}</div>
-          <div class="stat-label">音乐总数</div>
+          <div class="stat-label">音频总数</div>
         </div>
       </div>
-      <!-- 书籍 -->
+      <!-- 电子书 -->
       <div class="stat-card">
-        <div class="stat-card-title">书籍</div>
+        <div class="stat-card-title">电子书</div>
         <div class="stat-item">
           <div class="stat-value">{{ stats.books }}</div>
-          <div class="stat-label">书籍总数</div>
+          <div class="stat-label">电子书总数</div>
         </div>
       </div>
       <!-- 代码 -->
@@ -58,9 +59,9 @@
           <div class="stat-label">游戏总数</div>
         </div>
       </div>
-      <!-- 博客详情 -->
+      <!-- 个人笔记详情 -->
       <div class="stat-card">
-        <div class="stat-card-title">博客详情</div>
+        <div class="stat-card-title">个人笔记详情</div>
         <div class="blog-grid">
           <div class="blog-stat-item">
             <div class="stat-value">{{ stats.blog?.published || 0 }}</div>
@@ -220,6 +221,7 @@
 import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
 import { usePermission } from '@/composables/usePermission'
+import SystemStatusOverview from '@/components/business/SystemStatusOverview.vue'
 
 const { isGuest } = usePermission()
 

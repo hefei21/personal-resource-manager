@@ -1,5 +1,6 @@
 <template>
   <div class="dashboard">
+    <SystemStatusOverview />
     <!-- 第一行：6个主要统计 -->
     <NativeRow :gutter="16">
       <NativeCol :span="4">
@@ -11,26 +12,26 @@
         </NativeCard>
       </NativeCol>
       <NativeCol :span="4">
-        <NativeCard title="博客" hover-shadow>
+        <NativeCard title="个人笔记" hover-shadow>
           <div class="stat-item">
             <div class="stat-value">{{ stats.blog?.total || 0 }}</div>
-            <div class="stat-label">文章总数</div>
+            <div class="stat-label">笔记总数</div>
           </div>
         </NativeCard>
       </NativeCol>
       <NativeCol :span="4">
-        <NativeCard title="音乐" hover-shadow>
+        <NativeCard title="音频" hover-shadow>
           <div class="stat-item">
             <div class="stat-value">{{ stats.music }}</div>
-            <div class="stat-label">音乐总数</div>
+            <div class="stat-label">音频总数</div>
           </div>
         </NativeCard>
       </NativeCol>
       <NativeCol :span="4">
-        <NativeCard title="书籍" hover-shadow>
+        <NativeCard title="电子书" hover-shadow>
           <div class="stat-item">
             <div class="stat-value">{{ stats.books }}</div>
-            <div class="stat-label">书籍总数</div>
+            <div class="stat-label">电子书总数</div>
           </div>
         </NativeCard>
       </NativeCol>
@@ -63,7 +64,7 @@
         </NativeCard>
       </NativeCol>
       <NativeCol :span="8">
-        <NativeCard title="博客详情" hover-shadow>
+        <NativeCard title="个人笔记详情" hover-shadow>
           <NativeRow :gutter="16">
             <NativeCol :span="6">
               <div class="stat-item">
@@ -229,6 +230,7 @@ import api from '@/api'
 import { Solar } from 'lunar-javascript'
 import { usePermission } from '@/composables/usePermission'
 import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon } from '@/components/native'
+import SystemStatusOverview from '@/components/business/SystemStatusOverview.vue'
 
 
 

@@ -3,10 +3,14 @@ import assert from 'node:assert/strict'
 
 import {
   APPLICATION_NAVIGATION,
+  GROUP_LANDING_NAVIGATION,
+  MOBILE_BOTTOM_NAVIGATION,
   NAVIGATION_GROUPS,
   OWNER_NAVIGATION,
   PRIMARY_NAVIGATION,
   navigationForRoute,
+  navigationItemsForGroup,
+  navigationLandingForGroup,
   pageTitleForRoute,
   routeNavigationMeta
 } from '../src/router/navigation.js'
@@ -21,7 +25,8 @@ const REQUIRED_FIELDS = [
   'pcIcon',
   'mobileIconPath',
   'mobile',
-  'ownerOnly'
+  'ownerOnly',
+  'kind'
 ]
 
 test('navigation registry has complete unique route identity', () => {
@@ -70,6 +75,24 @@ test('owner and mobile boundaries keep logs out of mobile primary navigation', (
   assert.ok(OWNER_NAVIGATION.includes(logs))
   assert.ok(!PRIMARY_NAVIGATION.includes(logs))
   assert.ok(PRIMARY_NAVIGATION.every(item => item.mobile && !item.ownerOnly))
+})
+
+test('group landings and mobile bottom navigation match the confirmed IA', () => {
+  assert.equal(GROUP_LANDING_NAVIGATION.length, 5)
+  assert.deepEqual(MOBILE_BOTTOM_NAVIGATION.map(item => item.label), [
+    '首页', '资源库', '收藏', '工作台', '更多'
+  ])
+  assert.deepEqual(MOBILE_BOTTOM_NAVIGATION.map(item => item.path), [
+    '/dashboard', '/library', '/collection', '/workspace', '/more'
+  ])
+  assert.equal(navigationLandingForGroup('library').routeName, 'LibraryHub')
+  assert.equal(navigationLandingForGroup('system', { mobile: true }).routeName, 'MoreHub')
+  assert.deepEqual(
+    navigationItemsForGroup('workspace', { mobile: true }).map(item => item.routeName),
+    ['Search', 'Tasks']
+  )
+  assert.deepEqual(navigationItemsForGroup('system'), [])
+  assert.deepEqual(navigationItemsForGroup('system', { includeOwner: true }).map(item => item.routeName), ['Logs'])
 })
 
 test('route lookup and title fallback are deterministic', () => {

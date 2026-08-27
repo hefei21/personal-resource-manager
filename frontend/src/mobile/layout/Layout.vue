@@ -7,45 +7,6 @@
       </div>
     </div>
 
-    <!-- 移动端：遮罩层 -->
-    <div 
-      v-if="mobileMenuOpen" 
-      class="mobile-overlay"
-      @click="mobileMenuOpen = false"
-    ></div>
-
-    <!-- 移动端：汉堡菜单按钮 -->
-    <button class="hamburger-btn" :class="{ 'sidebar-open': mobileMenuOpen }" @click="mobileMenuOpen = !mobileMenuOpen" v-if="!mobileMenuOpen">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-        <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/>
-      </svg>
-    </button>
-
-    <!-- 固定侧边栏 -->
-    <aside class="fixed-aside" :class="{ 'mobile-open': mobileMenuOpen }">
-      <!-- 移动端侧边栏头部 -->
-      <div class="mobile-sidebar-header">
-        <span class="mobile-logo">雨的空间</span>
-      </div>
-      
-      <!-- 移动端：原生菜单 -->
-      <nav class="mobile-native-menu">
-        <div 
-          v-for="item in menuItems" 
-          :key="item.value"
-          class="mobile-menu-item"
-          :class="{ active: activeMenu === item.value }"
-          @click="handleMobileMenuClick(item.value)"
-        >
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" class="menu-icon">
-            <path :d="item.mobileIconPath" />
-          </svg>
-          <span class="menu-text">{{ item.label }}</span>
-        </div>
-        <!-- 访问日志在移动端已移除 -->
-      </nav>
-    </aside>
-
     <!-- 固定 Header -->
     <header class="fixed-header">
       <div class="header-content">
@@ -74,58 +35,52 @@
       <router-view />
     </main>
 
+    <nav class="bottom-navigation" aria-label="主要导航">
+      <button
+        v-for="item in bottomItems"
+        :key="item.value"
+        type="button"
+        class="bottom-navigation-item"
+        :class="{ active: isBottomItemActive(item) }"
+        :aria-current="isBottomItemActive(item) ? 'page' : undefined"
+        @click="handleBottomNavigation(item)"
+      >
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="currentColor" aria-hidden="true">
+          <path :d="item.mobileIconPath" />
+        </svg>
+        <span>{{ item.label }}</span>
+      </button>
+    </nav>
+
     <!-- 音乐播放器 -->
     <MediaPlayer />
     
-    <!-- 移动端：原生对话框 -->
-    <div v-if="showPasswordDialog" class="mobile-dialog-overlay" @click.self="closePasswordDialog">
-      <div class="mobile-dialog">
-        <div class="mobile-dialog-header">
-          <h3>修改密码</h3>
-          <button class="close-btn" @click="closePasswordDialog">&times;</button>
-        </div>
-        <div class="mobile-dialog-body">
-          <div class="form-item">
-            <label>旧密码</label>
-            <input 
-              v-model="passwordForm.oldPassword"
-              type="password"
-              placeholder="请输入旧密码"
-              class="form-input"
-            />
-          </div>
-          <div class="form-item">
-            <label>新密码</label>
-            <input 
-              v-model="passwordForm.newPassword"
-              type="password"
-              placeholder="请输入新密码"
-              class="form-input"
-            />
-          </div>
-          <div class="form-item">
-            <label>确认密码</label>
-            <input 
-              v-model="passwordForm.confirmPassword"
-              type="password"
-              placeholder="请再次输入新密码"
-              class="form-input"
-            />
-          </div>
-          <div v-if="passwordError" class="form-error">{{ passwordError }}</div>
-        </div>
-        <div class="mobile-dialog-footer">
-          <button class="btn-cancel" @click="closePasswordDialog">取消</button>
-          <button 
-            class="btn-confirm" 
-            :disabled="passwordLoading"
-            @click="handleMobilePasswordChange"
-          >
-            {{ passwordLoading ? '修改中...' : '确认修改' }}
-          </button>
-        </div>
+    <NativeDialog
+      v-model="showPasswordDialog"
+      title="修改密码"
+      width="400px"
+      confirm-text="确认修改"
+      :confirm-loading="passwordLoading"
+      :confirm-disabled="passwordLoading"
+      :close-on-overlay-click="!passwordLoading"
+      :close-on-esc="!passwordLoading"
+      @confirm="handleMobilePasswordChange"
+      @closed="resetPasswordForm"
+    >
+      <div class="form-item">
+        <label>旧密码</label>
+        <NativeInput v-model="passwordForm.oldPassword" type="password" placeholder="请输入旧密码" />
       </div>
-    </div>
+      <div class="form-item">
+        <label>新密码</label>
+        <NativeInput v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" />
+      </div>
+      <div class="form-item">
+        <label>确认密码</label>
+        <NativeInput v-model="passwordForm.confirmPassword" type="password" placeholder="请再次输入新密码" />
+      </div>
+      <div v-if="passwordError" class="form-error" role="alert">{{ passwordError }}</div>
+    </NativeDialog>
   </div>
 </template>
 
@@ -134,22 +89,29 @@ import { ref, computed, onUnmounted, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import MediaPlayer from '@/components/business/media-player/index.vue'
+import { NativeDialog, NativeInput } from '@/components/native'
 import api from '@/api'
-import { navigationForRoute, pageTitleForRoute, PRIMARY_NAVIGATION } from '@/router/navigation'
+import { useToast } from '@/composables/useToast'
+import {
+  MOBILE_BOTTOM_NAVIGATION,
+  navigationForRoute,
+  navigationItemsForGroup,
+  pageTitleForRoute
+} from '@/router/navigation'
 import { validateOwnerPasswordChange } from '@/utils/passwordPolicy'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const toast = useToast()
 
-const activeMenu = ref(route.name?.toLowerCase())
 const routeLoading = ref(false)
 const initialLoading = ref(true)
-const mobileMenuOpen = ref(false)
 let routeLoadingTimer = null
 
-// 移动端菜单配置来自集中注册表；mobile=false 的系统/危险入口直接隐藏。
-const menuItems = PRIMARY_NAVIGATION.filter(item => item.mobile)
+const bottomItems = MOBILE_BOTTOM_NAVIGATION
+const activeNavigation = computed(() => navigationForRoute(route.name))
+const rememberedRouteKey = group => `pr-manager:last-route:${group}`
 
 // 组件挂载后关闭初始loading
 onMounted(() => {
@@ -177,7 +139,7 @@ onMounted(() => {
     }
     const scrollContent = document.querySelector('.scrollable-content')
     if (scrollContent) {
-      scrollContent.style.paddingBottom = '20px'
+      scrollContent.style.paddingBottom = '84px'
     }
   })
   
@@ -196,7 +158,7 @@ onMounted(() => {
     }
     const scrollContent = document.querySelector('.scrollable-content')
     if (scrollContent) {
-      scrollContent.style.paddingBottom = '20px'
+      scrollContent.style.paddingBottom = '84px'
     }
   })
 })
@@ -216,7 +178,7 @@ const adjustForPlayer = () => {
     }
     const scrollContent = document.querySelector('.scrollable-content')
     if (scrollContent) {
-      scrollContent.style.paddingBottom = (playerHeight + 20) + 'px'
+      scrollContent.style.paddingBottom = (playerHeight + 84) + 'px'
     }
     return playerHeight
   } else {
@@ -228,7 +190,7 @@ const adjustForPlayer = () => {
     }
     const scrollContent = document.querySelector('.scrollable-content')
     if (scrollContent) {
-      scrollContent.style.paddingBottom = '20px'
+      scrollContent.style.paddingBottom = '84px'
     }
     return 0
   }
@@ -267,12 +229,14 @@ const observePlayer = () => {
   }, 200)
 }
 
-// 监听路由变化，同步侧边栏状态
-watch(() => route.name, (newName) => {
-  if (newName) {
-    activeMenu.value = newName.toLowerCase()
+watch(activeNavigation, item => {
+  if (!item || item.kind !== 'module' || !item.mobile || item.group === 'home') return
+  try {
+    localStorage.setItem(rememberedRouteKey(item.group), item.path)
+  } catch {
+    // 隐私模式或存储配额异常时只退化为分组入口，不影响导航。
   }
-})
+}, { immediate: true })
 
 // 路由切换前延迟显示全局loading
 const beforeRouteChange = router.beforeEach((_to, _from, next) => {
@@ -301,13 +265,28 @@ onUnmounted(() => {
   }
 })
 
-// 移动端菜单点击处理
-function handleMobileMenuClick(value) {
-  const item = navigationForRoute(value)
-  if (!item || !item.mobile) return
-  activeMenu.value = item.value
-  router.push(item.path)
-  mobileMenuOpen.value = false
+function isBottomItemActive(item) {
+  if (!activeNavigation.value) return false
+  if (item.group === 'home') return activeNavigation.value.group === 'home'
+  return activeNavigation.value.group === item.group
+}
+
+function handleBottomNavigation(item) {
+  if (item.group === 'home' || isBottomItemActive(item)) {
+    router.push(item.path)
+    return
+  }
+
+  const allowedPaths = new Set(
+    navigationItemsForGroup(item.group, { mobile: true }).map(module => module.path)
+  )
+  let rememberedPath = null
+  try {
+    rememberedPath = localStorage.getItem(rememberedRouteKey(item.group))
+  } catch {
+    // 存储不可用时使用稳定的分组入口。
+  }
+  router.push(allowedPaths.has(rememberedPath) ? rememberedPath : item.path)
 }
 
 // 修改密码相关
@@ -392,124 +371,6 @@ async function handleMobilePasswordChange() {
   background: #1a1a2e;
 }
 
-/* 遮罩层 */
-.mobile-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 99;
-  backdrop-filter: blur(2px);
-}
-
-/* 汉堡菜单按钮 */
-.hamburger-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: fixed;
-  top: 10px;
-  left: 12px;
-  width: 36px;
-  height: 36px;
-  background: rgba(102, 126, 234, 0.1);
-  border: none;
-  border-radius: 8px;
-  color: #667eea;
-  z-index: 101;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.hamburger-btn:active {
-  background: rgba(102, 126, 234, 0.2);
-}
-
-.fixed-aside {
-  position: fixed;
-  left: -160px;
-  top: 0;
-  bottom: 0;
-  width: 160px;
-  background: #1a1a2e;
-  z-index: 100;
-  transition: left 0.3s ease;
-  box-shadow: none !important;
-  border: none !important;
-  outline: none !important;
-  overflow: hidden;
-}
-
-.fixed-aside.mobile-open {
-  left: 0;
-}
-
-.mobile-sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px 8px;
-  height: 60px;
-  border-bottom: 1px solid rgba(232, 212, 184, 0.15);
-  background: linear-gradient(135deg, rgba(232, 212, 184, 0.08) 0%, rgba(232, 212, 184, 0.04) 100%);
-}
-
-.mobile-logo {
-  font-size: 16px;
-  font-weight: 600;
-  color: #e8d4b8;
-  text-shadow: 0 0 8px rgba(232, 212, 184, 0.4);
-}
-
-/* 移动端原生菜单 */
-.mobile-native-menu {
-  padding: 8px 0;
-  background: transparent;
-}
-
-.mobile-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 4px 8px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.mobile-menu-item:hover,
-.mobile-menu-item.active {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.1) 100%);
-  color: white;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-}
-
-.mobile-menu-item.active {
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.mobile-menu-item.active .menu-icon {
-  color: #4ecdc4;
-}
-
-.menu-icon {
-  flex-shrink: 0;
-  opacity: 0.9;
-}
-
-.menu-text {
-  line-height: 1;
-}
-
-.menu-divider {
-  height: 1px;
-  margin: 8px 12px;
-  background: rgba(255, 255, 255, 0.1);
-}
-
 /* Header */
 .fixed-header {
   position: fixed;
@@ -519,7 +380,7 @@ async function handleMobilePasswordChange() {
   height: 60px;
   background: white;
   border-bottom: 1px solid #e0e0e0;
-  padding: 0 16px 0 56px;
+  padding: 0 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
   z-index: 99;
 }
@@ -592,9 +453,51 @@ async function handleMobilePasswordChange() {
   margin-left: 0;
   margin-top: 60px;
   height: calc(100vh - 60px);
-  padding: 16px;
+  padding: 16px 16px calc(84px + var(--player-height, 0px));
   overflow-y: auto;
   background: #f5f5f5;
+}
+
+.bottom-navigation {
+  position: fixed;
+  z-index: 120;
+  left: 0;
+  right: 0;
+  bottom: var(--player-height, 0px);
+  height: 68px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  padding: 5px max(4px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+  border-top: 1px solid #e2e8f0;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.06);
+}
+
+.bottom-navigation-item {
+  min-width: 0;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.bottom-navigation-item.active {
+  color: #4f46e5;
+  background: #eef2ff;
+}
+
+.bottom-navigation-item:focus-visible {
+  outline: 2px solid #818cf8;
+  outline-offset: -2px;
 }
 
 /* 全局loading覆盖层 */
@@ -632,115 +535,6 @@ async function handleMobilePasswordChange() {
   to { transform: rotate(360deg); }
 }
 
-/* 移动端原生对话框 */
-.mobile-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
-  padding: 20px;
-  animation: fadeIn 0.2s ease;
-}
-
-.mobile-dialog {
-  background: white;
-  border-radius: 12px;
-  width: 100%;
-  max-width: 320px;
-  max-height: 80vh;
-  overflow: hidden;
-  animation: scaleIn 0.2s ease;
-}
-
-.mobile-dialog-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px;
-  border-bottom: 1px solid #eee;
-}
-
-.mobile-dialog-header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: #333;
-}
-
-.mobile-dialog-header .close-btn {
-  background: none;
-  border: none;
-  font-size: 24px;
-  color: #999;
-  cursor: pointer;
-  padding: 0;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transition: all 0.2s;
-}
-
-.mobile-dialog-header .close-btn:hover {
-  background: #f5f5f5;
-  color: #666;
-}
-
-.mobile-dialog-body {
-  padding: 16px;
-  max-height: 50vh;
-  overflow-y: auto;
-}
-
-.mobile-dialog-footer {
-  display: flex;
-  gap: 12px;
-  padding: 12px 16px;
-  border-top: 1px solid #eee;
-}
-
-.mobile-dialog-footer .btn-cancel,
-.mobile-dialog-footer .btn-confirm {
-  flex: 1;
-  padding: 10px;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  border: none;
-}
-
-.mobile-dialog-footer .btn-cancel {
-  background: #f5f5f5;
-  color: #666;
-}
-
-.mobile-dialog-footer .btn-cancel:hover {
-  background: #e8e8e8;
-}
-
-.mobile-dialog-footer .btn-confirm {
-  background: #667eea;
-  color: white;
-}
-
-.mobile-dialog-footer .btn-confirm:hover:not(:disabled) {
-  background: #5a6fd6;
-}
-
-.mobile-dialog-footer .btn-confirm:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-
 .form-item {
   margin-bottom: 16px;
 }
@@ -753,21 +547,6 @@ async function handleMobilePasswordChange() {
   font-weight: 500;
 }
 
-.form-input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-  box-sizing: border-box;
-  transition: border-color 0.2s;
-}
-
-.form-input:focus {
-  outline: none;
-  border-color: #667eea;
-}
-
 .form-error {
   color: #e34d59;
   font-size: 13px;
@@ -777,13 +556,4 @@ async function handleMobilePasswordChange() {
   border-radius: 4px;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes scaleIn {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
-}
 </style>
