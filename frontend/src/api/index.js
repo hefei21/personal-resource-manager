@@ -44,11 +44,14 @@ api.interceptors.response.use(
     const requestUrl = error.config?.url || ''
     
     // 排除登录相关接口，这些接口的401是业务错误而非登录过期
+    const responseCode = error.response?.data?.code
     const isAuthEndpoint = requestUrl.includes('/auth/login') ||
       requestUrl.includes('/auth/check') ||
       requestUrl.includes('/demo/session')
+    const isOldPasswordError = requestUrl.includes('/auth/change-password') &&
+      responseCode === 'OWNER_OLD_PASSWORD_INVALID'
     
-    if (error.response?.status === 401 && !isAuthEndpoint) {
+    if (error.response?.status === 401 && !isAuthEndpoint && !isOldPasswordError) {
       // Token 缺失或未认证
       handleTokenExpired()
     } else if (error.response?.status === 403 && !isAuthEndpoint) {

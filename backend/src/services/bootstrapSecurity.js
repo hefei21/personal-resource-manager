@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs'
 
-const MIN_BOOTSTRAP_PASSWORD_LENGTH = 12
+export const MIN_OWNER_PASSWORD_LENGTH = 12
 const RESERVED_OWNER_NAMES = new Set(['test'])
 const KNOWN_WEAK_PASSWORDS = new Set([
   '123456',
@@ -16,18 +16,36 @@ function configurationError(message, code) {
   return error
 }
 
+export function ownerPasswordPolicyViolation(password) {
+  if (typeof password !== 'string' || password.trim().length === 0) {
+    return {
+      code: 'OWNER_PASSWORD_INVALID',
+      message: '新密码必须是非空字符串'
+    }
+  }
+
+  if (
+    password.length < MIN_OWNER_PASSWORD_LENGTH ||
+    KNOWN_WEAK_PASSWORDS.has(password.toLowerCase())
+  ) {
+    return {
+      code: 'OWNER_PASSWORD_WEAK',
+      message: '新密码必须至少 12 位且不能使用已知弱密码'
+    }
+  }
+
+  return null
+}
+
 export function validateBootstrapPassword(password, variableName) {
-  if (!password) {
+  if (typeof password !== 'string' || password.trim().length === 0) {
     throw configurationError(
       `首次初始化前必须设置 ${variableName}`,
       'BOOTSTRAP_PASSWORD_REQUIRED'
     )
   }
 
-  if (
-    password.length < MIN_BOOTSTRAP_PASSWORD_LENGTH ||
-    KNOWN_WEAK_PASSWORDS.has(password.toLowerCase())
-  ) {
+  if (ownerPasswordPolicyViolation(password)) {
     throw configurationError(
       `${variableName} 必须至少 12 位且不能使用已知弱密码`,
       'BOOTSTRAP_PASSWORD_WEAK'

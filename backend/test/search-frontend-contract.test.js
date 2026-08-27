@@ -9,13 +9,13 @@ const readFrontend = (relativePath) => fs.readFileSync(path.join(repositoryRoot,
 
 test('exposes one shared Owner search route in PC and mobile navigation', () => {
   const router = readFrontend('src/router/index.js')
+  const navigation = readFrontend('src/router/navigation.js')
   const desktop = readFrontend('src/pc/layout/Layout.vue')
   const mobile = readFrontend('src/mobile/layout/Layout.vue')
   assert.match(router, /path:\s*'search'[\s\S]*name:\s*'Search'[\s\S]*views\/Search\.vue/u)
-  for (const source of [desktop, mobile]) {
-    assert.match(source, /value:\s*'search'/u)
-    assert.match(source, /Search:\s*'统一搜索'/u)
-  }
+  assert.match(navigation, /routeName:\s*'Search'[\s\S]*?value:\s*'search'[\s\S]*?label:\s*'统一搜索'[\s\S]*?mobile:\s*true/u)
+  assert.match(desktop, /PRIMARY_NAVIGATION/u)
+  assert.match(mobile, /PRIMARY_NAVIGATION\.filter\(item\s*=>\s*item\.mobile\)/u)
 })
 
 test('search UI preserves the Stage 6A scope, feedback, and safe locator contract', () => {

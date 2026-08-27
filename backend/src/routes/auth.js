@@ -15,6 +15,7 @@ import {
   revokeAllOwnerSessions,
   revokeOwnerSession
 } from '../services/sessions.js'
+import { ownerPasswordPolicyViolation } from '../services/bootstrapSecurity.js'
 
 const router = express.Router()
 
@@ -112,12 +113,13 @@ router.post('/change-password', authenticateToken, requireOwner, async (req, res
     const { oldPassword, newPassword } = req.body
     const userId = req.user.id
 
-    if (!oldPassword || !newPassword) {
+    if (typeof oldPassword !== 'string' || oldPassword.length === 0 || !newPassword) {
       return res.status(400).json({ message: '旧密码和新密码不能为空' })
     }
 
-    if (newPassword.length < 6) {
-      return res.status(400).json({ message: '新密码长度至少6位' })
+    const passwordViolation = ownerPasswordPolicyViolation(newPassword)
+    if (passwordViolation) {
+      return res.status(400).json(passwordViolation)
     }
 
     const db = getOwnerAuthDatabase()
@@ -130,7 +132,17 @@ router.post('/change-password', authenticateToken, requireOwner, async (req, res
     // 验证旧密码
     const isMatch = await bcrypt.compare(oldPassword, user.password)
     if (!isMatch) {
-      return res.status(401).json({ message: '旧密码错误' })
+      return res.status(401).json({
+        code: 'OWNER_OLD_PASSWORD_INVALID',
+        message: '旧密码错误'
+      })
+    }
+
+    if (oldPassword === newPassword) {
+      return res.status(400).json({
+        code: 'OWNER_PASSWORD_UNCHANGED',
+        message: '新密码不能与旧密码相同'
+      })
     }
 
     // 加密新密码
@@ -156,7 +168,10 @@ router.post('/change-password', authenticateToken, requireOwner, async (req, res
     })
   } catch (error) {
     console.error('修改密码错误:', error)
-    res.status(500).json({ message: '服务器错误', details: error.message })
+    res.status(500).json({
+      message: '服务器错误',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    })
   }
 })
 

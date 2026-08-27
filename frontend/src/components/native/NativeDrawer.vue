@@ -5,19 +5,29 @@
         v-if="modelValue" 
         class="native-drawer" 
         :class="[`native-drawer--${placement}`]" 
-        @click.self="handleMaskClick"
         role="dialog"
         :aria-modal="true"
         :aria-labelledby="titleId"
       >
         <!-- 遮罩层 -->
-        <div v-if="showOverlay" class="native-drawer__mask" :style="maskStyle"></div>
+        <div
+          v-if="showOverlay"
+          class="native-drawer__mask"
+          :style="maskStyle"
+          @click="handleMaskClick"
+        ></div>
         
         <!-- 抽屉内容 -->
         <Transition :name="`drawer-slide-${placement}`">
-          <div v-show="modelValue" class="native-drawer__content" :style="contentStyle">
+          <div
+            ref="drawerRef"
+            v-show="modelValue"
+            class="native-drawer__content"
+            tabindex="-1"
+            :style="contentStyle"
+          >
             <!-- 头部 -->
-            <div v-if="showHeader" class="native-drawer__header">
+            <div v-if="showHeader || $slots.header" class="native-drawer__header">
               <slot name="header">
                 <h3 :id="titleId" class="native-drawer__title">{{ title }}</h3>
                 <button 
@@ -51,7 +61,8 @@
 </template>
 
 <script setup>
-import { computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { acquireBodyScrollLock, useModalFocus } from '@/composables/useModalFocus'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -73,8 +84,22 @@ const titleId = computed(() => 'drawer-title-' + Math.random().toString(36).subs
 // 是否显示头部（有标题时显示）
 const showHeader = computed(() => Boolean(props.title))
 
-// 保存原始的 body overflow 值
-let originalBodyOverflow = ''
+const drawerRef = ref(null)
+useModalFocus(drawerRef, () => props.modelValue)
+
+let releaseBodyScrollLock = null
+
+function syncBodyScrollLock(isOpen) {
+  if (isOpen) {
+    if (!releaseBodyScrollLock) {
+      releaseBodyScrollLock = acquireBodyScrollLock()
+    }
+    return
+  }
+
+  releaseBodyScrollLock?.()
+  releaseBodyScrollLock = null
+}
 
 // 遮罩样式
 const maskStyle = computed(() => ({
@@ -130,21 +155,21 @@ function handleEsc(e) {
 watch(() => props.modelValue, (val) => {
   if (val) {
     emit('open')
-    originalBodyOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-  } else {
-    document.body.style.overflow = originalBodyOverflow
+  }
+  syncBodyScrollLock(val)
+  if (!val) {
     setTimeout(() => emit('closed'), 300)
   }
 })
 
 onMounted(() => {
+  syncBodyScrollLock(props.modelValue)
   document.addEventListener('keydown', handleEsc)
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleEsc)
-  document.body.style.overflow = originalBodyOverflow
+  syncBodyScrollLock(false)
 })
 </script>
 
@@ -175,6 +200,11 @@ onUnmounted(() => {
   flex-direction: column;
   pointer-events: auto;
   box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+}
+
+.native-drawer__content:focus-visible {
+  outline: 2px solid var(--color-primary, #0052d9);
+  outline-offset: -2px;
 }
 
 /* 位置定位 */

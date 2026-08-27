@@ -38,7 +38,7 @@
           @click="handleMobileMenuClick(item.value)"
         >
           <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" class="menu-icon">
-            <path :d="item.iconPath" />
+            <path :d="item.mobileIconPath" />
           </svg>
           <span class="menu-text">{{ item.label }}</span>
         </div>
@@ -135,6 +135,8 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import MediaPlayer from '@/components/business/media-player/index.vue'
 import api from '@/api'
+import { navigationForRoute, pageTitleForRoute, PRIMARY_NAVIGATION } from '@/router/navigation'
+import { validateOwnerPasswordChange } from '@/utils/passwordPolicy'
 
 const router = useRouter()
 const route = useRoute()
@@ -146,20 +148,8 @@ const initialLoading = ref(true)
 const mobileMenuOpen = ref(false)
 let routeLoadingTimer = null
 
-// 移动端菜单配置（原生实现，替代 t-menu）
-const menuItems = [
-  { value: 'dashboard', label: '仪表盘', iconPath: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z' },
-  { value: 'search', label: '统一搜索', iconPath: 'M9.5 3a6.5 6.5 0 104.05 11.58L19.97 21 21 19.97l-6.42-6.42A6.5 6.5 0 009.5 3zm0 2a4.5 4.5 0 110 9 4.5 4.5 0 010-9z' },
-  { value: 'documents', label: '文档管理', iconPath: 'M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z' },
-  { value: 'blog', label: '博客管理', iconPath: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z' },
-  { value: 'music', label: '音乐管理', iconPath: 'M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z' },
-  { value: 'books', label: '书籍管理', iconPath: 'M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z' },
-  { value: 'code', label: '代码管理', iconPath: 'M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z' },
-  { value: 'bookmarks', label: '书签管理', iconPath: 'M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z' },
-  { value: 'anime', label: '动漫管理', iconPath: 'M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z' },
-  { value: 'games', label: '游戏管理', iconPath: 'M15 7.5V2H9v5.5l3 3 3-3zM7.5 9H2v6h5.5l3-3-3-3zM9 16.5V22h6v-5.5l-3-3-3 3zM16.5 9l-3 3 3 3H22V9h-5.5z' },
-  { value: 'tasks', label: '任务中心', iconPath: 'M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z' }
-]
+// 移动端菜单配置来自集中注册表；mobile=false 的系统/危险入口直接隐藏。
+const menuItems = PRIMARY_NAVIGATION.filter(item => item.mobile)
 
 // 组件挂载后关闭初始loading
 onMounted(() => {
@@ -313,8 +303,10 @@ onUnmounted(() => {
 
 // 移动端菜单点击处理
 function handleMobileMenuClick(value) {
-  activeMenu.value = value
-  router.push(`/${value}`)
+  const item = navigationForRoute(value)
+  if (!item || !item.mobile) return
+  activeMenu.value = item.value
+  router.push(item.path)
   mobileMenuOpen.value = false
 }
 
@@ -328,23 +320,7 @@ const passwordForm = ref({
 })
 const passwordError = ref('')
 
-const pageTitle = computed(() => {
-  const titles = {
-    Dashboard: '仪表盘',
-    Search: '统一搜索',
-    Documents: '文档管理',
-    Music: '音乐管理',
-    Books: '书籍管理',
-    Code: '代码管理',
-    Bookmarks: '书签管理',
-    Anime: '动漫管理',
-    Games: '游戏管理',
-    Blog: '博客管理',
-    Logs: '访问日志',
-    Tasks: '任务中心'
-  }
-  return titles[route.name] || '雨的空间'
-})
+const pageTitle = computed(() => pageTitleForRoute(route.name) || '雨的空间')
 
 async function handleLogout() {
   await authStore.logout()
@@ -373,12 +349,12 @@ async function handleMobilePasswordChange() {
     passwordError.value = '请输入旧密码'
     return
   }
-  if (!passwordForm.value.newPassword) {
-    passwordError.value = '请输入新密码'
-    return
-  }
-  if (passwordForm.value.newPassword.length < 6) {
-    passwordError.value = '密码长度至少6位'
+  const passwordPolicyError = validateOwnerPasswordChange(
+    passwordForm.value.oldPassword,
+    passwordForm.value.newPassword
+  )
+  if (passwordPolicyError) {
+    passwordError.value = passwordPolicyError
     return
   }
   if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {

@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import bcrypt from 'bcryptjs'
 import {
   initializeOwner,
+  ownerPasswordPolicyViolation,
   resolveOwnerBootstrap,
   retireLegacyTestUser,
   validateBootstrapPassword
@@ -38,6 +39,26 @@ test('new installations reject missing and known weak passwords', () => {
     () => validateBootstrapPassword('admin123', 'DEFAULT_PASSWORD'),
     { code: 'BOOTSTRAP_PASSWORD_WEAK' }
   )
+})
+
+test('owner password changes use the same strength policy as bootstrap', () => {
+  assert.deepEqual(ownerPasswordPolicyViolation({}), {
+    code: 'OWNER_PASSWORD_INVALID',
+    message: '新密码必须是非空字符串'
+  })
+  assert.deepEqual(ownerPasswordPolicyViolation('            '), {
+    code: 'OWNER_PASSWORD_INVALID',
+    message: '新密码必须是非空字符串'
+  })
+  assert.deepEqual(ownerPasswordPolicyViolation('short'), {
+    code: 'OWNER_PASSWORD_WEAK',
+    message: '新密码必须至少 12 位且不能使用已知弱密码'
+  })
+  assert.deepEqual(ownerPasswordPolicyViolation('admin123'), {
+    code: 'OWNER_PASSWORD_WEAK',
+    message: '新密码必须至少 12 位且不能使用已知弱密码'
+  })
+  assert.equal(ownerPasswordPolicyViolation('safe-random-password-123'), null)
 })
 
 test('new owner bootstrap rejects the retired test username', () => {

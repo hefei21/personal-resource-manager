@@ -58,9 +58,10 @@ function handleClose() {
 .native-alert {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 12px 16px;
-  border-radius: 6px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   position: relative;
 }
 
@@ -77,7 +78,7 @@ function handleClose() {
 .native-alert__title {
   font-weight: 600;
   font-size: 14px;
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 
 .native-alert__message {
@@ -100,38 +101,57 @@ function handleClose() {
   opacity: 1;
 }
 
+.native-alert__close:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+  opacity: 1;
+}
+
 /* 主题样式 */
 .native-alert--info {
-  background: linear-gradient(135deg, #e8f4ff 0%, #f0f7ff 100%);
-  color: #0052d9;
-  border: 1px solid rgba(0, 82, 217, 0.15);
-  box-shadow: 0 2px 8px rgba(0, 82, 217, 0.08);
+  color: var(--color-info-text);
+  background: var(--color-info-surface);
+  border-color: var(--color-info-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .native-alert--success {
-  background: #e8f8f0;
-  color: #00a870;
+  background: var(--color-success-surface);
+  color: var(--color-success-text);
+  border-color: var(--color-success-border);
 }
 
 .native-alert--warning {
-  background: #fff4e6;
-  color: #ed7b2f;
+  background: var(--color-warning-surface);
+  color: var(--color-warning-text);
+  border-color: var(--color-warning-border);
 }
 
 .native-alert--error {
-  background: #fff0f0;
-  color: #e34d59;
+  background: var(--color-danger-surface);
+  color: var(--color-danger-text);
+  border-color: var(--color-danger-border);
 }
 
 /* 动画 */
 .native-alert-enter-active,
 .native-alert-leave-active {
-  transition: all 0.3s ease;
+  transition:
+    opacity var(--motion-duration-standard) var(--motion-easing-standard),
+    transform var(--motion-duration-standard) var(--motion-easing-standard);
 }
 
 .native-alert-enter-from,
 .native-alert-leave-to {
   opacity: 0;
-  transform: translateY(-10px);
+  transform: translateY(-6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .native-alert-enter-from,
+  .native-alert-leave-to {
+    transform: none;
+  }
 }
 </style>

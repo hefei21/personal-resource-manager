@@ -20,7 +20,7 @@
           :class="{ active: activeMenu === item.value }"
           @click="handleMenuChange(item.value)"
         >
-          <NativeIcon :name="item.icon" class="menu-icon" />
+          <NativeIcon :name="item.pcIcon" class="menu-icon" />
           <span class="menu-text">{{ item.label }}</span>
         </div>
         <div v-if="authStore.isAdmin()" class="menu-divider"></div>
@@ -30,8 +30,8 @@
           :class="{ active: activeMenu === 'logs' }"
           @click="handleMenuChange('logs')"
         >
-          <NativeIcon name="chart" class="menu-icon" />
-          <span class="menu-text">访问日志</span>
+          <NativeIcon :name="logsNavigation.pcIcon" class="menu-icon" />
+          <span class="menu-text">{{ logsNavigation.label }}</span>
         </div>
       </nav>
     </aside>
@@ -125,6 +125,8 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import MediaPlayer from '@/components/business/media-player/index.vue'
 import api from '@/api'
+import { navigationForRoute, OWNER_NAVIGATION, pageTitleForRoute, PRIMARY_NAVIGATION } from '@/router/navigation'
+import { validateOwnerPasswordChange } from '@/utils/passwordPolicy'
 
 const router = useRouter()
 const route = useRoute()
@@ -135,20 +137,9 @@ const routeLoading = ref(false)
 const initialLoading = ref(true)
 let routeLoadingTimer = null
 
-// 菜单配置
-const menuItems = [
-  { value: 'dashboard', label: '仪表盘', icon: 'dashboard' },
-  { value: 'search', label: '统一搜索', icon: 'search' },
-  { value: 'documents', label: '文档管理', icon: 'file' },
-  { value: 'blog', label: '博客管理', icon: 'edit-1' },
-  { value: 'music', label: '音乐管理', icon: 'music' },
-  { value: 'books', label: '书籍管理', icon: 'book' },
-  { value: 'code', label: '代码管理', icon: 'code' },
-  { value: 'bookmarks', label: '书签管理', icon: 'bookmark' },
-  { value: 'anime', label: '动漫管理', icon: 'video' },
-  { value: 'games', label: '游戏管理', icon: 'gamepad' },
-  { value: 'tasks', label: '任务中心', icon: 'list-dashes' }
-]
+// 菜单与标题由集中路由注册表提供，避免 PC/移动端漂移。
+const menuItems = PRIMARY_NAVIGATION
+const logsNavigation = OWNER_NAVIGATION.find(item => item.routeName === 'Logs')
 
 // 组件挂载后关闭初始loading
 onMounted(() => {
@@ -192,8 +183,10 @@ onUnmounted(() => {
 })
 
 function handleMenuChange(value) {
-  activeMenu.value = value
-  router.push(`/${value}`)
+  const item = navigationForRoute(value)
+  if (!item) return
+  activeMenu.value = item.value
+  router.push(item.path)
 }
 
 async function handleLogout() {
@@ -211,23 +204,7 @@ const passwordForm = ref({
 })
 const passwordError = ref('')
 
-const pageTitle = computed(() => {
-  const titles = {
-    Dashboard: '仪表盘',
-    Search: '统一搜索',
-    Documents: '文档管理',
-    Music: '音乐管理',
-    Books: '书籍管理',
-    Code: '代码管理',
-    Bookmarks: '书签管理',
-    Anime: '动漫管理',
-    Games: '游戏管理',
-    Blog: '博客管理',
-    Logs: '访问日志',
-    Tasks: '任务中心'
-  }
-  return titles[route.name] || '雨的空间'
-})
+const pageTitle = computed(() => pageTitleForRoute(route.name) || '雨的空间')
 
 function resetPasswordForm() {
   passwordForm.value = {
@@ -250,12 +227,12 @@ async function handlePasswordChange() {
     passwordError.value = '请输入旧密码'
     return
   }
-  if (!passwordForm.value.newPassword) {
-    passwordError.value = '请输入新密码'
-    return
-  }
-  if (passwordForm.value.newPassword.length < 6) {
-    passwordError.value = '密码长度至少6位'
+  const passwordPolicyError = validateOwnerPasswordChange(
+    passwordForm.value.oldPassword,
+    passwordForm.value.newPassword
+  )
+  if (passwordPolicyError) {
+    passwordError.value = passwordPolicyError
     return
   }
   if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {

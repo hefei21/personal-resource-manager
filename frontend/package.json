@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test:unit": "node --test",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -21,6 +22,7 @@
     "marked": "^12.0.0",
     "md-editor-v3": "^4.13.2",
     "pinia": "^2.1.7",
+    "reka-ui": "^2.10.4",
     "vue": "^3.4.0",
     "vue-router": "^4.2.5"
   },

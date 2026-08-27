@@ -1,20 +1,102 @@
 <template>
-  <div ref="selectRef" class="native-select" :class="{ 'native-select--open': isOpen, 'native-select--multiple': multiple, 'native-select--filterable': filterable, [`native-select--${size}`]: true }">
+  <SelectRoot
+    v-if="useRekaSelect"
+    :model-value="rekaModelValue"
+    :disabled="disabled"
+    @update:model-value="handleRekaValueChange"
+    @update:open="rekaOpen = $event"
+  >
+    <div
+      v-bind="attrs"
+      class="native-select native-select--reka"
+      :class="[
+        attrs.class,
+        {
+          'native-select--open': rekaOpen,
+          'native-select--clearable': clearable && hasSingleValue,
+          [`native-select--${size}`]: true
+        }
+      ]"
+    >
+      <SelectTrigger
+        class="native-select__trigger"
+        :class="{ 'native-select--disabled': disabled }"
+        :aria-label="placeholder"
+      >
+        <span class="native-select__label">{{ selectedLabel }}</span>
+        <span class="native-select__arrow">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+            <path d="M7 10l5 5 5-5z" />
+          </svg>
+        </span>
+      </SelectTrigger>
+      <button
+        v-if="clearable && hasSingleValue && !disabled"
+        type="button"
+        class="native-select__clear native-select__clear--reka"
+        aria-label="清除选择"
+        @pointerdown.prevent.stop
+        @click.stop="clearSelection"
+      >
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true">
+          <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+        </svg>
+      </button>
+      <SelectPortal>
+        <SelectContent
+          class="native-select__dropdown native-select__dropdown--reka"
+          position="popper"
+          :side-offset="4"
+          :collision-padding="8"
+          :body-lock="false"
+        >
+          <SelectViewport class="native-select__options-list">
+            <SelectItem
+              v-for="(option, index) in options"
+              :key="optionToken(index)"
+              class="native-select__option"
+              :class="{ 'native-select__option--selected': option.value === modelValue }"
+              :value="optionToken(index)"
+              :disabled="option.disabled"
+            >
+              <SelectItemText>{{ option.label }}</SelectItemText>
+            </SelectItem>
+            <div v-if="options.length === 0" class="native-select__empty">{{ emptyText }}</div>
+          </SelectViewport>
+        </SelectContent>
+      </SelectPortal>
+    </div>
+  </SelectRoot>
+
+  <div v-else ref="selectRef" v-bind="attrs" class="native-select" :class="[attrs.class, { 'native-select--open': isOpen, 'native-select--multiple': multiple, 'native-select--filterable': filterable, [`native-select--${size}`]: true }]">
     <div 
       ref="triggerRef"
       class="native-select__trigger" 
       :class="{ 'native-select--disabled': disabled }"
+      :tabindex="disabled ? -1 : 0"
+      role="combobox"
+      aria-haspopup="listbox"
+      :aria-expanded="isOpen ? 'true' : 'false'"
+      :aria-controls="listboxId"
+      :aria-activedescendant="activeDescendantId || undefined"
+      :aria-disabled="disabled ? 'true' : undefined"
       @click="handleTriggerClick"
+      @keydown="handleTriggerKeydown"
     >
       <template v-if="multiple">
         <div v-if="selectedValues.length > 0" class="native-select__tags">
           <span v-for="val in selectedValues.slice(0, maxTagCount)" :key="val" class="native-select__tag">
             {{ getOptionLabel(val) }}
-            <span class="native-select__tag-close" @click.stop="removeTag(val)">
+            <button
+              type="button"
+              class="native-select__tag-close"
+              :aria-label="`移除${getOptionLabel(val)}`"
+              @click.stop="removeTag(val)"
+            >
               <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
                 <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
               </svg>
-            </span>
+            </button>
           </span>
           <span v-if="selectedValues.length > maxTagCount" class="native-select__tag native-select__tag--more">
             +{{ selectedValues.length - maxTagCount }}
@@ -30,17 +112,27 @@
             type="text"
             class="native-select__filter-input"
             :placeholder="selectedLabel"
+            :aria-controls="listboxId"
+            :aria-autocomplete="'list'"
+            :aria-activedescendant="activeDescendantId || undefined"
             @click.stop
+            @keydown="handleFilterKeydown"
           >
         </span>
         <span v-else class="native-select__label">{{ selectedLabel }}</span>
       </template>
-      <span v-if="clearable && (multiple ? modelValue.length > 0 : modelValue)" class="native-select__clear" @click.stop="clearSelection">
+      <button
+      v-if="clearable && !disabled && (multiple ? selectedValues.length > 0 : hasSingleValue)"
+        type="button"
+        class="native-select__clear"
+        aria-label="清除选择"
+        @click.stop="clearSelection"
+      >
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
           <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
         </svg>
-      </span>
-      <span class="native-select__arrow" :class="{ 'native-select__arrow--clearable': clearable && (multiple ? modelValue.length > 0 : modelValue) }">
+      </button>
+      <span class="native-select__arrow" :class="{ 'native-select__arrow--clearable': clearable && (multiple ? selectedValues.length > 0 : hasSingleValue) }">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
           <path d="M7 10l5 5 5-5z"/>
         </svg>
@@ -50,23 +142,41 @@
       <div v-if="isOpen" ref="dropdownRef" class="native-select__dropdown" :style="dropdownStyle" @click.stop>
         <div v-if="filterable" class="native-select__filter-dropdown">
           <input 
+            ref="dropdownFilterInput"
             v-model="filterText"
             type="text"
             class="native-select__filter-input-dropdown"
             :placeholder="filterPlaceholder"
+            :aria-controls="listboxId"
+            :aria-autocomplete="'list'"
+            :aria-activedescendant="activeDescendantId || undefined"
+            @keydown="handleFilterKeydown"
           >
         </div>
-        <div class="native-select__options-list">
+        <div
+          :id="listboxId"
+          class="native-select__options-list"
+          role="listbox"
+          :aria-label="placeholder"
+          :aria-multiselectable="multiple ? 'true' : undefined"
+        >
           <div
-            v-for="option in filteredOptions"
+            v-for="(option, index) in filteredOptions"
             :key="option.value"
+            :id="optionId(option, index)"
+            :ref="element => setOptionRef(element, index)"
             class="native-select__option"
             :class="{ 
               'native-select__option--selected': isOptionSelected(option),
+              'native-select__option--active': activeIndex === index,
               'native-select__option--multiple': multiple,
               'native-select__option--disabled': option.disabled
             }"
-            @click="selectOption(option)"
+            role="option"
+            :aria-selected="isOptionSelected(option) ? 'true' : 'false'"
+            :aria-disabled="option.disabled ? 'true' : undefined"
+            @mouseenter="handleOptionMouseEnter(index)"
+            @click="selectOption(option, index)"
           >
             <span v-if="multiple" class="native-select__checkbox">
               <svg v-if="isOptionSelected(option)" viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
@@ -85,7 +195,24 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted, useAttrs } from 'vue'
+import {
+  SelectContent,
+  SelectItem,
+  SelectItemText,
+  SelectPortal,
+  SelectRoot,
+  SelectTrigger,
+  SelectViewport
+} from 'reka-ui'
+import {
+  findFirstEnabledIndex,
+  moveListboxActiveIndex
+} from '@/utils/listboxNavigation'
+
+let selectInstanceSeed = 0
+
+defineOptions({ inheritAttrs: false })
 
 // 获取所有可滚动的祖先元素
 function getScrollParents(element) {
@@ -121,6 +248,27 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
+const attrs = useAttrs()
+
+const hasSingleValue = computed(() => (
+  props.modelValue !== '' && props.modelValue !== null && props.modelValue !== undefined
+))
+const useRekaSelect = computed(() => !props.filterable && !props.multiple)
+const rekaOpen = ref(false)
+const optionToken = index => `native-select-option-${index}`
+const rekaModelValue = computed(() => {
+  if (!hasSingleValue.value) return undefined
+  const index = props.options.findIndex(option => option.value === props.modelValue)
+  return index >= 0 ? optionToken(index) : undefined
+})
+
+function handleRekaValueChange(token) {
+  const index = Number.parseInt(String(token).replace('native-select-option-', ''), 10)
+  const option = props.options[index]
+  if (!option || option.disabled) return
+  emit('update:modelValue', option.value)
+  emit('change', option.value)
+}
 
 const isOpen = ref(false)
 const filterText = ref('')
@@ -130,6 +278,11 @@ const dropdownRef = ref(null)
 const dropdownStyle = ref({})
 const scrollParents = ref([])
 const triggerRef = ref(null)
+const dropdownFilterInput = ref(null)
+const activeIndex = ref(-1)
+const optionRefs = ref([])
+const selectInstanceId = ++selectInstanceSeed
+const listboxId = `native-select-listbox-${selectInstanceId}`
 let resizeObserver = null
 
 // 文档点击处理器 - 用于点击外部关闭
@@ -153,7 +306,7 @@ const selectedValues = computed(() => {
   if (props.multiple) {
     return Array.isArray(props.modelValue) ? props.modelValue : []
   }
-  return props.modelValue ? [props.modelValue] : []
+  return hasSingleValue.value ? [props.modelValue] : []
 })
 
 const selectedLabel = computed(() => {
@@ -181,9 +334,32 @@ const filteredOptions = computed(() => {
   )
 })
 
+const activeDescendantId = computed(() => {
+  if (!isOpen.value || activeIndex.value < 0) return ''
+
+  const option = filteredOptions.value[activeIndex.value]
+  return option && !option.disabled ? optionId(option, activeIndex.value) : ''
+})
+
 function getOptionLabel(value) {
   const option = props.options.find(o => o.value === value)
   return option ? option.label : value
+}
+
+function optionId(option, filteredIndex = 0) {
+  const sourceIndex = props.options.findIndex(item => item === option)
+  const identity = option?.value !== undefined
+    ? `value-${String(option.value)}`
+    : `index-${sourceIndex >= 0 ? sourceIndex : filteredIndex}`
+  return `${listboxId}-option-${encodeURIComponent(identity)}`
+}
+
+function setOptionRef(element, index) {
+  if (element) {
+    optionRefs.value[index] = element
+  } else {
+    optionRefs.value[index] = null
+  }
 }
 
 function isOptionSelected(option) {
@@ -308,36 +484,151 @@ function updateDropdownPosition() {
   }
 }
 
-function close() {
-  isOpen.value = false
-  filterText.value = ''
-  stopPositionListeners()
-  document.removeEventListener('click', documentClickHandler)
+function initialActiveIndex() {
+  const selectedIndex = filteredOptions.value.findIndex(option => (
+    isOptionSelected(option) && !option.disabled
+  ))
+  return selectedIndex >= 0 ? selectedIndex : findFirstEnabledIndex(filteredOptions.value)
 }
 
-function handleTriggerClick(e) {
-  if (props.disabled) return
-  isOpen.value = !isOpen.value
-  
-  if (isOpen.value) {
-    // 延迟添加 document 监听，避免当前点击事件立即触发关闭
-    nextTick(() => {
-      document.addEventListener('click', documentClickHandler)
-    })
-    startPositionListeners()
-    nextTick(() => {
-      updateDropdownPosition()
-      if (props.filterable) {
-        filterInput.value?.focus()
-      }
-    })
-  } else {
-    stopPositionListeners()
+function scrollActiveOption() {
+  const element = optionRefs.value[activeIndex.value]
+  if (!element || typeof element.scrollIntoView !== 'function') return
+
+  try {
+    element.scrollIntoView({ block: 'nearest' })
+  } catch {
+    // Some embedded browsers expose scrollIntoView without accepting options.
+    element.scrollIntoView()
   }
 }
 
-function selectOption(option) {
+function open() {
+  if (props.disabled || isOpen.value) return
+
+  isOpen.value = true
+  filterText.value = ''
+  activeIndex.value = initialActiveIndex()
+  optionRefs.value = []
+
+  // 延迟添加 document 监听，避免当前点击事件立即触发关闭
+  nextTick(() => {
+    document.addEventListener('click', documentClickHandler)
+    updateDropdownPosition()
+
+    if (props.filterable) {
+      const input = props.multiple ? dropdownFilterInput.value : filterInput.value
+      input?.focus()
+    } else {
+      triggerRef.value?.focus({ preventScroll: true })
+    }
+  })
+  startPositionListeners()
+}
+
+function close({ focusTrigger = false } = {}) {
+  isOpen.value = false
+  filterText.value = ''
+  activeIndex.value = -1
+  optionRefs.value = []
+  stopPositionListeners()
+  document.removeEventListener('click', documentClickHandler)
+
+  if (focusTrigger) {
+    nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
+  }
+}
+
+function handleTriggerClick() {
+  if (props.disabled) return
+  if (isOpen.value) {
+    close()
+  } else {
+    open()
+  }
+}
+
+function isFilterInputTarget(event) {
+  return event.target === filterInput.value || event.target === dropdownFilterInput.value
+}
+
+function selectActiveOption() {
+  const option = filteredOptions.value[activeIndex.value]
+  if (option && !option.disabled) {
+    selectOption(option, activeIndex.value)
+  }
+}
+
+function handleKeyboardEvent(event) {
+  if (props.disabled) return
+
+  const { key } = event
+  const isFilterInput = isFilterInputTarget(event)
+
+  // Filter inputs keep regular text entry semantics. Space/Home/End are
+  // characters/caret navigation there, while the trigger owns list navigation.
+  if (isFilterInput && isOpen.value && (key === ' ' || key === 'Space' || key === 'Spacebar' || key === 'Home' || key === 'End')) {
+    return
+  }
+
+  if (key === 'Tab') {
+    if (isOpen.value) close()
+    return
+  }
+
+  if (key === 'Escape' || key === 'Esc') {
+    if (isOpen.value) {
+      event.preventDefault()
+      close({ focusTrigger: true })
+    }
+    return
+  }
+
+  if (key === 'Enter' || key === ' ' || key === 'Space' || key === 'Spacebar') {
+    event.preventDefault()
+    if (!isOpen.value) {
+      open()
+    } else {
+      selectActiveOption()
+    }
+    return
+  }
+
+  if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Home' || key === 'End') {
+    event.preventDefault()
+    if (!isOpen.value) {
+      open()
+
+      // Opening already chooses the selected option or the first enabled
+      // option. Do not advance again for ArrowDown; ArrowUp has an explicit
+      // closed-state boundary and starts at the last enabled option.
+      if (key === 'ArrowUp' || key === 'Home' || key === 'End') {
+        activeIndex.value = moveListboxActiveIndex(filteredOptions.value, -1, key)
+      }
+      return
+    }
+
+    activeIndex.value = moveListboxActiveIndex(filteredOptions.value, activeIndex.value, key)
+  }
+}
+
+function handleTriggerKeydown(event) {
+  handleKeyboardEvent(event)
+}
+
+function handleFilterKeydown(event) {
+  handleKeyboardEvent(event)
+}
+
+function handleOptionMouseEnter(index) {
+  const option = filteredOptions.value[index]
+  if (option && !option.disabled) activeIndex.value = index
+}
+
+function selectOption(option, index = -1) {
   if (option.disabled) return
+
+  if (index >= 0) activeIndex.value = index
   
   if (props.multiple) {
     const currentValues = Array.isArray(props.modelValue) ? [...props.modelValue] : []
@@ -352,8 +643,7 @@ function selectOption(option) {
   } else {
     emit('update:modelValue', option.value)
     emit('change', option.value)
-    isOpen.value = false
-    filterText.value = ''
+    close({ focusTrigger: true })
   }
 }
 
@@ -380,6 +670,30 @@ function clearSelection() {
   filterText.value = ''
 }
 
+watch(filteredOptions, (options, previousOptions = []) => {
+  optionRefs.value = []
+  if (!isOpen.value) {
+    activeIndex.value = -1
+    return
+  }
+
+  const previousActive = previousOptions[activeIndex.value]
+  const retainedIndex = previousActive
+    ? options.findIndex(option => option.value === previousActive.value)
+    : -1
+
+  if (retainedIndex >= 0 && !options[retainedIndex].disabled) {
+    activeIndex.value = retainedIndex
+    return
+  }
+
+  activeIndex.value = initialActiveIndex()
+})
+
+watch(activeIndex, () => {
+  if (isOpen.value) nextTick(scrollActiveOption)
+})
+
 onUnmounted(() => {
   stopPositionListeners()
   document.removeEventListener('click', documentClickHandler)
@@ -397,11 +711,15 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
   padding: 6px 12px;
-  border: 1px solid #dcdcdc;
+  border: 1px solid var(--color-border-default);
   border-radius: 6px;
-  background: #fff;
+  background: var(--color-surface-raised);
+  color: inherit;
   cursor: pointer;
+  font: inherit;
+  text-align: left;
   transition: all 0.2s;
   min-height: 36px;
   box-sizing: border-box;
@@ -433,22 +751,27 @@ onUnmounted(() => {
 }
 
 .native-select__trigger:hover:not(.native-select--disabled) {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
+}
+
+.native-select__trigger:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
 }
 
 .native-select--open .native-select__trigger {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-select--disabled {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   cursor: not-allowed;
   opacity: 0.6;
 }
 
 .native-select__label {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -457,12 +780,12 @@ onUnmounted(() => {
 
 .native-select__placeholder {
   font-size: 14px;
-  color: #999;
+  color: var(--color-text-muted);
   flex: 1;
 }
 
 .native-select__arrow {
-  color: #999;
+  color: var(--color-text-muted);
   transition: transform 0.2s;
   flex-shrink: 0;
 }
@@ -472,12 +795,30 @@ onUnmounted(() => {
 }
 
 .native-select__dropdown {
-  background: #fff;
-  border: 1px solid #ddd;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-default);
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-md);
   max-height: 200px;
   overflow-y: auto;
+  z-index: 10000;
+}
+
+.native-select__dropdown--reka {
+  width: var(--reka-select-trigger-width);
+  max-height: var(--reka-select-content-available-height);
+}
+
+.native-select--reka.native-select--clearable .native-select__trigger {
+  padding-right: 56px;
+}
+
+.native-select__clear--reka {
+  position: absolute;
+  top: 50%;
+  right: 28px;
+  z-index: 1;
+  transform: translateY(-50%);
 }
 
 .native-select__option {
@@ -491,18 +832,27 @@ onUnmounted(() => {
 }
 
 .native-select__option:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
+}
+
+.native-select__option[data-highlighted] {
+  background: var(--color-primary-surface);
+  outline: none;
+}
+
+.native-select__option--active {
+  background: var(--color-primary-surface);
 }
 
 .native-select__option--selected {
-  background: #e8f4ff;
-  color: #0052d9;
+  background: var(--color-primary-surface);
+  color: var(--color-primary);
 }
 
 .native-select__checkbox {
   width: 16px;
   height: 16px;
-  border: 2px solid #dcdcdc;
+  border: 2px solid var(--color-border-default);
   border-radius: 3px;
   display: flex;
   align-items: center;
@@ -511,9 +861,9 @@ onUnmounted(() => {
 }
 
 .native-select__option--selected .native-select__checkbox {
-  background: #0052d9;
-  border-color: #0052d9;
-  color: #fff;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-text-inverse);
 }
 
 .native-select__tags {
@@ -528,8 +878,8 @@ onUnmounted(() => {
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  background: #e8f4ff;
-  color: #0052d9;
+  background: var(--color-primary-surface);
+  color: var(--color-primary);
   border-radius: 4px;
   font-size: 12px;
 }
@@ -538,8 +888,18 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   cursor: pointer;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
   opacity: 0.6;
   transition: opacity 0.2s;
+}
+
+.native-select__tag-close:focus-visible,
+.native-select__clear:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
 }
 
 .native-select__tag-close:hover {
@@ -547,8 +907,8 @@ onUnmounted(() => {
 }
 
 .native-select__tag--more {
-  background: #f0f0f0;
-  color: #666;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
 }
 
 /* 过滤功能样式 */
@@ -562,27 +922,27 @@ onUnmounted(() => {
   border: none;
   background: transparent;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   outline: none;
   padding: 0;
 }
 
 .native-select__filter-dropdown {
   padding: 8px 12px;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .native-select__filter-input-dropdown {
   width: 100%;
   padding: 6px 12px;
-  border: 1px solid #dcdcdc;
+  border: 1px solid var(--color-border-default);
   border-radius: 4px;
   font-size: 14px;
   outline: none;
 }
 
 .native-select__filter-input-dropdown:focus {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-select__options-list {
@@ -596,8 +956,8 @@ onUnmounted(() => {
 }
 
 .native-select__option-label :deep(mark) {
-  background: #ffeb3b;
-  color: inherit;
+  background: var(--color-warning-surface);
+  color: var(--color-warning-text);
   padding: 0 2px;
   border-radius: 2px;
 }
@@ -605,7 +965,7 @@ onUnmounted(() => {
 .native-select__empty {
   padding: 16px;
   text-align: center;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 
@@ -615,15 +975,18 @@ onUnmounted(() => {
   justify-content: center;
   padding: 4px;
   margin-right: 4px;
-  color: #999;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
   cursor: pointer;
+  font: inherit;
   opacity: 0.6;
   transition: opacity 0.2s;
 }
 
 .native-select__clear:hover {
   opacity: 1;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .native-select__arrow--clearable {

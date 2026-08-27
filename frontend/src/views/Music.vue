@@ -4,28 +4,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import MusicPC from '@/pc/pages/MusicPC.vue'
-import MusicMobile from '@/mobile/pages/MusicMobile.vue'
+import { defineAsyncComponent } from 'vue'
+import { useViewport } from '@/composables/useViewport'
 
-// 初始化时检查窗口宽度，避免闪烁
-const getIsMobile = () => {
-  if (typeof window === 'undefined') return false
-  return window.innerWidth <= 768
-}
+const MusicPC = defineAsyncComponent(() => import('@/pc/pages/MusicPC.vue'))
+const MusicMobile = defineAsyncComponent(() => import('@/mobile/pages/MusicMobile.vue'))
 
-const isMobile = ref(getIsMobile())
-
-const checkMobile = () => {
-  isMobile.value = getIsMobile()
-}
-
-onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
-})
+const { isMobile } = useViewport()
 </script>

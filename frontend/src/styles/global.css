@@ -1,3 +1,86 @@
+/* 阶段 7.1 语义化设计变量：先作为稳定基线，旧页面可继续使用历史值。 */
+:root {
+  color-scheme: light;
+
+  /* Surfaces: deep graphite-blue navigation + warm/light content canvas. */
+  --color-sidebar: #172033;
+  --color-sidebar-hover: #222d45;
+  --color-sidebar-active: #2d3b5c;
+  --color-sidebar-text: #e4e9f3;
+  --color-sidebar-text-muted: #98a5bd;
+  --color-surface-page: #f5f6f8;
+  --color-surface-raised: #fffdfa;
+  --color-surface-subtle: #eef1f5;
+  --color-surface-inverse: #172033;
+
+  /* Text hierarchy. */
+  --color-text-primary: #202938;
+  --color-text-secondary: #5b6678;
+  --color-text-muted: #8993a4;
+  --color-text-disabled: #aeb6c3;
+  --color-text-inverse: #ffffff;
+
+  /* Borders, focus, and semantic accents. */
+  --color-border-subtle: #e9ecf1;
+  --color-border-default: #d9dee7;
+  --color-border-strong: #c5ccd8;
+  --color-focus-ring: #5967d9;
+  --color-primary: #5967d9;
+  --color-primary-hover: #4b58c6;
+  --color-primary-active: #414cae;
+  --color-primary-surface: #eef0ff;
+  --color-primary-border: #cbd0ff;
+  --color-info-text: #4252bb;
+  --color-info-surface: #eef0ff;
+  --color-info-border: #cbd0ff;
+  --color-success: #0f9f86;
+  --color-success-hover: #0b866f;
+  --color-success-text: #087663;
+  --color-success-surface: #e9f8f4;
+  --color-success-border: #bce8dc;
+  --color-warning: #b76a18;
+  --color-warning-hover: #985613;
+  --color-warning-text: #8c4f10;
+  --color-warning-surface: #fff6e8;
+  --color-warning-border: #f0d3a7;
+  --color-danger: #c94d5a;
+  --color-danger-hover: #b43f4b;
+  --color-danger-text: #a33b47;
+  --color-danger-surface: #fff0f2;
+  --color-danger-border: #f2cbd0;
+
+  /* Radius and elevation. */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 9999px;
+  --shadow-sm: 0 1px 2px rgba(23, 32, 51, 0.06);
+  --shadow-md: 0 4px 12px rgba(23, 32, 51, 0.10);
+  --shadow-lg: 0 12px 28px rgba(23, 32, 51, 0.14);
+
+  /* Spacing scale. */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Motion: restrained by default and easy to reduce for accessibility. */
+  --motion-duration-fast: 120ms;
+  --motion-duration-standard: 180ms;
+  --motion-duration-slow: 260ms;
+  --motion-duration-spinner: 800ms;
+  --motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --motion-easing-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+  --opacity-disabled: 0.52;
+}
+
 /* 全局样式 - 美化所有组件 */
 
 /* 按钮动画 */
@@ -246,4 +329,22 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-fast: 1ms;
+    --motion-duration-standard: 1ms;
+    --motion-duration-slow: 1ms;
+    --motion-duration-spinner: 1ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

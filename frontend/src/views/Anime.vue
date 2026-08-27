@@ -353,29 +353,17 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onActivated, onUnmounted, watch } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted, onActivated, onUnmounted, watch } from 'vue'
 import api from '@/api'
 import AnimeDetailDialog from '@/components/AnimeDetailDialog.vue'
-import AnimeMobile from '@/mobile/pages/AnimeMobile.vue'
 import { initAnimeCoverDB, getAnimeCoverFromCache, saveAnimeCoverToCache } from '@/utils/animeCoverCache'
 import { usePermission } from '@/composables/usePermission'
+import { useViewport } from '@/composables/useViewport'
 import { NativeButton, NativeInput, NativeCard, NativeCheckbox, NativeSelect, NativeTag, NativePagination, NativeIcon, NativeTable, NativeRate, NativeDropdown, NativePopconfirm } from '@/components/native'
 import { useToast } from '@/composables/useToast'
 
-// 移动端判断
-const getIsMobile = () => {
-  if (typeof window === 'undefined') return false
-  return window.innerWidth <= 768
-}
-const isMobile = ref(getIsMobile())
-const checkMobile = () => { isMobile.value = getIsMobile() }
-onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
-})
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
-})
+const AnimeMobile = defineAsyncComponent(() => import('@/mobile/pages/AnimeMobile.vue'))
+const { isMobile } = useViewport()
 
 const toast = useToast()
 const { isGuest } = usePermission()

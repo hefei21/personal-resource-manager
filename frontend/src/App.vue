@@ -18,7 +18,11 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  background-color: #f5f5f5;
+  background-color: var(--color-surface-page);
+  color: var(--color-text-primary);
+  transition:
+    background-color var(--motion-duration-standard) var(--motion-easing-standard),
+    color var(--motion-duration-standard) var(--motion-easing-standard);
 }
 
 #app {
@@ -27,7 +31,9 @@ body {
 
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.3s ease, transform 0.3s ease;
+  transition:
+    opacity var(--motion-duration-standard) var(--motion-easing-standard),
+    transform var(--motion-duration-standard) var(--motion-easing-standard);
 }
 
 .fade-enter-from {
@@ -38,5 +44,12 @@ body {
 .fade-leave-to {
   opacity: 0;
   transform: translateX(-20px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-enter-from,
+  .fade-leave-to {
+    transform: none;
+  }
 }
 </style>

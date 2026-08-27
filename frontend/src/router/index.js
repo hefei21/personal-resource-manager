@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { routeNavigationMeta } from './navigation'
 
 const routes = [
   {
@@ -24,63 +25,74 @@ const routes = [
       {
         path: 'dashboard',
         name: 'Dashboard',
-        component: () => import('@/views/Dashboard.vue')
+        component: () => import('@/views/Dashboard.vue'),
+        meta: routeNavigationMeta('Dashboard')
       },
       {
         path: 'search',
         name: 'Search',
-        component: () => import('@/views/Search.vue')
+        component: () => import('@/views/Search.vue'),
+        meta: routeNavigationMeta('Search')
       },
       {
         path: 'documents',
         name: 'Documents',
-        component: () => import('@/views/Documents.vue')
+        component: () => import('@/views/Documents.vue'),
+        meta: routeNavigationMeta('Documents')
       },
       {
         path: 'music',
         name: 'Music',
-        component: () => import('@/views/Music.vue')
+        component: () => import('@/views/Music.vue'),
+        meta: routeNavigationMeta('Music')
       },
       {
         path: 'books',
         name: 'Books',
-        component: () => import('@/views/Books.vue')
+        component: () => import('@/views/Books.vue'),
+        meta: routeNavigationMeta('Books')
       },
       {
         path: 'code',
         name: 'Code',
-        component: () => import('@/views/Code.vue')
+        component: () => import('@/views/Code.vue'),
+        meta: routeNavigationMeta('Code')
       },
       {
         path: 'bookmarks',
         name: 'Bookmarks',
-        component: () => import('@/views/Bookmarks.vue')
+        component: () => import('@/views/Bookmarks.vue'),
+        meta: routeNavigationMeta('Bookmarks')
       },
       {
         path: 'anime',
         name: 'Anime',
-        component: () => import('@/views/Anime.vue')
+        component: () => import('@/views/Anime.vue'),
+        meta: routeNavigationMeta('Anime')
       },
       {
         path: 'games',
         name: 'Games',
-        component: () => import('@/views/Games.vue')
+        component: () => import('@/views/Games.vue'),
+        meta: routeNavigationMeta('Games')
       },
       {
         path: 'blog',
         name: 'Blog',
-        component: () => import('@/views/Blog.vue')
+        component: () => import('@/views/Blog.vue'),
+        meta: routeNavigationMeta('Blog')
       },
       {
         path: 'logs',
         name: 'Logs',
         component: () => import('@/views/Logs.vue'),
-        meta: { requiresAdmin: true }
+        meta: { ...routeNavigationMeta('Logs'), requiresAdmin: true }
       },
       {
         path: 'tasks',
         name: 'Tasks',
-        component: () => import('@/views/Tasks.vue')
+        component: () => import('@/views/Tasks.vue'),
+        meta: routeNavigationMeta('Tasks')
       }
     ]
   }

@@ -4,22 +4,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import BookmarksPC from '@/pc/pages/BookmarksPC.vue'
-import BookmarksMobile from '@/mobile/pages/BookmarksMobile.vue'
+import { defineAsyncComponent } from 'vue'
+import { useViewport } from '@/composables/useViewport'
 
-const isMobile = ref(false)
+const BookmarksPC = defineAsyncComponent(() => import('@/pc/pages/BookmarksPC.vue'))
+const BookmarksMobile = defineAsyncComponent(() => import('@/mobile/pages/BookmarksMobile.vue'))
 
-const checkMobile = () => {
-  isMobile.value = window.innerWidth <= 768
-}
-
-onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
-})
+const { isMobile } = useViewport()
 </script>

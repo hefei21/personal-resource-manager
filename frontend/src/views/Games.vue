@@ -4,27 +4,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import GamesPC from '@/pc/pages/GamesPC.vue'
-import GamesMobile from '@/mobile/pages/GamesMobile.vue'
+import { defineAsyncComponent } from 'vue'
+import { useViewport } from '@/composables/useViewport'
 
-const getIsMobile = () => {
-  if (typeof window === 'undefined') return false
-  return window.innerWidth <= 768
-}
+const GamesPC = defineAsyncComponent(() => import('@/pc/pages/GamesPC.vue'))
+const GamesMobile = defineAsyncComponent(() => import('@/mobile/pages/GamesMobile.vue'))
 
-const isMobile = ref(getIsMobile())
-
-const checkMobile = () => {
-  isMobile.value = getIsMobile()
-}
-
-onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
-})
+const { isMobile } = useViewport()
 </script>

@@ -4,22 +4,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import DocumentsPC from '@/pc/pages/DocumentsPC.vue'
-import DocumentsMobile from '@/mobile/pages/DocumentsMobile.vue'
+import { defineAsyncComponent } from 'vue'
+import { useViewport } from '@/composables/useViewport'
 
-const isMobile = ref(false)
+const DocumentsPC = defineAsyncComponent(() => import('@/pc/pages/DocumentsPC.vue'))
+const DocumentsMobile = defineAsyncComponent(() => import('@/mobile/pages/DocumentsMobile.vue'))
 
-const checkMobile = () => {
-  isMobile.value = window.innerWidth <= 768
-}
-
-onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
-})
+const { isMobile } = useViewport()
 </script>

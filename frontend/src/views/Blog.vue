@@ -4,28 +4,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import BlogPC from '@/pc/pages/BlogPC.vue'
-import BlogMobile from '@/mobile/pages/BlogMobile.vue'
+import { defineAsyncComponent } from 'vue'
+import { useViewport } from '@/composables/useViewport'
 
-// 初始化时检查窗口宽度，避免闪烁
-const getIsMobile = () => {
-  if (typeof window === 'undefined') return false
-  return window.innerWidth <= 768
-}
+const BlogPC = defineAsyncComponent(() => import('@/pc/pages/BlogPC.vue'))
+const BlogMobile = defineAsyncComponent(() => import('@/mobile/pages/BlogMobile.vue'))
 
-const isMobile = ref(getIsMobile())
-
-const checkMobile = () => {
-  isMobile.value = getIsMobile()
-}
-
-onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
-})
+const { isMobile } = useViewport()
 </script>

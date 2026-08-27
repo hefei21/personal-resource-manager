@@ -51,7 +51,7 @@
     
     <!-- 子节点 -->
     <div v-show="hasLoadedChildren && isExpanded" class="native-tree-node__children">
-      <TreeNode
+      <NativeTreeNode2
         v-for="(child, childIndex) in node[childrenField]"
         :key="child[keyField] ?? `child-${childIndex}`"
         :node="child"
@@ -75,7 +75,7 @@
         <template #node="slotProps">
           <slot name="node" v-bind="slotProps"></slot>
         </template>
-      </TreeNode>
+      </NativeTreeNode2>
     </div>
   </div>
 </template>

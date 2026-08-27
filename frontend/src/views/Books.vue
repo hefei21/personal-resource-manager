@@ -6,23 +6,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import BooksMobile from '@/mobile/pages/BooksMobile.vue'
-import BooksPC from '@/pc/pages/BooksPC.vue'
+import { defineAsyncComponent } from 'vue'
+import { useViewport } from '@/composables/useViewport'
 
-// 移动端检测
-const isMobile = ref(false)
+const BooksPC = defineAsyncComponent(() => import('@/pc/pages/BooksPC.vue'))
+const BooksMobile = defineAsyncComponent(() => import('@/mobile/pages/BooksMobile.vue'))
 
-function checkMobile() {
-  isMobile.value = window.innerWidth <= 768
-}
-
-onMounted(() => {
-  checkMobile()
-  window.addEventListener('resize', checkMobile)
-})
-
-onUnmounted(() => {
-  window.removeEventListener('resize', checkMobile)
-})
+const { isMobile } = useViewport()
 </script>

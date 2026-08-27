@@ -41,7 +41,7 @@
     
     <!-- 子节点 -->
     <div v-if="hasChildren && isExpanded" class="native-tree-node__children">
-      <TreeNode
+      <NativeTreeNode
         v-for="child in node[childrenKey]"
         :key="child[valueKey]"
         :node="child"
