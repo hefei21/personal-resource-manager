@@ -522,7 +522,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, shallowRef, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
@@ -531,8 +531,10 @@ import hljs from 'highlight.js'
 import mammoth from 'mammoth'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
+import { normalizeDocumentTags } from '@/utils/documentTags'
+import { openPdfDocument } from '@/utils/pdfPreview'
 import { usePermission } from '@/composables/usePermission'
-import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect, NativeAlert } from '@/components/native'
+import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect, NativeAlert, NativeLoading } from '@/components/native'
 import { useToast } from '@/composables/useToast'
 import {
   escapeHtml,
@@ -555,29 +557,6 @@ marked.setOptions({
   breaks: true,
   gfm: true
 })
-
-// 动态加载 PDF.js
-let pdfjsLib = null
-
-async function loadPdfJS() {
-  if (pdfjsLib) return pdfjsLib
-  try {
-    const script = document.createElement('script')
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js'
-    script.async = true
-    await new Promise((resolve, reject) => {
-      script.onload = resolve
-      script.onerror = reject
-      document.head.appendChild(script)
-    })
-    pdfjsLib = window.pdfjsLib
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.10.377/build/pdf.worker.min.js'
-    return pdfjsLib
-  } catch (e) {
-    console.error('PDF.js 加载失败:', e)
-    throw e
-  }
-}
 
 // 状态定义
 const loading = ref(false)
@@ -683,7 +662,7 @@ function isPreviewing(docId) {
 
 // PDF预览状态
 const pdfCanvas = ref(null)
-const pdfDoc = ref(null)
+const pdfDoc = shallowRef(null)
 const currentPage = ref(1)
 const totalPages = ref(0)
 
@@ -926,11 +905,11 @@ async function loadOfficeContent(base64Content, ext) {
 // PDF渲染相关函数
 async function loadPDFDocument(pdfData) {
   try {
-    const pdfjs = await loadPdfJS()
     let uint8Array = pdfData
     if (typeof pdfData === 'string') uint8Array = base64ToUint8Array(pdfData)
 
-    pdfDoc.value = await pdfjs.getDocument(uint8Array).promise
+    if (pdfDoc.value) await pdfDoc.value.destroy()
+    pdfDoc.value = await openPdfDocument(uint8Array)
     totalPages.value = pdfDoc.value.numPages
     currentPage.value = 1
     // 注意: 不在此处渲染和关闭loading，由previewDocument统一控制
@@ -939,6 +918,7 @@ async function loadPDFDocument(pdfData) {
     console.error('PDF加载失败:', error)
     toast.error('PDF加载失败')
     previewLoading.value = false
+    throw error
   }
 }
 
@@ -968,7 +948,7 @@ function nextPage() {
 function handleDownloadFile() {
   const doc = documents.value.find(d => d.id === previewDocumentId.value)
   if (!doc) return
-  const downloadUrl = authenticatedAssetUrl(`/api/documents/${doc.id}/content?download=1`)
+  const downloadUrl = authenticatedAssetUrl(`/api/documents/download/${doc.id}`)
   window.open(downloadUrl, '_blank')
 }
 
@@ -1616,8 +1596,7 @@ function formatDateTime(value) {
 }
 
 function parseTags(tagsStr) {
-  if (!tagsStr) return []
-  return tagsStr.split(/[,，]/).map(t => t.trim()).filter(Boolean)
+  return normalizeDocumentTags(tagsStr)
 }
 
 function getImageMimeType(fileName) {

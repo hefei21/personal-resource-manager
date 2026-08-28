@@ -21,7 +21,20 @@ test('NAS Git repositories are read-only in task processor and routes', () => {
   assert.match(routeSource, /getGitNasCommitDetail/u)
   assert.match(routeSource, /readGitNasReadme/u)
   assert.match(routeSource, /readOnly: isGitNasRepository/u)
+  assert.match(routeSource, /router\.put\('\/:id'[\s\S]*SELECT id, type FROM code_repositories[\s\S]*isGitNasRepository\(repo\)[\s\S]*sendGitNasReadOnly/u)
   assert.doesNotMatch(routeSource, /fs\.rmSync\([^\n]*repo\.local_path/u)
+})
+
+test('PC and mobile code views expose NAS read-only state without mobile write entry points', () => {
+  const desktopSource = read('frontend/src/pc/pages/CodePC.vue')
+  const mobileSource = read('frontend/src/mobile/pages/CodeMobile.vue')
+  const capabilitySource = read('frontend/src/utils/codeRepositoryCapabilities.js')
+  assert.match(capabilitySource, /repository\?\.readOnly === true \|\| repository\?\.type === 'git_nas'/u)
+  assert.match(desktopSource, /v-if="!isReadOnlyRepository\(repo\)" class="repo-actions"/u)
+  assert.match(desktopSource, /NAS 只读/u)
+  assert.match(mobileSource, /NAS 只读/u)
+  assert.doesNotMatch(mobileSource, /@click\.stop="(?:editRepo|syncRepo)\(repo\)"|@click\.stop="confirmDelete\(repo\)"/u)
+  assert.doesNotMatch(mobileSource, /class="fab-add"/u)
 })
 
 test('NAS Git task code only exposes opaque IDs and fixed read-only Git commands', () => {

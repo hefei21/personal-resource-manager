@@ -631,10 +631,11 @@ router.put('/:id', authenticateToken, requireWritePermission, async (req, res) =
       return res.status(400).json({ message: '仓库名称不能为空' })
     }
     
-    const repo = db.prepare('SELECT id FROM code_repositories WHERE id = ?').get(req.params.id)
+    const repo = db.prepare('SELECT id, type FROM code_repositories WHERE id = ?').get(req.params.id)
     if (!repo) {
       return res.status(404).json({ message: '仓库不存在' })
     }
+    if (isGitNasRepository(repo)) return sendGitNasReadOnly(res)
     
     db.prepare('UPDATE code_repositories SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(name, description, req.params.id)

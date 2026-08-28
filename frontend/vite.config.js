@@ -1,9 +1,53 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { resolve } from 'path'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { basename, extname, resolve } from 'node:path'
+
+const PDFJS_RUNTIME_DIRECTORIES = Object.freeze(['cmaps', 'standard_fonts', 'wasm', 'iccs'])
+const PDFJS_RUNTIME_ROOT = resolve(__dirname, 'node_modules/pdfjs-dist')
+
+function pdfjsRuntimeAssets() {
+  return [
+    {
+      name: 'pdfjs-runtime-assets-build',
+      apply: 'build',
+      buildStart() {
+        for (const directory of PDFJS_RUNTIME_DIRECTORIES) {
+          const sourceDirectory = resolve(PDFJS_RUNTIME_ROOT, directory)
+          for (const fileName of readdirSync(sourceDirectory)) {
+            this.emitFile({
+              type: 'asset',
+              fileName: `pdfjs/${directory}/${fileName}`,
+              source: readFileSync(resolve(sourceDirectory, fileName))
+            })
+          }
+        }
+      }
+    },
+    {
+      name: 'pdfjs-runtime-assets-serve',
+      apply: 'serve',
+      configureServer(server) {
+        server.middlewares.use((request, response, next) => {
+          const pathname = new URL(request.url, 'http://localhost').pathname
+          const match = /^\/pdfjs\/(cmaps|standard_fonts|wasm|iccs)\/([A-Za-z0-9_.-]+)$/u.exec(pathname)
+          if (!match) return next()
+          const [, directory, fileName] = match
+          const sourceDirectory = resolve(PDFJS_RUNTIME_ROOT, directory)
+          const filePath = resolve(sourceDirectory, fileName)
+          if (basename(filePath) !== fileName || !existsSync(filePath)) return next()
+          const extension = extname(fileName)
+          response.setHeader('Content-Type', extension === '.wasm' ? 'application/wasm' : 'application/octet-stream')
+          response.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+          response.end(readFileSync(filePath))
+        })
+      }
+    }
+  ]
+}
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), ...pdfjsRuntimeAssets()],
   cacheDir: 'node_modules/.vite_cache', // 启用构建缓存
   resolve: {
     alias: {
@@ -11,7 +55,6 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    // 不需要预构建 pdfjs-dist,因为已经移除了这个依赖
     exclude: [],
     force: false // 避免强制重新预构建
   },

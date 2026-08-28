@@ -750,10 +750,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, nextTick } from 'vue'
+import { ref, shallowRef, onMounted, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
+import { documentTagsLabel } from '@/utils/documentTags'
+import { openPdfDocument } from '@/utils/pdfPreview'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mammoth from 'mammoth'
@@ -777,9 +779,6 @@ const toast = useToast()
 const route = useRoute()
 const { isGuest, canWrite } = usePermission()
 
-// 动态加载 PDF.js (不使用本地 pdfjs-dist,避免版本冲突)
-let pdfjsLib = null
-
 // 配置 marked 选项
 marked.setOptions({
   highlight: function (code, lang) {
@@ -791,36 +790,6 @@ marked.setOptions({
   breaks: true,
   gfm: true
 })
-
-// 动态加载 PDF.js 的函数
-async function loadPdfJS() {
-  if (pdfjsLib) return pdfjsLib
-
-  try {
-    // 使用 PDF.js 2.10.377 版本(经过验证的稳定版本)
-    const script = document.createElement('script')
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js'
-    script.async = true
-
-    await new Promise((resolve, reject) => {
-      script.onload = resolve
-      script.onerror = reject
-      document.head.appendChild(script)
-    })
-
-    // 获取全局的 pdfjsLib 对象
-    pdfjsLib = window.pdfjsLib
-
-    // 配置 worker URL(使用 jsdelivr CDN,更稳定)
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@2.10.377/build/pdf.worker.min.js'
-
-    console.log('PDF.js 加载成功,版本:', pdfjsLib.version)
-    return pdfjsLib
-  } catch (error) {
-    console.error('加载 PDF.js 失败:', error)
-    throw error
-  }
-}
 
 const loading = ref(false)
 const documents = ref([])
@@ -873,7 +842,7 @@ const previewDocumentId = ref(null)
 const pdfCanvas = ref(null)
 const currentPage = ref(1)
 const totalPages = ref(0)
-const pdfDoc = ref(null)
+const pdfDoc = shallowRef(null)
 const jumpPageNum = ref(1)
 
 // 分类悬停相关状态
@@ -1273,7 +1242,7 @@ async function loadDocuments() {
       title: doc.title,
       category: doc.category,
       subcategory: doc.subcategory || '',
-      tags: doc.tags,
+      tags: documentTagsLabel(doc.tags),
       version: doc.version,
       filePath: doc.filePath,
       createdAt: doc.createdAt,
@@ -1973,10 +1942,6 @@ async function loadPDFDocument(pdfData) {
     console.log('开始加载 PDF,数据类型:', typeof pdfData, '长度:', pdfData?.length)
     console.log('PDF 数据前 100 字符:', typeof pdfData === 'string' ? pdfData.substring(0, 100) : 'binary data')
 
-    // 动态加载 PDF.js
-    const pdfjs = await loadPdfJS()
-    console.log('PDF.js 已加载,版本:', pdfjs.version)
-
     // 确保数据是 Uint8Array
     let uint8Array = pdfData
     if (typeof pdfData === 'string') {
@@ -1988,16 +1953,8 @@ async function loadPDFDocument(pdfData) {
     console.log('开始加载 PDF 文档...')
     console.log('PDF 数据前 16 字节(Array):', Array.from(uint8Array.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' '))
 
-    const loadingTask = pdfjs.getDocument(uint8Array)
-
-    // 监听加载进度
-    loadingTask.onProgress = (progress) => {
-      if (progress.total > 0) {
-        console.log(`PDF 加载进度: ${Math.round(progress.loaded / progress.total * 100)}%`)
-      }
-    }
-
-    const doc = await loadingTask.promise
+    if (pdfDoc.value) await pdfDoc.value.destroy()
+    const doc = await openPdfDocument(uint8Array)
     console.log('PDF 文档加载成功,页数:', doc.numPages)
 
     pdfDoc.value = doc

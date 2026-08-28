@@ -38,7 +38,8 @@
                   <div class="repo-name">
                     <NativeIcon name="git" />
                     {{ repo.name }}
-                    <NativeTag v-if="isCloning(repo.id)" theme="warning" variant="light">克隆中 {{ cloneProgress(repo.id) }}%</NativeTag>
+                    <NativeTag v-if="isReadOnlyRepository(repo)" theme="success" variant="light">NAS 只读</NativeTag>
+                    <NativeTag v-else-if="isCloning(repo.id)" theme="warning" variant="light">克隆中 {{ cloneProgress(repo.id) }}%</NativeTag>
                     <NativeTag v-else-if="!repo.last_sync" theme="warning" variant="light">等待克隆</NativeTag>
                   </div>
                   <div class="repo-desc">{{ repo.description || '暂无描述' }}</div>
@@ -46,7 +47,7 @@
                     <div class="clone-progress-fill" :style="{ width: cloneProgress(repo.id) + '%' }"></div>
                   </div>
                   <div class="repo-meta">
-                    <span>GIT</span>
+                    <span>{{ repositorySourceLabel(repo) }}</span>
                     <span v-if="repo.last_sync">同步: {{ formatDate(repo.last_sync) }}</span>
                   </div>
                   <div v-if="repo.size !== undefined || (repo.languages && repo.languages.length > 0)" class="repo-stats">
@@ -58,7 +59,7 @@
                     <span v-if="repo.size !== undefined" class="repo-size">{{ formatSize(repo.size) }}</span>
                   </div>
                 </div>
-                <div class="repo-actions">
+                <div v-if="!isReadOnlyRepository(repo)" class="repo-actions">
                   <NativeButton theme="default" size="small" @click.stop="editRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id) || isGuest">
                     <template #icon><NativeIcon name="pencil" /></template>
                   </NativeButton>
@@ -95,13 +96,14 @@
         <div class="browser-title">
           <NativeIcon name="git" />
           {{ currentRepo.name }}
+          <NativeTag v-if="isReadOnlyRepository(currentRepo)" theme="success" variant="light">NAS 只读</NativeTag>
         </div>
         <div class="browser-header-right">
           <NativeButton theme="default" size="small" @click="refreshRepo" v-if="!isGuest">
             <template #icon><NativeIcon name="arrow-clockwise" /></template>
             刷新
           </NativeButton>
-          <NativePopconfirm content="确定删除吗？这将同时删除本地代码文件。" @confirm="deleteRepo(currentRepo.id)">
+          <NativePopconfirm v-if="!isReadOnlyRepository(currentRepo)" content="确定删除吗？这将同时删除本地代码文件。" @confirm="deleteRepo(currentRepo.id)">
             <template #trigger>
               <NativeButton theme="default" size="small" class="btn-delete" :disabled="isGuest">
                 <template #icon><NativeIcon name="trash" color="#e34d59" /></template>
@@ -315,6 +317,7 @@ import api from '@/api'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { usePermission } from '@/composables/usePermission'
+import { isReadOnlyRepository, repositorySourceLabel } from '@/utils/codeRepositoryCapabilities'
 
 const route = useRoute()
 import { 

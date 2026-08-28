@@ -36,7 +36,10 @@
             <div class="repo-name">
               <NativeIcon name="git" size="18" />
               <span class="name-text">{{ repo.name }}</span>
-              <NativeTag v-if="isCloning(repo.id)" theme="warning" size="small">
+              <NativeTag v-if="isReadOnlyRepository(repo)" theme="success" size="small">
+                NAS 只读
+              </NativeTag>
+              <NativeTag v-else-if="isCloning(repo.id)" theme="warning" size="small">
                 克隆中 {{ cloneProgress(repo.id) }}%
               </NativeTag>
               <NativeTag v-else-if="isSyncing(repo.id)" theme="primary" size="small">
@@ -45,17 +48,6 @@
               <NativeTag v-else-if="!repo.last_sync" theme="warning" size="small">
                 等待克隆
               </NativeTag>
-            </div>
-            <div class="repo-actions" @click.stop>
-              <NativeButton theme="default" size="small" variant="text" @click.stop="editRepo(repo)">
-                <NativeIcon name="pencil" size="16" />
-              </NativeButton>
-              <NativeButton theme="default" size="small" variant="text" @click.stop="syncRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id)">
-                <NativeIcon name="arrow-clockwise" size="16" />
-              </NativeButton>
-              <NativeButton theme="default" size="small" variant="text" class="btn-delete" @click.stop="confirmDelete(repo)">
-                <NativeIcon name="trash" size="16" color="#e34d59" />
-              </NativeButton>
             </div>
           </div>
           
@@ -66,7 +58,7 @@
           </div>
           
           <div class="repo-meta">
-            <span class="repo-type">{{ repo.type.toUpperCase() }}</span>
+            <span class="repo-type">{{ repositorySourceLabel(repo) }}</span>
             <span v-if="repo.last_sync">同步: {{ formatDate(repo.last_sync) }}</span>
           </div>
           
@@ -82,13 +74,8 @@
       <div v-else class="empty-state">
         <NativeIcon name="git" size="48" color="#ccc" />
         <p>暂无代码仓库</p>
-        <span class="empty-tip">点击右上角添加仓库</span>
+        <span class="empty-tip">尚未纳管代码仓库</span>
       </div>
-
-      <!-- 添加按钮 -->
-      <button v-if="!isGuest" class="fab-add" @click="showAddDialog">
-        <NativeIcon name="plus" size="24" color="#fff" />
-      </button>
     </div>
 
     <!-- 仓库详情视图 -->
@@ -97,7 +84,10 @@
         <button class="back-btn" @click="closeRepo">
           <NativeIcon name="arrow-left" size="20" />
         </button>
-        <div class="detail-title">{{ currentRepo.name }}</div>
+        <div class="detail-title">
+          {{ currentRepo.name }}
+          <NativeTag v-if="isReadOnlyRepository(currentRepo)" theme="success" size="small">NAS 只读</NativeTag>
+        </div>
         <button class="action-btn" @click="refreshRepo">
           <NativeIcon name="arrow-clockwise" size="18" />
         </button>
@@ -281,6 +271,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
 import { usePermission } from '@/composables/usePermission'
+import { isReadOnlyRepository, repositorySourceLabel } from '@/utils/codeRepositoryCapabilities'
 
 const route = useRoute()
 import { 
