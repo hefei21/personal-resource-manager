@@ -28,13 +28,13 @@ test('PC music UI presents reversible deletion and the full trash lifecycle', ()
   assert.match(pcSource, /MUSIC_TRASH_LEGACY_MIGRATION_REQUIRED/u)
 })
 
-test('mobile music UI presents reversible deletion and cleans the player queue', () => {
+test('mobile music UI presents reversible deletion and cleans the player queue without permanent deletion', () => {
   assert.match(mobileSource, /@click="openTrash"/u)
   assert.match(mobileSource, /默认保留 30 天，可在回收站恢复/u)
   assert.match(mobileSource, /api\.music\.trash\(\)/u)
   assert.match(mobileSource, /api\.music\.restoreTrash\(id\)/u)
-  assert.match(mobileSource, /api\.music\.permanentlyDeleteTrash\(id\)/u)
-  assert.match(mobileSource, /永久删除不可恢复/u)
+  assert.doesNotMatch(mobileSource, /api\.music\.permanentlyDeleteTrash\(id\)/u)
+  assert.doesNotMatch(mobileSource, /永久删除不可恢复/u)
   assert.match(mobileSource, /new CustomEvent\('remove-music'/u)
   assert.doesNotMatch(mobileSource, /彻底删除选中的/u)
   assert.doesNotMatch(mobileSource, /删除后无法恢复/u)

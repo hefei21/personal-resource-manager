@@ -89,11 +89,11 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
     assert.match(source, /metadataStatusLabel/u)
     assert.match(source, /activeConflict/u)
   }
-  for (const source of [musicPcSource, musicMobileSource]) {
-    assert.match(source, /api\.music\.reparseMetadata/u)
-    assert.match(source, /metadataStatusLabel/u)
-    assert.match(source, /activeConflict/u)
-  }
+  assert.match(musicPcSource, /api\.music\.reparseMetadata/u)
+  assert.match(musicPcSource, /metadataStatusLabel/u)
+  assert.match(musicPcSource, /activeConflict/u)
+  assert.match(musicMobileSource, /metadataStatusLabel/u)
+  assert.doesNotMatch(musicMobileSource, /api\.music\.reparseMetadata/u)
 
   for (const source of [storeSource, viewSource]) {
     assert.doesNotMatch(source, /errorSummary|leaseToken|leaseOwner|leaseExpiresAt/u)

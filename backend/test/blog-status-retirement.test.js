@@ -16,6 +16,8 @@ const BLOG_ROUTE_SOURCE = fs.readFileSync(new URL('../src/routes/blog.js', impor
 const INDEX_SOURCE = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
 const BLOG_PC_SOURCE = fs.readFileSync(new URL('../../frontend/src/pc/pages/BlogPC.vue', import.meta.url), 'utf8')
 const BLOG_MOBILE_SOURCE = fs.readFileSync(new URL('../../frontend/src/mobile/pages/BlogMobile.vue', import.meta.url), 'utf8')
+const DASHBOARD_PC_SOURCE = fs.readFileSync(new URL('../../frontend/src/pc/pages/DashboardPC.vue', import.meta.url), 'utf8')
+const DASHBOARD_MOBILE_SOURCE = fs.readFileSync(new URL('../../frontend/src/mobile/pages/DashboardMobile.vue', import.meta.url), 'utf8')
 
 function isKnownNativeBindingMissingError(error) {
   return /^Could not locate the bindings file\. Tried:\s*[\s\S]*better_sqlite3\.node\b/.test(
@@ -223,6 +225,14 @@ test('blog runtime and both owner UIs no longer expose publishing-state semantic
     ]) {
       assert.equal(source.includes(forbidden), false, `${name} blog UI still contains ${forbidden}`)
     }
+  }
+
+  for (const [name, source] of [
+    ['PC dashboard', DASHBOARD_PC_SOURCE],
+    ['mobile dashboard', DASHBOARD_MOBILE_SOURCE]
+  ]) {
+    assert.equal(source.includes('stats.blog?.published'), false, `${name} still reads retired published count`)
+    assert.equal(source.includes('stats.blog?.draft'), false, `${name} still reads retired draft count`)
   }
 })
 

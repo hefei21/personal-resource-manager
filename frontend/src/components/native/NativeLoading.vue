@@ -1,6 +1,6 @@
 <template>
-  <div class="native-loading" :class="{ 'native-loading--center': center }">
-    <div class="native-loading__spinner" :style="{ width: sizeMap[size], height: sizeMap[size] }"></div>
+  <div class="native-loading" :class="{ 'native-loading--center': center }" role="status" aria-live="polite">
+    <div class="native-loading__spinner" :style="{ width: sizeMap[size], height: sizeMap[size] }" aria-hidden="true"></div>
     <span v-if="text" class="native-loading__text">{{ text }}</span>
   </div>
 </template>
@@ -34,9 +34,9 @@ const sizeMap = {
 
 .native-loading__spinner {
   border: 2px solid #e0e0e0;
-  border-top-color: #667eea;
+  border-top-color: var(--color-primary, #5967d9);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--motion-duration-spinner, 800ms) linear infinite;
 }
 
 .native-loading__text {

@@ -1,53 +1,14 @@
 <template>
   <div class="mobile-games">
-    <!-- Steam 配置栏（游客不显示） -->
-    <div v-if="!isGuest" class="config-section">
-      <!-- 未配置 - 折叠状态 -->
-      <div v-if="!editMode && !hasConfig" class="config-bar">
-        <div class="config-bar-left">
-          <button class="config-btn compact primary" @click="editMode = true">配置 Steam</button>
-          <button class="config-btn compact" disabled>批量下载封面</button>
-        </div>
-        <button class="config-btn icon-btn" disabled title="同步游戏库">
-          <svg class="sync-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-        </button>
-      </div>
-      <!-- 已配置 - 折叠状态 -->
-      <div v-else-if="!editMode && hasConfig" class="config-bar">
-        <div class="config-bar-left">
-          <button class="config-btn compact primary" @click="editMode = true">修改 Steam 配置</button>
-          <button class="config-btn compact" :class="{ loading: downloadingCovers }" @click="handleBatchDownloadCovers" :disabled="downloadingCovers">
-            {{ downloadingCovers ? '下载中...' : '批量下载封面' }}
-          </button>
-        </div>
-        <button class="config-btn icon-btn" :class="{ loading: syncing }" @click="syncGames" :disabled="syncing" title="同步游戏库">
-          <svg class="sync-icon" :class="{ spinning: syncing }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
-        </button>
-      </div>
-      <!-- 展开编辑状态 -->
-      <div v-else class="config-expanded">
-        <input v-model="steamId" placeholder="Steam ID (64位)" class="native-input" />
-        <input v-model="apiKey" placeholder="Steam API Key" type="password" class="native-input" />
-        <div class="config-actions">
-          <button class="btn-primary" @click="saveConfig" :disabled="saving">
-            {{ saving ? '保存中...' : '保存' }}
-          </button>
-          <button class="btn-secondary" @click="cancelEdit">取消</button>
-        </div>
-      </div>
-      <div v-if="lastSync && !editMode" class="last-sync">最后同步: {{ lastSync }}</div>
-    </div>
-
     <!-- 加载状态 -->
-    <div v-if="loading && games.length === 0" class="loading-state">
-      <div class="spinner"></div>
-      <span>加载中...</span>
-    </div>
-
-    <!-- 空状态 -->
-    <div v-else-if="games.length === 0" class="empty-state">
-      <p>还没有游戏数据，请先配置 Steam 并同步游戏库</p>
-    </div>
+    <ResourceListState
+      v-if="(loading && games.length === 0) || loadError || games.length === 0"
+      :state="loading ? 'loading' : loadError ? 'error' : 'empty'"
+      loading-text="加载游戏中..."
+      empty-text="还没有游戏数据"
+      :error-text="loadError"
+      @retry="loadGames(false)"
+    />
 
     <!-- 游戏列表 -->
     <div v-else class="games-list">
@@ -129,19 +90,6 @@
               class="detail-cover"
               @error="handleImageError"
             />
-            <!-- 游客不显示更新封面按钮 -->
-            <NativeButton
-              v-if="!isGuest"
-              size="small"
-              variant="text"
-              theme="primary"
-              :loading="refreshingCover"
-              @click="handleRefreshCover"
-              class="refresh-cover-btn"
-            >
-              <template #icon><NativeIcon name="arrow-clockwise" /></template>
-              更新封面
-            </NativeButton>
           </div>
           <div class="detail-info">
             <h2 class="detail-title">{{ currentGame.title }}</h2>
@@ -180,17 +128,6 @@
             <h3 class="section-title">
               🏆 成就列表 ({{ achievements.filter(a => a.isAchieved).length }}/{{ achievements.length }})
             </h3>
-            <!-- 游客不显示刷新成就按钮 -->
-            <NativeButton
-              v-if="!isGuest"
-              size="small"
-              variant="outline"
-              :loading="loadingAchievements"
-              @click="fetchAchievementsForGame(currentGame.id)"
-            >
-              <template #icon><NativeIcon name="arrow-clockwise" /></template>
-              刷新成就
-            </NativeButton>
           </div>
           <div class="achievements-list">
             <div
@@ -220,18 +157,7 @@
 
         <!-- 无成就提示 -->
         <div v-else-if="!loadingAchievements" class="no-achievements">
-          <NativeEmpty description="该游戏暂无成就数据">
-            <template #action>
-              <NativeButton
-                v-if="!isGuest"
-                theme="primary"
-                :loading="loadingAchievements"
-                @click="fetchAchievementsForGame(currentGame.id)"
-              >
-                获取成就数据
-              </NativeButton>
-            </template>
-          </NativeEmpty>
+          <NativeEmpty description="该游戏暂无成就数据" />
         </div>
 
         <!-- 加载中 -->
@@ -246,119 +172,28 @@
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '@/api'
-import { usePermission } from '@/composables/usePermission'
-import { NativeButton, NativeDialog, NativeLoading, NativeEmpty, NativeIcon } from '@/components/native'
+import { NativeDialog, NativeLoading, NativeEmpty, NativeIcon } from '@/components/native'
+import ResourceListState from '@/components/common/ResourceListState.vue'
 import { useToast } from '@/composables/useToast'
 
 const toast = useToast()
-const { isGuest } = usePermission()
 
 const loading = ref(false)
+const loadError = ref('')
 const games = ref([])
 const pagination = ref({ current: 1, pageSize: 20, total: 0 })
 const hasMore = ref(true)
 const isLoadingMore = ref(false)
-
-// Steam 配置
-const steamId = ref('')
-const apiKey = ref('')
-const editMode = ref(false)
-const hasConfig = ref(false)
-const saving = ref(false)
-const syncing = ref(false)
-const syncProgress = ref(0)
-const lastSync = ref('')
-const downloadingCovers = ref(false)
 
 // 游戏详情
 const detailVisible = ref(false)
 const currentGame = ref(null)
 const achievements = ref([])
 const loadingAchievements = ref(false)
-const refreshingCover = ref(false)
 
 // 无限滚动
 const loadMoreTriggerRef = ref(null)
 let loadMoreObserver = null
-
-// 加载 Steam 配置
-async function loadConfig() {
-  try {
-    const response = await api.games.getSteamConfig()
-    const config = response.data?.data
-    if (config) {
-      steamId.value = config.steam_id || ''
-      apiKey.value = config.api_key || ''
-      lastSync.value = config.last_sync || ''
-      hasConfig.value = !!(config.steam_id && config.api_key)
-    }
-  } catch (error) {
-    console.error('加载配置失败:', error)
-  }
-}
-
-// 保存配置
-async function saveConfig() {
-  if (!steamId.value || !apiKey.value) {
-    toast.warning('请填写完整的 Steam 配置')
-    return
-  }
-  saving.value = true
-  try {
-    await api.games.saveSteamConfig({ steamId: steamId.value, apiKey: apiKey.value })
-    toast.success('配置保存成功')
-    editMode.value = false
-    hasConfig.value = true
-    await loadConfig()
-  } catch (error) {
-    toast.error(error.response?.data?.message || '配置保存失败')
-  } finally {
-    saving.value = false
-  }
-}
-
-// 取消编辑
-function cancelEdit() {
-  editMode.value = false
-  loadConfig()
-}
-
-// 同步游戏库
-async function syncGames() {
-  syncing.value = true
-  syncProgress.value = 0
-  try {
-    const startResponse = await api.games.syncSteam()
-    const taskId = startResponse.data.taskId
-    const pollInterval = setInterval(async () => {
-      try {
-        const statusResponse = await api.games.getSyncStatus(taskId)
-        const task = statusResponse.data?.data
-        if (task) {
-          syncProgress.value = task.progress || 0
-          if (task.status === 'completed') {
-            clearInterval(pollInterval)
-            syncing.value = false
-            toast.success(task.message)
-            await loadConfig()
-            pagination.value.current = 1 // 重置到第一页
-            hasMore.value = true // 重置加载更多状态
-            loadGames()
-          } else if (task.status === 'failed') {
-            clearInterval(pollInterval)
-            syncing.value = false
-            toast.error(task.message)
-          }
-        }
-      } catch (error) {
-        console.error('[同步] 查询状态失败:', error)
-      }
-    }, 2000)
-  } catch (error) {
-    syncing.value = false
-    toast.error(error.response?.data?.message || '启动同步失败')
-  }
-}
 
 // 加载游戏列表
 async function loadGames(append = false) {
@@ -366,6 +201,7 @@ async function loadGames(append = false) {
     isLoadingMore.value = true
   } else {
     loading.value = true
+    loadError.value = ''
   }
   try {
     const response = await api.games.list({
@@ -384,6 +220,7 @@ async function loadGames(append = false) {
     pagination.value.total = total
     hasMore.value = games.value.length < total
   } catch (error) {
+    if (!append) loadError.value = error.response?.data?.message || '加载游戏失败，请稍后重试'
     toast.error('加载游戏失败')
   } finally {
     loading.value = false
@@ -406,70 +243,11 @@ async function openGameDetail(game) {
     if (data) {
       currentGame.value = data.game
       achievements.value = data.achievements || []
-      if (data.game.steam_appid && (!data.achievements || data.achievements.length === 0)) {
-        await fetchAchievementsForGame(game.id)
-      }
     }
   } catch (error) {
     console.error('加载成就详情失败:', error)
   } finally {
     loadingAchievements.value = false
-  }
-}
-
-// 刷新成就
-async function fetchAchievementsForGame(gameId) {
-  loadingAchievements.value = true
-  try {
-    const response = await api.games.fetchAchievements(gameId)
-    const data = response.data?.data
-    if (data) {
-      currentGame.value = { ...currentGame.value, ...data.game }
-      achievements.value = data.achievements || []
-      toast.success('成就数据获取成功')
-    }
-  } catch (error) {
-    toast.error(error.response?.data?.message || '获取成就数据失败')
-  } finally {
-    loadingAchievements.value = false
-  }
-}
-
-// 更新封面
-async function handleRefreshCover() {
-  if (!currentGame.value) return
-  refreshingCover.value = true
-  try {
-    const response = await api.games.refreshCover(currentGame.value.id)
-    if (response.data?.data) {
-      currentGame.value = {
-        ...currentGame.value,
-        cover_image: response.data.data.cover_image,
-        cover_image_data: response.data.data.cover_image_data,
-        header_cover_image: response.data.data.header_cover_image,
-        header_cover_image_data: response.data.data.header_cover_image_data
-      }
-      toast.success('封面更新成功')
-      loadGames()
-    }
-  } catch (error) {
-    toast.error(error.response?.data?.message || '封面更新失败')
-  } finally {
-    refreshingCover.value = false
-  }
-}
-
-// 批量下载封面
-async function handleBatchDownloadCovers() {
-  downloadingCovers.value = true
-  try {
-    const response = await api.games.batchDownloadCovers()
-    toast.success(response.data.message)
-    loadGames()
-  } catch (error) {
-    toast.error(error.response?.data?.message || '批量下载封面失败')
-  } finally {
-    downloadingCovers.value = false
   }
 }
 
@@ -565,7 +343,6 @@ function initLoadMoreObserver() {
 }
 
 onMounted(() => {
-  loadConfig()
   loadGames()
   setTimeout(() => initLoadMoreObserver(), 500)
 })

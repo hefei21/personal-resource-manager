@@ -1,7 +1,5 @@
 <template>
-  <div class="mobile-music" :class="{ 'batch-mode-active': batchMode }">
-    <!-- 批量操作时的顶部占位 -->
-    <div v-if="batchMode" class="batch-bar-placeholder"></div>
+  <div class="mobile-music">
     
     <!-- 歌单标签栏 -->
     <div class="playlist-tabs">
@@ -34,51 +32,22 @@
       </button>
     </div>
 
-    <!-- 批量操作栏（顶部固定） -->
-    <div v-if="batchMode" class="batch-bar">
-      <div class="batch-left">
-        <label class="checkbox-wrap">
-          <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll">
-          <span class="checkmark"></span>
-        </label>
-        <span class="batch-count">已选择 {{ selectedSongs.length }} 首</span>
-      </div>
-      <div class="batch-actions">
-        <button class="action-btn-icon" @click="addSelectedToPlaylist" title="添加到歌单">
-          <NativeIcon name="add" size="18" />
-          <span>添加</span>
-        </button>
-        <button class="action-btn-icon danger" @click="batchDelete" :title="currentPlaylist ? '从歌单移除' : '移入回收站'">
-          <NativeIcon name="delete" size="18" />
-          <span>{{ currentPlaylist ? '移除' : '回收' }}</span>
-        </button>
-        <button class="action-btn-icon" @click="exitBatchMode" title="完成">
-          <NativeIcon name="check" size="18" />
-          <span>完成</span>
-        </button>
-      </div>
-    </div>
-
     <!-- 音乐列表 -->
     <div class="music-container">
-      <div v-if="loading" class="loading-state">
-        <div class="spinner"></div>
-        <span>加载中...</span>
-      </div>
-
-      <div v-else-if="musicList.length === 0" class="empty-state">
-        <NativeIcon name="music" size="48" />
-        <p>暂无音乐</p>
-      </div>
+      <ResourceListState
+        v-if="loading || loadError || musicList.length === 0"
+        :state="loading ? 'loading' : loadError ? 'error' : 'empty'"
+        loading-text="加载音乐中..."
+        empty-text="暂无音乐"
+        :error-text="loadError"
+        @retry="loadMusic()"
+      />
 
       <div v-else class="music-list">
         <div v-for="song in musicList" :key="song.id" 
              class="music-item" 
-             :class="{ selected: batchMode && selectedSongs.includes(song.id) }"
              @click="handleSongClick(song)"
-             @touchstart="!isGuest && handleTouchStart($event, song)"
-             @touchend="handleTouchEnd"
-             @touchmove="handleTouchMove">
+        >
           <!-- 封面 -->
           <div class="song-cover" :ref="el => observeCover(el, song)">
             <img v-if="coverCache[song.id]" :src="coverCache[song.id]" />
@@ -96,14 +65,7 @@
 
           <!-- 右侧操作 -->
           <div class="song-action" @click.stop>
-            <!-- 批量模式：显示多选框 -->
-            <label v-if="batchMode" class="checkbox-wrap">
-              <input type="checkbox" :checked="selectedSongs.includes(song.id)" 
-                     @change="toggleSelection(song.id)">
-              <span class="checkmark"></span>
-            </label>
-            <!-- 普通模式：管理员显示更多按钮 -->
-            <button v-else-if="!isGuest" class="more-btn" @click="showActionMenu(song)">
+            <button v-if="!isGuest" class="more-btn" @click="showActionMenu(song)">
               <NativeIcon name="more" size="20" />
             </button>
           </div>
@@ -119,9 +81,6 @@
         <div ref="loadMoreTriggerRef" class="load-more-trigger"></div>
       </div>
     </div>
-
-    <!-- 长按提示 -->
-    <div v-if="showLongPressTip" class="longpress-tip">长按进入多选模式</div>
 
     <!-- 筛选抽屉 -->
     <div v-if="showFilterDrawer" class="drawer-overlay" @click.self="showFilterDrawer = false">
@@ -175,17 +134,11 @@
           <div class="sheet-item" @click="playSong(currentSong)">
             <NativeIcon name="play-circle" /> 播放
           </div>
-          <div class="sheet-item" @click="startBatchFromSong(currentSong)">
-            <NativeIcon name="check-rectangle" /> 多选
-          </div>
           <div class="sheet-item" @click="showAddToPlaylist(currentSong)">
             <NativeIcon name="add-rectangle" /> 添加到歌单
           </div>
           <div class="sheet-item" @click="editSong(currentSong)">
             <NativeIcon name="edit" /> 编辑
-          </div>
-          <div class="sheet-item" @click="reparseSongMetadata(currentSong)">
-            <NativeIcon name="arrow-clockwise" /> 重新解析元数据
           </div>
           <div class="sheet-item delete" @click="confirmDelete(currentSong)">
             <NativeIcon name="delete" /> {{ currentPlaylist ? '从歌单移除' : '移入回收站' }}
@@ -264,7 +217,7 @@
           <button class="close-btn" @click="showTrash = false"><NativeIcon name="close" /></button>
         </div>
         <div class="modal-body trash-body">
-          <p class="trash-retention-hint">默认保留 30 天；永久删除后不可恢复。</p>
+          <p class="trash-retention-hint">默认保留 30 天；移动端支持单项恢复。</p>
           <div v-if="trashLoading" class="trash-empty">加载中...</div>
           <div v-else-if="trashMusic.length === 0" class="trash-empty">回收站为空</div>
           <div v-else class="trash-list">
@@ -277,7 +230,6 @@
               </div>
               <div class="trash-item-actions">
                 <button class="btn-primary" @click="restoreTrash(song.id)">恢复</button>
-                <button class="btn-danger" @click="permanentlyDeleteTrash(song.id)">永久删除</button>
               </div>
             </div>
           </div>
@@ -331,6 +283,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/api'
 import { NativeIcon } from '@/components/native'
+import ResourceListState from '@/components/common/ResourceListState.vue'
 import { useToast } from '@/composables/useToast'
 const authStore = useAuthStore()
 const toast = useToast()
@@ -341,6 +294,7 @@ const musicList = ref([])
 const playlists = ref([])
 const currentPlaylist = ref(null)
 const loading = ref(false)
+const loadError = ref('')
 const loadingMore = ref(false)
 const hasMore = ref(true)
 const page = ref(1)
@@ -361,15 +315,6 @@ const selectListTitle = computed(() => selectListType.value === 'artist' ? '选�
 const selectListData = computed(() => selectListType.value === 'artist' ? filterOptions.value.artists : filterOptions.value.albums)
 const currentSelectValue = computed(() => selectListType.value === 'artist' ? artistFilter.value : albumFilter.value)
 
-// 批量操作（仅管理员）
-const batchMode = ref(false)
-const selectedSongs = ref([])
-
-// 长按相关（仅管理员）
-let longPressTimer = null
-const LONG_PRESS_DURATION = 600
-const showLongPressTip = ref(false)
-
 // 操作菜单
 const actionMenuVisible = ref(false)
 const currentSong = ref(null)
@@ -381,7 +326,6 @@ const songsToAdd = ref([])
 // 编辑
 const editDialogVisible = ref(false)
 const editForm = ref({ id: null, title: '', artist: '', album: '' })
-const metadataReparseLoading = ref({})
 
 // 删除
 const deleteConfirmVisible = ref(false)
@@ -440,16 +384,13 @@ const observeCover = (el, song) => {
 }
 
 // 计算属性
-const isAllSelected = computed(() => {
-  return musicList.value.length > 0 && selectedSongs.value.length === musicList.value.length
-})
-
 // 加载音乐列表
 const loadMusic = async (isLoadMore = false) => {
   if (isLoadMore) {
     loadingMore.value = true
   } else {
     loading.value = true
+    loadError.value = ''
     page.value = 1
   }
 
@@ -485,6 +426,7 @@ const loadMusic = async (isLoadMore = false) => {
     console.log('[加载完成] hasMore:', hasMore.value, '列表长度:', list.length)
   } catch (error) {
     console.error('加载音乐失败:', error)
+    if (!isLoadMore) loadError.value = error.response?.data?.message || '加载音乐失败，请稍后重试'
   } finally {
     loading.value = false
     loadingMore.value = false
@@ -606,148 +548,12 @@ const playSong = async (song) => {
 
 // 处理歌曲点击
 const handleSongClick = async (song) => {
-  if (batchMode.value) {
-    toggleSelection(song.id)
-  } else {
-    await playSong(song)
-  }
-}
-
-// 长按处理（仅管理员）
-const handleTouchStart = (e, song) => {
-  if (batchMode.value || isGuest.value) return
-  
-  longPressTimer = setTimeout(() => {
-    batchMode.value = true
-    selectedSongs.value = [song.id]
-    showLongPressTip.value = true
-    setTimeout(() => showLongPressTip.value = false, 1500)
-  }, LONG_PRESS_DURATION)
-}
-
-const handleTouchEnd = () => {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
-}
-
-const handleTouchMove = () => {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
-}
-
-// 从操作菜单进入批量模式
-const startBatchFromSong = (song) => {
-  batchMode.value = true
-  selectedSongs.value = [song.id]
-  closeActionMenu()
-}
-
-// 退出批量模式
-const exitBatchMode = () => {
-  batchMode.value = false
-  selectedSongs.value = []
-}
-
-// 切换选择
-const toggleSelection = (songId) => {
-  const index = selectedSongs.value.indexOf(songId)
-  if (index > -1) {
-    selectedSongs.value.splice(index, 1)
-  } else {
-    selectedSongs.value.push(songId)
-  }
-}
-
-// 全选/取消全选（支持加载所有后全选）
-const toggleSelectAll = async () => {
-  if (isAllSelected.value) {
-    selectedSongs.value = []
-    return
-  }
-  
-  // 如果有更多未加载的数据，先加载所有
-  if (hasMore.value && !currentPlaylist.value) {
-    toast.info('正在加载所有音乐...')
-    try {
-      // 循环加载所有分页数据
-      while (hasMore.value) {
-        page.value++
-        const params = {
-          page: page.value,
-          pageSize,
-          keyword: searchKeyword.value,
-          artist: artistFilter.value,
-          album: albumFilter.value,
-          sortBy: sortBy.value
-        }
-        const res = await api.music.list(params)
-        const list = res.data.data || []
-        musicList.value.push(...list)
-        hasMore.value = list.length === pageSize
-      }
-      toast.success('加载完成，已全选')
-    } catch (error) {
-      console.error('加载更多音乐失败:', error)
-      toast.error('加载失败')
-    }
-  }
-  
-  // 全选所有已加载的歌曲
-  selectedSongs.value = musicList.value.map(s => s.id)
-}
-
-// 批量删除
-const batchDelete = async () => {
-  if (selectedSongs.value.length === 0) return
-  
-  // 根据是否在歌单中显示不同的提示
-  const isInPlaylist = !!currentPlaylist.value
-  const confirmMsg = isInPlaylist 
-    ? `确定要从歌单「${currentPlaylist.value.name}」中移除选中的 ${selectedSongs.value.length} 首歌曲吗？\n（歌曲文件不会被删除）`
-    : `确定要将选中的 ${selectedSongs.value.length} 首歌曲移入回收站吗？\n（默认保留 30 天，可恢复）`
-  
-  if (!confirm(confirmMsg)) return
-
-  try {
-    const idsToDelete = [...selectedSongs.value]
-    
-    // 保存当前滚动位置
-    const scrollPos = saveScrollPosition()
-    
-    if (isInPlaylist) {
-      // 从歌单中移除
-      await api.music.batchRemoveSongsFromPlaylist(currentPlaylist.value.id, idsToDelete)
-      toast.success('已从歌单中移除')
-    } else {
-      // 移入回收站
-      await api.music.batchDelete({ ids: idsToDelete })
-      toast.success('已移入回收站')
-      window.dispatchEvent(new CustomEvent('remove-music', {
-        detail: { songIds: idsToDelete }
-      }))
-    }
-    
-    // 立即从本地列表移除被删除的项，实现即时刷新
-    musicList.value = musicList.value.filter(song => !idsToDelete.includes(song.id))
-    
-    exitBatchMode()
-    await loadPlaylists()
-    
-    // 恢复滚动位置
-    restoreScrollPosition(scrollPos)
-  } catch (error) {
-    console.error('批量处理音乐失败:', error)
-    toast.error(error.response?.data?.message || (isInPlaylist ? '从歌单移除失败' : '移入回收站失败'))
-  }
+  await playSong(song)
 }
 
 // 显示添加到歌单选择
 const showAddToPlaylist = (song) => {
-  songsToAdd.value = song ? [song.id] : selectedSongs.value
+  songsToAdd.value = song ? [song.id] : []
   showPlaylistSelect.value = true
   closeActionMenu()
 }
@@ -763,15 +569,6 @@ const addToPlaylist = async (playlistId) => {
     console.error('添加到歌单失败:', error)
     toast.error('添加失败')
   }
-}
-
-// 添加选中歌曲到歌单
-const addSelectedToPlaylist = () => {
-  if (selectedSongs.value.length === 0) {
-    toast.warning('请先选择歌曲')
-    return
-  }
-  showAddToPlaylist()
 }
 
 // 操作菜单
@@ -871,25 +668,6 @@ const metadataStatusLabel = (status) => ({
   failed: '元数据解析失败'
 })[status] || ''
 
-const reparseSongMetadata = async (song) => {
-  if (!song?.id || metadataReparseLoading.value[song.id]) return
-  metadataReparseLoading.value[song.id] = true
-  closeActionMenu()
-  try {
-    await api.music.reparseMetadata(song.id)
-    toast.success('元数据重解析任务已加入队列')
-  } catch (error) {
-    if (error.response?.status === 409 && error.response?.data?.activeConflict) {
-      toast.info('该音乐的元数据重解析任务已在运行')
-    } else {
-      toast.error(error.response?.data?.message || '元数据重解析任务创建失败')
-    }
-  } finally {
-    metadataReparseLoading.value[song.id] = false
-    await loadMusic()
-  }
-}
-
 const formatTrashDate = (value) => {
   if (!value) return '-'
   const date = new Date(value)
@@ -924,21 +702,6 @@ const restoreTrash = async (id) => {
     await Promise.all([loadTrashMusic(), refreshMusicSurfaces()])
   } catch (error) {
     toast.error(error.response?.data?.message || '恢复音乐失败')
-  }
-}
-
-const permanentlyDeleteTrash = async (id) => {
-  if (!confirm('永久删除不可恢复，确定继续吗？')) return
-  try {
-    await api.music.permanentlyDeleteTrash(id)
-    toast.success('音乐已永久删除')
-    await Promise.all([loadTrashMusic(), refreshMusicSurfaces()])
-  } catch (error) {
-    const code = error.response?.data?.code
-    const message = code === 'MUSIC_TRASH_LEGACY_MIGRATION_REQUIRED'
-      ? '该音乐仍使用旧存储，完成存储迁移后才能永久删除'
-      : (error.response?.data?.message || '永久删除音乐失败')
-    toast.error(message)
   }
 }
 

@@ -59,20 +59,6 @@
           <div class="stat-label">游戏总数</div>
         </div>
       </div>
-      <!-- 个人笔记详情 -->
-      <div class="stat-card">
-        <div class="stat-card-title">个人笔记详情</div>
-        <div class="blog-grid">
-          <div class="blog-stat-item">
-            <div class="stat-value">{{ stats.blog?.published || 0 }}</div>
-            <div class="stat-label">已发布</div>
-          </div>
-          <div class="blog-stat-item">
-            <div class="stat-value">{{ stats.blog?.draft || 0 }}</div>
-            <div class="stat-label">草稿</div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- 动漫卡片独占一行 -->
@@ -233,9 +219,7 @@ const stats = ref({
   code: 0,
   bookmarks: 0,
   blog: {
-    total: 0,
-    published: 0,
-    draft: 0
+    total: 0
   },
   anime: {
     total: 0,
@@ -540,7 +524,7 @@ async function loadStats() {
     stats.value.games = data.games || 0
     stats.value.code = data.code || 0
     stats.value.bookmarks = data.bookmarks || 0
-    stats.value.blog = data.blog || { total: 0, published: 0, draft: 0 }
+    stats.value.blog = data.blog || { total: 0 }
     stats.value.anime = data.anime || { total: 0, want_to_watch: 0, watching: 0, watched: 0 }
   } catch (error) {
     console.error('Failed to load stats:', error)
@@ -631,25 +615,6 @@ onMounted(() => {
 
 .anime-card .anime-grid {
   padding: 12px 16px 16px;
-}
-
-/* 博客卡片：2列网格布局 */
-.blog-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  padding: 12px 16px 16px;
-  justify-items: center;
-}
-
-.blog-stat-item {
-  width: 100%;
-  text-align: center;
-}
-
-.blog-stat-item .stat-label {
-  font-size: 12px;
-  white-space: nowrap;
 }
 
 /* 动漫卡片：横向4列布局 */

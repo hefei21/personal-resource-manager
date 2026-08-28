@@ -37,47 +37,23 @@
       </div>
     </div>
 
-    <!-- 批量操作栏 -->
-    <div v-if="batchMode" class="batch-bar">
-      <div class="batch-info">
-        <span>已选择 {{ selectedIds.length }} 项</span>
-        <button class="text-btn" @click="toggleSelectAll">{{ isAllSelected ? '取消全选' : '全选' }}</button>
-      </div>
-      <div class="batch-actions">
-        <button class="action-btn danger" @click="confirmBatchDelete">删除</button>
-        <button class="action-btn secondary" @click="exitBatchMode">完成</button>
-      </div>
-    </div>
-
     <!-- 书签列表 -->
     <div class="bookmark-list">
-      <div v-if="loading" class="loading-state">
-        <div class="spinner"></div>
-        <span>加载中...</span>
-      </div>
-
-      <div v-else-if="bookmarks.length === 0" class="empty-state">
-        <NativeIcon name="bookmark" size="48" />
-        <p>暂无书签</p>
-      </div>
+      <ResourceListState
+        v-if="loading || loadError || bookmarks.length === 0"
+        :state="loading ? 'loading' : loadError ? 'error' : 'empty'"
+        loading-text="加载书签中..."
+        empty-text="暂无书签"
+        :error-text="loadError"
+        @retry="loadBookmarks(false)"
+      />
 
       <div
         v-for="bookmark in bookmarks"
         :key="bookmark.id"
         class="bookmark-card"
-        :class="{ selected: batchMode && selectedIds.includes(bookmark.id) }"
         @click="handleCardClick(bookmark)"
-        @touchstart="!isGuest && handleTouchStart($event, bookmark)"
-        @touchend="handleTouchEnd"
-        @touchmove="handleTouchMove"
       >
-        <!-- 批量模式复选框 -->
-        <div v-if="batchMode" class="batch-checkbox">
-          <div class="checkbox" :class="{ checked: selectedIds.includes(bookmark.id) }">
-            <NativeIcon v-if="selectedIds.includes(bookmark.id)" name="check" size="12" />
-          </div>
-        </div>
-
         <!-- 图标 -->
         <img
           :src="getIconUrl(bookmark)"
@@ -97,7 +73,7 @@
         </div>
 
         <!-- 右侧操作 -->
-        <div v-if="!batchMode && !isGuest" class="card-action" @click.stop="showActionMenu(bookmark)">
+        <div v-if="!isGuest" class="card-action" @click.stop="showActionMenu(bookmark)">
           <NativeIcon name="more" size="20" />
         </div>
       </div>
@@ -115,9 +91,6 @@
     <!-- 无限滚动触发器 -->
     <div ref="loadMoreTriggerRef" class="load-more-trigger"></div>
 
-    <!-- 长按提示 -->
-    <div v-if="showLongPressTip" class="longpress-tip">长按进入多选模式</div>
-
     <!-- 底部操作菜单 -->
     <div v-if="actionMenuVisible" class="drawer-overlay" @click.self="closeActionMenu">
       <div class="action-sheet">
@@ -126,14 +99,8 @@
           <div class="sheet-item" @click="openBookmark(currentBookmark)">
             <NativeIcon name="link" /> 打开链接
           </div>
-          <div class="sheet-item" @click="startBatchFromBookmark(currentBookmark)">
-            <NativeIcon name="check-rectangle" /> 多选
-          </div>
           <div class="sheet-item" @click="handleEdit(currentBookmark); closeActionMenu()">
             <NativeIcon name="edit" /> 编辑
-          </div>
-          <div class="sheet-item delete" @click="confirmDelete(currentBookmark)">
-            <NativeIcon name="delete" /> 删除
           </div>
         </div>
         <div class="sheet-cancel" @click="closeActionMenu">取消</div>
@@ -177,12 +144,14 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import api from '@/api'
 import { usePermission } from '@/composables/usePermission'
 import { NativeIcon, NativeLoading } from '@/components/native'
+import ResourceListState from '@/components/common/ResourceListState.vue'
 import { useToast } from '@/composables/useToast'
 
 const toast = useToast()
 const { isGuest } = usePermission()
 
 const loading = ref(false)
+const loadError = ref('')
 const bookmarks = ref([])
 const searchKeyword = ref('')
 const selectedTags = ref([])
@@ -196,15 +165,6 @@ const pagination = ref({
 })
 const hasMore = ref(true)
 const isLoadingMore = ref(false)
-
-// 批量操作
-const batchMode = ref(false)
-const selectedIds = ref([])
-
-// 长按相关
-let longPressTimer = null
-const LONG_PRESS_DURATION = 600
-const showLongPressTip = ref(false)
 
 // 操作菜单
 const actionMenuVisible = ref(false)
@@ -227,10 +187,6 @@ const fetchingTitle = ref(false)
 // 无限滚动
 const loadMoreTriggerRef = ref(null)
 let loadMoreObserver = null
-
-const isAllSelected = computed(() => {
-  return bookmarks.value.length > 0 && selectedIds.value.length === bookmarks.value.length
-})
 
 // 获取图标URL
 function getIconUrl(row) {
@@ -272,6 +228,7 @@ function parseTags(tagsStr) {
 async function loadBookmarks(append = false) {
   if (!append) {
     loading.value = true
+    loadError.value = ''
   }
   try {
     const params = {
@@ -294,6 +251,7 @@ async function loadBookmarks(append = false) {
     pagination.value.total = total
     hasMore.value = bookmarks.value.length < total
   } catch (error) {
+    if (!append) loadError.value = error.response?.data?.message || '加载书签失败，请稍后重试'
     toast.error('加载书签失败')
   } finally {
     loading.value = false
@@ -378,73 +336,12 @@ function initLoadMoreObserver() {
 
 // 卡片点击
 function handleCardClick(bookmark) {
-  if (batchMode.value) {
-    toggleSelection(bookmark.id)
-  } else {
-    openBookmark(bookmark)
-  }
+  openBookmark(bookmark)
 }
 
 function openBookmark(bookmark) {
-  window.open(bookmark.url, '_blank')
-}
-
-// 长按处理（仅管理员）
-function handleTouchStart(e, bookmark) {
-  if (batchMode.value || isGuest.value) return
-  
-  longPressTimer = setTimeout(() => {
-    batchMode.value = true
-    selectedIds.value = [bookmark.id]
-    showLongPressTip.value = true
-    setTimeout(() => showLongPressTip.value = false, 1500)
-  }, LONG_PRESS_DURATION)
-}
-
-function handleTouchEnd() {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
-}
-
-function handleTouchMove() {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
-}
-
-// 从操作菜单进入批量模式
-function startBatchFromBookmark(bookmark) {
-  batchMode.value = true
-  selectedIds.value = [bookmark.id]
-  closeActionMenu()
-}
-
-// 退出批量模式
-function exitBatchMode() {
-  batchMode.value = false
-  selectedIds.value = []
-}
-
-// 切换选择
-function toggleSelection(id) {
-  const index = selectedIds.value.indexOf(id)
-  if (index > -1) {
-    selectedIds.value.splice(index, 1)
-  } else {
-    selectedIds.value.push(id)
-  }
-}
-
-// 全选/取消全选
-function toggleSelectAll() {
-  if (isAllSelected.value) {
-    selectedIds.value = []
-  } else {
-    selectedIds.value = bookmarks.value.map(b => b.id)
-  }
+  const opened = window.open(bookmark.url, '_blank', 'noopener,noreferrer')
+  if (opened) opened.opener = null
 }
 
 // 操作菜单
@@ -456,41 +353,6 @@ function showActionMenu(bookmark) {
 function closeActionMenu() {
   actionMenuVisible.value = false
   currentBookmark.value = null
-}
-
-// 删除确认
-function confirmDelete(bookmark) {
-  closeActionMenu()
-  if (!confirm('确定删除该书签吗？')) return
-  handleDelete(bookmark.id)
-}
-
-// 批量删除确认
-function confirmBatchDelete() {
-  if (selectedIds.value.length === 0) return
-  if (!confirm(`确定删除选中的 ${selectedIds.value.length} 项书签吗？`)) return
-  handleBatchDelete()
-}
-
-async function handleDelete(id) {
-  try {
-    await api.bookmarks.delete(id)
-    toast.success('删除成功')
-    loadBookmarks()
-  } catch (error) {
-    toast.error('删除失败')
-  }
-}
-
-async function handleBatchDelete() {
-  try {
-    await api.bookmarks.batchDelete({ ids: selectedIds.value })
-    toast.success('批量删除成功')
-    exitBatchMode()
-    loadBookmarks()
-  } catch (error) {
-    toast.error('批量删除失败')
-  }
 }
 
 // 添加/编辑

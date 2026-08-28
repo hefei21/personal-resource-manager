@@ -53,9 +53,9 @@
       </NativeCol>
     </NativeRow>
 
-    <!-- 第二行：游戏、博客详情、动漫详情 -->
+    <!-- 第二行：游戏、动漫详情 -->
     <NativeRow :gutter="16" style="margin-top: 16px;">
-      <NativeCol :span="4">
+      <NativeCol :span="6">
         <NativeCard title="游戏" hover-shadow>
           <div class="stat-item">
             <div class="stat-value">{{ stats.games }}</div>
@@ -63,25 +63,7 @@
           </div>
         </NativeCard>
       </NativeCol>
-      <NativeCol :span="8">
-        <NativeCard title="个人笔记详情" hover-shadow>
-          <NativeRow :gutter="16">
-            <NativeCol :span="6">
-              <div class="stat-item">
-                <div class="stat-value">{{ stats.blog?.published || 0 }}</div>
-                <div class="stat-label">已发布</div>
-              </div>
-            </NativeCol>
-            <NativeCol :span="6">
-              <div class="stat-item">
-                <div class="stat-value">{{ stats.blog?.draft || 0 }}</div>
-                <div class="stat-label">草稿</div>
-              </div>
-            </NativeCol>
-          </NativeRow>
-        </NativeCard>
-      </NativeCol>
-      <NativeCol :span="12">
+      <NativeCol :span="18">
         <NativeCard title="动漫详情" hover-shadow>
           <NativeRow :gutter="16">
             <NativeCol :span="3">
@@ -244,9 +226,7 @@ const stats = ref({
   code: 0,
   bookmarks: 0,
   blog: {
-    total: 0,
-    published: 0,
-    draft: 0
+    total: 0
   },
   anime: {
     total: 0,
@@ -673,7 +653,7 @@ async function loadStats() {
     stats.value.games = data.games || 0
     stats.value.code = data.code || 0
     stats.value.bookmarks = data.bookmarks || 0
-    stats.value.blog = data.blog || { total: 0, published: 0, draft: 0 }
+    stats.value.blog = data.blog || { total: 0 }
     stats.value.anime = data.anime || { total: 0, want_to_watch: 0, watching: 0, watched: 0 }
   } catch (error) {
     console.error('Failed to load stats:', error)

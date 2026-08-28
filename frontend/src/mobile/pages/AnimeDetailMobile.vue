@@ -6,14 +6,6 @@
     </div>
 
     <div v-else-if="anime" class="detail-content">
-      <!-- 刷新loading遮罩 -->
-      <div v-if="refreshing" class="refresh-overlay">
-        <div class="refresh-spinner">
-          <div class="spinner"></div>
-          <p>刷新中...</p>
-        </div>
-      </div>
-
       <!-- 顶部操作栏 -->
       <div class="top-bar">
         <button class="top-btn back-btn" @click="visible = false">
@@ -168,13 +160,6 @@
         <p class="no-resources">未找到相关资源</p>
       </div>
 
-      <!-- 底部操作栏 -->
-      <div class="bottom-actions" v-if="!isImported && !isGuest">
-        <button class="action-btn primary" :class="{ loading: importing }" @click="handleImport">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          添加到收藏
-        </button>
-      </div>
     </div>
 
     <!-- 状态编辑二级窗口 -->
@@ -222,33 +207,10 @@
     <!-- 三点菜单 -->
     <div v-if="showMenu" class="sub-overlay" @click="showMenu = false">
       <div class="menu-panel" @click.stop>
-        <button v-if="!isImported" class="menu-item" @click="handleImportMenu">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          添加
-        </button>
-        <button v-if="isImported" class="menu-item danger" @click="confirmDelete">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-          删除
-        </button>
-        <button class="menu-item" @click="refreshAnimeMenu">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-          刷新
-        </button>
         <button class="menu-item" @click="searchResourcesMenu">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
           资源
         </button>
-      </div>
-    </div>
-
-    <!-- 删除确认 -->
-    <div v-if="showDeleteConfirm" class="sub-overlay">
-      <div class="confirm-panel">
-        <p>确定要删除这部动漫吗？</p>
-        <div class="confirm-btns">
-          <button class="btn-cancel" @click="showDeleteConfirm = false">取消</button>
-          <button class="btn-danger" @click="doDelete">删除</button>
-        </div>
       </div>
     </div>
 
@@ -304,7 +266,7 @@ const props = defineProps({
   animeData: { type: Object, default: null }
 })
 
-const emit = defineEmits(['update:modelValue', 'imported', 'updated', 'deleted', 'openRelation'])
+const emit = defineEmits(['update:modelValue', 'updated', 'openRelation'])
 
 const visible = computed({
   get: () => props.modelValue,
@@ -318,16 +280,13 @@ const staff = ref([])
 const relations = ref([])
 const isImported = ref(false)
 const localAnime = ref(null)
-const importing = ref(false)
 const searchingResources = ref(false)
 const showResources = ref(false)
 const resources = ref([])
-const refreshing = ref(false)
 
 // 弹窗控制
 const showStatusEdit = ref(false)
 const showMenu = ref(false)
-const showDeleteConfirm = ref(false)
 const showResourcePanel = ref(false)
 
 // 编辑状态
@@ -496,32 +455,6 @@ function syncEditValues() {
 
 // 操作
 
-async function handleImport() {
-  importing.value = true
-  try {
-    const targetId = props.bangumiId || props.animeData?.id || anime.value?.bangumi_id || props.animeData?.bangumi_id
-    if (!targetId) {
-      toast.error('无法获取动漫ID')
-      return
-    }
-    await api.anime.import(targetId)
-    toast.success('添加成功')
-    isImported.value = true
-    emit('imported')
-    // 重新加载详情以刷新状态
-    loadDetail()
-  } catch (error) {
-    toast.error(error.response?.data?.message || '添加失败')
-  } finally {
-    importing.value = false
-  }
-}
-
-async function handleImportMenu() {
-  showMenu.value = false
-  await handleImport()
-}
-
 async function toggleFavorite() {
   if (!localAnime.value) return
   try {
@@ -581,44 +514,6 @@ function handleStarClick(i, e) {
     editRating.value = 0
   } else {
     editRating.value = newRating
-  }
-}
-
-async function refreshAnimeMenu() {
-  showMenu.value = false
-  if (!localAnime.value) return
-  refreshing.value = true
-  try {
-    const response = await api.anime.refresh(localAnime.value.id)
-    toast.success('刷新成功')
-    anime.value = response.data.data
-    localAnime.value = response.data.data
-    characters.value = response.data.data.characters || []
-    staff.value = response.data.data.staff || []
-    emit('updated')
-  } catch (error) {
-    toast.error(error.response?.data?.message || '刷新失败')
-  } finally {
-    refreshing.value = false
-  }
-}
-
-function confirmDelete() {
-  showMenu.value = false
-  showDeleteConfirm.value = true
-}
-
-async function doDelete() {
-  if (!localAnime.value) return
-  try {
-    await api.anime.delete(localAnime.value.id)
-    toast.success('删除成功')
-    visible.value = false
-    emit('deleted')
-  } catch (error) {
-    toast.error('删除失败')
-  } finally {
-    showDeleteConfirm.value = false
   }
 }
 

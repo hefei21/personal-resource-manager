@@ -3,7 +3,7 @@
     <!-- 搜索栏 -->
     <div class="search-section">
       <div class="search-bar">
-        <input v-model="searchKeyword" type="text" placeholder="搜索文章..." @keyup.enter="loadPosts(true)" />
+        <input v-model="searchKeyword" type="text" placeholder="搜索笔记..." @keyup.enter="loadPosts(true)" />
         <span class="search-icon" @click="loadPosts(true)"><NativeIcon name="search" /></span>
       </div>
       <button class="filter-btn" @click="showFilterDrawer = true"><NativeIcon name="filter" /></button>
@@ -11,16 +11,18 @@
 
     <!-- 文章列表 -->
     <div class="posts-container">
-      <div v-if="loading && posts.length === 0" class="loading-state">
-        <div class="spinner"></div>
-        <span>加载中...</span>
-      </div>
-
-      <div v-else-if="posts.length === 0" class="empty-state">
-        <NativeIcon name="file" size="48" />
-        <p>暂无文章</p>
-        <button v-if="!isGuest" class="primary-btn" @click="handleCreate">写第一篇文章</button>
-      </div>
+      <ResourceListState
+        v-if="(loading && posts.length === 0) || loadError || posts.length === 0"
+        :state="loading ? 'loading' : loadError ? 'error' : 'empty'"
+        loading-text="加载笔记中..."
+        empty-text="暂无笔记"
+        :error-text="loadError"
+        @retry="loadPosts(true)"
+      >
+        <template #empty-action>
+          <button v-if="!isGuest" class="primary-btn" @click="handleCreate">写第一篇笔记</button>
+        </template>
+      </ResourceListState>
 
       <div v-else class="post-list">
         <div v-for="post in posts" :key="post.id" class="post-card" @click="handlePreview(post)">
@@ -38,7 +40,6 @@
           <div class="post-actions" @click.stop>
             <button class="action-btn-small" @click="handlePreview(post)"><NativeIcon name="browse" size="16" /></button>
             <button v-if="!isGuest" class="action-btn-small" @click="handleEdit(post)"><NativeIcon name="edit" size="16" /></button>
-            <button v-if="!isGuest" class="action-btn-small danger" @click="confirmDelete(post)"><NativeIcon name="delete" size="16" /></button>
           </div>
         </div>
 
@@ -93,7 +94,6 @@
               <div class="category-info"><NativeIcon name="folder" size="18" /><span>{{ cat.name }}</span><span class="count">({{ cat.post_count || 0 }})</span></div>
               <div class="category-actions" v-if="!isGuest">
                 <button class="action-btn-icon" @click="handleEditCategory(cat)"><NativeIcon name="edit" size="16" /></button>
-                <button class="action-btn-icon danger" @click="confirmDeleteCategory(cat)"><NativeIcon name="delete" size="16" /></button>
               </div>
             </div>
           </div>
@@ -115,26 +115,11 @@
       </div>
     </div>
 
-    <!-- 删除确认弹窗 -->
-    <div v-if="deleteConfirmVisible" class="modal-overlay" @click.self="deleteConfirmVisible = false">
-      <div class="modal-container small">
-        <div class="modal-header">确认删除</div>
-        <div class="modal-body">
-          <p>确定要删除文章「{{ postToDelete?.title }}」吗？</p>
-          <p class="warning-text">删除后无法恢复</p>
-        </div>
-        <div class="modal-footer">
-          <button class="btn-secondary" @click="deleteConfirmVisible = false">取消</button>
-          <button class="btn-danger" @click="doDelete">删除</button>
-        </div>
-      </div>
-    </div>
-
     <!-- 文章预览全屏页 -->
     <div v-if="previewVisible" class="fullscreen-preview">
       <div class="preview-header">
         <button class="back-btn" @click="previewVisible = false"><NativeIcon name="chevron-left" size="24" /></button>
-        <span class="preview-title">文章预览</span>
+        <span class="preview-title">笔记预览</span>
         <button v-if="!isGuest && previewPost" class="edit-btn" @click="handleEditFromPreview"><NativeIcon name="edit" size="20" /></button>
         <div v-else class="placeholder"></div>
       </div>
@@ -164,7 +149,7 @@
     <div v-if="editorVisible" class="fullscreen-editor">
       <div class="editor-header">
         <button class="back-btn" @click="closeEditor"><NativeIcon name="chevron-left" size="24" /></button>
-        <input v-model="editForm.title" type="text" placeholder="文章标题" class="title-input" />
+        <input v-model="editForm.title" type="text" placeholder="笔记标题" class="title-input" />
         <button class="more-btn" @click="showEditorOptions = true"><NativeIcon name="more" size="20" /></button>
       </div>
       <div class="editor-body">
@@ -190,7 +175,7 @@
       <!-- 编辑器选项抽屉 -->
       <div v-if="showEditorOptions" class="drawer-overlay" @click.self="showEditorOptions = false">
         <div class="options-drawer">
-          <div class="drawer-header"><span>文章设置</span><button class="close-btn" @click="showEditorOptions = false"><NativeIcon name="close" size="20" /></button></div>
+          <div class="drawer-header"><span>笔记设置</span><button class="close-btn" @click="showEditorOptions = false"><NativeIcon name="close" size="20" /></button></div>
           <div class="drawer-body">
             <div class="form-item">
               <label>分类</label>
@@ -204,7 +189,7 @@
               <input v-model="tagInput" type="text" placeholder="例如：技术, 生活, 随笔" class="native-input" />
             </div>
             <div class="form-item checkbox-item">
-              <label class="checkbox-label"><input type="checkbox" v-model="editForm.is_top" /><span>置顶文章</span></label>
+              <label class="checkbox-label"><input type="checkbox" v-model="editForm.is_top" /><span>置顶笔记</span></label>
             </div>
           </div>
         </div>
@@ -225,6 +210,7 @@ const route = useRoute()
 import 'md-editor-v3/lib/preview.css'
 import { usePermission } from '@/composables/usePermission'
 import { NativeIcon } from '@/components/native'
+import ResourceListState from '@/components/common/ResourceListState.vue'
 
 const { isGuest } = usePermission()
 
@@ -234,6 +220,7 @@ const codeTheme = ref('atom')
 const mobileToolbars = ['bold', 'underline', 'italic', 'strikeThrough', '|', 'title', 'quote', 'unorderedList', 'orderedList', '|', 'codeRow', 'code', 'link', 'image', '|', 'revoke', 'next', 'save']
 
 const posts = ref([])
+const loadError = ref('')
 const total = ref(0)
 const loading = ref(false)
 const loadingMore = ref(false)
@@ -263,8 +250,6 @@ const showCategoryManager = ref(false)
 const newCategoryName = ref('')
 const editCategoryDialogVisible = ref(false)
 const editingCategory = ref({ id: null, name: '' })
-const deleteConfirmVisible = ref(false)
-const postToDelete = ref(null)
 
 const flatCategories = computed(() => {
   const flatten = (items, result = []) => {
@@ -281,6 +266,7 @@ const contentLength = computed(() => editForm.value.content?.length || 0)
 
 async function loadPosts(reset = false) {
   if (reset) { page.value = 1; posts.value = []; hasMore.value = true }
+  if (reset || posts.value.length === 0) loadError.value = ''
   loading.value = true
   try {
     const params = { page: page.value, pageSize: pageSize }
@@ -294,8 +280,9 @@ async function loadPosts(reset = false) {
     total.value = response.data.total || 0
     hasMore.value = posts.value.length < total.value
   } catch (error) {
-    console.error('加载文章失败:', error)
-    toast.error('加载文章失败')
+    console.error('加载笔记失败:', error)
+    if (posts.value.length === 0) loadError.value = error.response?.data?.message || '加载笔记失败，请稍后重试'
+    toast.error('加载笔记失败')
   } finally {
     loading.value = false
   }
@@ -334,7 +321,7 @@ async function handleEdit(post) {
     tagInput.value = (data.tags || []).join(', ')
     editorVisible.value = true
   } catch (error) {
-    toast.error('加载文章失败')
+    toast.error('加载笔记失败')
   }
 }
 
@@ -344,7 +331,7 @@ function closeEditor() {
 }
 
 async function handleSave() {
-  if (!editForm.value.title?.trim()) { toast.warning('请输入文章标题'); return }
+  if (!editForm.value.title?.trim()) { toast.warning('请输入笔记标题'); return }
   const tags = tagInput.value.split(/[,，]/).map(t => t.trim()).filter(t => t)
   saving.value = true
   try {
@@ -365,24 +352,10 @@ async function handlePreview(post) {
     previewPost.value = data
     previewContent.value = data.content || ''
     previewVisible.value = true
-  } catch (error) { toast.error('加载文章失败') }
+  } catch (error) { toast.error('加载笔记失败') }
 }
 
 function handleEditFromPreview() { previewVisible.value = false; handleEdit(previewPost.value) }
-
-function confirmDelete(post) { postToDelete.value = post; deleteConfirmVisible.value = true }
-
-async function doDelete() {
-  if (!postToDelete.value) return
-  try {
-    await api.blog.deletePost(postToDelete.value.id)
-    toast.success('删除成功')
-    deleteConfirmVisible.value = false
-    postToDelete.value = null
-    loadPosts(true)
-    loadCategories()
-  } catch (error) { toast.error('删除失败') }
-}
 
 async function handleCreateCategory() {
   if (!newCategoryName.value?.trim()) { toast.warning('请输入分类名称'); return }
@@ -404,13 +377,6 @@ async function handleUpdateCategory() {
     editCategoryDialogVisible.value = false
     loadCategories()
   } catch (error) { toast.error(error.response?.data?.message || '更新失败') }
-}
-
-function confirmDeleteCategory(category) { if (confirm(`确定要删除分类「${category.name}」吗？`)) handleDeleteCategory(category.id) }
-
-async function handleDeleteCategory(id) {
-  try { await api.blog.deleteCategory(id); toast.success('删除成功'); loadCategories() }
-  catch (error) { toast.error(error.response?.data?.message || '删除失败') }
 }
 
 function formatDate(dateStr) {

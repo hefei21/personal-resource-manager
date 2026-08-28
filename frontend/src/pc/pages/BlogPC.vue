@@ -12,7 +12,7 @@
             <NativeSpace fill>
               <NativeInput
                 v-model="searchKeyword"
-                placeholder="搜索文章..."
+                placeholder="搜索笔记..."
                 clearable
                 @clear="loadPosts"
                 @enter="loadPosts"
@@ -43,7 +43,7 @@
 
               <NativeButton theme="primary" @click="handleCreate" :disabled="isGuest">
                 <template #icon><NativeIcon name="plus" /></template>
-                新建文章
+                新建笔记
               </NativeButton>
               <NativeButton theme="default" @click="showCategoryManager = true" :disabled="isGuest">
                 <template #icon><NativeIcon name="folder" /></template>
@@ -93,7 +93,7 @@
               <NativeButton size="small" variant="text" class="action-btn edit-btn" @click="handleEdit(post)" :disabled="isGuest">
                 <NativeIcon name="pencil" />
               </NativeButton>
-              <NativePopconfirm content="确定删除这篇文章吗？" @confirm="handleDelete(post.id)">
+              <NativePopconfirm content="确定删除这篇笔记吗？" @confirm="handleDelete(post.id)">
                 <template #trigger>
                   <NativeButton size="small" variant="text" theme="danger" class="action-btn delete-btn" :disabled="isGuest">
                     <NativeIcon name="trash" />
@@ -107,10 +107,10 @@
         <!-- 空状态 -->
         <div v-else class="empty-state">
           <NativeIcon name="file" size="64" />
-          <p>暂无文章</p>
+          <p>暂无笔记</p>
           <NativeButton theme="primary" @click="handleCreate" :disabled="isGuest">
             <template #icon><NativeIcon name="plus" /></template>
-            写第一篇文章
+            写第一篇笔记
           </NativeButton>
         </div>
 
@@ -130,7 +130,7 @@
     <!-- 文章编辑对话框 -->
     <NativeDialog
       v-model="editDialogVisible"
-      :header="editingPost ? '编辑文章' : '新建文章'"
+      :header="editingPost ? '编辑笔记' : '新建笔记'"
       width="85%"
       :show-footer="false"
       :close-on-overlay-click="false"
@@ -140,7 +140,7 @@
         <div class="editor-header">
           <NativeInput
             v-model="editForm.title"
-            placeholder="文章标题"
+            placeholder="笔记标题"
             size="large"
             style="font-size: 20px; font-weight: 600"
           />
@@ -164,7 +164,7 @@
             />
           </NativeSpace>
 
-          <NativeCheckbox v-model="editForm.is_top">置顶文章</NativeCheckbox>
+          <NativeCheckbox v-model="editForm.is_top">置顶笔记</NativeCheckbox>
         </div>
 
         <div class="editor-body">
@@ -196,7 +196,7 @@
     <!-- 预览文章对话框 -->
     <NativeDialog
       v-model="previewDialogVisible"
-      :title="previewPost?.title || '文章预览'"
+      :title="previewPost?.title || '笔记预览'"
       width="85%"
       :show-footer="false"
     >
@@ -387,8 +387,8 @@ async function loadPosts() {
     posts.value = response.data.data || []
     total.value = response.data.total || 0
   } catch (error) {
-    console.error('加载文章失败:', error)
-    toast.error('加载文章失败')
+    console.error('加载笔记失败:', error)
+    toast.error('加载笔记失败')
   } finally {
     loading.value = false
   }
@@ -460,8 +460,8 @@ async function handleEdit(post) {
     }
     editDialogVisible.value = true
   } catch (error) {
-    console.error('加载文章失败:', error)
-    toast.error('加载文章失败')
+    console.error('加载笔记失败:', error)
+    toast.error('加载笔记失败')
   }
 }
 
@@ -474,15 +474,15 @@ async function handlePreview(post) {
     previewContent.value = data.content || ''
     previewDialogVisible.value = true
   } catch (error) {
-    console.error('加载文章失败:', error)
-    toast.error('加载文章失败')
+    console.error('加载笔记失败:', error)
+    toast.error('加载笔记失败')
   }
 }
 
 // 保存文章
 async function handleSave() {
   if (!editForm.value.title || !editForm.value.title.trim()) {
-    toast.warning('请输入文章标题')
+    toast.warning('请输入笔记标题')
     return
   }
 

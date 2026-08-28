@@ -1,46 +1,25 @@
 <template>
   <div class="mobile-anime">
-    <!-- Token 失效提醒 -->
-    <div v-if="tokenStatus && tokenStatus.hasToken && !tokenStatus.isValid" class="token-bar">
-      <span class="token-msg">{{ tokenStatus.message }}</span>
-      <button class="token-btn" @click="openTokenPage">更新 Token</button>
-    </div>
-
     <!-- 顶部工具栏 -->
     <div class="toolbar">
       <button
         class="toolbar-btn"
-        :class="{ active: showSearchBar }"
-        @click="showSearchBar = !showSearchBar; showFilterDrawer = false"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      </button>
-      <button
-        class="toolbar-btn"
         :class="{ active: showFilterDrawer }"
-        @click="showFilterDrawer = !showFilterDrawer; showSearchBar = false"
+        @click="showFilterDrawer = !showFilterDrawer"
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="16" y2="12"/><line x1="4" y1="18" x2="12" y2="18"/></svg>
       </button>
     </div>
 
-    <!-- 搜索栏（可折叠） -->
-    <div v-if="showSearchBar" class="search-section">
-      <div class="search-inputs">
-        <input v-model="searchKeyword" placeholder="搜索 Bangumi..." class="native-input" @keyup.enter="handleSearch" />
-        <input v-model="searchTag" placeholder="标签（如：恋爱、奇幻）" class="native-input" @keyup.enter="handleSearch" />
-      </div>
-      <button class="search-btn" :class="{ loading: searching }" @click="handleSearch">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-        {{ searching ? '搜索中...' : '搜索' }}
-      </button>
-    </div>
-
     <!-- 加载中 -->
-    <div v-if="loading && animeList.length === 0" class="loading-state">
-      <div class="spinner"></div>
-      <span>加载中...</span>
-    </div>
+    <ResourceListState
+      v-if="(loading && animeList.length === 0) || loadError || animeList.length === 0"
+      :state="loading ? 'loading' : loadError ? 'error' : 'empty'"
+      loading-text="加载动漫中..."
+      empty-text="还没有动漫数据"
+      :error-text="loadError"
+      @retry="loadAnime(false)"
+    />
 
     <!-- 动漫库列表 -->
     <div v-else class="anime-list">
@@ -48,17 +27,8 @@
         v-for="anime in animeList"
         :key="anime.id"
         class="anime-card"
-        :class="{ 'swiped': swipedCardId === anime.id }"
         @click="handleCardClick(anime)"
-        @touchstart="handleTouchStart($event, anime.id)"
-        @touchmove="handleTouchMove($event, anime.id)"
-        @touchend="handleTouchEnd(anime.id)"
       >
-        <!-- 滑动删除按钮 -->
-        <div v-if="!isGuest" class="delete-btn" @click.stop="confirmDelete(anime.id)">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-        </div>
-
         <!-- 左侧封面 -->
         <div class="cover-wrap" :ref="el => { if (el) observeCover(el, anime) }">
           <img v-if="coverCache[anime.id]" :src="coverCache[anime.id]" class="anime-cover" @error="handleImageError" />
@@ -116,11 +86,6 @@
         <span>加载中...</span>
       </div>
       <div v-else-if="!hasMore && animeList.length > 0" class="no-more">没有更多了</div>
-    </div>
-
-    <!-- 空状态 -->
-    <div v-if="!loading && animeList.length === 0" class="empty-state">
-      <p>还没有动漫数据</p>
     </div>
 
     <!-- 无限滚动触发器 -->
@@ -181,79 +146,12 @@
       </div>
     </div>
 
-    <!-- 搜索结果窗口（从底部弹出） -->
-    <div v-if="showSearchResults" class="search-overlay" @click="showSearchResults = false">
-      <div class="search-panel" @click.stop>
-        <div class="search-panel-header">
-          <span>搜索结果</span>
-          <button class="close-btn" @click="showSearchResults = false">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-        </div>
-        <div ref="searchListRef" class="search-list">
-          <div
-            v-for="anime in searchResults"
-            :key="anime.id"
-            class="anime-card search-card"
-            @click="openDetailFromSearch(anime)"
-          >
-            <!-- 左侧封面 -->
-            <div class="cover-wrap">
-              <img :src="toHttps(anime.images?.large || anime.images?.common)" class="anime-cover" @error="handleImageError" />
-            </div>
-            <!-- 右侧内容 -->
-            <div class="anime-info">
-              <div class="title-row">
-                <span class="anime-title">{{ anime.name_cn || anime.name }}</span>
-                <span
-                  class="add-icon"
-                  :class="{ disabled: isInLibrary(anime.id) || isGuest }"
-                  @click.stop="!isInLibrary(anime.id) && !isGuest && handleImport(anime)"
-                >
-                  <svg v-if="isInLibrary(anime.id)" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                  <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0052d9" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                </span>
-              </div>
-              <div v-if="anime.name && anime.name !== anime.name_cn" class="anime-original">{{ anime.name }}</div>
-              <div class="air-date">{{ anime.air_date || anime.date || '-' }}</div>
-              <div class="rating-row">
-                <div class="total-rating">
-                  <span class="score">{{ anime.rating?.score?.toFixed(1) || anime.rating || '-' }}</span>
-                  <span class="count" v-if="anime.rating_count || anime.rating?.total">({{ anime.rating_count || anime.rating?.total }}人)</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-if="searchResults.length === 0" class="empty-state">
-            <p>无搜索结果</p>
-          </div>
-          <div v-if="searchHasMore" ref="searchLoadMoreTriggerRef" class="search-load-more">
-            <span v-if="isSearchingMore">加载中...</span>
-            <span v-else>上拉加载更多</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 删除确认弹窗 -->
-    <div v-if="showDeleteConfirm" class="confirm-overlay">
-      <div class="confirm-dialog">
-        <p>确定要删除这部动漫吗？</p>
-        <div class="confirm-btns">
-          <button class="btn-cancel" @click="showDeleteConfirm = false">取消</button>
-          <button class="btn-danger" @click="doDelete">删除</button>
-        </div>
-      </div>
-    </div>
-
     <!-- 详情弹窗 -->
     <AnimeDetailMobile
       v-model="detailVisible"
       :bangumi-id="selectedBangumiId"
       :anime-data="selectedAnime"
-      @imported="onImported"
       @updated="onUpdated"
-      @deleted="onDeleted"
       @openRelation="handleOpenRelation"
     />
   </div>
@@ -266,28 +164,15 @@ import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
 import { initAnimeCoverDB, getAnimeCoverFromCache, saveAnimeCoverToCache } from '@/utils/animeCoverCache'
 import AnimeDetailMobile from './AnimeDetailMobile.vue'
+import ResourceListState from '@/components/common/ResourceListState.vue'
 
 const toast = useToast()
 const { isGuest } = usePermission()
 
 // 加载状态
 const loading = ref(false)
-const searching = ref(false)
+const loadError = ref('')
 const animeList = ref([])
-const allBangumiIds = ref(new Set())
-const searchResults = ref([])
-const showSearchResults = ref(false)
-
-// 搜索
-const searchKeyword = ref('')
-const searchTag = ref('')
-const searchPage = ref(1)
-const searchTotal = ref(0)
-const searchHasMore = ref(false)
-const isSearchingMore = ref(false)
-const searchListRef = ref(null)
-const searchLoadMoreTriggerRef = ref(null)
-let searchLoadMoreObserver = null
 
 // 筛选
 const filterStatus = ref('')
@@ -307,25 +192,12 @@ const coverCache = ref({})
 const coverLoadingSet = new Set()
 let coverObserver = null
 
-// Token 状态
-const tokenStatus = ref(null)
-
 // 详情弹窗
 const detailVisible = ref(false)
 const selectedBangumiId = ref(null)
 const selectedAnime = ref(null)
 
-// 滑动删除
-const swipedCardId = ref(null)
-const touchStartX = ref(0)
-const touchCurrentX = ref(0)
-
-// 删除确认
-const showDeleteConfirm = ref(false)
-const deleteTargetId = ref(null)
-
 // 折叠控制
-const showSearchBar = ref(false)
 const showFilterDrawer = ref(false)
 
 // 加载数据
@@ -335,6 +207,7 @@ async function loadAnime(append = false) {
     isLoadingMore.value = true
   } else {
     loading.value = true
+    loadError.value = ''
     pagination.value.current = 1
   }
   try {
@@ -356,93 +229,13 @@ async function loadAnime(append = false) {
     pagination.value.total = response.data.total || 0
     hasMore.value = animeList.value.length < pagination.value.total
   } catch (error) {
+    if (!append) loadError.value = error.response?.data?.message || '加载动漫失败，请稍后重试'
     toast.error('加载动漫失败')
   } finally {
     loading.value = false
     isLoadingMore.value = false
     nextTick(() => setTimeout(() => initLoadMoreObserver(), 200))
   }
-}
-
-async function loadAllBangumiIds() {
-  try {
-    const response = await api.anime.getAllBangumiIds()
-    allBangumiIds.value = new Set(response.data.data || [])
-  } catch (error) {
-    console.error('加载Bangumi ID列表失败:', error)
-  }
-}
-
-function isInLibrary(bangumiId) {
-  return allBangumiIds.value.has(bangumiId)
-}
-
-// 搜索
-
-async function handleSearch() {
-  if (!searchKeyword.value.trim() && !searchTag.value.trim()) {
-    searchResults.value = []
-    return
-  }
-  searching.value = true
-  searchPage.value = 1
-  searchHasMore.value = false
-  try {
-    const response = await api.anime.search(searchKeyword.value, searchTag.value, searchPage.value)
-    searchResults.value = response.data.data || []
-    searchTotal.value = response.data.total || 0
-    searchHasMore.value = searchResults.value.length < searchTotal.value
-    showSearchResults.value = true
-    nextTick(() => initSearchLoadMoreObserver())
-  } catch (error) {
-    if (error.response?.status === 401 || error.response?.data?.tokenExpired) {
-      toast.warning('Bangumi Token已失效')
-      getTokenStatus()
-    } else {
-      toast.error('搜索失败')
-    }
-  } finally {
-    searching.value = false
-  }
-}
-
-async function loadMoreSearch() {
-  if (isSearchingMore.value || !searchHasMore.value) return
-  isSearchingMore.value = true
-  searchPage.value += 1
-  try {
-    const response = await api.anime.search(searchKeyword.value, searchTag.value, searchPage.value)
-    const data = response.data.data || []
-    searchResults.value.push(...data)
-    searchHasMore.value = searchResults.value.length < searchTotal.value
-  } catch (error) {
-    console.error('加载更多搜索失败:', error)
-  } finally {
-    isSearchingMore.value = false
-  }
-}
-
-function initSearchLoadMoreObserver() {
-  if (searchLoadMoreObserver) {
-    searchLoadMoreObserver.disconnect()
-    searchLoadMoreObserver = null
-  }
-  if (!searchHasMore.value) return
-  const triggerEl = searchLoadMoreTriggerRef.value
-  if (!triggerEl) return
-  const rootEl = searchListRef.value
-  searchLoadMoreObserver = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting && !isSearchingMore.value && searchHasMore.value) {
-        loadMoreSearch()
-      }
-    })
-  }, {
-    root: rootEl || null,
-    rootMargin: '0px 0px 100px 0px',
-    threshold: 0
-  })
-  searchLoadMoreObserver.observe(triggerEl)
 }
 
 // 筛选排序
@@ -555,52 +348,6 @@ async function loadCover(id) {
   }
 }
 
-// 滑动删除
-
-function handleTouchStart(e, id) {
-  if (isGuest.value) return
-  touchStartX.value = e.touches[0].clientX
-  touchCurrentX.value = e.touches[0].clientX
-}
-
-function handleTouchMove(e, id) {
-  if (isGuest.value) return
-  touchCurrentX.value = e.touches[0].clientX
-  const diff = touchStartX.value - touchCurrentX.value
-  if (diff > 50) {
-    swipedCardId.value = id
-  } else if (diff < -30) {
-    swipedCardId.value = null
-  }
-}
-
-function handleTouchEnd(id) {
-  const diff = touchStartX.value - touchCurrentX.value
-  if (diff < 50) {
-    swipedCardId.value = null
-  }
-}
-
-function confirmDelete(id) {
-  deleteTargetId.value = id
-  showDeleteConfirm.value = true
-  swipedCardId.value = null
-}
-
-async function doDelete() {
-  if (!deleteTargetId.value) return
-  try {
-    await api.anime.delete(deleteTargetId.value)
-    toast.success('删除成功')
-    loadAnime()
-  } catch (error) {
-    toast.error('删除失败')
-  } finally {
-    showDeleteConfirm.value = false
-    deleteTargetId.value = null
-  }
-}
-
 // 收藏
 
 async function toggleFavorite(row) {
@@ -620,52 +367,12 @@ async function toggleFavorite(row) {
 // 详情
 
 function handleCardClick(anime) {
-  // 如果正在滑动，不触发点击
-  if (swipedCardId.value) {
-    swipedCardId.value = null
-    return
-  }
   selectedBangumiId.value = anime.bangumi_id
   selectedAnime.value = anime
   detailVisible.value = true
 }
 
-function openDetailFromSearch(anime) {
-  selectedBangumiId.value = anime.id
-  selectedAnime.value = {
-    id: anime.id,
-    title: anime.name,
-    name_cn: anime.name_cn,
-    name_original: anime.name,
-    cover_image: anime.images?.large || anime.images?.common,
-    images: anime.images,
-    rating: anime.rating?.score || anime.rating,
-    rating_count: anime.rating_count || anime.rating?.total || 0,
-    summary: anime.summary,
-    tags: anime.tags?.map(t => t.name).join(',') || anime.tags,
-    air_date: anime.air_date || anime.date,
-    eps: anime.eps,
-    eps_total: anime.eps_total,
-    author: anime.author,
-    director: anime.director,
-    studio: anime.studio,
-    characters: anime.characters || [],
-    staff: anime.staff || [],
-    infobox: anime.infobox
-  }
-  detailVisible.value = true
-}
-
-function onImported() {
-  loadAnime()
-  loadAllBangumiIds()
-}
-
 function onUpdated() {
-  loadAnime()
-}
-
-function onDeleted() {
   loadAnime()
 }
 
@@ -678,38 +385,6 @@ function handleOpenRelation(data) {
   }, 100)
 }
 
-// 导入
-
-async function handleImport(anime) {
-  anime.importing = true
-  try {
-    await api.anime.import(anime.id, {
-      id: anime.id,
-      name: anime.name,
-      name_cn: anime.name_cn,
-      images: anime.images,
-      rating: anime.rating,
-      rating_count: anime.rating_count,
-      summary: anime.summary,
-      tags: anime.tags,
-      date: anime.air_date || anime.date,
-      eps: anime.eps,
-      eps_count: anime.eps_total,
-      author: anime.author,
-      director: anime.director,
-      studio: anime.studio,
-      infobox: anime.infobox
-    })
-    toast.success('添加成功')
-    loadAnime()
-    loadAllBangumiIds()
-  } catch (error) {
-    toast.error(error.response?.data?.message || '添加失败')
-  } finally {
-    anime.importing = false
-  }
-}
-
 // 工具函数
 
 function handleImageError(e) {
@@ -719,19 +394,6 @@ function handleImageError(e) {
 function toHttps(url) {
   if (!url) return url
   return url.replace(/^http:\/\//, 'https://')
-}
-
-async function getTokenStatus() {
-  try {
-    const response = await api.anime.getTokenStatus()
-    tokenStatus.value = response.data
-  } catch (error) {
-    console.error('获取Token状态失败:', error)
-  }
-}
-
-function openTokenPage() {
-  window.open('https://next.bgm.tv/demo/access-token', '_blank')
 }
 
 function getUserStarWidth(userRating, index) {
@@ -746,8 +408,6 @@ function getUserStarWidth(userRating, index) {
 onMounted(async () => {
   await initCoverCache()
   loadAnime()
-  loadAllBangumiIds()
-  getTokenStatus()
   setTimeout(() => initLoadMoreObserver(), 500)
 })
 
