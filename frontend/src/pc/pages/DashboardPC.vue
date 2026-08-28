@@ -694,11 +694,6 @@ onMounted(() => {
   animation-delay: 0.2s;
 }
 
-.dashboard :deep(.t-card:hover) {
-  transform: translateY(-8px);
-  box-shadow: 0 12px 24px rgba(102, 126, 234, 0.2);
-}
-
 @keyframes fadeInUp {
   from {
     opacity: 0;
@@ -718,7 +713,7 @@ onMounted(() => {
 .stat-value {
   font-size: 28px;
   font-weight: bold;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -735,13 +730,8 @@ onMounted(() => {
 
 .stat-label {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   transition: all 0.3s ease;
-}
-
-.dashboard :deep(.t-card:hover .stat-label) {
-  color: #667eea;
-  transform: translateY(-2px);
 }
 
 /* 日程表样式 */
@@ -774,7 +764,7 @@ onMounted(() => {
   text-align: center;
   padding: 8px;
   font-weight: 600;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
 }
 
@@ -798,7 +788,7 @@ onMounted(() => {
 }
 
 .calendar-day:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .calendar-day.other-month {
@@ -810,7 +800,7 @@ onMounted(() => {
 }
 
 .calendar-day.today {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   color: white;
 }
 
@@ -820,11 +810,11 @@ onMounted(() => {
 
 .calendar-day.selected:not(.today) {
   background: #e8e4f8;
-  color: #667eea;
+  color: var(--color-primary);
 }
 
 .calendar-day.selected:not(.today) .lunar-text {
-  color: #667eea;
+  color: var(--color-primary);
 }
 
 .calendar-day .day-number {
@@ -840,7 +830,7 @@ onMounted(() => {
 
 .lunar-text {
   font-size: 11px;
-  color: #999;
+  color: var(--color-text-muted);
   margin-top: 2px;
   line-height: 1;
   max-width: 100%;
@@ -864,7 +854,7 @@ onMounted(() => {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #667eea;
+  background: var(--color-primary);
 }
 
 .calendar-day.today .todo-dot {
@@ -888,7 +878,7 @@ onMounted(() => {
 .todo-header h4 {
   margin: 0;
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .todo-list {
@@ -913,7 +903,7 @@ onMounted(() => {
 
 .todo-item.completed .todo-input {
   text-decoration: line-through;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .todo-item.confirmed {
@@ -939,7 +929,7 @@ onMounted(() => {
 .todo-input:disabled {
   background: transparent;
   cursor: default;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .todo-input::placeholder {
@@ -949,7 +939,7 @@ onMounted(() => {
 .empty-todos {
   text-align: center;
   padding: 40px 20px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 </style>

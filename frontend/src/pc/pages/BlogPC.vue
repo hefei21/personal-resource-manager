@@ -609,13 +609,13 @@ onMounted(async () => {
 .page-header h2 {
   font-size: 28px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0 0 8px 0;
 }
 
 .page-header p {
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
   font-weight: 500;
 }
@@ -643,15 +643,14 @@ onMounted(async () => {
   padding: 16px 20px;
   background: linear-gradient(135deg, #f6f8fa 0%, #ffffff 100%);
   border-radius: 10px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-border-subtle);
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .post-item:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
-  border-color: #667eea;
+  box-shadow: var(--shadow-md);
+  border-color: var(--color-primary);
 }
 
 .post-main {
@@ -668,7 +667,7 @@ onMounted(async () => {
 .title-text {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -715,27 +714,27 @@ onMounted(async () => {
 
 /* 操作按钮样式 */
 .action-btn {
-  color: #666 !important;
+  color: var(--color-text-secondary) !important;
 }
 
 .action-btn:hover {
-  color: #0052d9 !important;
+  color: var(--color-primary) !important;
 }
 
 .view-btn:hover {
-  color: #0052d9 !important;
+  color: var(--color-primary) !important;
 }
 
 .edit-btn:hover {
-  color: #0052d9 !important;
+  color: var(--color-primary) !important;
 }
 
 .delete-btn {
-  color: #666 !important;
+  color: var(--color-text-secondary) !important;
 }
 
 .delete-btn:hover {
-  color: #e34d59 !important;
+  color: var(--color-danger) !important;
 }
 
 /* 预览对话框样式 */
@@ -762,7 +761,7 @@ onMounted(async () => {
   align-items: center;
   gap: 4px;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .preview-divider {
@@ -774,7 +773,7 @@ onMounted(async () => {
 .preview-content {
   padding: 16px 0;
   line-height: 1.8;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .preview-content :deep(h1),
@@ -787,7 +786,7 @@ onMounted(async () => {
   margin-bottom: 16px;
   font-weight: 600;
   line-height: 1.25;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .preview-content :deep(h1) { font-size: 28px; }
@@ -814,7 +813,7 @@ onMounted(async () => {
 
 .empty-state p {
   font-size: 16px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
@@ -844,7 +843,7 @@ onMounted(async () => {
 
 .editor-header {
   padding-bottom: 12px;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .editor-meta {
@@ -865,7 +864,7 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   padding-top: 16px;
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 /* 分类管理 */
@@ -920,7 +919,7 @@ onMounted(async () => {
 .category-info .category-name {
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

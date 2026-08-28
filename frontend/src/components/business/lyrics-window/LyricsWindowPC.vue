@@ -222,7 +222,7 @@
           <template #icon><NativeIcon name="upload" /></template>
           选择歌词文件
         </NativeButton>
-        <span v-if="lyricsFileName" style="margin-left: 8px; color: #666;">{{ lyricsFileName }}</span>
+        <span v-if="lyricsFileName" style="margin-left: 8px; color: var(--color-text-secondary);">{{ lyricsFileName }}</span>
       </div>
       <NativeTextarea v-model="lyricsText" placeholder="或手动粘贴LRC格式歌词，例如：&#10;[00:00.00]歌曲名称&#10;[00:10.50]第一句歌词" :rows="10" />
     </NativeDialog>
@@ -489,7 +489,7 @@ function formatTime(seconds) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   color: rgba(255, 255, 255, 0.8);
 }
 
@@ -762,7 +762,7 @@ function formatTime(seconds) {
   top: 0;
   left: 0;
   height: 100%;
-  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   border-radius: 2px;
   transition: width 0.1s linear;
 }

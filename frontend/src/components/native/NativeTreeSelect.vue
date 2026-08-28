@@ -299,11 +299,11 @@ const vClickOutside = {
 }
 
 .native-tree-select__trigger:hover:not(.native-tree-select--disabled) {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-tree-select__trigger--active {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-tree-select__tags {
@@ -319,7 +319,7 @@ const vClickOutside = {
   gap: 4px;
   padding: 2px 8px;
   background: #e8f4ff;
-  color: #0052d9;
+  color: var(--color-primary);
   border-radius: 4px;
   font-size: 12px;
 }
@@ -338,12 +338,12 @@ const vClickOutside = {
 
 .native-tree-select__tag--more {
   background: #f0f0f0;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .native-tree-select__value {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -352,12 +352,12 @@ const vClickOutside = {
 
 .native-tree-select__placeholder {
   font-size: 14px;
-  color: #999;
+  color: var(--color-text-muted);
   flex: 1;
 }
 
 .native-tree-select__arrow {
-  color: #999;
+  color: var(--color-text-muted);
   transition: transform 0.2s;
   flex-shrink: 0;
 }
@@ -380,8 +380,8 @@ const vClickOutside = {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid #e8e8e8;
-  color: #999;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-muted);
 }
 
 .native-tree-select__search input {
@@ -389,7 +389,7 @@ const vClickOutside = {
   border: none;
   outline: none;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-tree-select__tree {
@@ -399,7 +399,7 @@ const vClickOutside = {
 .native-tree-select__empty {
   padding: 24px;
   text-align: center;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 </style>

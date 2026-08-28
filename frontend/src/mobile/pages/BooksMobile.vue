@@ -649,7 +649,7 @@ async function handleMetadataReparse(book) {
 .books-mobile {
   padding: 12px;
   min-height: 100vh;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 /* 搜索栏 */
@@ -677,7 +677,7 @@ async function handleMetadataReparse(book) {
 .search-icon {
   width: 20px;
   height: 20px;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
   margin-left: 8px;
 }
@@ -715,7 +715,7 @@ async function handleMetadataReparse(book) {
   background: #fff;
   border-radius: 16px;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.2s;
@@ -723,17 +723,17 @@ async function handleMetadataReparse(book) {
 }
 
 .tab-item.active {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
 .trash-tab {
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .tab-item.add-btn {
   background: #e7e7e7;
-  color: #666;
+  color: var(--color-text-secondary);
   font-weight: bold;
   padding: 6px 12px;
 }
@@ -750,14 +750,14 @@ async function handleMetadataReparse(book) {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .spinner {
   width: 32px;
   height: 32px;
   border: 3px solid #e7e7e7;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
   margin-bottom: 12px;
@@ -849,7 +849,7 @@ async function handleMetadataReparse(book) {
 .book-title {
   font-size: 12px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
@@ -861,7 +861,7 @@ async function handleMetadataReparse(book) {
 
 .book-author {
   font-size: 11px;
-  color: #999;
+  color: var(--color-text-muted);
   margin-top: 3px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -878,13 +878,13 @@ async function handleMetadataReparse(book) {
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: 12px;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 16px;
   font-weight: 500;
 }
 
 .trash-hint {
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 11px;
   font-weight: 400;
 }
@@ -912,7 +912,7 @@ async function handleMetadataReparse(book) {
 
 .trash-item-title {
   overflow: hidden;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 13px;
   font-weight: 500;
   text-overflow: ellipsis;
@@ -922,7 +922,7 @@ async function handleMetadataReparse(book) {
 .trash-item-meta {
   margin-top: 4px;
   overflow: hidden;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -936,7 +936,7 @@ async function handleMetadataReparse(book) {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
   border: none;
   box-shadow: 0 4px 12px rgba(0, 82, 217, 0.4);
@@ -1004,7 +1004,7 @@ async function handleMetadataReparse(book) {
   background: none;
   border: none;
   font-size: 24px;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
   line-height: 1;
 }
@@ -1024,7 +1024,7 @@ async function handleMetadataReparse(book) {
 
 .modal-body input:focus {
   outline: none;
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .modal-footer {
@@ -1045,12 +1045,12 @@ async function handleMetadataReparse(book) {
 }
 
 .btn-cancel {
-  background: #f5f5f5;
-  color: #666;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
 }
 
 .btn-confirm {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
@@ -1117,13 +1117,13 @@ async function handleMetadataReparse(book) {
 .form-label {
   display: block;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 6px;
   font-weight: 500;
 }
 
 .form-label .required {
-  color: #e34d59;
+  color: var(--color-danger);
 }
 
 .form-input,
@@ -1140,7 +1140,7 @@ async function handleMetadataReparse(book) {
 .form-input:focus,
 .form-select:focus {
   outline: none;
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .file-selector {
@@ -1156,17 +1156,17 @@ async function handleMetadataReparse(book) {
   gap: 8px;
   width: 100%;
   padding: 12px;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border: 1px dashed #ccc;
   border-radius: 6px;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .btn-file-select:active:not(:disabled) {
-  background: #e8e8e8;
+  background: var(--color-border-subtle);
 }
 
 .btn-file-select:disabled {
@@ -1177,7 +1177,7 @@ async function handleMetadataReparse(book) {
 .btn-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid #999;
+  border: 2px solid var(--color-text-muted);
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -1185,19 +1185,19 @@ async function handleMetadataReparse(book) {
 
 .file-hint {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   margin: 4px 0 0 0;
 }
 
 .parsing-hint {
   font-size: 12px;
-  color: #0052d9;
+  color: var(--color-primary);
   margin: 4px 0 0 0;
 }
 .metadata-status {
   margin-top: 4px;
   font-size: 11px;
-  color: var(--native-color-text-secondary, #666);
+  color: var(--native-color-text-secondary, var(--color-text-secondary));
 }
 
 .metadata-status.is-pending { color: #b26a00; }

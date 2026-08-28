@@ -146,7 +146,7 @@ function handlePageSizeChange() {
 
 .native-pagination__total {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .native-pagination__pages {
@@ -164,15 +164,15 @@ function handlePageSizeChange() {
   border: 1px solid #ddd;
   border-radius: 4px;
   background: #fff;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .native-pagination__btn:hover:not(:disabled) {
-  border-color: #0052d9;
-  color: #0052d9;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .native-pagination__btn:disabled {
@@ -181,8 +181,8 @@ function handlePageSizeChange() {
 }
 
 .native-pagination__btn--active {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
   color: #fff;
 }
 
@@ -195,7 +195,7 @@ function handlePageSizeChange() {
 
 .native-pagination__btn--ellipsis:hover {
   border-color: transparent;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .native-pagination__size {
@@ -208,7 +208,7 @@ function handlePageSizeChange() {
   border: 1px solid #ddd;
   border-radius: 4px;
   background: #fff;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
   cursor: pointer;
   outline: none;
@@ -216,6 +216,6 @@ function handlePageSizeChange() {
 
 .native-pagination__select:hover,
 .native-pagination__select:focus {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 </style>

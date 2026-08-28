@@ -39,7 +39,7 @@ const footerStyle = computed(() => {
   justify-content: center;
   padding: 0 20px;
   background: #fff;
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
   flex-shrink: 0;
 }
 </style>

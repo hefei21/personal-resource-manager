@@ -99,6 +99,8 @@ export default {
     checkSession: () => api.get('/demo/session'),
     closeSession: () => api.delete('/demo/session'),
     summary: () => api.get('/demo/summary'),
+    journeys: () => api.get('/demo/journeys'),
+    runJourney: (journeyId, data = {}) => api.post(`/demo/journeys/${journeyId}/run`, data),
     reset: () => api.post('/demo/reset'),
     list: (type, params) => api.get(`/demo/resources/${type}`, { params }),
     create: (type, data) => api.post(`/demo/resources/${type}`, data),

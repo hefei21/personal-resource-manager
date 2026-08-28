@@ -824,7 +824,7 @@ onUnmounted(() => {
   background: #f5f7fa;
   border-radius: 16px;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.2s;
@@ -833,14 +833,14 @@ onUnmounted(() => {
 }
 
 .tab-item.active {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
 .tab-item.add-btn {
   padding: 8px 12px;
   background: #e6f7ff;
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 /* ========== 搜索栏 ========== */
@@ -871,7 +871,7 @@ onUnmounted(() => {
 }
 
 .search-icon {
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
 }
 
@@ -884,7 +884,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
@@ -917,7 +917,7 @@ onUnmounted(() => {
 
 .batch-count {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
 }
 
@@ -933,7 +933,7 @@ onUnmounted(() => {
   gap: 2px;
   background: none;
   border: none;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 11px;
   cursor: pointer;
   padding: 4px 8px;
@@ -944,7 +944,7 @@ onUnmounted(() => {
 }
 
 .action-btn-icon.danger {
-  color: #e34d59;
+  color: var(--color-danger);
 }
 
 .action-btn-icon span {
@@ -962,14 +962,14 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 80px 20px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .spinner {
   width: 32px;
   height: 32px;
   border: 3px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 12px;
@@ -979,7 +979,7 @@ onUnmounted(() => {
   width: 20px;
   height: 20px;
   border: 2px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -1044,7 +1044,7 @@ onUnmounted(() => {
 .song-title {
   font-size: 15px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1053,7 +1053,7 @@ onUnmounted(() => {
 
 .song-subtitle {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1072,12 +1072,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
 }
 
 .more-btn:active {
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 /* 多选框 */
@@ -1108,8 +1108,8 @@ onUnmounted(() => {
 }
 
 .checkbox-wrap input:checked ~ .checkmark {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .checkmark:after {
@@ -1139,7 +1139,7 @@ onUnmounted(() => {
   padding: 10px 32px;
   background: transparent;
   border: none;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
   cursor: pointer;
 }
@@ -1149,7 +1149,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 
@@ -1235,7 +1235,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
@@ -1263,16 +1263,16 @@ onUnmounted(() => {
 
 .btn-secondary {
   background: #f5f7fa;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .btn-primary {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
 .btn-danger {
-  background: #e34d59;
+  background: var(--color-danger);
   color: #fff;
 }
 
@@ -1285,7 +1285,7 @@ onUnmounted(() => {
   display: block;
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 12px;
 }
 
@@ -1300,13 +1300,13 @@ onUnmounted(() => {
   background: #f5f7fa;
   border-radius: 16px;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .filter-chip.active {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
@@ -1319,18 +1319,18 @@ onUnmounted(() => {
   background: #f5f7fa;
   border-radius: 8px;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .filter-select-btn.active {
   background: #e6f7ff;
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .filter-select-btn:active {
-  background: #e8e8e8;
+  background: var(--color-border-subtle);
 }
 
 /* 选择列表抽屉 */
@@ -1355,7 +1355,7 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 14px 20px;
   font-size: 15px;
-  color: #333;
+  color: var(--color-text-primary);
   cursor: pointer;
   border-bottom: 1px solid #f8f8f8;
   transition: background 0.15s;
@@ -1366,12 +1366,12 @@ onUnmounted(() => {
 }
 
 .select-list-item.active {
-  color: #0052d9;
+  color: var(--color-primary);
   font-weight: 500;
 }
 
 .select-list-item .check-icon {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 /* ========== 底部操作菜单 ========== */
@@ -1385,7 +1385,7 @@ onUnmounted(() => {
   text-align: center;
   padding: 16px;
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
   border-bottom: 1px solid #f0f0f0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1403,7 +1403,7 @@ onUnmounted(() => {
   gap: 12px;
   padding: 16px 20px;
   font-size: 15px;
-  color: #333;
+  color: var(--color-text-primary);
   cursor: pointer;
   border-bottom: 1px solid #f8f8f8;
 }
@@ -1413,14 +1413,14 @@ onUnmounted(() => {
 }
 
 .sheet-item.delete {
-  color: #e34d59;
+  color: var(--color-danger);
 }
 
 .sheet-cancel {
   text-align: center;
   padding: 16px;
   font-size: 15px;
-  color: #666;
+  color: var(--color-text-secondary);
   border-top: 8px solid #f5f7fa;
   cursor: pointer;
 }
@@ -1477,13 +1477,13 @@ onUnmounted(() => {
 
 .trash-retention-hint {
   margin: 0 0 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 13px;
 }
 
 .trash-empty {
   padding: 32px 0;
-  color: #999;
+  color: var(--color-text-muted);
   text-align: center;
 }
 
@@ -1558,13 +1558,13 @@ onUnmounted(() => {
 }
 
 .warning-text {
-  color: #e34d59;
+  color: var(--color-danger);
   font-size: 13px;
   margin-top: 8px;
 }
 
 .info-text {
-  color: #0052d9;
+  color: var(--color-primary);
   font-size: 13px;
   margin-top: 8px;
 }
@@ -1577,14 +1577,14 @@ onUnmounted(() => {
 .form-item label {
   display: block;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-bottom: 8px;
 }
 
 .native-input {
   width: 100%;
   padding: 12px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
   font-size: 14px;
   outline: none;
@@ -1592,7 +1592,7 @@ onUnmounted(() => {
 .metadata-status {
   margin-top: 3px;
   font-size: 11px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .metadata-status.is-pending { color: #b26a00; }

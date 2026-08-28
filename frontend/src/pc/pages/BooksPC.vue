@@ -2283,7 +2283,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 10px;
   min-height: 120px;
   animation: skeleton-pulse 1.5s ease-in-out infinite;
@@ -2324,7 +2324,7 @@ onUnmounted(() => {
 
 .page-header p {
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
   font-weight: 500;
 }
@@ -2429,13 +2429,13 @@ onUnmounted(() => {
 
 .empty-categories h3 {
   font-size: 24px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
 }
 
 .empty-categories p {
   font-size: 16px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
@@ -2451,18 +2451,17 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.3s ease;
-  box-shadow: 0 3px 8px rgba(102, 126, 234, 0.2);
+  box-shadow: 0 3px 8px var(--color-primary-alpha-20);
   position: relative;
   user-select: none;
 }
 
 .category-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+  box-shadow: var(--shadow-md);
 }
 
 .category-card .native-icon {
@@ -2535,7 +2534,7 @@ onUnmounted(() => {
   gap: 12px;
   margin-top: 20px;
   padding-top: 16px;
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 /* 分类图标大小强制设置 */
@@ -2558,7 +2557,7 @@ onUnmounted(() => {
 
 .trash-retention-hint {
   margin: -4px 0 16px;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 13px;
 }
 
@@ -2568,7 +2567,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   min-height: 220px;
-  color: #999;
+  color: var(--color-text-muted);
   gap: 12px;
 }
 
@@ -2592,17 +2591,17 @@ onUnmounted(() => {
 }
 
 .batch-actions-hint {
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
   margin-left: auto;
 }
 
 .section-title {
   font-size: 18px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 16px;
   padding-bottom: 8px;
-  border-bottom: 2px solid #667eea;
+  border-bottom: 2px solid var(--color-primary);
 }
 
 .empty-state {
@@ -2618,7 +2617,7 @@ onUnmounted(() => {
 
 .empty-state p {
   font-size: 16px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin: 0 0 24px 0;
 }
 
@@ -2634,7 +2633,7 @@ onUnmounted(() => {
   width: 220px;
   min-width: 220px;
   background: #f8f9fa;
-  border-right: 1px solid #e8e8e8;
+  border-right: 1px solid var(--color-border-subtle);
   display: flex;
   flex-direction: column;
   transition: all 0.3s ease;
@@ -2656,7 +2655,7 @@ onUnmounted(() => {
   justify-content: space-between;
   padding: 10px 12px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .sidebar-header .native-button {
@@ -2680,7 +2679,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .empty-toc {
@@ -2689,7 +2688,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .empty-toc p {
@@ -2705,7 +2704,7 @@ onUnmounted(() => {
   padding: 10px 16px;
   cursor: pointer;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   border-left: 3px solid transparent;
   transition: all 0.2s;
   overflow: hidden;
@@ -2715,13 +2714,13 @@ onUnmounted(() => {
 
 .toc-item:hover {
   background: #e8f4ff;
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .toc-item.toc-active {
   background: #e8f4ff;
-  color: #0052d9;
-  border-left-color: #0052d9;
+  color: var(--color-primary);
+  border-left-color: var(--color-primary);
 }
 
 .reader-main {
@@ -2804,7 +2803,7 @@ onUnmounted(() => {
   text-align: center;
   font-weight: 500;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 /* 工具栏按钮样式 - 图标文字对齐 */
@@ -2844,7 +2843,7 @@ onUnmounted(() => {
 
 .progress-info {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
@@ -2887,7 +2886,7 @@ onUnmounted(() => {
 
 .book-text {
   line-height: 1.9;
-  color: #333;
+  color: var(--color-text-primary);
   text-align: justify;
   word-break: break-word;
   position: relative;
@@ -2920,7 +2919,7 @@ onUnmounted(() => {
 }
 
 .book-text a {
-  color: #0052d9;
+  color: var(--color-primary);
   text-decoration: none;
 }
 
@@ -2979,14 +2978,14 @@ onUnmounted(() => {
   width: 40px;
   height: 40px;
   border: 3px solid #e0e0e0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
 
 .loading-text {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 @keyframes spin {
@@ -3018,7 +3017,7 @@ onUnmounted(() => {
 .book-skeleton-card {
   display: flex;
   flex-direction: column;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 8px;
   overflow: hidden;
   animation: skeleton-pulse 1.5s ease-in-out infinite;
@@ -3058,14 +3057,13 @@ onUnmounted(() => {
 }
 
 .book-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-md);
 }
 
 .book-cover {
   width: 100%;
   height: 220px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3102,7 +3100,7 @@ onUnmounted(() => {
 .book-title {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0 0 4px 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3111,7 +3109,7 @@ onUnmounted(() => {
 
 .book-author {
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin: 0 0 8px 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3217,7 +3215,7 @@ onUnmounted(() => {
 .upload-status-text {
   margin-top: 8px;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   text-align: center;
 }
 
@@ -3227,7 +3225,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 12px;
 }
 

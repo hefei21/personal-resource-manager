@@ -441,25 +441,25 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__trigger:hover:not(.native-date-range-picker--disabled) {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-date-range-picker__trigger--active {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-date-range-picker__value {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-date-range-picker__placeholder {
   font-size: 14px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .native-date-range-picker__icon {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .native-date-range-picker__dropdown {
@@ -483,18 +483,18 @@ onUnmounted(() => {
   border: none;
   cursor: pointer;
   padding: 4px;
-  color: #666;
+  color: var(--color-text-secondary);
   transition: color 0.2s;
 }
 
 .native-date-range-picker__nav:hover {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .native-date-range-picker__current {
   font-weight: 600;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-date-range-picker__weekdays {
@@ -507,7 +507,7 @@ onUnmounted(() => {
 .native-date-range-picker__weekday {
   text-align: center;
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   padding: 4px;
 }
 
@@ -524,7 +524,7 @@ onUnmounted(() => {
   cursor: pointer;
   border-radius: 4px;
   font-size: 13px;
-  color: #333;
+  color: var(--color-text-primary);
   transition: all 0.2s;
 }
 
@@ -537,12 +537,12 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__day--today {
-  color: #0052d9;
+  color: var(--color-primary);
   font-weight: 600;
 }
 
 .native-date-range-picker__day--selected {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
   font-weight: 500;
 }
@@ -553,7 +553,7 @@ onUnmounted(() => {
 
 /* 开始日期 - 蓝色背景白字 */
 .native-date-range-picker__day--start {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
   font-weight: 500;
 }
@@ -564,7 +564,7 @@ onUnmounted(() => {
 
 /* 结束日期 - 蓝色背景白字 */
 .native-date-range-picker__day--end {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
   font-weight: 500;
 }
@@ -576,7 +576,7 @@ onUnmounted(() => {
 /* 范围内日期 - 浅蓝色背景，深色文字 */
 .native-date-range-picker__day--in-range {
   background: #e8f4ff;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-date-range-picker__day--disabled {
@@ -590,7 +590,7 @@ onUnmounted(() => {
   gap: 8px;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .native-date-range-picker__preset {
@@ -604,8 +604,8 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__preset:hover {
-  border-color: #0052d9;
-  color: #0052d9;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .native-date-range-picker__footer {
@@ -614,7 +614,7 @@ onUnmounted(() => {
   gap: 8px;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .native-date-range-picker__btn {
@@ -628,15 +628,15 @@ onUnmounted(() => {
 .native-date-range-picker__btn--text {
   background: none;
   border: none;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .native-date-range-picker__btn--text:hover {
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-date-range-picker__btn--primary {
-  background: #0052d9;
+  background: var(--color-primary);
   border: none;
   color: #fff;
 }

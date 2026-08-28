@@ -94,7 +94,7 @@ function select(item, index) {
   padding: 8px 16px;
   font-size: 14px;
   line-height: 1;
-  color: #333;
+  color: var(--color-text-primary);
   background: #fff;
   border: 1px solid #dcdcdc;
   cursor: pointer;
@@ -115,15 +115,15 @@ function select(item, index) {
 }
 
 .native-button-group__item:hover:not(:disabled) {
-  color: #0052d9;
-  border-color: #0052d9;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
   z-index: 1;
 }
 
 .native-button-group__item--active {
   color: #fff;
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
   z-index: 2;
 }
 
@@ -135,7 +135,7 @@ function select(item, index) {
 
 .native-button-group__item:disabled {
   color: #ccc;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   cursor: not-allowed;
 }
 
@@ -172,6 +172,6 @@ function select(item, index) {
 }
 
 .native-button-group--outline .native-button-group__item--active {
-  background: #0052d9;
+  background: var(--color-primary);
 }
 </style>

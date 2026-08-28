@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="documents">
     <div class="page-header">
       <p>管理 PDF、Word、PPT、文本等文档</p>
@@ -376,7 +376,7 @@
           <NativeInput v-model="batchEditForm.tags" placeholder="输入标签，用逗号分隔（留空则不修改）" />
         </NativeFormItem>
       </NativeForm>
-      <p style="color: #999; font-size: 12px; margin-top: 10px;">
+      <p style="color: var(--color-text-muted); font-size: 12px; margin-top: 10px;">
         提示：只有填写了内容的字段才会被更新，留空的字段保持原值。
       </p>
     </NativeDialog>
@@ -408,11 +408,11 @@
     >
       <div class="delete-category-content">
         <p class="delete-warning">
-          <NativeIcon name="warning-circle" style="color: #e34d59; margin-right: 8px;" />
+          <NativeIcon name="warning-circle" style="color: var(--color-danger); margin-right: 8px;" />
           确定要删除分类「<strong>{{ deleteCategoryData?.name }}</strong>」吗？
         </p>
         <p class="delete-info">
-          <NativeIcon name="info" style="color: #0052d9; margin-right: 8px;" />
+          <NativeIcon name="info" style="color: var(--color-primary); margin-right: 8px;" />
           此操作将同时删除该分类下的所有子分类，但不会删除文档、版本或文件。
         </p>
         <NativeDivider />
@@ -432,7 +432,7 @@
           <NativeInput v-model="renameCategoryName" placeholder="请输入新的分类名称" />
         </NativeFormItem>
       </NativeForm>
-      <p style="color: #999; font-size: 12px; margin-top: 8px;">
+      <p style="color: var(--color-text-muted); font-size: 12px; margin-top: 8px;">
         提示：同级分类下不能存在同名分类
       </p>
     </NativeDialog>
@@ -758,6 +758,7 @@ import { documentTagsLabel } from '@/utils/documentTags'
 import { openPdfDocument } from '@/utils/pdfPreview'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
+import 'highlight.js/styles/atom-one-dark.css'
 import mammoth from 'mammoth'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
@@ -2354,13 +2355,13 @@ onMounted(async () => {
 .page-header h2 {
   font-size: 28px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0 0 8px 0;
 }
 
 .page-header p {
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
   font-weight: 500;
 }
@@ -2455,7 +2456,7 @@ onMounted(async () => {
 .category-actions-bar {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
   display: flex;
   gap: 12px;
 }
@@ -2464,7 +2465,7 @@ onMounted(async () => {
 .advanced-search-panel {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 /* 可排序列样式 */
@@ -2503,13 +2504,13 @@ onMounted(async () => {
 
 .empty-categories h3 {
   font-size: 24px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
 }
 
 .empty-categories p {
   font-size: 16px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
@@ -2519,10 +2520,10 @@ onMounted(async () => {
 
 .category-path {
   font-size: 18px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 24px;
   padding-bottom: 12px;
-  border-bottom: 2px solid #667eea;
+  border-bottom: 2px solid var(--color-primary);
 }
 
 .categories-grid {
@@ -2537,22 +2538,21 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.3s ease;
-  box-shadow: 0 3px 8px rgba(102, 126, 234, 0.2);
+  box-shadow: 0 3px 8px var(--color-primary-alpha-20);
   position: relative;
   user-select: none;
 }
 
 .category-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+  box-shadow: var(--shadow-md);
 }
 
 .category-card.drag-over {
-  border: 2px dashed #0052d9;
+  border: 2px dashed var(--color-primary);
   background: linear-gradient(135deg, #e8f0ff 0%, #f0e8ff 100%);
 }
 
@@ -2653,14 +2653,14 @@ onMounted(async () => {
   align-items: center;
   font-size: 16px;
   margin-bottom: 12px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .delete-category-content .delete-info {
   display: flex;
   align-items: center;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-bottom: 0;
 }
 
@@ -2682,12 +2682,12 @@ onMounted(async () => {
 
 /* 拖拽上传时的阴影效果 */
 .drag-active :deep(.t-dialog) {
-  box-shadow: 0 0 30px rgba(102, 126, 234, 0.6) !important;
-  border: 2px dashed #667eea !important;
+  box-shadow: 0 0 30px var(--color-primary-alpha-60) !important;
+  border: 2px dashed var(--color-primary) !important;
 }
 
 .drag-active :deep(.native-dialog__content) {
-  background: rgba(102, 126, 234, 0.05) !important;
+  background: var(--color-primary-alpha-05) !important;
 }
 
 .empty-state .t-button {
@@ -2713,7 +2713,7 @@ onMounted(async () => {
 
 .subcategory-view h3 {
   font-size: 20px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 20px;
 }
 
@@ -2729,13 +2729,13 @@ onMounted(async () => {
 }
 
 .subcategory-item:hover {
-  background: #667eea;
+  background: var(--color-primary);
   color: white;
   transform: translateX(5px);
 }
 
 .subcategory-item .t-icon {
-  color: #667eea;
+  color: var(--color-primary);
 }
 
 .subcategory-item:hover .t-icon {
@@ -2743,7 +2743,7 @@ onMounted(async () => {
 }
 
 .subcategory-item.all-docs {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   color: white;
 }
 
@@ -2758,10 +2758,10 @@ onMounted(async () => {
 
 .section-title {
   font-size: 18px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 0;
   padding-bottom: 8px;
-  border-bottom: 2px solid #667eea;
+  border-bottom: 2px solid var(--color-primary);
 }
 
 /* 批量操作栏 */
@@ -2777,7 +2777,7 @@ onMounted(async () => {
 
 .batch-actions-hint {
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-left: auto;
 }
 
@@ -2788,7 +2788,7 @@ onMounted(async () => {
 .native-table :deep(.native-table__th) {
   background: #f6f8fa;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-table :deep(.native-table__tr:hover) {
@@ -2827,7 +2827,7 @@ onMounted(async () => {
 
 .empty-state p {
   font-size: 16px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin: 0 0 24px 0;
 }
 
@@ -2874,7 +2874,7 @@ onMounted(async () => {
 
 .pdf-controls span {
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   min-width: 100px;
   text-align: center;
 }
@@ -3005,20 +3005,20 @@ onMounted(async () => {
 }
 
 .office-preview .native-icon {
-  color: #667eea;
+  color: var(--color-primary);
   margin-bottom: 20px;
 }
 
 .office-preview h3 {
   margin: 0;
   font-size: 20px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .office-preview p {
   margin: 0;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   text-align: center;
 }
 
@@ -3043,11 +3043,11 @@ onMounted(async () => {
   justify-content: center;
   gap: 16px;
   padding: 60px 20px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .unsupported-preview .t-icon {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .unsupported-preview p {
@@ -3111,7 +3111,7 @@ onMounted(async () => {
   background: #f6f8fa;
   border-radius: 8px;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 /* 编辑对话框 */
@@ -3137,8 +3137,8 @@ onMounted(async () => {
 }
 
 .editor-wrapper:hover {
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-alpha-10);
 }
 
 .editor-textarea {
@@ -3151,7 +3151,7 @@ onMounted(async () => {
   font-size: 14px;
   line-height: 1.6;
   background: #f9f9f9;
-  color: #333;
+  color: var(--color-text-primary);
   outline: none;
   transition: background 0.3s ease;
 }
@@ -3165,7 +3165,7 @@ onMounted(async () => {
   justify-content: space-between;
   padding: 8px 0;
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .file-info {
@@ -3186,7 +3186,7 @@ onMounted(async () => {
 }
 
 :deep(*)::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(180deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   border-radius: 4px;
 }
 
@@ -3240,7 +3240,7 @@ onMounted(async () => {
   }
 
   .version-current-label {
-    color: #0052d9;
+    color: var(--color-primary);
     font-weight: 600;
   }
 
@@ -3280,7 +3280,7 @@ onMounted(async () => {
   }
 
   .upload-conflict-candidate.hash-match {
-    border-color: #ed7b2f;
+    border-color: var(--color-warning);
     background: #fff7ed;
   }
 

@@ -1,5 +1,5 @@
 <template>
-  <div class="native-list" :class="{ 'native-list--split': split, 'native-list--stripe': stripe }">
+  <div class="native-list" :class="[`native-list--${size}`, { 'native-list--split': split, 'native-list--stripe': stripe }]">
     <div v-if="header || $slots.header" class="native-list__header">
       <slot name="header">{{ header }}</slot>
     </div>
@@ -26,15 +26,15 @@ defineProps({
 
 <style scoped>
 .native-list {
-  background: #fff;
-  border-radius: 6px;
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-sm);
 }
 
 .native-list__header {
   padding: 12px 16px;
   font-weight: 600;
-  color: #333;
-  border-bottom: 1px solid #e8e8e8;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .native-list__items {
@@ -44,13 +44,13 @@ defineProps({
 
 .native-list__footer {
   padding: 12px 16px;
-  color: #666;
-  border-top: 1px solid #e8e8e8;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 /* 分割线样式 */
 .native-list--split :deep(.native-list-item) {
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .native-list--split :deep(.native-list-item:last-child) {
@@ -59,6 +59,9 @@ defineProps({
 
 /* 斑马纹样式 */
 .native-list--stripe :deep(.native-list-item:nth-child(even)) {
-  background: #fafafa;
+  background: var(--color-surface-page);
 }
+
+.native-list--small :deep(.native-list-item) { padding: var(--space-2) var(--space-3); }
+.native-list--large :deep(.native-list-item) { padding: var(--space-4) var(--space-5); }
 </style>

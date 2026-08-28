@@ -273,22 +273,19 @@
           </div>
         </template>
         <template #cell-status="{ row }">
-          <NativeDropdown
+          <NativeSelect
             v-if="!isGuest"
-            trigger="hover"
+            :modelValue="row.status || 'none'"
             :options="[
               { value: 'none', label: '未标记' },
               { value: 'want_to_watch', label: '想看' },
               { value: 'watching', label: '在看' },
               { value: 'watched', label: '看过' }
             ]"
-            @command="(val) => updateStatus(row, val)"
-          >
-            <NativeTag v-if="row.status === 'want_to_watch'" theme="warning" variant="light" style="cursor: pointer;">想看</NativeTag>
-            <NativeTag v-else-if="row.status === 'watching'" theme="primary" variant="light" style="cursor: pointer;">在看</NativeTag>
-            <NativeTag v-else-if="row.status === 'watched'" theme="success" variant="light" style="cursor: pointer;">看过</NativeTag>
-            <NativeTag v-else theme="default" variant="light" style="cursor: pointer;">未标记</NativeTag>
-          </NativeDropdown>
+            aria-label="更新观看状态"
+            style="width: 112px"
+            @update:modelValue="(val) => updateStatus(row, val)"
+          />
           <NativeTag v-else-if="row.status === 'want_to_watch'" theme="warning" variant="light">想看</NativeTag>
           <NativeTag v-else-if="row.status === 'watching'" theme="primary" variant="light">在看</NativeTag>
           <NativeTag v-else-if="row.status === 'watched'" theme="success" variant="light">看过</NativeTag>
@@ -296,7 +293,7 @@
         </template>
         <template #cell-isFavorite="{ row }">
           <span class="favorite-icon" @click.stop="!isGuest && toggleFavorite(row)">
-            <NativeIcon v-if="row.is_favorite || row.isFavorite" name="heart-fill" size="16" :style="{ color: '#e34d59', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
+            <NativeIcon v-if="row.is_favorite || row.isFavorite" name="heart-fill" size="16" :style="{ color: 'var(--color-danger)', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
             <NativeIcon v-else name="heart" size="16" :style="{ color: '#bbb', cursor: isGuest ? 'not-allowed' : 'pointer' }" />
           </span>
         </template>
@@ -359,7 +356,7 @@ import AnimeDetailDialog from '@/components/AnimeDetailDialog.vue'
 import { initAnimeCoverDB, getAnimeCoverFromCache, saveAnimeCoverToCache } from '@/utils/animeCoverCache'
 import { usePermission } from '@/composables/usePermission'
 import { useViewport } from '@/composables/useViewport'
-import { NativeButton, NativeInput, NativeCard, NativeCheckbox, NativeSelect, NativeTag, NativePagination, NativeIcon, NativeTable, NativeRate, NativeDropdown, NativePopconfirm } from '@/components/native'
+import { NativeButton, NativeInput, NativeCard, NativeCheckbox, NativeSelect, NativeTag, NativePagination, NativeIcon, NativeTable, NativeRate, NativePopconfirm } from '@/components/native'
 import { useToast } from '@/composables/useToast'
 
 const AnimeMobile = defineAsyncComponent(() => import('@/mobile/pages/AnimeMobile.vue'))
@@ -932,7 +929,7 @@ onUnmounted(() => {
 .card-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   flex-shrink: 0;
 }
 
@@ -981,7 +978,7 @@ onUnmounted(() => {
 
 .page-header p {
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
   font-weight: 500;
 }
@@ -1012,7 +1009,7 @@ onUnmounted(() => {
 
 .search-card:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .cover-wrapper {
@@ -1069,7 +1066,7 @@ onUnmounted(() => {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1079,7 +1076,7 @@ onUnmounted(() => {
   margin: 4px 0 0;
   font-size: 12px;
   font-weight: normal;
-  color: #999;
+  color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1096,7 +1093,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .staff-info {
@@ -1114,11 +1111,11 @@ onUnmounted(() => {
 }
 
 .staff-label {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .staff-value {
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .tags-row {
@@ -1130,7 +1127,7 @@ onUnmounted(() => {
 
 .more-tags {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .card-actions {
@@ -1162,7 +1159,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 4px;
   color: #bbb;
 }
@@ -1276,7 +1273,7 @@ onUnmounted(() => {
 
 .main-title {
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1284,7 +1281,7 @@ onUnmounted(() => {
 
 .sub-title {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1321,12 +1318,12 @@ onUnmounted(() => {
 
 .rating-cell .count {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .year-cell {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   white-space: nowrap;
   display: inline-block;
 }
@@ -1366,11 +1363,11 @@ onUnmounted(() => {
 
 /* 测试资源站点按钮图标颜色 */
 .test-resources-btn:not(:disabled) {
-  color: #333 !important;
+  color: var(--color-text-primary) !important;
 }
 
 .test-resources-btn:not(:disabled) .native-icon {
-  color: #333 !important;
+  color: var(--color-text-primary) !important;
 }
 
 /* 收藏图标强制缩小 */

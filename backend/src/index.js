@@ -53,7 +53,7 @@ import {
 
 // 导入路由
 import authRoutes from './routes/auth.js'
-import demoRoutes from './routes/demo.js'
+import demoRoutes, { demoRequestBodyGuard } from './routes/demo.js'
 import documentsRoutes from './routes/documents.js'
 import privateSpaceRetiredRoutes from './routes/privateSpaceRetired.js'
 import musicRoutes from './routes/music.js'
@@ -112,6 +112,9 @@ app.use(cors((req, callback) => {
     maxAge: 86400
   })
 }))
+
+// 演示请求在通用 50 MB parser 前执行独立小包守卫，避免匿名大包占用主后端内存。
+app.use('/api/demo', demoRequestBodyGuard)
 
 // 请求体解析
 app.use(express.json({ limit: '50mb' }))

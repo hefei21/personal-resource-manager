@@ -89,7 +89,7 @@ function toggle() {
 }
 
 .native-checkbox:focus-visible {
-  outline: 2px solid #0052d9;
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -120,21 +120,21 @@ function toggle() {
 }
 
 .native-checkbox:hover:not(.native-checkbox--disabled) .native-checkbox__box {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-checkbox--checked .native-checkbox__box {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .native-checkbox--indeterminate .native-checkbox__box {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .native-checkbox__label {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 </style>

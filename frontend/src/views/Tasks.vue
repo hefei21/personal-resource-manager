@@ -509,7 +509,7 @@ onBeforeUnmount(() => {
 
 .tasks-heading h1 {
   margin: 0;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 24px;
   font-weight: 600;
 }
@@ -541,7 +541,7 @@ onBeforeUnmount(() => {
 }
 
 .cleanup-preview dt {
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .cleanup-preview dd {
@@ -619,7 +619,7 @@ onBeforeUnmount(() => {
 }
 
 .tasks-table-head {
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--color-border-subtle);
   background: #fafafa;
   color: #777;
   font-size: 13px;
@@ -628,7 +628,7 @@ onBeforeUnmount(() => {
 .task-row {
   min-height: 82px;
   border-bottom: 1px solid #f0f0f0;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 14px;
 }
 
@@ -659,7 +659,7 @@ onBeforeUnmount(() => {
 }
 
 .task-cell--time small {
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 12px;
 }
 
@@ -678,7 +678,7 @@ onBeforeUnmount(() => {
 }
 
 .tasks-muted {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .tasks-pagination {
@@ -729,13 +729,13 @@ onBeforeUnmount(() => {
     gap: 12px;
     margin: 12px;
     padding: 16px;
-    border: 1px solid #e8e8e8;
+    border: 1px solid var(--color-border-subtle);
     border-radius: 8px;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
   }
 
   .task-row:last-child {
-    border-bottom: 1px solid #e8e8e8;
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .task-cell {

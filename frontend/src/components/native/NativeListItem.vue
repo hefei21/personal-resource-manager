@@ -6,12 +6,17 @@
       'native-list-item--hover': hover,
       'native-list-item--disabled': disabled
     }"
+    :role="interactive ? 'button' : undefined"
+    :tabindex="interactive && !disabled ? 0 : undefined"
+    :aria-disabled="interactive ? disabled : undefined"
     @click="handleClick"
+    @keydown.enter.prevent="handleKeyboardActivate"
+    @keydown.space.prevent="handleKeyboardActivate"
   >
     <!-- 左侧内容 -->
     <div v-if="$slots.prefix?.() || avatar" class="native-list-item__prefix">
       <slot name="prefix">
-        <img v-if="avatar" :src="avatar" class="native-list-item__avatar" />
+        <img v-if="avatar" :src="avatar" :alt="avatarAlt" class="native-list-item__avatar" />
       </slot>
     </div>
     
@@ -47,7 +52,9 @@ const props = defineProps({
   action: { type: String, default: '' },
   active: { type: Boolean, default: false },
   hover: { type: Boolean, default: true },
-  disabled: { type: Boolean, default: false }
+  disabled: { type: Boolean, default: false },
+  interactive: { type: Boolean, default: false },
+  avatarAlt: { type: String, default: '' }
 })
 
 const emit = defineEmits(['click'])
@@ -57,6 +64,10 @@ function handleClick() {
     emit('click')
   }
 }
+
+function handleKeyboardActivate() {
+  if (props.interactive) handleClick()
+}
 </script>
 
 <style scoped>
@@ -64,20 +75,23 @@ function handleClick() {
   display: flex;
   align-items: center;
   padding: 12px 16px;
-  cursor: pointer;
-  transition: background 0.2s;
+  cursor: default;
+  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
+.native-list-item[role='button'] { cursor: pointer; }
+.native-list-item[role='button']:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: -2px; }
+
 .native-list-item:hover:not(.native-list-item--disabled) {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .native-list-item--active {
-  background: #e6f7ff;
+  background: var(--color-primary-surface);
 }
 
 .native-list-item--disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -100,7 +114,7 @@ function handleClick() {
 
 .native-list-item__title {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -109,7 +123,7 @@ function handleClick() {
 
 .native-list-item__description {
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-top: 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -123,6 +137,6 @@ function handleClick() {
 
 .native-list-item__action {
   font-size: 13px;
-  color: #0052d9;
+  color: var(--color-primary);
 }
 </style>

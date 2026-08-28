@@ -99,7 +99,7 @@ onUnmounted(() => {
 }
 
 .native-radio:focus-visible {
-  outline: 2px solid #0052d9;
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -122,7 +122,7 @@ onUnmounted(() => {
 }
 
 .native-radio:hover:not(.native-radio--disabled) .native-radio__input {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-radio__inner {
@@ -132,13 +132,13 @@ onUnmounted(() => {
   transform: translate(-50%, -50%) scale(0);
   width: 8px;
   height: 8px;
-  background: #0052d9;
+  background: var(--color-primary);
   border-radius: 50%;
   transition: transform 0.2s;
 }
 
 .native-radio--checked .native-radio__input {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-radio--checked .native-radio__inner {
@@ -152,7 +152,7 @@ onUnmounted(() => {
 
 .native-radio--disabled .native-radio__input {
   border-color: #ddd;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .native-radio--disabled .native-radio__inner {
@@ -160,14 +160,14 @@ onUnmounted(() => {
 }
 
 .native-radio__label {
-  color: #333;
+  color: var(--color-text-primary);
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
 .native-radio--disabled .native-radio__label {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 /* 按钮组样式 - 灰色背景未选中，白色背景选中 */
@@ -177,7 +177,7 @@ onUnmounted(() => {
   background: #f3f3f3;
   border-right: 1px solid #e7e7e7;
   transition: all 0.2s;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-radio--filled:last-child {
@@ -195,12 +195,12 @@ onUnmounted(() => {
 }
 
 .native-radio--filled.native-radio--filled-checked .native-radio__label {
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
 }
 
 .native-radio--filled.native-radio--disabled {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   opacity: 0.6;
 }
 </style>

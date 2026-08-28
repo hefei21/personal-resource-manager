@@ -286,12 +286,12 @@ function handleSort(col) {
 .native-table td {
   padding: 12px 16px;
   text-align: left;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .native-table th {
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   background: #fafafa;
   white-space: nowrap;
 }
@@ -314,7 +314,7 @@ function handleSort(col) {
 
 .native-table--bordered th,
 .native-table--bordered td {
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-border-subtle);
 }
 
 .native-table__checkbox {
@@ -339,7 +339,7 @@ function handleSort(col) {
   display: inline-flex;
   margin-left: 4px;
   font-size: 12px;
-  color: #0052d9;
+  color: var(--color-primary);
   line-height: 1;
 }
 
@@ -350,7 +350,7 @@ function handleSort(col) {
 .native-table__empty {
   text-align: center;
   padding: 48px 16px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .empty-content {

@@ -29,7 +29,9 @@ const dividerStyle = computed(() => {
     }
   }
   return {
-    margin: `${marginValue} 0`
+    margin: `${marginValue} 0`,
+    '--divider-before-grow': props.align === 'left' ? 0 : 1,
+    '--divider-after-grow': props.align === 'right' ? 0 : 1
   }
 })
 </script>
@@ -48,17 +50,19 @@ const dividerStyle = computed(() => {
 .native-divider--horizontal::before,
 .native-divider--horizontal::after {
   content: '';
-  flex: 1;
+  flex: var(--divider-before-grow, 1);
   height: 1px;
-  background: #e8e8e8;
+  background: var(--color-border-subtle);
 }
+
+.native-divider--horizontal::after { flex-grow: var(--divider-after-grow, 1); }
 
 .native-divider--horizontal.native-divider--dashed::before,
 .native-divider--horizontal.native-divider--dashed::after {
   background: repeating-linear-gradient(
     to right,
-    #e8e8e8,
-    #e8e8e8 4px,
+    var(--color-border-default),
+    var(--color-border-default) 4px,
     transparent 4px,
     transparent 8px
   );
@@ -67,7 +71,7 @@ const dividerStyle = computed(() => {
 .native-divider--horizontal .native-divider__content {
   padding: 0 16px;
   font-size: 14px;
-  color: #999;
+  color: var(--color-text-muted);
   white-space: nowrap;
 }
 
@@ -76,15 +80,15 @@ const dividerStyle = computed(() => {
   display: inline-flex;
   width: 1px;
   height: 1em;
-  background: #e8e8e8;
+  background: var(--color-border-subtle);
   vertical-align: middle;
 }
 
 .native-divider--vertical.native-divider--dashed {
   background: repeating-linear-gradient(
     to bottom,
-    #e8e8e8,
-    #e8e8e8 4px,
+    var(--color-border-default),
+    var(--color-border-default) 4px,
     transparent 4px,
     transparent 8px
   );

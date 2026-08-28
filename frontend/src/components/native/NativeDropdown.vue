@@ -246,15 +246,15 @@ defineExpose({
   gap: 8px;
   padding: 8px 16px;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
 }
 
 .native-dropdown__item:hover:not(.native-dropdown__item--disabled) {
-  background: #f5f5f5;
-  color: #0052d9;
+  background: var(--color-surface-subtle);
+  color: var(--color-primary);
 }
 
 .native-dropdown__item--disabled {
@@ -263,14 +263,14 @@ defineExpose({
 }
 
 .native-dropdown__item--divided {
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
   margin-top: 4px;
   padding-top: 8px;
 }
 
 .native-dropdown__item--active {
   background: #e6f7ff;
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 /* 箭头 */

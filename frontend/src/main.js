@@ -3,15 +3,12 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
 import './styles/global.css'
-import 'highlight.js/styles/atom-one-dark.css'
 import { useToast } from './composables/useToast'
-import { NativeIcon } from '@/components/native'
 
 const app = createApp(App)
 
 app.use(createPinia())
 app.use(router)
-app.component('NativeIcon', NativeIcon)
 
 app.mount('#app')
 

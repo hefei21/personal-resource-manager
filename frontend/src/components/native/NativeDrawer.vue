@@ -203,7 +203,7 @@ onUnmounted(() => {
 }
 
 .native-drawer__content:focus-visible {
-  outline: 2px solid var(--color-primary, #0052d9);
+  outline: 2px solid var(--color-primary);
   outline-offset: -2px;
 }
 
@@ -239,22 +239,22 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 16px 20px;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .native-drawer__title {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-drawer__close {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border: 1px solid #e0e0e0;
   cursor: pointer;
   padding: 6px;
-  color: #666;
+  color: var(--color-text-secondary);
   transition: all 0.2s;
   display: flex;
   align-items: center;
@@ -265,13 +265,13 @@ onUnmounted(() => {
 }
 
 .native-drawer__close:hover {
-  background: #e8e8e8;
-  color: #333;
+  background: var(--color-border-subtle);
+  color: var(--color-text-primary);
   border-color: #ccc;
 }
 
 .native-drawer__close:focus-visible {
-  outline: 2px solid #0052d9;
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
@@ -283,7 +283,7 @@ onUnmounted(() => {
 
 .native-drawer__footer {
   padding: 16px 20px;
-  border-top: 1px solid #e8e8e8;
+  border-top: 1px solid var(--color-border-subtle);
   display: flex;
   justify-content: flex-end;
   gap: 12px;

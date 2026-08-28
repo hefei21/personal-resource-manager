@@ -2253,7 +2253,7 @@ onUnmounted(() => {
 
 .page-header p {
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
   font-weight: 500;
 }
@@ -2339,7 +2339,7 @@ onUnmounted(() => {
 }
 
 .playlist-item:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .playlist-item.active {
@@ -2351,7 +2351,7 @@ onUnmounted(() => {
 .playlist-item .count {
   margin-left: auto;
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   min-width: 24px;
   text-align: right;
 }
@@ -2419,7 +2419,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .song-cover-small img {
@@ -2429,7 +2429,7 @@ onUnmounted(() => {
 }
 
 .song-cover-small .native-icon {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .title-text {
@@ -2439,7 +2439,7 @@ onUnmounted(() => {
 }
 
 .artist-text, .album-text {
-  color: #666;
+  color: var(--color-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2503,12 +2503,12 @@ onUnmounted(() => {
 
 .upload-dropzone p {
   margin: 8px 0 0;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .upload-dropzone .hint {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .upload-queue {
@@ -2593,7 +2593,7 @@ onUnmounted(() => {
 }
 
 .file-size {
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 12px;
 }
 

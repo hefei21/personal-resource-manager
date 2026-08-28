@@ -377,7 +377,7 @@ onMounted(() => {
 .stat-value {
   font-size: 28px;
   font-weight: bold;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   line-height: 1.2;
@@ -390,14 +390,13 @@ onMounted(() => {
 
 .stat-label {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-top: 8px;
   transition: all 0.3s ease;
 }
 
 .stat-card:hover .stat-label {
-  color: #667eea;
-  transform: translateY(-2px);
+  color: var(--color-primary);
 }
 
 .filter-card {
@@ -414,13 +413,13 @@ onMounted(() => {
 }
 
 .slow-query {
-  color: #e34d59;
+  color: var(--color-danger);
   font-weight: 600;
 }
 
 .is-admin {
   font-weight: 600;
-  color: var(--td-brand-color, #0052d9);
+  color: var(--td-brand-color, var(--color-primary));
 }
 
 .pagination-wrapper {

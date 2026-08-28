@@ -4,6 +4,9 @@
       ref="inputRef"
       :class="['native-input', { 'native-input--clearable': clearable }]"
       :type="type"
+      :id="id"
+      :name="name"
+      :autocomplete="autocomplete"
       :value="modelValue"
       :placeholder="placeholder"
       :disabled="disabled"
@@ -37,7 +40,10 @@ const props = defineProps({
   type: { type: String, default: 'text' },
   placeholder: { type: String, default: '' },
   clearable: { type: Boolean, default: false },
-  disabled: { type: Boolean, default: false }
+  disabled: { type: Boolean, default: false },
+  id: { type: String, default: undefined },
+  name: { type: String, default: undefined },
+  autocomplete: { type: String, default: undefined }
 })
 
 const emit = defineEmits(['update:modelValue', 'enter', 'clear', 'focus', 'blur'])
@@ -91,23 +97,25 @@ function handleBlur(e) {
 
 .native-input {
   width: 100%;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid #dcdcdc;
-  border-radius: 6px;
-  font-size: 14px;
-  background: #fff;
-  transition: all 0.2s;
+  height: var(--control-height-md);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font: inherit;
+  background: var(--color-surface-raised);
+  transition: border-color var(--motion-duration-fast) var(--motion-easing-standard), box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
   outline: none;
 }
 
 .native-input:focus {
-  border-color: #0052d9;
-  box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
+  border-color: var(--color-focus-ring);
+  box-shadow: 0 0 0 3px var(--color-primary-surface);
 }
 
 .native-input:disabled {
-  background: #f5f5f5;
+  color: var(--color-text-disabled);
+  background: var(--color-surface-subtle);
   cursor: not-allowed;
 }
 
@@ -121,22 +129,22 @@ function handleBlur(e) {
   justify-content: center;
   width: 20px;
   height: 20px;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
   border-radius: 50%;
-  transition: all 0.2s;
+  transition: color var(--motion-duration-fast) var(--motion-easing-standard), background-color var(--motion-duration-fast) var(--motion-easing-standard);
   background: transparent;
   border: none;
   padding: 0;
 }
 
 .native-input__clear:hover {
-  background: #f0f0f0;
-  color: #666;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
 }
 
 .native-input__clear:focus-visible {
-  outline: 2px solid #0052d9;
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
 
@@ -145,6 +153,11 @@ function handleBlur(e) {
   right: 8px;
   display: flex;
   align-items: center;
-  color: #999;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 768px) {
+  .native-input { height: var(--control-height-touch); font-size: 16px; }
+  .native-input__clear { width: 32px; height: 32px; }
 }
 </style>

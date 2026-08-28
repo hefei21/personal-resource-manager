@@ -97,7 +97,7 @@ const circleStyle = computed(() => {
 .native-progress__track {
   flex: 1;
   height: 8px;
-  background: #e8e8e8;
+  background: var(--color-border-subtle);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -118,10 +118,10 @@ const circleStyle = computed(() => {
   overflow: hidden;
 }
 
-.native-progress__bar--primary { background: #0052d9; }
-.native-progress__bar--success { background: #00a870; }
-.native-progress__bar--warning { background: #ed7b2f; }
-.native-progress__bar--error { background: #e34d59; }
+.native-progress__bar--primary { background: var(--color-primary); }
+.native-progress__bar--success { background: var(--color-success); }
+.native-progress__bar--warning { background: var(--color-warning); }
+.native-progress__bar--error { background: var(--color-danger); }
 
 .native-progress__stripes {
   position: absolute;
@@ -150,7 +150,7 @@ const circleStyle = computed(() => {
 
 .native-progress__text {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   min-width: 40px;
   text-align: right;
 }
@@ -167,7 +167,7 @@ const circleStyle = computed(() => {
 
 .native-progress__circle-track {
   fill: none;
-  stroke: #e8e8e8;
+  stroke: var(--color-border-subtle);
   stroke-width: 6;
 }
 
@@ -177,10 +177,10 @@ const circleStyle = computed(() => {
   transition: stroke-dashoffset 0.3s ease;
 }
 
-.native-progress__circle-bar--primary { stroke: #0052d9; }
-.native-progress__circle-bar--success { stroke: #00a870; }
-.native-progress__circle-bar--warning { stroke: #ed7b2f; }
-.native-progress__circle-bar--error { stroke: #e34d59; }
+.native-progress__circle-bar--primary { stroke: var(--color-primary); }
+.native-progress__circle-bar--success { stroke: var(--color-success); }
+.native-progress__circle-bar--warning { stroke: var(--color-warning); }
+.native-progress__circle-bar--error { stroke: var(--color-danger); }
 
 .native-progress__circle-text {
   position: absolute;
@@ -188,6 +188,6 @@ const circleStyle = computed(() => {
   left: 50%;
   transform: translate(-50%, -50%);
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 </style>

@@ -105,7 +105,7 @@ import { ref, computed, onUnmounted, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import MediaPlayer from '@/components/business/media-player/index.vue'
-import { NativeDialog, NativeInput } from '@/components/native'
+import { NativeDialog, NativeIcon, NativeInput } from '@/components/native'
 import api from '@/api'
 import { useToast } from '@/composables/useToast'
 import {
@@ -290,7 +290,7 @@ async function handlePasswordChange() {
   height: calc(100vh - 60px);
   padding: 24px;
   overflow-y: auto;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.3) transparent;
 }
@@ -454,7 +454,7 @@ async function handlePasswordChange() {
 .header-content h2 {
   margin: 0;
   font-size: 24px;
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 600;
 }
 
@@ -467,7 +467,7 @@ async function handlePasswordChange() {
 .username-link,
 .username-text {
   font-weight: 500;
-  color: #667eea;
+  color: var(--color-primary);
   padding: 4px 12px;
 }
 
@@ -478,9 +478,8 @@ async function handlePasswordChange() {
 }
 
 .username-link:hover {
-  color: #764ba2;
-  background: rgba(102, 126, 234, 0.1);
-  transform: translateY(-1px);
+  color: var(--color-primary-active);
+  background: var(--color-primary-alpha-10);
 }
 
 /* 退出按钮 */
@@ -489,17 +488,16 @@ async function handlePasswordChange() {
   border: 1px solid #e0e0e0;
   border-radius: 6px;
   background: white;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 13px;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .logout-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
-  border-color: #667eea;
-  color: #667eea;
+  box-shadow: var(--shadow-sm);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .logout-btn:active {
@@ -532,7 +530,7 @@ async function handlePasswordChange() {
   width: 32px;
   height: 32px;
   border: 3px solid #e0e0e0;
-  border-top-color: #667eea;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -548,13 +546,13 @@ async function handlePasswordChange() {
 .form-item label {
   display: block;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 6px;
   font-weight: 500;
 }
 
 .form-error {
-  color: #e34d59;
+  color: var(--color-danger);
   font-size: 13px;
   margin-top: 8px;
   padding: 8px 12px;

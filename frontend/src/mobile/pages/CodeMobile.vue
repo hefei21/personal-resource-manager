@@ -150,7 +150,7 @@
           >
             <NativeIcon :name="file.type === 'directory' ? 'folder' : 'file'" size="18" />
             <span class="file-name">{{ file.name }}</span>
-            <NativeIcon v-if="file.type === 'directory'" name="chevron-right" size="16" color="#999" />
+            <NativeIcon v-if="file.type === 'directory'" name="chevron-right" size="16" color="var(--color-text-muted)" />
           </div>
         </div>
         <div v-else class="empty-content">
@@ -767,7 +767,7 @@ onUnmounted(() => {
 <style scoped>
 .code-mobile {
   min-height: 100vh;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .list-view {
@@ -781,13 +781,13 @@ onUnmounted(() => {
 .page-header h2 {
   margin: 0 0 4px 0;
   font-size: 20px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .page-header .subtitle {
   margin: 0;
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .search-bar {
@@ -831,7 +831,7 @@ onUnmounted(() => {
 .name-text {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -845,7 +845,7 @@ onUnmounted(() => {
 
 .repo-desc {
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-bottom: 8px;
   line-height: 1.4;
   display: -webkit-box;
@@ -865,7 +865,7 @@ onUnmounted(() => {
 
 .clone-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #0052d9, #00a8ff);
+  background: linear-gradient(90deg, var(--color-primary), #00a8ff);
   border-radius: 2px;
   transition: width 0.3s;
 }
@@ -874,13 +874,13 @@ onUnmounted(() => {
   display: flex;
   gap: 12px;
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   margin-bottom: 8px;
 }
 
 .repo-type {
   background: #e8f4ff;
-  color: #0052d9;
+  color: var(--color-primary);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 11px;
@@ -894,7 +894,7 @@ onUnmounted(() => {
 
 .lang-tag {
   background: #f0f0f0;
-  color: #666;
+  color: var(--color-text-secondary);
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 11px;
@@ -905,7 +905,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   padding: 64px 16px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .empty-state p {
@@ -925,7 +925,7 @@ onUnmounted(() => {
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: #0052d9;
+  background: var(--color-primary);
   border: none;
   display: flex;
   align-items: center;
@@ -966,7 +966,7 @@ onUnmounted(() => {
   flex: 1;
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -993,14 +993,14 @@ onUnmounted(() => {
   text-align: center;
   padding: 12px;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   border-bottom: 2px solid transparent;
   transition: all 0.2s;
 }
 
 .tab-item.active {
-  color: #0052d9;
-  border-bottom-color: #0052d9;
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
   font-weight: 500;
 }
 
@@ -1025,7 +1025,7 @@ onUnmounted(() => {
 .file-name {
   flex: 1;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1044,7 +1044,7 @@ onUnmounted(() => {
 .commit-hash {
   font-family: monospace;
   font-size: 12px;
-  color: #0052d9;
+  color: var(--color-primary);
   background: #e8f4ff;
   display: inline-block;
   padding: 2px 6px;
@@ -1054,14 +1054,14 @@ onUnmounted(() => {
 
 .commit-message {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 6px;
   line-height: 1.4;
 }
 
 .commit-meta {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   display: flex;
   gap: 12px;
 }
@@ -1071,7 +1071,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   padding: 64px 16px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .empty-content p {
@@ -1126,7 +1126,7 @@ onUnmounted(() => {
   gap: 4px;
   background: transparent;
   border: none;
-  color: #0052d9;
+  color: var(--color-primary);
   font-size: 14px;
   padding: 4px 8px;
   border-radius: 4px;
@@ -1138,7 +1138,7 @@ onUnmounted(() => {
 
 .path-current {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 /* 文件列表项 */
@@ -1162,7 +1162,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: #666;
+  color: var(--color-text-secondary);
   gap: 12px;
 }
 
@@ -1173,7 +1173,7 @@ onUnmounted(() => {
   overflow-x: auto;
   font-size: 13px;
   line-height: 1.6;
-  color: #333;
+  color: var(--color-text-primary);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1184,12 +1184,12 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: #666;
+  color: var(--color-text-secondary);
   gap: 12px;
 }
 
 .binary-preview .file-size {
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 </style>

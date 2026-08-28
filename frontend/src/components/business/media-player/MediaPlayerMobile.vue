@@ -331,7 +331,7 @@ function updateDragProgressFromTouch(e) {
   height: 28px;
   border-radius: 50%;
   overflow: hidden;
-  background: #333;
+  background: var(--color-text-primary);
   display: flex;
   align-items: center;
   justify-content: center;

@@ -409,7 +409,7 @@ onMounted(() => {
 
 .page-header p {
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
   font-weight: 500;
 }
@@ -432,7 +432,7 @@ onMounted(() => {
 .bookmark-title-link {
   flex: 1;
   min-width: 0;
-  color: #333;
+  color: var(--color-text-primary);
   text-decoration: none;
   cursor: pointer;
 }
@@ -442,7 +442,7 @@ onMounted(() => {
 }
 
 .bookmark-title-link:visited {
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .bookmark-title-text {

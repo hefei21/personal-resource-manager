@@ -341,7 +341,7 @@ defineExpose({
 }
 
 .native-tree-node__content:hover:not(.native-tree-node--disabled) {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .native-tree-node--selected {
@@ -410,14 +410,14 @@ defineExpose({
 }
 
 .native-tree-node__checkbox--checked {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
   color: #fff;
 }
 
 .native-tree-node__checkbox--indeterminate {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .native-tree-node__checkbox--indeterminate::after {
@@ -429,7 +429,7 @@ defineExpose({
 
 .native-tree-node__label {
   flex: 1;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

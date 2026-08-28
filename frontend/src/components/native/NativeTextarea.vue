@@ -44,18 +44,18 @@ defineEmits(['update:modelValue', 'blur', 'focus'])
 
 .native-textarea:focus {
   outline: none;
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-textarea:disabled {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   cursor: not-allowed;
 }
 
 .native-textarea__count {
   text-align: right;
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   margin-top: 4px;
 }
 </style>

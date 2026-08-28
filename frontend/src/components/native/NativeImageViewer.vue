@@ -395,7 +395,7 @@ onUnmounted(() => {
 }
 
 .native-image-viewer__thumb--active {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 /* 过渡动画 */

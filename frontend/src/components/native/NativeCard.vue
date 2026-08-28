@@ -21,32 +21,31 @@ defineProps({
 
 <style scoped>
 .native-card {
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transition: all 0.3s;
-  border: 1px solid #e8e8e8;
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--motion-duration-fast) var(--motion-easing-standard), box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
+  border: 1px solid var(--color-border-subtle);
   width: 100%;
 }
 
 .native-card--hover:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  transform: translateY(-2px);
+  border-color: var(--color-border-default);
+  box-shadow: var(--shadow-md);
 }
 
 .native-card__header {
-  padding: 16px 20px;
-  background: #fff;
-  border-radius: 8px 8px 0 0;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .native-card__title {
-  font-size: 16px;
+  font-size: var(--font-size-lg);
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-card__body {
-  padding: 20px;
+  padding: var(--space-5);
 }
 </style>

@@ -21,7 +21,7 @@
       <SelectTrigger
         class="native-select__trigger"
         :class="{ 'native-select--disabled': disabled }"
-        :aria-label="placeholder"
+        :aria-label="attrs['aria-label'] || placeholder"
       >
         <span class="native-select__label">{{ selectedLabel }}</span>
         <span class="native-select__arrow">
@@ -80,6 +80,7 @@
       :aria-controls="listboxId"
       :aria-activedescendant="activeDescendantId || undefined"
       :aria-disabled="disabled ? 'true' : undefined"
+      :aria-label="attrs['aria-label'] || placeholder"
       @click="handleTriggerClick"
       @keydown="handleTriggerKeydown"
     >

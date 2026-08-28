@@ -120,12 +120,12 @@ function toggleSelect() {
 }
 
 .native-tree-node__content:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .native-tree-node__content--selected {
   background: #e8f4ff;
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .native-tree-node__content--disabled {
@@ -144,7 +144,7 @@ function toggleSelect() {
   width: 20px;
   height: 20px;
   margin-right: 4px;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
   transition: transform 0.2s;
 }
@@ -176,14 +176,14 @@ function toggleSelect() {
 }
 
 .native-tree-node__checkbox--checked {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
   color: #fff;
 }
 
 .native-tree-node__checkbox--indeterminate {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .native-tree-node__checkbox--indeterminate::after {

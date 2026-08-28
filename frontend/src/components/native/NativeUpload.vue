@@ -564,11 +564,11 @@ defineExpose({
 }
 
 .native-upload__drag:hover {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-upload__drag--over {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
   background: #e8f4ff;
 }
 
@@ -577,7 +577,7 @@ defineExpose({
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .native-upload__drag-text {
@@ -587,7 +587,7 @@ defineExpose({
 
 .native-upload__drag-tip {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   margin: 0;
 }
 
@@ -600,7 +600,7 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 4px;
   margin-bottom: 8px;
   font-size: 13px;
@@ -614,14 +614,14 @@ defineExpose({
 }
 
 .native-upload__file-name {
-  color: #333;
+  color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .native-upload__file-size {
-  color: #999;
+  color: var(--color-text-muted);
   flex-shrink: 0;
 }
 
@@ -633,7 +633,7 @@ defineExpose({
 }
 
 .native-upload__status {
-  color: #666;
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
@@ -652,20 +652,20 @@ defineExpose({
 .native-upload__progress {
   width: 80px;
   height: 4px;
-  background: #e8e8e8;
+  background: var(--color-border-subtle);
   border-radius: 2px;
   overflow: hidden;
 }
 
 .native-upload__progress-bar {
   height: 100%;
-  background: #0052d9;
+  background: var(--color-primary);
   transition: width 0.3s;
 }
 
 .native-upload__percentage {
   min-width: 34px;
-  color: #666;
+  color: var(--color-text-secondary);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -684,7 +684,7 @@ defineExpose({
 
 .native-upload__remove {
   cursor: pointer;
-  color: #999;
+  color: var(--color-text-muted);
   transition: color 0.2s;
 }
 

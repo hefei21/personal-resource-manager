@@ -108,7 +108,7 @@ const hasError = computed(() => !!errorMessage.value)
   flex-shrink: 0;
   padding: 8px 12px 8px 0;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   line-height: 1.5;
 }
 
@@ -117,7 +117,7 @@ const hasError = computed(() => !!errorMessage.value)
 }
 
 .required-mark {
-  color: #e34d59;
+  color: var(--color-danger);
   margin-left: 4px;
 }
 
@@ -130,20 +130,20 @@ const hasError = computed(() => !!errorMessage.value)
 .native-form-item__error {
   margin-top: 4px;
   font-size: 12px;
-  color: #e34d59;
+  color: var(--color-danger);
   line-height: 1.5;
 }
 
 .native-form-item__tips {
   margin-top: 4px;
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   line-height: 1.5;
 }
 
 .native-form-item--error :deep(.native-input__input),
 .native-form-item--error :deep(.native-select__trigger) {
-  border-color: #e34d59;
+  border-color: var(--color-danger);
 }
 
 .fade-enter-active,

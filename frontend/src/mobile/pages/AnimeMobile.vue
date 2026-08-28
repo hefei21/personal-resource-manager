@@ -448,7 +448,7 @@ onUnmounted(() => {
   padding: 4px 10px;
   border-radius: 4px;
   border: none;
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
   font-size: 12px;
   cursor: pointer;
@@ -472,15 +472,15 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
   -webkit-tap-highlight-color: transparent;
 }
 
 .toolbar-btn.active {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
   color: #fff;
 }
 
@@ -510,7 +510,7 @@ onUnmounted(() => {
 }
 
 .native-input:focus {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .search-btn {
@@ -518,7 +518,7 @@ onUnmounted(() => {
   padding: 10px;
   border-radius: 6px;
   border: none;
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
   font-size: 14px;
   font-weight: 500;
@@ -585,7 +585,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -615,11 +615,11 @@ onUnmounted(() => {
 
 .btn-secondary {
   background: #f5f7fa;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .btn-primary {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
@@ -631,7 +631,7 @@ onUnmounted(() => {
   display: block;
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 12px;
 }
 
@@ -646,14 +646,14 @@ onUnmounted(() => {
   background: #f5f7fa;
   border-radius: 16px;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
   -webkit-tap-highlight-color: transparent;
 }
 
 .filter-chip.active {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
@@ -662,7 +662,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   cursor: pointer;
 }
 
@@ -676,7 +676,7 @@ onUnmounted(() => {
   border-radius: 8px;
   border: none;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -689,7 +689,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 
@@ -697,7 +697,7 @@ onUnmounted(() => {
   width: 32px;
   height: 32px;
   border: 3px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 12px;
@@ -743,7 +743,7 @@ onUnmounted(() => {
   top: 0;
   bottom: 0;
   width: 60px;
-  background: #e34d59;
+  background: var(--color-danger);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -808,7 +808,7 @@ onUnmounted(() => {
   flex: 1;
   font-size: 15px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -824,7 +824,7 @@ onUnmounted(() => {
 
 .anime-original {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -840,7 +840,7 @@ onUnmounted(() => {
 
 .air-date {
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   line-height: 1.3;
   flex-shrink: 0;
 }
@@ -909,7 +909,7 @@ onUnmounted(() => {
 }
 
 .total-rating .count {
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 12px;
 }
 
@@ -951,7 +951,7 @@ onUnmounted(() => {
   width: 32px;
   height: 32px;
   border: none;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -988,7 +988,7 @@ onUnmounted(() => {
   text-align: center;
   padding: 12px;
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 /* 删除确认 */
@@ -1018,7 +1018,7 @@ onUnmounted(() => {
 .confirm-dialog p {
   margin: 0 0 20px;
   font-size: 15px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .confirm-btns {
@@ -1038,12 +1038,12 @@ onUnmounted(() => {
 }
 
 .btn-cancel {
-  background: #f5f5f5;
-  color: #333;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
 }
 
 .btn-danger {
-  background: #e34d59;
+  background: var(--color-danger);
   color: #fff;
 }
 
@@ -1053,7 +1053,7 @@ onUnmounted(() => {
   text-align: center;
   padding: 16px 0;
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1064,7 +1064,7 @@ onUnmounted(() => {
   width: 16px;
   height: 16px;
   border: 2px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }

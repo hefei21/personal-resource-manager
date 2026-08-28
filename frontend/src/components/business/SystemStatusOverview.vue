@@ -58,6 +58,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import api from '@/api'
+import { NativeIcon } from '@/components/native'
 
 const health = ref(null)
 const rag = ref(null)

@@ -258,9 +258,9 @@ onUnmounted(() => {
 
 .native-tooltip--light .native-tooltip__inner {
   background: #fff;
-  color: #333;
+  color: var(--color-text-primary);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-border-subtle);
 }
 
 /* 箭头 */

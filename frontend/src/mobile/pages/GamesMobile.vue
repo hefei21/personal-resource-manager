@@ -385,7 +385,7 @@ onUnmounted(() => {
   border-radius: 4px;
   border: 1px solid #dcdcdc;
   background: #fff;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
@@ -401,12 +401,12 @@ onUnmounted(() => {
 .config-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .config-btn.primary {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
   color: #fff;
 }
 
@@ -459,7 +459,7 @@ onUnmounted(() => {
 }
 
 .native-input:focus {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .config-actions {
@@ -480,19 +480,19 @@ onUnmounted(() => {
 }
 
 .btn-primary {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
 .btn-secondary {
-  background: #f5f5f5;
-  color: #333;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
 }
 
 .last-sync {
   margin-top: 8px;
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 /* ====== 加载 / 空状态 ====== */
@@ -503,7 +503,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 
@@ -511,7 +511,7 @@ onUnmounted(() => {
   width: 32px;
   height: 32px;
   border: 3px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 12px;
@@ -574,7 +574,7 @@ onUnmounted(() => {
 .game-title {
   font-size: 15px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -605,12 +605,12 @@ onUnmounted(() => {
 }
 
 .time-total {
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
 }
 
 .time-2weeks {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .progress-track {
@@ -628,7 +628,7 @@ onUnmounted(() => {
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #0052d9, #00a8ff);
+  background: linear-gradient(90deg, var(--color-primary), #00a8ff);
   border-radius: 2px;
   transition: width 0.3s;
 }
@@ -656,18 +656,18 @@ onUnmounted(() => {
 }
 
 .achievement-completed {
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
 }
 
 .achievement-separator,
 .achievement-total {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .achievement-dash {
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 /* ====== 加载更多 ====== */
@@ -676,7 +676,7 @@ onUnmounted(() => {
   text-align: center;
   padding: 16px 0;
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -687,7 +687,7 @@ onUnmounted(() => {
   width: 16px;
   height: 16px;
   border: 2px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -749,7 +749,7 @@ onUnmounted(() => {
 .detail-title {
   font-size: 20px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
 }
 
@@ -767,17 +767,17 @@ onUnmounted(() => {
 
 .detail-stat-label {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .detail-stat-value {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .detail-stat-value.highlight {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .achievement-progress {
@@ -817,7 +817,7 @@ onUnmounted(() => {
 .section-title {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
 }
 
@@ -855,7 +855,7 @@ onUnmounted(() => {
 .achievement-name {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -864,7 +864,7 @@ onUnmounted(() => {
 
 .achievement-desc {
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-bottom: 4px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -876,11 +876,11 @@ onUnmounted(() => {
   display: flex;
   gap: 10px;
   font-size: 11px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .global-percent {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .unlock-time {

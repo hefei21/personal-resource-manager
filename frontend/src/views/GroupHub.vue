@@ -38,6 +38,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useViewport } from '@/composables/useViewport'
 import { navigationItemsForGroup, pageTitleForRoute } from '@/router/navigation'
 import SystemStatusOverview from '@/components/business/SystemStatusOverview.vue'
+import { NativeIcon } from '@/components/native'
 
 const route = useRoute()
 const authStore = useAuthStore()

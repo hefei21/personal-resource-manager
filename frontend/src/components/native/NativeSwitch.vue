@@ -52,7 +52,7 @@ function toggle() {
 }
 
 .native-switch:focus-visible {
-  outline: 2px solid #0052d9;
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -81,7 +81,7 @@ function toggle() {
 }
 
 .native-switch--checked .native-switch__handle {
-  background: #0052d9;
+  background: var(--color-primary);
 }
 
 .native-switch--checked .native-switch__handle::before {
@@ -125,7 +125,7 @@ function toggle() {
 
 .native-switch__label {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .native-switch__loading {
@@ -136,7 +136,7 @@ function toggle() {
   width: 12px;
   height: 12px;
   border: 2px solid rgba(0, 0, 0, 0.1);
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }

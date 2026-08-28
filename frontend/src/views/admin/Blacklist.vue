@@ -305,13 +305,13 @@ function isExpired(expiresAt) {
   display: block;
   margin-bottom: 8px;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
 }
 
 .form-label.required::before {
   content: '*';
-  color: #e34d59;
+  color: var(--color-danger);
   margin-right: 4px;
 }
 </style>

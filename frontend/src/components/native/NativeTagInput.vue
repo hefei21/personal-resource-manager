@@ -179,16 +179,16 @@ defineExpose({
 }
 
 .native-tag-input:hover:not(.native-tag-input--disabled) {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
 }
 
 .native-tag-input--focused {
-  border-color: #0052d9;
+  border-color: var(--color-primary);
   box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
 }
 
 .native-tag-input--disabled {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   cursor: not-allowed;
 }
 
@@ -208,7 +208,7 @@ defineExpose({
   gap: 4px;
   padding: 4px 8px;
   background: #e8f4ff;
-  color: #0052d9;
+  color: var(--color-primary);
   border-radius: 4px;
   font-size: 13px;
   line-height: 1;
@@ -236,13 +236,13 @@ defineExpose({
   border: none;
   background: transparent;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   outline: none;
   padding: 4px 0;
 }
 
 .native-tag-input__input::placeholder {
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .native-tag-input__input:disabled {
@@ -251,7 +251,7 @@ defineExpose({
 
 .native-tag-input__count {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   margin-left: auto;
 }
 

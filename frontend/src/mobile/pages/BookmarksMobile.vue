@@ -425,7 +425,7 @@ onUnmounted(() => {
 .mobile-bookmarks {
   padding: 12px;
   min-height: 100vh;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 /* 搜索栏 */
@@ -454,7 +454,7 @@ onUnmounted(() => {
 }
 
 .search-icon {
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
 }
 
@@ -463,7 +463,7 @@ onUnmounted(() => {
   height: 40px;
   border-radius: 8px;
   border: none;
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
   display: flex;
   align-items: center;
@@ -505,13 +505,13 @@ onUnmounted(() => {
   background: #fff;
   border-radius: 16px;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .tag-chip.active {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
@@ -531,13 +531,13 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   font-size: 13px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .text-btn {
   background: none;
   border: none;
-  color: #0052d9;
+  color: var(--color-primary);
   font-size: 13px;
   cursor: pointer;
 }
@@ -556,13 +556,13 @@ onUnmounted(() => {
 }
 
 .action-btn.danger {
-  background: #e34d59;
+  background: var(--color-danger);
   color: #fff;
 }
 
 .action-btn.secondary {
   background: #fff;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 /* 书签列表 */
@@ -607,8 +607,8 @@ onUnmounted(() => {
 }
 
 .checkbox.checked {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .card-icon {
@@ -628,7 +628,7 @@ onUnmounted(() => {
 .card-title {
   font-size: 15px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -636,7 +636,7 @@ onUnmounted(() => {
 
 .card-url {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -652,7 +652,7 @@ onUnmounted(() => {
 
 .card-tags .tag {
   font-size: 11px;
-  color: #0052d9;
+  color: var(--color-primary);
   background: #e6f2ff;
   padding: 2px 8px;
   border-radius: 10px;
@@ -661,7 +661,7 @@ onUnmounted(() => {
 .card-action {
   flex-shrink: 0;
   padding: 8px;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -673,14 +673,14 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   padding: 60px 0;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .spinner {
   width: 32px;
   height: 32px;
   border: 3px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 12px;
@@ -706,7 +706,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 13px;
 }
 
@@ -714,13 +714,13 @@ onUnmounted(() => {
   width: 16px;
   height: 16px;
   border: 2px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
 .no-more {
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 13px;
 }
 
@@ -742,7 +742,7 @@ onUnmounted(() => {
   border-radius: 6px;
   border: none;
   background: #fff;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 14px;
   cursor: pointer;
 }
@@ -754,7 +754,7 @@ onUnmounted(() => {
 
 .page-info {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 /* 长按提示 */
@@ -805,7 +805,7 @@ onUnmounted(() => {
   text-align: center;
   padding: 16px;
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
   border-bottom: 1px solid #f0f0f0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -823,7 +823,7 @@ onUnmounted(() => {
   gap: 12px;
   padding: 16px 20px;
   font-size: 15px;
-  color: #333;
+  color: var(--color-text-primary);
   cursor: pointer;
   border-bottom: 1px solid #f8f8f8;
 }
@@ -833,14 +833,14 @@ onUnmounted(() => {
 }
 
 .sheet-item.delete {
-  color: #e34d59;
+  color: var(--color-danger);
 }
 
 .sheet-cancel {
   text-align: center;
   padding: 16px;
   font-size: 15px;
-  color: #666;
+  color: var(--color-text-secondary);
   border-top: 8px solid #f5f7fa;
   cursor: pointer;
 }
@@ -911,11 +911,11 @@ onUnmounted(() => {
 
 .btn-secondary {
   background: #f5f7fa;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .btn-primary {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
@@ -927,7 +927,7 @@ onUnmounted(() => {
 .form-item label {
   display: block;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-bottom: 8px;
 }
 
@@ -935,7 +935,7 @@ onUnmounted(() => {
 .native-textarea {
   width: 100%;
   padding: 12px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 8px;
   font-size: 14px;
   outline: none;

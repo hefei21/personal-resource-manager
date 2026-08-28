@@ -41,7 +41,7 @@ const sizeMap = {
 
 .native-loading__text {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 @keyframes spin {

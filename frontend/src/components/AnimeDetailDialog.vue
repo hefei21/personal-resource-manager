@@ -731,7 +731,7 @@ onUnmounted(() => {
 .rating-box {
   text-align: center;
   padding: 12px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   border-radius: 8px;
   color: white;
 }
@@ -812,7 +812,7 @@ onUnmounted(() => {
   color: #303133;
   margin: 0 0 12px;
   padding-bottom: 8px;
-  border-bottom: 2px solid #0052d9;
+  border-bottom: 2px solid var(--color-primary);
 }
 
 .summary {
@@ -847,7 +847,7 @@ onUnmounted(() => {
 }
 
 .info-value :deep(a) {
-  color: #0052d9;
+  color: var(--color-primary);
   text-decoration: none;
 }
 

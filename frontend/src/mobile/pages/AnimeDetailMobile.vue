@@ -635,14 +635,14 @@ watch(() => props.bangumiId, () => {
   align-items: center;
   justify-content: center;
   padding: 80px 20px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .spinner {
   width: 32px;
   height: 32px;
   border: 3px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 12px;
@@ -858,14 +858,14 @@ watch(() => props.bangumiId, () => {
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0 0 12px;
   padding-left: 12px;
 }
 
 .summary-text {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   line-height: 1.7;
   margin: 0;
 }
@@ -886,14 +886,14 @@ watch(() => props.bangumiId, () => {
 }
 
 .infobox-key {
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 13px;
   flex-shrink: 0;
   min-width: 60px;
 }
 
 .infobox-value {
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 13px;
   flex: 1;
 }
@@ -933,12 +933,12 @@ watch(() => props.bangumiId, () => {
 .char-name {
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .char-role {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .char-actors {
@@ -952,7 +952,7 @@ watch(() => props.bangumiId, () => {
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .actor-avatar {
@@ -997,12 +997,12 @@ watch(() => props.bangumiId, () => {
 .staff-name {
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .staff-role {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 /* 关联作品 */
@@ -1040,12 +1040,12 @@ watch(() => props.bangumiId, () => {
 
 .relation-type {
   font-size: 11px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .relation-name {
   font-size: 13px;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1075,7 +1075,7 @@ watch(() => props.bangumiId, () => {
 
 .resource-title {
   font-size: 13px;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1087,15 +1087,15 @@ watch(() => props.bangumiId, () => {
   display: flex;
   gap: 8px;
   font-size: 11px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .copy-btn {
   padding: 4px 10px;
   border-radius: 4px;
-  border: 1px solid #0052d9;
+  border: 1px solid var(--color-primary);
   background: #fff;
-  color: #0052d9;
+  color: var(--color-primary);
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
@@ -1104,7 +1104,7 @@ watch(() => props.bangumiId, () => {
 
 .no-resources {
   text-align: center;
-  color: #999;
+  color: var(--color-text-muted);
   padding: 20px;
 }
 
@@ -1135,7 +1135,7 @@ watch(() => props.bangumiId, () => {
 }
 
 .action-btn.primary {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
@@ -1180,7 +1180,7 @@ watch(() => props.bangumiId, () => {
   width: 32px;
   height: 32px;
   border: none;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -1196,7 +1196,7 @@ watch(() => props.bangumiId, () => {
 .edit-label {
   display: block;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 10px;
 }
 
@@ -1224,7 +1224,7 @@ watch(() => props.bangumiId, () => {
   padding: 12px;
   border-radius: 8px;
   border: none;
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
   font-size: 14px;
   font-weight: 500;
@@ -1250,17 +1250,17 @@ watch(() => props.bangumiId, () => {
   border: none;
   background: transparent;
   font-size: 15px;
-  color: #333;
+  color: var(--color-text-primary);
   cursor: pointer;
   border-radius: 8px;
 }
 
 .menu-item:active {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .menu-item.danger {
-  color: #e34d59;
+  color: var(--color-danger);
 }
 
 /* 刷新loading遮罩 */
@@ -1283,7 +1283,7 @@ watch(() => props.bangumiId, () => {
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
 }
 
@@ -1301,7 +1301,7 @@ watch(() => props.bangumiId, () => {
 .confirm-panel p {
   margin: 0 0 20px;
   font-size: 15px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .confirm-btns {
@@ -1320,12 +1320,12 @@ watch(() => props.bangumiId, () => {
 }
 
 .btn-cancel {
-  background: #f5f5f5;
-  color: #333;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
 }
 
 .btn-danger {
-  background: #e34d59;
+  background: var(--color-danger);
   color: #fff;
 }
 
@@ -1353,7 +1353,7 @@ watch(() => props.bangumiId, () => {
   align-items: center;
   justify-content: center;
   padding: 40px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 
@@ -1361,7 +1361,7 @@ watch(() => props.bangumiId, () => {
   width: 16px;
   height: 16px;
   border: 2px solid #f0f0f0;
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin-bottom: 8px;

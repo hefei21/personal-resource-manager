@@ -528,6 +528,7 @@ import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
+import 'highlight.js/styles/atom-one-dark.css'
 import mammoth from 'mammoth'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
@@ -1651,7 +1652,7 @@ watch(viewMode, (newMode) => {
 .mobile-documents {
   padding: 12px;
   min-height: 100vh;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .mobile-header {
@@ -1690,12 +1691,12 @@ watch(viewMode, (newMode) => {
   padding: 6px 0;
   border-radius: 6px;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   transition: all 0.2s;
 }
 
 .tab-item.active {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 
@@ -1733,14 +1734,14 @@ watch(viewMode, (newMode) => {
 
 .batch-info {
   font-size: 13px;
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
 }
 
 .section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .section-title-row {
@@ -1752,7 +1753,7 @@ watch(viewMode, (newMode) => {
 
 .section-title .count {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   font-weight: normal;
 }
 
@@ -1775,7 +1776,7 @@ watch(viewMode, (newMode) => {
   padding: 8px 12px;
   border-radius: 16px;
   font-size: 13px;
-  color: #333;
+  color: var(--color-text-primary);
   box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
@@ -1795,14 +1796,14 @@ watch(viewMode, (newMode) => {
 }
 
 .empty-text {
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 12px;
 }
 
 .category-name {
   font-size: 13px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1812,7 +1813,7 @@ watch(viewMode, (newMode) => {
 
 .file-count {
   font-size: 11px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .subcategories-section {
@@ -1833,7 +1834,7 @@ watch(viewMode, (newMode) => {
   padding: 8px 12px;
   border-radius: 16px;
   font-size: 13px;
-  color: #333;
+  color: var(--color-text-primary);
   box-shadow: 0 1px 2px rgba(0,0,0,0.05);
 }
 
@@ -1947,8 +1948,8 @@ watch(viewMode, (newMode) => {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background: #f5f5f5;
-  color: #666;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
 }
 
 .file-icon-pdf { color: #e53935; }
@@ -1967,7 +1968,7 @@ watch(viewMode, (newMode) => {
 .file-name {
   font-size: 14px;
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1979,7 +1980,7 @@ watch(viewMode, (newMode) => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   overflow: hidden;
 }
 
@@ -1988,7 +1989,7 @@ watch(viewMode, (newMode) => {
 }
 
 .file-tags {
-  color: #0052d9;
+  color: var(--color-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2005,7 +2006,7 @@ watch(viewMode, (newMode) => {
 .action-menu {
   flex-shrink: 0;
   padding: 12px 10px;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
@@ -2021,7 +2022,7 @@ watch(viewMode, (newMode) => {
   flex-direction: column;
   align-items: center;
   padding: 40px 0;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .empty-state p {
@@ -2113,17 +2114,17 @@ watch(viewMode, (newMode) => {
 .version-num {
   font-weight: 600;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .version-date {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .version-note {
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   line-height: 1.4;
 }
 
@@ -2138,7 +2139,7 @@ watch(viewMode, (newMode) => {
   padding: 6px 16px;
   font-size: 13px;
   color: #fff;
-  background: #0052d9;
+  background: var(--color-primary);
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -2165,7 +2166,7 @@ watch(viewMode, (newMode) => {
   word-break: break-all;
   font-size: 14px;
   line-height: 1.6;
-  color: #333;
+  color: var(--color-text-primary);
 }
 .text-preview pre {
   margin: 0;
@@ -2200,7 +2201,7 @@ watch(viewMode, (newMode) => {
   margin-top: 12px;
   padding: 8px;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 /* 代码预览 */
@@ -2239,12 +2240,12 @@ watch(viewMode, (newMode) => {
 .office-preview, .unsupported-preview {
   text-align: center;
   padding: 32px 0;
-  color: #999;
+  color: var(--color-text-muted);
 }
 .office-preview h3 {
   margin: 12px 0 8px;
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 .office-preview p {
   margin-bottom: 16px;
@@ -2317,7 +2318,7 @@ watch(viewMode, (newMode) => {
   }
 
   .version-current-label {
-    color: #0052d9;
+    color: var(--color-primary);
     font-weight: 600;
   }
 
@@ -2330,7 +2331,7 @@ watch(viewMode, (newMode) => {
     font-size: 12px;
     color: #c9353f;
     background: transparent;
-    border: 1px solid #e34d59;
+    border: 1px solid var(--color-danger);
     border-radius: 4px;
   }
 
@@ -2370,7 +2371,7 @@ watch(viewMode, (newMode) => {
   }
 
   .upload-conflict-candidate.hash-match {
-    border-color: #ed7b2f;
+    border-color: var(--color-warning);
     background: #fff7ed;
   }
 
@@ -2474,7 +2475,7 @@ watch(viewMode, (newMode) => {
   justify-content: space-between;
   padding: 12px 16px;
   background: #fff;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 16px;
   flex-shrink: 0;
   border-bottom: 1px solid #eee;
@@ -2491,7 +2492,7 @@ watch(viewMode, (newMode) => {
   line-height: 1;
   padding: 0 4px;
   cursor: pointer;
-  color: #999;
+  color: var(--color-text-muted);
 }
 .preview-close:active {
   color: #fff;
@@ -2526,7 +2527,7 @@ watch(viewMode, (newMode) => {
 .native-preview-body .text-preview pre {
   margin: 0;
   padding: 8px 4px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 .native-preview-body .image-preview img {
   max-width: 100%;
@@ -2535,7 +2536,7 @@ watch(viewMode, (newMode) => {
 }
 .native-preview-body .office-content {
   padding: 8px 4px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 .native-preview-body .office-content table {
   width: 100%;
@@ -2546,7 +2547,7 @@ watch(viewMode, (newMode) => {
 .native-preview-body .office-content table th {
   border: 1px solid #ddd;
   padding: 6px 8px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 /* 原生底部操作菜单 */
@@ -2601,7 +2602,7 @@ watch(viewMode, (newMode) => {
 }
 .dialog-close {
   font-size: 24px;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
 }
 .native-dialog-footer {
@@ -2619,15 +2620,15 @@ watch(viewMode, (newMode) => {
   cursor: pointer;
 }
 .btn-cancel {
-  background: #f5f5f5;
-  color: #666;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
 }
 .btn-confirm {
-  background: #0052d9;
+  background: var(--color-primary);
   color: #fff;
 }
 .btn-confirm.delete {
-  background: #e34d59;
+  background: var(--color-danger);
 }
 .delete-confirm-content {
   padding: 24px 16px;
@@ -2638,7 +2639,7 @@ watch(viewMode, (newMode) => {
   font-size: 15px;
 }
 .delete-warning {
-  color: #e34d59;
+  color: var(--color-danger);
   font-size: 13px;
 }
 .native-action-sheet {
@@ -2654,7 +2655,7 @@ watch(viewMode, (newMode) => {
 .action-sheet-title {
   text-align: center;
   font-size: 14px;
-  color: #999;
+  color: var(--color-text-muted);
   padding: 8px 16px 16px;
   border-bottom: 1px solid #f0f0f0;
 }
@@ -2667,15 +2668,15 @@ watch(viewMode, (newMode) => {
   gap: 12px;
   padding: 16px 20px;
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   cursor: pointer;
   transition: background 0.2s;
 }
 .action-sheet-item:active {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 .action-sheet-item.delete {
-  color: #e34d59;
+  color: var(--color-danger);
 }
 .action-sheet-item.delete:active {
   background: #fff0f0;
@@ -2684,12 +2685,12 @@ watch(viewMode, (newMode) => {
   text-align: center;
   padding: 16px 20px;
   font-size: 16px;
-  color: #666;
-  border-top: 8px solid #f5f5f5;
+  color: var(--color-text-secondary);
+  border-top: 8px solid var(--color-surface-subtle);
   cursor: pointer;
 }
 .action-sheet-cancel:active {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 </style>
 

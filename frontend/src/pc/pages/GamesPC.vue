@@ -692,7 +692,7 @@ onMounted(() => {
 
 .page-header p {
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
   font-weight: 500;
 }
@@ -723,7 +723,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
 }
 
@@ -746,8 +746,7 @@ onMounted(() => {
 }
 
 .game-card:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
 }
 
 .cover-wrapper {
@@ -775,7 +774,7 @@ onMounted(() => {
   gap: 4px;
   padding: 2px 8px;
   background: #ffd700;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 12px;
   font-weight: 600;
   border-radius: 10px;
@@ -793,7 +792,7 @@ onMounted(() => {
 .game-title {
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -815,17 +814,17 @@ onMounted(() => {
 
 .stat-label {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .stat-value {
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .stat-value.highlight {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .progress-bar {
@@ -837,7 +836,7 @@ onMounted(() => {
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #0052d9, #00a8ff);
+  background: linear-gradient(90deg, var(--color-primary), #00a8ff);
   border-radius: 3px;
   transition: width 0.3s;
 }
@@ -846,7 +845,7 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
   margin-top: auto;
 }
 
@@ -950,7 +949,7 @@ onMounted(() => {
 .detail-title {
   font-size: 24px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0 0 20px 0;
 }
 
@@ -968,17 +967,17 @@ onMounted(() => {
 
 .detail-stat-label {
   font-size: 13px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .detail-stat-value {
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .detail-stat-value.highlight {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .detail-stat-value.achievement-progress {
@@ -1022,7 +1021,7 @@ onMounted(() => {
   gap: 8px;
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
 }
 
@@ -1067,7 +1066,7 @@ onMounted(() => {
 .achievement-name {
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1076,7 +1075,7 @@ onMounted(() => {
 
 .achievement-desc {
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-bottom: 6px;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1088,7 +1087,7 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   font-size: 11px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .achievement-meta span {
@@ -1107,7 +1106,7 @@ onMounted(() => {
 .game-title {
   font-size: 18px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1115,7 +1114,7 @@ onMounted(() => {
 }
 
 .global-percent {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .unlock-time {

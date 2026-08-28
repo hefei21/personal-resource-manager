@@ -308,7 +308,7 @@ function formatTime(seconds) {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   color: rgba(255, 255, 255, 0.8);
 }
 
@@ -456,7 +456,7 @@ function formatTime(seconds) {
   top: 0;
   left: 0;
   height: 100%;
-  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   border-radius: 2px;
 }
 

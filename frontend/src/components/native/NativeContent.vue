@@ -9,7 +9,7 @@ import { computed } from 'vue'
 
 const props = defineProps({
   padding: { type: [String, Number], default: '20px' },
-  background: { type: String, default: '#f5f5f5' }
+  background: { type: String, default: 'var(--color-surface-subtle)' }
 })
 
 const contentStyle = computed(() => {

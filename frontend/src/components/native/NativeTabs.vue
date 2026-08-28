@@ -136,7 +136,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--color-border-subtle);
   margin-bottom: 16px;
 }
 
@@ -152,18 +152,18 @@ onMounted(() => {
   gap: 6px;
   padding: 12px 16px;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
 }
 
 .native-tabs__tab:hover:not(.native-tabs__tab--disabled) {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .native-tabs__tab--active {
-  color: #0052d9;
+  color: var(--color-primary);
   font-weight: 500;
 }
 
@@ -191,7 +191,7 @@ onMounted(() => {
   bottom: -1px;
   left: 0;
   height: 2px;
-  background: #0052d9;
+  background: var(--color-primary);
   transition: all 0.3s;
 }
 
@@ -202,7 +202,7 @@ onMounted(() => {
 }
 
 .native-tabs--card .native-tabs__nav {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 6px 6px 0 0;
   padding: 4px 4px 0;
 }
@@ -219,7 +219,7 @@ onMounted(() => {
 
 .native-tabs--card .native-tabs__content {
   background: #fff;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--color-border-subtle);
   border-top: none;
   border-radius: 0 0 6px 6px;
   padding: 16px;

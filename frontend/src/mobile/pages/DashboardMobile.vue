@@ -562,15 +562,14 @@ onMounted(() => {
 }
 
 .stat-card:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
 }
 
 .stat-card-title {
   padding: 12px 16px 0;
   font-size: 14px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .stat-card .stat-item {
@@ -595,7 +594,7 @@ onMounted(() => {
 .stat-value {
   font-size: 22px;
   font-weight: bold;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -605,7 +604,7 @@ onMounted(() => {
 
 .stat-label {
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 /* 动漫卡片独占一行 */
@@ -679,13 +678,13 @@ onMounted(() => {
   background: transparent;
   border: none;
   border-radius: 6px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .icon-btn:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .btn-outline {
@@ -694,15 +693,15 @@ onMounted(() => {
   border: 1px solid #ddd;
   border-radius: 6px;
   font-size: 13px;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
   transition: all 0.2s;
   margin-left: 8px;
 }
 
 .btn-outline:hover {
-  border-color: #667eea;
-  color: #667eea;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .btn-primary {
@@ -711,7 +710,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #0052d9;
+  background: var(--color-primary);
   border: none;
   border-radius: 6px;
   color: #fff;
@@ -751,7 +750,7 @@ onMounted(() => {
 }
 
 .btn-primary.btn-icon {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .btn-primary.btn-icon:hover:not(:disabled) {
@@ -759,7 +758,7 @@ onMounted(() => {
 }
 
 .btn-danger {
-  color: #e34d59;
+  color: var(--color-danger);
 }
 
 .btn-danger:hover:not(:disabled) {
@@ -782,7 +781,7 @@ onMounted(() => {
   text-align: center;
   padding: 6px 0;
   font-weight: 600;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 12px;
 }
 
@@ -809,7 +808,7 @@ onMounted(() => {
 }
 
 .calendar-day:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .calendar-day.other-month {
@@ -817,15 +816,15 @@ onMounted(() => {
 }
 
 .calendar-day.today {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   color: white;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 4px 12px var(--color-primary-alpha-40);
 }
 
 .calendar-day.selected:not(.today) {
   background: #e8e4f8;
-  color: #667eea;
-  box-shadow: 0 3px 10px rgba(102, 126, 234, 0.25);
+  color: var(--color-primary);
+  box-shadow: 0 3px 10px var(--color-primary-alpha-25);
 }
 
 .calendar-day .day-number {
@@ -843,7 +842,7 @@ onMounted(() => {
   width: 16px;
   height: 2px;
   border-radius: 1px;
-  background: #667eea;
+  background: var(--color-primary);
 }
 
 .calendar-day.today .todo-dot {
@@ -870,7 +869,7 @@ onMounted(() => {
 .todo-header h4 {
   margin: 0;
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .todo-list {
@@ -895,7 +894,7 @@ onMounted(() => {
 
 .todo-item.completed .todo-input {
   text-decoration: line-through;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 .todo-item.confirmed {
@@ -932,8 +931,8 @@ onMounted(() => {
 }
 
 .checkbox-wrapper input[type="checkbox"]:checked + .checkbox-custom {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 .checkbox-wrapper input[type="checkbox"]:checked + .checkbox-custom::after {
@@ -971,7 +970,7 @@ onMounted(() => {
 .todo-input:disabled {
   background: transparent;
   cursor: default;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .todo-input::placeholder {
@@ -988,18 +987,18 @@ onMounted(() => {
 }
 
 .todo-input::-webkit-scrollbar-thumb {
-  background: rgba(102, 126, 234, 0.3);
+  background: var(--color-primary-alpha-30);
   border-radius: 2px;
 }
 
 .todo-input::-webkit-scrollbar-thumb:hover {
-  background: rgba(102, 126, 234, 0.5);
+  background: var(--color-primary-alpha-50);
 }
 
 .empty-todos {
   text-align: center;
   padding: 40px 20px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 </style>

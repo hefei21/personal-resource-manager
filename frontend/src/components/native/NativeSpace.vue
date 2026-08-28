@@ -29,7 +29,7 @@ const spaceStyle = computed(() => {
   
   return {
     gap: gapValue,
-    alignItems: props.align,
+    alignItems: ({ start: 'flex-start', end: 'flex-end' })[props.align] || props.align,
     width: props.fill ? '100%' : undefined,
     flexWrap: props.wrap ? 'wrap' : 'nowrap'
   }
@@ -39,7 +39,7 @@ const spaceStyle = computed(() => {
 <style scoped>
 .native-space {
   display: inline-flex;
-  width: 100%;
+  width: auto;
 }
 
 .native-space--vertical {

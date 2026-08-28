@@ -223,7 +223,7 @@ onUnmounted(() => {
 }
 
 .native-popconfirm__trigger:focus-visible {
-  outline: 2px solid #0052d9;
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
@@ -244,12 +244,12 @@ onUnmounted(() => {
 
 .native-popconfirm__icon {
   flex-shrink: 0;
-  color: #ed7b2f;
+  color: var(--color-warning);
 }
 
 .native-popconfirm__message {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   line-height: 1.5;
 }
 
@@ -271,22 +271,22 @@ onUnmounted(() => {
 }
 
 .native-popconfirm__btn:focus-visible {
-  outline: 2px solid #0052d9;
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
 .native-popconfirm__btn--cancel {
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .native-popconfirm__btn--cancel:hover {
-  border-color: #0052d9;
-  color: #0052d9;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .native-popconfirm__btn--confirm {
-  background: #0052d9;
-  border-color: #0052d9;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
   color: #fff;
 }
 
@@ -296,8 +296,8 @@ onUnmounted(() => {
 }
 
 .native-popconfirm__btn--warning {
-  background: #ed7b2f;
-  border-color: #ed7b2f;
+  background: var(--color-warning);
+  border-color: var(--color-warning);
 }
 
 .native-popconfirm__btn--warning:hover {
@@ -306,8 +306,8 @@ onUnmounted(() => {
 }
 
 .native-popconfirm__btn--danger {
-  background: #e34d59;
-  border-color: #e34d59;
+  background: var(--color-danger);
+  border-color: var(--color-danger);
 }
 
 .native-popconfirm__btn--danger:hover {

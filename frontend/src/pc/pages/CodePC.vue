@@ -69,7 +69,7 @@
                   <NativePopconfirm content="确定删除吗？这将同时删除本地代码文件。" @confirm="deleteRepo(repo.id)">
                     <template #trigger>
                       <NativeButton theme="default" size="small" class="btn-delete" :disabled="isGuest">
-                        <template #icon><NativeIcon name="trash" color="#e34d59" /></template>
+                        <template #icon><NativeIcon name="trash" color="var(--color-danger)" /></template>
                       </NativeButton>
                     </template>
                   </NativePopconfirm>
@@ -106,7 +106,7 @@
           <NativePopconfirm v-if="!isReadOnlyRepository(currentRepo)" content="确定删除吗？这将同时删除本地代码文件。" @confirm="deleteRepo(currentRepo.id)">
             <template #trigger>
               <NativeButton theme="default" size="small" class="btn-delete" :disabled="isGuest">
-                <template #icon><NativeIcon name="trash" color="#e34d59" /></template>
+                <template #icon><NativeIcon name="trash" color="var(--color-danger)" /></template>
                 删除
               </NativeButton>
             </template>
@@ -217,7 +217,7 @@
             <NativeTabPanel name="commits" label="提交历史">
               <div class="commits-panel">
                 <NativeList v-if="commits.length > 0" :split="true">
-                  <NativeListItem v-for="commit in commits" :key="commit.hash" class="commit-list-item" @click="showCommitDetail(commit)">
+                  <NativeListItem v-for="commit in commits" :key="commit.hash" class="commit-list-item" interactive @click="showCommitDetail(commit)">
                     <div class="commit-item">
                       <div class="commit-hash">{{ commit.hash }}</div>
                       <div class="commit-message">{{ commit.message }}</div>
@@ -1226,7 +1226,7 @@ onMounted(async () => {
 
 .page-header p {
   font-size: 16px;
-  color: #333;
+  color: var(--color-text-primary);
   margin: 0;
   font-weight: 500;
 }
@@ -1247,13 +1247,13 @@ onMounted(async () => {
 }
 
 .repo-info:hover .repo-name {
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .repo-name {
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--color-text-primary);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1263,7 +1263,7 @@ onMounted(async () => {
 
 .repo-desc {
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-bottom: 6px;
   padding-left: 24px;
   line-height: 1.5;
@@ -1271,7 +1271,7 @@ onMounted(async () => {
 
 .repo-meta {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   display: flex;
   gap: 16px;
   padding-left: 24px;
@@ -1279,7 +1279,7 @@ onMounted(async () => {
 
 .repo-stats {
   font-size: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
   display: flex;
   gap: 16px;
   padding-left: 24px;
@@ -1297,7 +1297,7 @@ onMounted(async () => {
   padding: 2px 8px;
   background: #e8f4ff;
   border-radius: 4px;
-  color: #0052d9;
+  color: var(--color-primary);
   font-size: 11px;
 }
 
@@ -1312,7 +1312,7 @@ onMounted(async () => {
 
 .clone-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #0052d9, #00a8ff);
+  background: linear-gradient(90deg, var(--color-primary), #00a8ff);
   border-radius: 2px;
   transition: width 0.3s;
 }
@@ -1445,14 +1445,14 @@ onMounted(async () => {
 }
 
 .markdown-content :deep(code) {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   padding: 0.2em 0.4em;
   border-radius: 3px;
   font-family: monospace;
 }
 
 .markdown-content :deep(pre) {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   padding: 16px;
   border-radius: 6px;
   overflow-x: auto;
@@ -1475,7 +1475,7 @@ onMounted(async () => {
 }
 
 .markdown-content :deep(a) {
-  color: #0052d9;
+  color: var(--color-primary);
   text-decoration: none;
 }
 
@@ -1497,7 +1497,7 @@ onMounted(async () => {
 }
 
 .markdown-content :deep(th) {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   font-weight: 600;
 }
 
@@ -1509,7 +1509,7 @@ onMounted(async () => {
   border-left: 4px solid #ddd;
   padding-left: 16px;
   margin-left: 0;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .markdown-content :deep(hr) {
@@ -1530,7 +1530,7 @@ onMounted(async () => {
 }
 
 .tree-node-icon {
-  color: #0052d9;
+  color: var(--color-primary);
   flex-shrink: 0;
 }
 
@@ -1546,7 +1546,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 6px 6px 0 0;
   border-bottom: 1px solid #e7e7e7;
 }
@@ -1557,7 +1557,7 @@ onMounted(async () => {
   gap: 8px;
   font-weight: 500;
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 .search-line-badge {
@@ -1583,13 +1583,13 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
-  color: #666;
+  color: var(--color-text-secondary);
   gap: 12px;
 }
 
 .file-loading .loading-text {
   font-size: 14px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 /* Markdown预览样式 */
@@ -1607,7 +1607,7 @@ onMounted(async () => {
   margin-bottom: 16px;
   font-weight: 600;
   line-height: 1.25;
-  color: #333;
+  color: var(--color-text-primary);
 }
 
 :deep(.markdown-preview) :deep(h1) {
@@ -1632,7 +1632,7 @@ onMounted(async () => {
 }
 
 :deep(.markdown-preview) :deep(code) {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   padding: 0.2em 0.4em;
   border-radius: 3px;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
@@ -1663,7 +1663,7 @@ onMounted(async () => {
 }
 
 :deep(.markdown-preview) :deep(a) {
-  color: #0052d9;
+  color: var(--color-primary);
   text-decoration: none;
 }
 
@@ -1685,7 +1685,7 @@ onMounted(async () => {
 }
 
 :deep(.markdown-preview) :deep(th) {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   font-weight: 600;
 }
 
@@ -1697,7 +1697,7 @@ onMounted(async () => {
   border-left: 4px solid #ddd;
   padding-left: 16px;
   margin-left: 0;
-  color: #666;
+  color: var(--color-text-secondary);
   margin-bottom: 16px;
 }
 
@@ -1736,7 +1736,7 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   padding: 48px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .binary-file p {
@@ -1745,7 +1745,7 @@ onMounted(async () => {
 
 .binary-file .file-size {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
 }
 
 /* 提交列表面板 */
@@ -1759,7 +1759,7 @@ onMounted(async () => {
 }
 
 .commit-list-item:hover {
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
 }
 
 .commit-item {
@@ -1769,7 +1769,7 @@ onMounted(async () => {
 .commit-hash {
   font-family: monospace;
   font-size: 12px;
-  color: #0052d9;
+  color: var(--color-primary);
   background: #e8f4ff;
   display: inline-block;
   padding: 2px 8px;
@@ -1779,14 +1779,14 @@ onMounted(async () => {
 
 .commit-message {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   margin-bottom: 8px;
   font-weight: 500;
 }
 
 .commit-meta {
   font-size: 12px;
-  color: #999;
+  color: var(--color-text-muted);
   display: flex;
   gap: 16px;
 }
@@ -1805,7 +1805,7 @@ onMounted(async () => {
 
 .commit-detail-header {
   padding: 16px;
-  background: #f5f5f5;
+  background: var(--color-surface-subtle);
   border-radius: 6px;
   margin-bottom: 16px;
 }
@@ -1818,11 +1818,11 @@ onMounted(async () => {
 
 .commit-info-row .label {
   font-weight: 500;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .commit-info-row .value {
-  color: #333;
+  color: var(--color-text-primary);
   font-family: monospace;
 }
 
@@ -1832,7 +1832,7 @@ onMounted(async () => {
 
 .changed-files .label {
   font-weight: 500;
-  color: #666;
+  color: var(--color-text-secondary);
   display: block;
   margin-bottom: 8px;
 }
@@ -1845,7 +1845,7 @@ onMounted(async () => {
 
 .file-item {
   background: #e8f4ff;
-  color: #0052d9;
+  color: var(--color-primary);
   padding: 4px 8px;
   border-radius: 4px;
   font-size: 12px;
@@ -1875,7 +1875,7 @@ onMounted(async () => {
 
 .diff-line .line-number {
   width: 50px;
-  color: #999;
+  color: var(--color-text-muted);
   text-align: right;
   padding-right: 8px;
   flex-shrink: 0;
@@ -1893,12 +1893,12 @@ onMounted(async () => {
 
 .diff-line.header {
   background: #e8f4ff;
-  color: #0052d9;
+  color: var(--color-primary);
 }
 
 .diff-line.info {
   background: #f0f0f0;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .diff-line.removed {
@@ -1938,11 +1938,11 @@ onMounted(async () => {
 /* 删除按钮样式 - 白底红边红图标 */
 .btn-delete {
   background-color: #fff !important;
-  border-color: #e34d59 !important;
-  color: #e34d59 !important;
+  border-color: var(--color-danger) !important;
+  color: var(--color-danger) !important;
 }
 
 .btn-delete :deep(.native-icon) {
-  color: #e34d59 !important;
+  color: var(--color-danger) !important;
 }
 </style>

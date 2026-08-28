@@ -177,7 +177,7 @@ function handleClick(event, index) {
 
 /* 底层空星（灰色） */
 .native-rate__icon--empty {
-  fill: #e8e8e8;
+  fill: var(--color-border-subtle);
 }
 
 /* 上层填充星容器 - 通过 width 控制显示范围 */
@@ -205,7 +205,7 @@ function handleClick(event, index) {
 .native-rate__text {
   margin-left: 8px;
   font-size: 14px;
-  color: #666;
+  color: var(--color-text-secondary);
 }
 
 .native-rate__score {

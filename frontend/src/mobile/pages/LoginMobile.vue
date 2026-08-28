@@ -123,7 +123,7 @@ async function handleGuestLogin() {
   align-items: center;
   min-height: 100vh;
   min-height: 100dvh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
   padding: 16px;
   box-sizing: border-box;
 }
@@ -140,7 +140,7 @@ async function handleGuestLogin() {
 .login-box h1 {
   text-align: center;
   margin-bottom: 24px;
-  color: #333;
+  color: var(--color-text-primary);
   font-size: 22px;
   font-weight: 600;
 }
@@ -165,7 +165,7 @@ async function handleGuestLogin() {
   display: block;
   margin-bottom: 8px;
   font-size: 15px;
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
 }
 

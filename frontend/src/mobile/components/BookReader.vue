@@ -1727,7 +1727,7 @@ watch(fontSize, async () => {
   justify-content: center;
   gap: 16px;
   z-index: 10001;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
 }
 
@@ -1735,7 +1735,7 @@ watch(fontSize, async () => {
   width: 40px;
   height: 40px;
   border: 3px solid rgba(0, 0, 0, 0.1);
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -1744,7 +1744,7 @@ watch(fontSize, async () => {
   width: 20px;
   height: 20px;
   border: 2px solid rgba(0, 0, 0, 0.1);
-  border-top-color: #0052d9;
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -1760,7 +1760,7 @@ watch(fontSize, async () => {
   justify-content: center;
   gap: 8px;
   padding: 16px;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
   background: rgba(245, 241, 232, 0.9);
 }
@@ -1786,7 +1786,7 @@ watch(fontSize, async () => {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 14px;
   z-index: 10;
 }
@@ -1826,7 +1826,7 @@ watch(fontSize, async () => {
   justify-content: center;
   background: none;
   border: none;
-  color: #666;
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
@@ -1873,7 +1873,7 @@ watch(fontSize, async () => {
   font-size: 20px;
   font-weight: 600;
   margin-bottom: 20px;
-  color: #333;
+  color: var(--color-text-primary);
   text-align: center;
 }
 
@@ -1896,7 +1896,7 @@ watch(fontSize, async () => {
 .load-more {
   text-align: center;
   padding: 32px 16px;
-  color: #999;
+  color: var(--color-text-muted);
   font-size: 14px;
 }
 
@@ -1933,7 +1933,7 @@ watch(fontSize, async () => {
   gap: 4px;
   background: none;
   border: none;
-  color: #666;
+  color: var(--color-text-secondary);
   font-size: 11px;
   cursor: pointer;
   padding: 8px 16px;
@@ -1941,7 +1941,7 @@ watch(fontSize, async () => {
 
 .progress-text {
   font-size: 14px;
-  color: #333;
+  color: var(--color-text-primary);
   font-weight: 500;
   min-width: 60px;
   text-align: center;
@@ -2026,7 +2026,7 @@ watch(fontSize, async () => {
   background: none;
   border: none;
   font-size: 24px;
-  color: #999;
+  color: var(--color-text-muted);
   cursor: pointer;
   line-height: 1;
 }
@@ -2047,7 +2047,7 @@ watch(fontSize, async () => {
 }
 
 .toc-item.active {
-  color: #0052d9;
+  color: var(--color-primary);
   background: #f0f7ff;
 }
 
