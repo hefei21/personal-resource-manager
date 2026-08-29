@@ -16,6 +16,7 @@ import {
   updateDemoResource
 } from '../src/services/demoWorkspace.js'
 import demoRoutes, { demoRequestBodyGuard } from '../src/routes/demo.js'
+import { createDemoOnlyApp } from '../src/demoOnly.js'
 
 test('demo sessions are opaque, isolated and expire', () => {
   const now = 1_000_000
@@ -179,4 +180,32 @@ test('demo routes require same-origin writes and enforce per-IP and answer limit
   })
   assert.equal(limitedAnswer.status, 429)
   assert.equal((await limitedAnswer.json()).code, 'DEMO_SESSION_RATE_LIMITED')
+})
+
+test('demo-only runtime exposes no owner, storage or worker routes', async (context) => {
+  const previousDemoEnabled = process.env.DEMO_ENABLED
+  process.env.DEMO_ENABLED = 'true'
+  context.after(() => {
+    if (previousDemoEnabled === undefined) delete process.env.DEMO_ENABLED
+    else process.env.DEMO_ENABLED = previousDemoEnabled
+  })
+
+  const server = createDemoOnlyApp().listen(0, '127.0.0.1')
+  context.after(() => server.close())
+  await once(server, 'listening')
+  const baseUrl = `http://127.0.0.1:${server.address().port}`
+
+  const health = await fetch(`${baseUrl}/health`)
+  assert.equal(health.status, 200)
+  assert.deepEqual(await health.json(), { status: 'ok', mode: 'demo-only' })
+
+  for (const pathname of ['/api/auth/check', '/api/documents', '/api/tasks', '/api/pc-workers']) {
+    const response = await fetch(`${baseUrl}${pathname}`)
+    assert.equal(response.status, 404, pathname)
+    assert.equal((await response.json()).code, 'DEMO_ROUTE_NOT_FOUND')
+  }
+
+  const demoSession = await fetch(`${baseUrl}/api/demo/session`)
+  assert.equal(demoSession.status, 401)
+  assert.equal((await demoSession.json()).code, 'DEMO_SESSION_REQUIRED')
 })

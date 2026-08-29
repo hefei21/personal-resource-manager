@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
+    "start:demo": "node src/demoOnly.js",
     "test": "node --test",
     "preflight:rag:corpus": "node scripts/fetch-rag-evaluation-corpus.js",
     "preflight:rag:qdrant": "node scripts/qdrant-stage6c-preflight.js",
