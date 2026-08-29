@@ -98,22 +98,22 @@ jobs:
             node --check /app/src/demoOnly.js
             DEMO_ENABLED=true DEMO_MAX_INFLIGHT=8 PORT=3100 npm run start:demo >/tmp/demo-only.log 2>&1 &
             demo_pid="$!"
-            trap 'kill "$demo_pid" 2>/dev/null || true' EXIT
-            node -e '
-              const base = "http://127.0.0.1:3100";
+            trap "kill $demo_pid 2>/dev/null || true" EXIT
+            node -e "
+              const base = \"http://127.0.0.1:3100\";
               for (let attempt = 0; attempt < 30; attempt += 1) {
                 try {
-                  const health = await fetch(`${base}/health`);
-                  if (health.ok && (await health.json()).mode === "demo-only") break;
+                  const health = await fetch(base + \"/health\");
+                  if (health.ok && (await health.json()).mode === \"demo-only\") break;
                 } catch {}
                 if (attempt === 29) process.exit(1);
                 await new Promise(resolve => setTimeout(resolve, 100));
               }
-              for (const path of ["/api/auth/check", "/api/documents", "/api/tasks", "/api/pc-workers"]) {
-                const response = await fetch(`${base}${path}`);
+              for (const routePath of [\"/api/auth/check\", \"/api/documents\", \"/api/tasks\", \"/api/pc-workers\"]) {
+                const response = await fetch(base + routePath);
                 if (response.status !== 404) process.exit(1);
               }
-            '
+            "
             kill "$demo_pid"
             wait "$demo_pid" || true
             trap - EXIT
