@@ -29,6 +29,7 @@ import {
 import { createRagArtifactStore } from '../services/ragArtifactStore.js'
 import { createRagEmbeddingRuntime } from '../services/ragEmbeddingRuntime.js'
 import { readActiveRagEmbeddingModel } from '../services/ragQueryRuntime.js'
+import { getDocumentStorageRuntime } from '../services/documentStorageRuntime.js'
 import { getResourceStorageRuntime } from '../services/resourceStorageRuntime.js'
 import { getTaskRuntime } from '../services/taskRuntime.js'
 import { projectTask } from '../services/taskTypeCatalog.js'
@@ -144,6 +145,64 @@ function runtimeStore(runtimeProvider) {
   return store
 }
 
+function legacyDomainContentRecord(database, domainType, sourceId) {
+  try {
+    return domainType === 'document'
+      ? database.prepare(`
+          SELECT current_version.id AS legacy_version_id,
+                 COALESCE(current_version.storage_key, domain_source.storage_key) AS legacy_storage_key,
+                 COALESCE(current_version.file_path, domain_source.file_path) AS legacy_file_path,
+                 COALESCE(current_version.content_sha256, domain_source.content_sha256) AS sha256,
+                 COALESCE(current_version.content_bytes, domain_source.content_bytes) AS bytes,
+                 domain_source.version AS legacy_version_number
+            FROM documents domain_source
+            LEFT JOIN document_versions current_version ON current_version.id = (
+              SELECT candidate.id
+                FROM document_versions candidate
+               WHERE candidate.document_id = domain_source.id
+                 AND CAST(candidate.version AS REAL) = CAST(domain_source.version AS REAL)
+               ORDER BY candidate.id DESC
+               LIMIT 1
+            )
+           WHERE domain_source.id = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM resource_trash_entries trash
+                WHERE trash.resource_type = 'document' AND trash.resource_id = domain_source.id
+             )
+             AND (current_version.id IS NULL OR NOT EXISTS (
+               SELECT 1 FROM resource_trash_entries trash
+                WHERE trash.resource_type = 'document_version' AND trash.resource_id = current_version.id
+             ))
+        `).get(sourceId)
+      : database.prepare(`
+          SELECT domain_source.storage_key AS legacy_storage_key,
+                 domain_source.file_path AS legacy_file_path,
+                 domain_source.content_sha256 AS sha256,
+                 domain_source.content_bytes AS bytes
+            FROM books domain_source
+           WHERE domain_source.id = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM resource_trash_entries trash
+                WHERE trash.resource_type = 'ebook' AND trash.resource_id = domain_source.id
+             )
+        `).get(sourceId)
+  } catch {
+    return null
+  }
+}
+
+function hasLegacyContentReference(row) {
+  return (typeof row?.legacy_storage_key === 'string' && row.legacy_storage_key.trim() !== '') ||
+    (typeof row?.legacy_file_path === 'string' && row.legacy_file_path.trim() !== '')
+}
+
+function legacyContentMatches(row, expectedHash, expectedBytes) {
+  if (!hasLegacyContentReference(row)) return false
+  if (row.sha256 !== null && row.sha256 !== undefined && row.sha256 !== expectedHash) return false
+  if (row.bytes !== null && row.bytes !== undefined && Number(row.bytes) !== Number(expectedBytes)) return false
+  return true
+}
+
 function contentRecord(database, task) {
   const input = task?.input
   if (task?.taskType === 'rag.content.extract') {
@@ -165,77 +224,37 @@ function contentRecord(database, task) {
       `).get(domainType, sourceId)
     } catch {}
     if (row) {
-      if (row.lifecycle_status !== 'active' || row.managed_storage_key === null ||
-          row.sha256 !== input.sourceContentSha256 || row.sha256 !== task.subjectContentHash ||
-          Number(row.bytes) !== input.contentBytes) return null
+      if (row.lifecycle_status !== 'active' || row.sha256 !== input.sourceContentSha256 ||
+          row.sha256 !== task.subjectContentHash || Number(row.bytes) !== input.contentBytes) return null
+      let legacy = null
       let versionMatches = String(row.resource_version_id) === String(input.sourceVersionId)
       if (!versionMatches && domainType === 'document') {
-        try {
-          const legacyVersion = database.prepare(`
-            SELECT current_version.id
-              FROM documents domain_source
-              JOIN document_versions current_version ON current_version.id = (
-                SELECT candidate.id
-                  FROM document_versions candidate
-                 WHERE candidate.document_id = domain_source.id
-                   AND CAST(candidate.version AS REAL) = CAST(domain_source.version AS REAL)
-                 ORDER BY candidate.id DESC
-                 LIMIT 1
-              )
-             WHERE domain_source.id = ?
-          `).get(sourceId)
-          versionMatches = String(legacyVersion?.id) === String(input.sourceVersionId)
-        } catch {}
+        legacy = legacyDomainContentRecord(database, domainType, sourceId)
+        versionMatches = String(legacy?.legacy_version_id) === String(input.sourceVersionId)
       }
       if (!versionMatches) return null
-      return row
+      if (typeof row.managed_storage_key === 'string' && row.managed_storage_key.trim() !== '') return row
+      legacy ??= legacyDomainContentRecord(database, domainType, sourceId)
+      if (!legacyContentMatches(legacy, row.sha256, row.bytes)) return null
+      return {
+        ...row,
+        legacy_storage_key: legacy.legacy_storage_key,
+        legacy_file_path: legacy.legacy_file_path
+      }
     }
-    try {
-      row = domainType === 'document'
-        ? database.prepare(`
-            SELECT current_version.id AS legacy_version_id,
-                   COALESCE(current_version.storage_key, domain_source.storage_key) AS managed_storage_key,
-                   COALESCE(current_version.content_sha256, domain_source.content_sha256) AS sha256,
-                   COALESCE(current_version.content_bytes, domain_source.content_bytes) AS bytes,
-                   domain_source.version AS legacy_version_number
-              FROM documents domain_source
-              LEFT JOIN document_versions current_version ON current_version.id = (
-                SELECT candidate.id
-                  FROM document_versions candidate
-                 WHERE candidate.document_id = domain_source.id
-                   AND CAST(candidate.version AS REAL) = CAST(domain_source.version AS REAL)
-                 ORDER BY candidate.id DESC
-                 LIMIT 1
-              )
-             WHERE domain_source.id = ?
-               AND NOT EXISTS (
-                 SELECT 1 FROM resource_trash_entries trash
-                  WHERE trash.resource_type = 'document' AND trash.resource_id = domain_source.id
-               )
-               AND (current_version.id IS NULL OR NOT EXISTS (
-                 SELECT 1 FROM resource_trash_entries trash
-                  WHERE trash.resource_type = 'document_version' AND trash.resource_id = current_version.id
-               ))
-          `).get(sourceId)
-        : database.prepare(`
-            SELECT domain_source.storage_key AS managed_storage_key,
-                   domain_source.content_sha256 AS sha256,
-                   domain_source.content_bytes AS bytes
-              FROM books domain_source
-             WHERE domain_source.id = ?
-               AND NOT EXISTS (
-                 SELECT 1 FROM resource_trash_entries trash
-                  WHERE trash.resource_type = 'ebook' AND trash.resource_id = domain_source.id
-               )
-          `).get(sourceId)
-    } catch { return null }
-    if (!row || row.managed_storage_key === null || row.sha256 !== input.sourceContentSha256 ||
-        row.sha256 !== task.subjectContentHash || Number(row.bytes) !== input.contentBytes) return null
+    row = legacyDomainContentRecord(database, domainType, sourceId)
+    if (!row || input.sourceContentSha256 !== task.subjectContentHash ||
+        !legacyContentMatches(row, input.sourceContentSha256, input.contentBytes)) return null
     const legacyVersionId = domainType === 'document' && Number.isSafeInteger(Number(row.legacy_version_id))
       ? String(row.legacy_version_id)
-      : `current:${row.legacy_version_number ?? 1}:${row.sha256}`
+      : `current:${row.legacy_version_number ?? 1}:${input.sourceContentSha256}`
     if (legacyVersionId !== String(input.sourceVersionId)) return null
-    return row
+    return {
+      ...row,
+      sha256: input.sourceContentSha256,
+      bytes: input.contentBytes,
+      managed_storage_key: null
+    }
   }
   const resourceVersionId = positiveId(input?.resourceVersionId)
   const contentObjectId = positiveId(input?.contentObjectId)
@@ -251,6 +270,48 @@ function contentRecord(database, task) {
   if (!row || row.lifecycle_status !== 'active' || row.managed_storage_key === null ||
     String(row.resource_version_id) !== task.subjectId || row.sha256 !== task.subjectContentHash) return null
   return row
+}
+
+function contentUnavailable(cause) {
+  return Object.assign(new Error('Worker content is unavailable.'), {
+    code: 'PC_WORKER_CONTENT_UNAVAILABLE',
+    ...(cause ? { cause } : {})
+  })
+}
+
+async function openTaskContent({ task, row, resourceRuntime, documentRuntime }) {
+  try {
+    if (task.taskType !== 'rag.content.extract' ||
+        (typeof row.managed_storage_key === 'string' && row.managed_storage_key.trim() !== '')) {
+      return await resourceRuntime().storageService.createReadStream(row.managed_storage_key)
+    }
+    const sourceType = task.input?.sourceType
+    const runtime = sourceType === 'document' ? documentRuntime() : sourceType === 'ebook' ? resourceRuntime() : null
+    const service = sourceType === 'document'
+      ? runtime?.contentService
+      : runtime?.contentServiceFor?.('ebooks') ?? runtime?.contentService
+    if (!service || typeof service.stat !== 'function' || typeof service.createReadStream !== 'function') {
+      throw contentUnavailable()
+    }
+    const reference = {
+      storage_key: row.legacy_storage_key ?? null,
+      file_path: row.legacy_file_path ?? null,
+      content_sha256: row.sha256,
+      content_bytes: Number(row.bytes)
+    }
+    const metadata = await service.stat(reference)
+    if (Number(metadata?.bytes) !== Number(row.bytes) ||
+        (metadata?.sha256 !== undefined && metadata.sha256 !== row.sha256)) {
+      throw contentUnavailable()
+    }
+    const opened = await service.createReadStream(reference)
+    const stream = opened?.stream ?? opened
+    if (!stream || typeof stream.pipe !== 'function') throw contentUnavailable()
+    return stream
+  } catch (error) {
+    if (error?.code === 'PC_WORKER_CONTENT_UNAVAILABLE') throw error
+    throw contentUnavailable(error)
+  }
 }
 
 function authorizedTask(store, worker, taskId, leaseToken, statuses) {
@@ -460,6 +521,7 @@ export function createPcWorkerAgentRouter({
   database = databaseProvider,
   runtime = getTaskRuntime,
   storageRuntime = getResourceStorageRuntime,
+  documentStorageRuntime = getDocumentStorageRuntime,
   enroll = enrollWorker,
   refresh = refreshWorkerCredentials,
   authenticate = authenticateWorkerAccess,
@@ -588,7 +650,12 @@ export function createPcWorkerAgentRouter({
       processorInput(task)
       const row = contentRecord(await database(req), task)
       if (!row) return sendCode(res, 409, 'PC_WORKER_CONTENT_UNAVAILABLE')
-      const stream = await storageRuntime().storageService.createReadStream(row.managed_storage_key)
+      const stream = await openTaskContent({
+        task,
+        row,
+        resourceRuntime: storageRuntime,
+        documentRuntime: documentStorageRuntime
+      })
       res.set({
         'content-type': 'application/octet-stream',
         'content-length': String(row.bytes),

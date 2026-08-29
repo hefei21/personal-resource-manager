@@ -436,7 +436,8 @@ test('RAG extraction streams a newly uploaded legacy document without a resource
           if (sql.includes('FROM documents domain_source')) {
             return {
               legacy_version_id: 11,
-              managed_storage_key: `documents/${sha256.slice(0, 2)}/${sha256}`,
+              legacy_storage_key: `documents/${sha256.slice(0, 2)}/${sha256}`,
+              legacy_file_path: null,
               sha256,
               bytes: content.length,
               legacy_version_number: 1
@@ -447,12 +448,23 @@ test('RAG extraction streams a newly uploaded legacy document without a resource
       }
     }
   }
+  const contentService = {
+    async stat(reference) {
+      assert.equal(reference.storage_key, `documents/${sha256.slice(0, 2)}/${sha256}`)
+      return { source: 'storage', sha256, bytes: content.length }
+    },
+    async createReadStream(reference) {
+      assert.equal(reference.storage_key, `documents/${sha256.slice(0, 2)}/${sha256}`)
+      return { source: 'storage', stream: Readable.from(content) }
+    }
+  }
   const app = express()
   app.use(express.json())
   app.use('/agent', createPcWorkerAgentRouter({
     database: () => database,
     runtime: () => ({ getStore: () => ({ getById: (id) => Number(id) === task.id ? task : null }) }),
-    storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
+    storageRuntime: () => ({ storageService: { createReadStream: async () => { throw new Error('canonical storage must not be used') } } }),
+    documentStorageRuntime: () => ({ contentService }),
     authenticate: () => worker
   }))
   await withServer(app, async (baseUrl) => {
@@ -496,7 +508,8 @@ test('RAG extraction streams a newly uploaded legacy EPUB without a resource pro
           if (sql.includes('FROM resource_domain_links link')) return undefined
           if (sql.includes('FROM books domain_source')) {
             return {
-              managed_storage_key: `ebooks/${sha256.slice(0, 2)}/${sha256}`,
+              legacy_storage_key: `ebooks/${sha256.slice(0, 2)}/${sha256}`,
+              legacy_file_path: null,
               sha256,
               bytes: content.length
             }
@@ -506,12 +519,29 @@ test('RAG extraction streams a newly uploaded legacy EPUB without a resource pro
       }
     }
   }
+  const contentService = {
+    async stat(reference) {
+      assert.equal(reference.storage_key, `ebooks/${sha256.slice(0, 2)}/${sha256}`)
+      return { source: 'storage', sha256, bytes: content.length }
+    },
+    async createReadStream(reference) {
+      assert.equal(reference.storage_key, `ebooks/${sha256.slice(0, 2)}/${sha256}`)
+      return { source: 'storage', stream: Readable.from(content) }
+    }
+  }
   const app = express()
   app.use(express.json())
   app.use('/agent', createPcWorkerAgentRouter({
     database: () => database,
     runtime: () => ({ getStore: () => ({ getById: (id) => Number(id) === task.id ? task : null }) }),
-    storageRuntime: () => ({ storageService: { createReadStream: async () => Readable.from(content) } }),
+    storageRuntime: () => ({
+      storageService: { createReadStream: async () => { throw new Error('canonical storage must not be used') } },
+      contentService,
+      contentServiceFor: (kind) => {
+        assert.equal(kind, 'ebooks')
+        return contentService
+      }
+    }),
     authenticate: () => worker
   }))
   await withServer(app, async (baseUrl) => {
@@ -522,6 +552,127 @@ test('RAG extraction streams a newly uploaded legacy EPUB without a resource pro
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), content)
   })
 })
+
+for (const fixture of [
+  {
+    label: 'document',
+    sourceType: 'document',
+    sourceId: 46,
+    sourceVersionId: '11',
+    resourceVersionId: 146,
+    filePath: 'legacy/projected.pdf',
+    format: 'pdf'
+  },
+  {
+    label: 'ebook',
+    sourceType: 'ebook',
+    sourceId: 47,
+    sourceVersionId: '147',
+    resourceVersionId: 147,
+    filePath: 'legacy/projected.epub',
+    format: 'epub'
+  }
+]) {
+  test(`RAG extraction streams a projected legacy ${fixture.label} without a managed content key`, async () => {
+    const input = {
+      schemaVersion: 1,
+      sourceType: fixture.sourceType,
+      sourceId: fixture.sourceId,
+      sourceVersionId: fixture.sourceVersionId,
+      sourceContentSha256: sha256,
+      contentBytes: content.length,
+      format: fixture.format
+    }
+    const task = {
+      id: fixture.resourceVersionId,
+      taskType: 'rag.content.extract',
+      processorVersion: 'v1',
+      executionClass: 'cpu',
+      subjectId: `${fixture.sourceType}:${fixture.sourceId}`,
+      subjectContentHash: sha256,
+      input,
+      status: 'running',
+      leaseOwner: `pcw:${worker.id}`,
+      leaseToken: 'lease-secret',
+      leaseExpiresAt: '2999-01-01T00:00:00.000Z',
+      attemptCount: 1
+    }
+    const database = {
+      prepare(sql) {
+        return {
+          get() {
+            if (sql.includes('FROM resource_domain_links link')) {
+              return {
+                resource_version_id: fixture.resourceVersionId,
+                resource_id: fixture.resourceVersionId + 1000,
+                content_object_id: fixture.resourceVersionId + 2000,
+                sha256,
+                bytes: content.length,
+                managed_storage_key: null,
+                lifecycle_status: 'active'
+              }
+            }
+            if (fixture.sourceType === 'document' && sql.includes('FROM documents domain_source')) {
+              return {
+                legacy_version_id: 11,
+                legacy_storage_key: null,
+                legacy_file_path: fixture.filePath,
+                sha256: null,
+                bytes: null,
+                legacy_version_number: 1
+              }
+            }
+            if (fixture.sourceType === 'ebook' && sql.includes('FROM books domain_source')) {
+              return {
+                legacy_storage_key: null,
+                legacy_file_path: fixture.filePath,
+                sha256: null,
+                bytes: null
+              }
+            }
+            return undefined
+          }
+        }
+      }
+    }
+    const contentService = {
+      async stat(reference) {
+        assert.equal(reference.file_path, fixture.filePath)
+        assert.equal(reference.content_sha256, sha256)
+        assert.equal(reference.content_bytes, content.length)
+        return { source: 'legacy', bytes: content.length }
+      },
+      async createReadStream(reference) {
+        assert.equal(reference.file_path, fixture.filePath)
+        return { source: 'legacy', stream: Readable.from(content) }
+      }
+    }
+    const app = express()
+    app.use(express.json())
+    app.use('/agent', createPcWorkerAgentRouter({
+      database: () => database,
+      runtime: () => ({ getStore: () => ({ getById: (id) => Number(id) === task.id ? task : null }) }),
+      storageRuntime: () => ({
+        storageService: { createReadStream: async () => { throw new Error('managed storage must not be used') } },
+        contentService,
+        contentServiceFor: (kind) => {
+          assert.equal(kind, 'ebooks')
+          return contentService
+        }
+      }),
+      documentStorageRuntime: () => ({ contentService }),
+      authenticate: () => worker
+    }))
+    await withServer(app, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/agent/tasks/${task.id}/input`, {
+        headers: { authorization: 'Bearer access', 'x-worker-lease': 'lease-secret' }
+      })
+      assert.equal(response.status, 200, JSON.stringify(await response.clone().json().catch(() => null)))
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), content)
+      assert.equal(response.headers.get('x-content-sha256'), sha256)
+    })
+  })
+}
 
 test('RAG embedding completion is catalog-normalized and stale snapshots are rejected', async () => {
   const model = {
