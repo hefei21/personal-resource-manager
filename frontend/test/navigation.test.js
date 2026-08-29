@@ -8,6 +8,7 @@ import {
   NAVIGATION_GROUPS,
   OWNER_NAVIGATION,
   PRIMARY_NAVIGATION,
+  mobileGroupParentForRoute,
   navigationForRoute,
   navigationItemsForGroup,
   navigationLandingForGroup,
@@ -110,4 +111,13 @@ test('route lookup and title fallback are deterministic', () => {
   assert.equal(blogMeta.title, '个人笔记')
   assert.equal(blogMeta.group, 'library')
   assert.equal(blogMeta.navigation, navigationForRoute('Blog'))
+})
+
+test('mobile modules expose an explicit return target to their group chooser', () => {
+  assert.equal(mobileGroupParentForRoute('Music')?.routeName, 'LibraryHub')
+  assert.equal(mobileGroupParentForRoute('Bookmarks')?.routeName, 'CollectionHub')
+  assert.equal(mobileGroupParentForRoute('Tasks')?.routeName, 'WorkspaceHub')
+  assert.equal(mobileGroupParentForRoute('Dashboard'), undefined)
+  assert.equal(mobileGroupParentForRoute('LibraryHub'), undefined)
+  assert.equal(mobileGroupParentForRoute('Logs'), undefined)
 })

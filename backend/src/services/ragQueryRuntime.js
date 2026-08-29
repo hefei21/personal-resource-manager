@@ -587,6 +587,38 @@ export class RagQueryRuntime {
     return Object.freeze({ available: true, model, vectorStore })
   }
 
+  /**
+   * Probe the vector store independently from PC Worker/model serving health.
+   * The Owner status surface uses this to distinguish Qdrant outages from a
+   * stopped Worker or an unloaded local embedding model.
+   */
+  async vectorAvailability() {
+    const model = await this.#resolveModel()
+    if (!model) return Object.freeze({ available: false, reason: RAG_QUERY_RUNTIME_ERROR_CODES.MODEL_UNAVAILABLE })
+    let vectorStore
+    try { vectorStore = await this.#resolveVectorStore(model) } catch { vectorStore = null }
+    if (!vectorStore) {
+      return Object.freeze({
+        available: false,
+        reason: this.vectorConfig?.enabled === false
+          ? RAG_QUERY_RUNTIME_ERROR_CODES.CONFIG_INCOMPLETE
+          : RAG_QUERY_RUNTIME_ERROR_CODES.MODEL_MISMATCH
+      })
+    }
+    if (!sameModel(vectorStore.modelConfig, model.model)) {
+      return Object.freeze({ available: false, reason: RAG_QUERY_RUNTIME_ERROR_CODES.MODEL_MISMATCH })
+    }
+    try {
+      const health = await vectorStore.health()
+      return Object.freeze({ available: health?.available === true })
+    } catch (error) {
+      return Object.freeze({
+        available: false,
+        reason: error?.code ?? RAG_QUERY_RUNTIME_ERROR_CODES.VECTOR_UNAVAILABLE
+      })
+    }
+  }
+
   async #waitForTask(task) {
     if (!task || typeof task !== 'object') return null
     let current = task

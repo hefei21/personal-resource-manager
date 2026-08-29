@@ -22,7 +22,7 @@ const moduleItems = [
     label: '首页',
     title: '首页',
     group: 'home',
-    pcIcon: 'dashboard',
+    pcIcon: 'home',
     mobileIconPath: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
     mobile: true,
     ownerOnly: false,
@@ -48,7 +48,7 @@ const moduleItems = [
     label: '文档',
     title: '文档',
     group: 'library',
-    pcIcon: 'file',
+    pcIcon: 'file-text',
     mobileIconPath: 'M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z',
     mobile: true,
     ownerOnly: false,
@@ -61,7 +61,7 @@ const moduleItems = [
     label: '个人笔记',
     title: '个人笔记',
     group: 'library',
-    pcIcon: 'edit-1',
+    pcIcon: 'pencil',
     mobileIconPath: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
     mobile: true,
     ownerOnly: false,
@@ -267,6 +267,13 @@ export function navigationItemsForGroup(group, { mobile = false, includeOwner = 
 export function navigationLandingForGroup(group, { mobile = false } = {}) {
   const routeName = mobile && group === 'system' ? 'MoreHub' : `${group[0]?.toUpperCase()}${group.slice(1)}Hub`
   return GROUP_LANDING_NAVIGATION.find(item => item.routeName === routeName)
+}
+
+/** Resolve the explicit mobile back target for a module nested in a bottom-nav group. */
+export function mobileGroupParentForRoute(route) {
+  const item = navigationForRoute(route)
+  if (!item || item.kind !== 'module' || !item.mobile || item.group === 'home') return undefined
+  return navigationLandingForGroup(item.group, { mobile: true })
 }
 
 /** Convert a navigation item into route metadata without exposing mutable state. */

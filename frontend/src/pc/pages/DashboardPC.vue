@@ -1,99 +1,39 @@
 <template>
   <div class="dashboard">
     <SystemStatusOverview />
-    <!-- 第一行：6个主要统计 -->
-    <NativeRow :gutter="16">
-      <NativeCol :span="4">
-        <NativeCard title="文档" hover-shadow>
-          <div class="stat-item">
-            <div class="stat-value">{{ stats.documents }}</div>
-            <div class="stat-label">文档总数</div>
+    <section class="resource-overview" aria-labelledby="resource-overview-title">
+      <div class="resource-heading">
+        <div>
+          <p>内容资产</p>
+          <h2 id="resource-overview-title">资源总览</h2>
+        </div>
+        <span>按资源类型统计</span>
+      </div>
+      <div class="resource-stat-grid">
+        <article v-for="item in resourceStats" :key="item.key" class="resource-stat-card">
+          <span class="resource-stat-icon" :class="`resource-stat-icon--${item.tone}`">
+            <NativeIcon :name="item.icon" size="19" weight="duotone" />
+          </span>
+          <span class="resource-stat-label">{{ item.label }}</span>
+          <strong>{{ item.value }}</strong>
+          <small>{{ item.unit }}</small>
+        </article>
+      </div>
+      <article class="anime-summary-card">
+        <div class="anime-summary-title">
+          <span class="resource-stat-icon resource-stat-icon--cyan">
+            <NativeIcon name="video" size="19" weight="duotone" />
+          </span>
+          <div><strong>动漫进度</strong><small>收藏状态分布</small></div>
+        </div>
+        <div class="anime-summary-grid">
+          <div v-for="item in animeStats" :key="item.label">
+            <strong>{{ item.value }}</strong>
+            <span>{{ item.label }}</span>
           </div>
-        </NativeCard>
-      </NativeCol>
-      <NativeCol :span="4">
-        <NativeCard title="个人笔记" hover-shadow>
-          <div class="stat-item">
-            <div class="stat-value">{{ stats.blog?.total || 0 }}</div>
-            <div class="stat-label">笔记总数</div>
-          </div>
-        </NativeCard>
-      </NativeCol>
-      <NativeCol :span="4">
-        <NativeCard title="音频" hover-shadow>
-          <div class="stat-item">
-            <div class="stat-value">{{ stats.music }}</div>
-            <div class="stat-label">音频总数</div>
-          </div>
-        </NativeCard>
-      </NativeCol>
-      <NativeCol :span="4">
-        <NativeCard title="电子书" hover-shadow>
-          <div class="stat-item">
-            <div class="stat-value">{{ stats.books }}</div>
-            <div class="stat-label">电子书总数</div>
-          </div>
-        </NativeCard>
-      </NativeCol>
-      <NativeCol :span="4">
-        <NativeCard title="代码" hover-shadow>
-          <div class="stat-item">
-            <div class="stat-value">{{ stats.code }}</div>
-            <div class="stat-label">代码仓库</div>
-          </div>
-        </NativeCard>
-      </NativeCol>
-      <NativeCol :span="4">
-        <NativeCard title="书签" hover-shadow>
-          <div class="stat-item">
-            <div class="stat-value">{{ stats.bookmarks }}</div>
-            <div class="stat-label">书签总数</div>
-          </div>
-        </NativeCard>
-      </NativeCol>
-    </NativeRow>
-
-    <!-- 第二行：游戏、动漫详情 -->
-    <NativeRow :gutter="16" style="margin-top: 16px;">
-      <NativeCol :span="6">
-        <NativeCard title="游戏" hover-shadow>
-          <div class="stat-item">
-            <div class="stat-value">{{ stats.games }}</div>
-            <div class="stat-label">游戏总数</div>
-          </div>
-        </NativeCard>
-      </NativeCol>
-      <NativeCol :span="18">
-        <NativeCard title="动漫详情" hover-shadow>
-          <NativeRow :gutter="16">
-            <NativeCol :span="3">
-              <div class="stat-item">
-                <div class="stat-value">{{ stats.anime.total }}</div>
-                <div class="stat-label">动漫总数</div>
-              </div>
-            </NativeCol>
-            <NativeCol :span="3">
-              <div class="stat-item">
-                <div class="stat-value">{{ stats.anime.want_to_watch }}</div>
-                <div class="stat-label">想看</div>
-              </div>
-            </NativeCol>
-            <NativeCol :span="3">
-              <div class="stat-item">
-                <div class="stat-value">{{ stats.anime.watching }}</div>
-                <div class="stat-label">在看</div>
-              </div>
-            </NativeCol>
-            <NativeCol :span="3">
-              <div class="stat-item">
-                <div class="stat-value">{{ stats.anime.watched }}</div>
-                <div class="stat-label">看过</div>
-              </div>
-            </NativeCol>
-          </NativeRow>
-        </NativeCard>
-      </NativeCol>
-    </NativeRow>
+        </div>
+      </article>
+    </section>
 
     <!-- 日程表 -->
     <NativeCard title="日程表" style="margin-top: 24px;">
@@ -211,7 +151,7 @@ import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
 import { Solar } from 'lunar-javascript'
 import { usePermission } from '@/composables/usePermission'
-import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon } from '@/components/native'
+import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeCheckbox, NativeIcon } from '@/components/native'
 import SystemStatusOverview from '@/components/business/SystemStatusOverview.vue'
 
 
@@ -235,6 +175,23 @@ const stats = ref({
     watched: 0
   }
 })
+
+const resourceStats = computed(() => [
+  { key: 'documents', label: '文档', value: stats.value.documents, unit: '份内容', icon: 'file-text', tone: 'indigo' },
+  { key: 'blog', label: '个人笔记', value: stats.value.blog?.total || 0, unit: '篇笔记', icon: 'pencil', tone: 'violet' },
+  { key: 'music', label: '音频', value: stats.value.music, unit: '首音频', icon: 'music', tone: 'cyan' },
+  { key: 'books', label: '电子书', value: stats.value.books, unit: '本藏书', icon: 'book', tone: 'amber' },
+  { key: 'code', label: '代码知识库', value: stats.value.code, unit: '个仓库', icon: 'code', tone: 'slate' },
+  { key: 'bookmarks', label: '书签', value: stats.value.bookmarks, unit: '个链接', icon: 'bookmark', tone: 'rose' },
+  { key: 'games', label: '游戏', value: stats.value.games, unit: '款游戏', icon: 'gamepad', tone: 'emerald' }
+])
+
+const animeStats = computed(() => [
+  { label: '总数', value: stats.value.anime.total },
+  { label: '想看', value: stats.value.anime.want_to_watch || 0 },
+  { label: '在看', value: stats.value.anime.watching },
+  { label: '看过', value: stats.value.anime.watched }
+])
 
 // 日程表相关
 const weekdays = ['日', '一', '二', '三', '四', '五', '六']
@@ -672,66 +629,115 @@ onMounted(() => {
   padding: 0;
 }
 
-.dashboard :deep(.t-card) {
-  transition: all 0.3s ease;
-  border-radius: 12px;
-  animation: fadeInUp 0.6s ease-out backwards;
+.resource-overview {
+  margin-bottom: 24px;
+  padding: 22px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-sm);
 }
 
-.dashboard :deep(.t-card:nth-child(1)) {
-  animation-delay: 0.05s;
+.resource-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
 }
 
-.dashboard :deep(.t-card:nth-child(2)) {
-  animation-delay: 0.1s;
+.resource-heading p {
+  margin: 0 0 4px;
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
 }
 
-.dashboard :deep(.t-card:nth-child(3)) {
-  animation-delay: 0.15s;
+.resource-heading h2 { margin: 0; color: var(--color-text-primary); font-size: 20px; }
+.resource-heading > span { color: var(--color-text-muted); font-size: 12px; }
+
+.resource-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
 }
 
-.dashboard :deep(.t-card:nth-child(4)) {
-  animation-delay: 0.2s;
+.resource-stat-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 2px 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-page);
 }
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.resource-stat-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  grid-row: 1 / span 2;
+  place-items: center;
+  color: var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-surface);
 }
 
-.stat-item {
-  text-align: center;
-  padding: 16px;
-}
+.resource-stat-icon--cyan { color: #0f766e; background: #e6f7f5; }
+.resource-stat-icon--amber { color: #a16207; background: #fef3c7; }
+.resource-stat-icon--emerald { color: #047857; background: #dff7ec; }
+.resource-stat-icon--rose { color: #be4166; background: #fff0f4; }
+.resource-stat-icon--slate { color: #475569; background: #e9edf3; }
+.resource-stat-icon--violet { color: #7357b5; background: #f2edff; }
 
-.stat-value {
-  font-size: 28px;
-  font-weight: bold;
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  margin-bottom: 8px;
-  transition: all 0.3s ease;
-  line-height: 1.2;
-  word-wrap: break-word;
-  word-break: break-all;
-}
-
-.dashboard :deep(.t-card:hover .stat-value) {
-  transform: scale(1.1);
-}
-
-.stat-label {
-  font-size: 14px;
+.resource-stat-label {
+  overflow: hidden;
   color: var(--color-text-secondary);
-  transition: all 0.3s ease;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-stat-card > strong {
+  grid-column: 2;
+  color: var(--color-text-primary);
+  font-size: 25px;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.resource-stat-card > small {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.anime-summary-card {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 2fr;
+  align-items: center;
+  gap: 22px;
+  margin-top: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-page);
+}
+
+.anime-summary-title { display: flex; align-items: center; gap: 11px; }
+.anime-summary-title > div { display: grid; gap: 3px; }
+.anime-summary-title strong { color: var(--color-text-primary); font-size: 13px; }
+.anime-summary-title small { color: var(--color-text-muted); font-size: 11px; }
+.anime-summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+.anime-summary-grid > div { display: grid; gap: 3px; padding: 2px 18px; border-left: 1px solid var(--color-border-subtle); }
+.anime-summary-grid strong { color: var(--color-text-primary); font-size: 20px; }
+.anime-summary-grid span { color: var(--color-text-muted); font-size: 11px; }
+
+@media (max-width: 1320px) {
+  .resource-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
 /* 日程表样式 */

@@ -10,7 +10,21 @@
     <!-- 固定 Header -->
     <header class="fixed-header">
       <div class="header-content">
-        <h2>{{ pageTitle }}</h2>
+        <div class="mobile-page-heading">
+          <button
+            v-if="parentNavigation"
+            type="button"
+            class="group-back-button"
+            :aria-label="`返回${parentNavigation.label}`"
+            @click="navigateToGroupLanding"
+          >
+            <NativeIcon name="arrow-left" size="20" />
+          </button>
+          <div class="mobile-title-copy">
+            <span v-if="parentNavigation">{{ parentNavigation.label }}</span>
+            <h2>{{ pageTitle }}</h2>
+          </div>
+        </div>
         <div class="user-info">
           <span 
             v-if="!authStore.isGuest()" 
@@ -89,11 +103,12 @@ import { ref, computed, onUnmounted, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import MediaPlayer from '@/components/business/media-player/index.vue'
-import { NativeDialog, NativeInput } from '@/components/native'
+import { NativeDialog, NativeIcon, NativeInput } from '@/components/native'
 import api from '@/api'
 import { useToast } from '@/composables/useToast'
 import {
   MOBILE_BOTTOM_NAVIGATION,
+  mobileGroupParentForRoute,
   navigationForRoute,
   navigationItemsForGroup,
   pageTitleForRoute
@@ -111,6 +126,7 @@ let routeLoadingTimer = null
 
 const bottomItems = MOBILE_BOTTOM_NAVIGATION
 const activeNavigation = computed(() => navigationForRoute(route.name))
+const parentNavigation = computed(() => mobileGroupParentForRoute(route.name) ?? null)
 const rememberedRouteKey = group => `pr-manager:last-route:${group}`
 
 // 组件挂载后关闭初始loading
@@ -289,6 +305,10 @@ function handleBottomNavigation(item) {
   router.push(allowedPaths.has(rememberedPath) ? rememberedPath : item.path)
 }
 
+function navigateToGroupLanding() {
+  if (parentNavigation.value) router.push(parentNavigation.value.path)
+}
+
 // 修改密码相关
 const showPasswordDialog = ref(false)
 const passwordLoading = ref(false)
@@ -378,10 +398,11 @@ async function handleMobilePasswordChange() {
   left: 0;
   right: 0;
   height: 60px;
-  background: white;
-  border-bottom: 1px solid #e0e0e0;
+  background: color-mix(in srgb, var(--color-surface-raised) 96%, transparent);
+  border-bottom: 1px solid var(--color-border-subtle);
   padding: 0 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
   z-index: 99;
 }
 
@@ -391,6 +412,45 @@ async function handleMobilePasswordChange() {
   align-items: center;
   height: 100%;
   width: 100%;
+}
+
+.mobile-page-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.group-back-button {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+  cursor: pointer;
+}
+
+.group-back-button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mobile-title-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.mobile-title-copy > span {
+  color: var(--color-text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
 }
 
 .header-content h2 {
@@ -487,6 +547,9 @@ async function handleMobilePasswordChange() {
   color: #64748b;
   font-size: 11px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bottom-navigation-item.active {

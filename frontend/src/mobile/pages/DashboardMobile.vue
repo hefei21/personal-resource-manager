@@ -1,88 +1,35 @@
 <template>
   <div class="dashboard mobile-dashboard">
     <SystemStatusOverview />
-    <!-- 统计卡片：使用 CSS Grid 布局 -->
-    <div class="stats-grid">
-      <!-- 文档 -->
-      <div class="stat-card">
-        <div class="stat-card-title">文档</div>
-        <div class="stat-item">
-          <div class="stat-value">{{ stats.documents }}</div>
-          <div class="stat-label">文档总数</div>
-        </div>
+    <section class="mobile-resource-overview" aria-labelledby="mobile-resource-title">
+      <div class="mobile-resource-heading">
+        <div><span>内容资产</span><h2 id="mobile-resource-title">资源总览</h2></div>
+        <small>按类型统计</small>
       </div>
-      <!-- 个人笔记 -->
-      <div class="stat-card">
-        <div class="stat-card-title">个人笔记</div>
-        <div class="stat-item">
-          <div class="stat-value">{{ stats.blog?.total || 0 }}</div>
-          <div class="stat-label">笔记总数</div>
-        </div>
+      <div class="stats-grid">
+        <article v-for="item in resourceStats" :key="item.key" class="stat-card resource-stat-card">
+          <span class="resource-stat-icon" :class="`resource-stat-icon--${item.tone}`">
+            <NativeIcon :name="item.icon" size="18" weight="duotone" />
+          </span>
+          <span class="stat-card-title">{{ item.label }}</span>
+          <strong class="stat-value">{{ item.value }}</strong>
+          <small class="stat-label">{{ item.unit }}</small>
+        </article>
       </div>
-      <!-- 音频 -->
-      <div class="stat-card">
-        <div class="stat-card-title">音频</div>
-        <div class="stat-item">
-          <div class="stat-value">{{ stats.music }}</div>
-          <div class="stat-label">音频总数</div>
-        </div>
-      </div>
-      <!-- 电子书 -->
-      <div class="stat-card">
-        <div class="stat-card-title">电子书</div>
-        <div class="stat-item">
-          <div class="stat-value">{{ stats.books }}</div>
-          <div class="stat-label">电子书总数</div>
-        </div>
-      </div>
-      <!-- 代码 -->
-      <div class="stat-card">
-        <div class="stat-card-title">代码</div>
-        <div class="stat-item">
-          <div class="stat-value">{{ stats.code }}</div>
-          <div class="stat-label">代码仓库</div>
-        </div>
-      </div>
-      <!-- 书签 -->
-      <div class="stat-card">
-        <div class="stat-card-title">书签</div>
-        <div class="stat-item">
-          <div class="stat-value">{{ stats.bookmarks }}</div>
-          <div class="stat-label">书签总数</div>
-        </div>
-      </div>
-      <!-- 游戏 -->
-      <div class="stat-card">
-        <div class="stat-card-title">游戏</div>
-        <div class="stat-item">
-          <div class="stat-value">{{ stats.games }}</div>
-          <div class="stat-label">游戏总数</div>
-        </div>
-      </div>
-    </div>
 
-    <!-- 动漫卡片独占一行 -->
-    <div class="stat-card anime-card">
-      <div class="stat-card-title">动漫详情</div>
-      <div class="anime-grid">
-        <div class="anime-stat-item">
-          <div class="stat-value">{{ stats.anime.total }}</div>
-          <div class="stat-label">总数</div>
+      <article class="stat-card anime-card">
+        <div class="anime-card-heading">
+          <span class="resource-stat-icon resource-stat-icon--cyan"><NativeIcon name="video" size="18" weight="duotone" /></span>
+          <div><strong>动漫进度</strong><small>收藏状态分布</small></div>
         </div>
-        <div class="anime-stat-item">
-          <div class="stat-value">{{ stats.anime.want_to_watch }}</div>
-          <div class="stat-label">想看</div>
+        <div class="anime-grid">
+          <div v-for="item in animeStats" :key="item.label" class="anime-stat-item">
+            <div class="stat-value">{{ item.value }}</div>
+            <div class="stat-label">{{ item.label }}</div>
+          </div>
         </div>
-        <div class="anime-stat-item">
-          <div class="stat-value">{{ stats.anime.watching }}</div>
-          <div class="stat-label">在看</div>
-        </div>
-        <div class="anime-stat-item">
-          <div class="stat-value">{{ stats.anime.watched }}</div>
-          <div class="stat-label">看过</div>
-        </div>
-      </div>
-    </div>
+      </article>
+    </section>
 
     <!-- 日程表 -->
     <div class="stat-card calendar-card">
@@ -207,6 +154,7 @@
 import { ref, onMounted, computed, nextTick } from 'vue'
 import api from '@/api'
 import { usePermission } from '@/composables/usePermission'
+import { NativeIcon } from '@/components/native'
 import SystemStatusOverview from '@/components/business/SystemStatusOverview.vue'
 
 const { isGuest } = usePermission()
@@ -228,6 +176,23 @@ const stats = ref({
     watched: 0
   }
 })
+
+const resourceStats = computed(() => [
+  { key: 'documents', label: '文档', value: stats.value.documents, unit: '份内容', icon: 'file-text', tone: 'indigo' },
+  { key: 'blog', label: '个人笔记', value: stats.value.blog?.total || 0, unit: '篇笔记', icon: 'pencil', tone: 'violet' },
+  { key: 'music', label: '音频', value: stats.value.music, unit: '首音频', icon: 'music', tone: 'cyan' },
+  { key: 'books', label: '电子书', value: stats.value.books, unit: '本藏书', icon: 'book', tone: 'amber' },
+  { key: 'code', label: '代码知识库', value: stats.value.code, unit: '个仓库', icon: 'code', tone: 'slate' },
+  { key: 'bookmarks', label: '书签', value: stats.value.bookmarks, unit: '个链接', icon: 'bookmark', tone: 'rose' },
+  { key: 'games', label: '游戏', value: stats.value.games, unit: '款游戏', icon: 'gamepad', tone: 'emerald' }
+])
+
+const animeStats = computed(() => [
+  { label: '总数', value: stats.value.anime.total },
+  { label: '想看', value: stats.value.anime.want_to_watch || 0 },
+  { label: '在看', value: stats.value.anime.watching },
+  { label: '看过', value: stats.value.anime.watched }
+])
 
 // 日程表相关
 const weekdays = ['日', '一', '二', '三', '四', '五', '六']
@@ -543,98 +508,136 @@ onMounted(() => {
   padding: 0;
 }
 
-/* 统计卡片网格布局：每行2个 */
+.mobile-resource-overview {
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+.mobile-resource-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.mobile-resource-heading span {
+  color: var(--color-primary);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.mobile-resource-heading h2 { margin: 3px 0 0; color: var(--color-text-primary); font-size: 18px; }
+.mobile-resource-heading > small { color: var(--color-text-muted); font-size: 11px; }
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+  gap: 8px;
   width: 100%;
 }
 
-/* 原生卡片样式替代 t-card */
 .stat-card {
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transition: all 0.3s ease;
-  animation: fadeInUp 0.6s ease-out backwards;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-page);
   overflow: hidden;
 }
 
-.stat-card:hover {
-  box-shadow: var(--shadow-md);
+.resource-stat-card {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 2px 9px;
+  padding: 12px;
 }
 
 .stat-card-title {
-  padding: 12px 16px 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-text-primary);
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.stat-card .stat-item {
-  padding: 12px 16px 16px;
+.resource-stat-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  grid-row: 1 / span 2;
+  place-items: center;
+  color: var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-surface);
 }
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.stat-item {
-  text-align: center;
-}
+.resource-stat-icon--cyan { color: #0f766e; background: #e6f7f5; }
+.resource-stat-icon--amber { color: #a16207; background: #fef3c7; }
+.resource-stat-icon--emerald { color: #047857; background: #dff7ec; }
+.resource-stat-icon--rose { color: #be4166; background: #fff0f4; }
+.resource-stat-icon--slate { color: #475569; background: #e9edf3; }
+.resource-stat-icon--violet { color: #7357b5; background: #f2edff; }
 
 .stat-value {
-  font-size: 22px;
-  font-weight: bold;
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  margin-bottom: 4px;
-  line-height: 1.2;
+  color: var(--color-text-primary);
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
 }
 
 .stat-label {
-  font-size: 12px;
-  color: var(--color-text-secondary);
+  grid-column: 1 / -1;
+  margin-top: 7px;
+  color: var(--color-text-muted);
+  font-size: 10px;
 }
 
-/* 动漫卡片独占一行 */
 .anime-card {
-  margin-top: 12px;
+  margin-top: 8px;
+  padding: 12px;
 }
 
-.anime-card .anime-grid {
-  padding: 12px 16px 16px;
+.anime-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
+
+.anime-card-heading > div { display: grid; gap: 2px; }
+.anime-card-heading strong { color: var(--color-text-primary); font-size: 12px; }
+.anime-card-heading small { color: var(--color-text-muted); font-size: 10px; }
 
 /* 动漫卡片：横向4列布局 */
 .anime-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+  gap: 0;
+  padding-top: 11px;
   justify-items: center;
 }
 
 .anime-stat-item {
-  padding: 4px 0;
+  padding: 3px 0;
   width: 100%;
   text-align: center;
 }
+
+.anime-stat-item + .anime-stat-item { border-left: 1px solid var(--color-border-subtle); }
 
 .anime-stat-item .stat-value {
   font-size: 18px;
 }
 
 .anime-stat-item .stat-label {
+  display: block;
+  margin-top: 4px;
   font-size: 11px;
 }
 

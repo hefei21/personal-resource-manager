@@ -134,6 +134,20 @@ test('query runtime stays FTS-degraded when model, worker, or Qdrant configurati
   assert.equal(qdrantFailureResult.vectorError.code, 'RAG_VECTOR_UNAVAILABLE')
 })
 
+test('vector availability probes Qdrant independently from PC Worker readiness', async () => {
+  const qdrantReady = runtime({ workerAvailable: false })
+  assert.deepEqual(await qdrantReady.runtime.vectorAvailability(), { available: true })
+
+  const qdrantOffline = runtime({ workerAvailable: true, vectorStore: {
+    modelConfig: MODEL,
+    async health() { throw Object.assign(new Error('offline'), { code: 'RAG_VECTOR_UNAVAILABLE' }) }
+  } })
+  assert.deepEqual(await qdrantOffline.runtime.vectorAvailability(), {
+    available: false,
+    reason: 'RAG_VECTOR_UNAVAILABLE'
+  })
+})
+
 test('query runtime validates the active model, queues query embedding, and returns Qdrant candidates with a resolver', async () => {
   const { query, runtime: service } = runtime()
   const result = await service.query({ query, limit: 5 })

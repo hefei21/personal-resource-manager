@@ -9,7 +9,13 @@
 
     <!-- 固定侧边栏 -->
     <aside class="fixed-aside">
-      <div class="logo">雨的空间</div>
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true">雨</span>
+        <span class="brand-copy">
+          <small>PERSONAL ARCHIVE</small>
+          <strong>雨的空间</strong>
+        </span>
+      </div>
       
       <!-- 原生菜单 -->
       <nav class="native-menu">
@@ -21,7 +27,10 @@
             :class="{ active: activeNavigation?.group === section.group }"
             @click="navigateTo(section.landing)"
           >
-            <span>{{ section.label }}</span>
+            <span class="menu-group-copy">
+              <NativeIcon :name="section.icon" size="15" weight="duotone" />
+              {{ section.label }}
+            </span>
             <NativeIcon name="chevron-right" size="14" />
           </button>
           <span v-else class="menu-group-label">{{ section.label }}</span>
@@ -33,8 +42,16 @@
             :class="{ active: activeNavigation?.routeName === item.routeName }"
             @click="navigateTo(item)"
           >
-            <NativeIcon :name="item.pcIcon" class="menu-icon" />
+            <span class="menu-icon-shell">
+              <NativeIcon
+                :name="item.pcIcon"
+                :weight="activeNavigation?.routeName === item.routeName ? 'fill' : 'regular'"
+                class="menu-icon"
+                size="18"
+              />
+            </span>
             <span class="menu-text">{{ item.label }}</span>
+            <span v-if="activeNavigation?.routeName === item.routeName" class="active-indicator" aria-hidden="true"></span>
           </button>
         </section>
       </nav>
@@ -43,7 +60,10 @@
     <!-- 固定 Header -->
     <header class="fixed-header">
       <div class="header-content">
-        <h2>{{ pageTitle }}</h2>
+        <div class="page-heading">
+          <span>{{ activeGroupLabel }}</span>
+          <h2>{{ pageTitle }}</h2>
+        </div>
         <div class="user-info">
           <span 
             v-if="!authStore.isGuest()" 
@@ -57,6 +77,7 @@
             {{ authStore.user?.username || '用户' }}
           </span>
           <button class="logout-btn" @click="handleLogout">
+            <NativeIcon name="logout" size="16" />
             退出
           </button>
         </div>
@@ -133,6 +154,7 @@ const menuSections = computed(() => Object.values(NAVIGATION_GROUPS)
     group: group.key,
     label: group.label,
     landing: group.key === 'home' ? null : navigationLandingForGroup(group.key),
+    icon: group.key === 'home' ? 'home' : navigationLandingForGroup(group.key)?.pcIcon ?? 'folder',
     items: navigationItemsForGroup(group.key, { includeOwner: authStore.isAdmin() })
   })))
 
@@ -191,6 +213,7 @@ const passwordForm = ref({
 const passwordError = ref('')
 
 const pageTitle = computed(() => pageTitleForRoute(route.name) || '雨的空间')
+const activeGroupLabel = computed(() => NAVIGATION_GROUPS[activeNavigation.value?.group]?.label || '个人空间')
 
 function resetPasswordForm() {
   passwordForm.value = {
@@ -253,7 +276,7 @@ async function handlePasswordChange() {
   height: 100vh;
   width: 100%;
   overflow: hidden;
-  background: #1a1a2e;
+  background: var(--color-sidebar);
 }
 
 .fixed-aside {
@@ -261,8 +284,8 @@ async function handlePasswordChange() {
   left: 0;
   top: 0;
   bottom: 0;
-  width: 240px;
-  background: #1a1a2e;
+  width: 256px;
+  background: var(--color-sidebar);
   z-index: 100;
   animation: slideInLeft 0.5s ease-out;
   border-right: none !important;
@@ -273,22 +296,23 @@ async function handlePasswordChange() {
 .fixed-header {
   position: fixed;
   top: 0;
-  left: 240px;
+  left: 256px;
   right: 0;
-  height: 60px;
-  background: white;
-  border-bottom: 1px solid #e0e0e0;
-  padding: 0 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  height: 72px;
+  background: color-mix(in srgb, var(--color-surface-raised) 94%, transparent);
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding: 0 28px;
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px);
   z-index: 99;
   animation: slideInTop 0.5s ease-out;
 }
 
 .scrollable-content {
-  margin-left: 240px;
-  margin-top: 60px;
-  height: calc(100vh - 60px);
-  padding: 24px;
+  margin-left: 256px;
+  margin-top: 72px;
+  height: calc(100vh - 72px);
+  padding: 28px;
   overflow-y: auto;
   background: var(--color-surface-subtle);
   scrollbar-width: thin;
@@ -341,28 +365,55 @@ async function handlePasswordChange() {
   }
 }
 
-.logo {
-  padding: 0 20px;
-  text-align: center;
-  font-size: 26px;
-  font-weight: bold;
-  color: #e8d4b8;
-  border-bottom: 1px solid rgba(232, 212, 184, 0.2);
-  text-shadow: 0 0 10px rgba(232, 212, 184, 0.5), 0 2px 4px rgba(0, 0, 0, 0.5);
-  background: linear-gradient(135deg, rgba(232, 212, 184, 0.1) 0%, rgba(232, 212, 184, 0.05) 100%);
-  height: 60px;
+.brand-lockup {
+  height: 72px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  letter-spacing: 4px;
-  backdrop-filter: blur(10px);
+  gap: 11px;
+  padding: 0 18px;
+  border-bottom: 1px solid rgba(228, 233, 243, 0.09);
+}
+
+.brand-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #f8fafc;
+  border: 1px solid rgba(165, 180, 252, 0.45);
+  border-radius: 11px;
+  background: rgba(89, 103, 217, 0.24);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.12);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.brand-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.brand-copy small {
+  color: var(--color-sidebar-text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+}
+
+.brand-copy strong {
+  color: var(--color-sidebar-text);
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
 }
 
 /* 原生菜单样式 */
 .native-menu {
-  padding: 14px 12px 24px;
+  padding: 16px 12px 24px;
   background: transparent;
-  height: calc(100vh - 60px);
+  height: calc(100vh - 72px);
   overflow-y: auto;
 }
 
@@ -391,6 +442,12 @@ async function handlePasswordChange() {
   cursor: pointer;
 }
 
+.menu-group-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .menu-group:hover,
 .menu-group.active {
   color: #a5b4fc;
@@ -399,12 +456,14 @@ async function handlePasswordChange() {
 .menu-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  position: relative;
+  gap: 10px;
   width: 100%;
   margin: 2px 0;
-  padding: 9px 10px;
+  min-height: 42px;
+  padding: 5px 10px 5px 7px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   cursor: pointer;
   transition: background-color 0.16s ease, color 0.16s ease;
@@ -419,22 +478,38 @@ async function handlePasswordChange() {
 }
 
 .menu-item.active {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(89, 103, 217, 0.22);
   color: white;
-  box-shadow: inset 2px 0 #818cf8;
+  box-shadow: inset 0 0 0 1px rgba(165, 180, 252, 0.12);
 }
 
-.menu-item.active .menu-icon {
-  color: #4ecdc4;
+.menu-item.active .menu-icon-shell {
+  color: #c7d2fe;
+  background: rgba(199, 210, 254, 0.12);
 }
 
-.menu-icon {
+.menu-icon-shell {
+  display: grid;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
-  font-size: 20px;
+  place-items: center;
+  color: var(--color-sidebar-text-muted);
+  border-radius: 8px;
+  transition: color 0.16s ease, background-color 0.16s ease;
 }
 
 .menu-text {
+  flex: 1;
   line-height: 1;
+}
+
+.active-indicator {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #5eead4;
+  box-shadow: 0 0 0 3px rgba(94, 234, 212, 0.1);
 }
 
 .menu-divider {
@@ -451,9 +526,21 @@ async function handlePasswordChange() {
   width: 100%;
 }
 
+.page-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.page-heading > span {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
 .header-content h2 {
   margin: 0;
-  font-size: 24px;
+  font-size: 21px;
   color: var(--color-text-primary);
   font-weight: 600;
 }
@@ -485,9 +572,12 @@ async function handlePasswordChange() {
 /* 退出按钮 */
 .logout-btn {
   padding: 6px 16px;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  background: white;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
   color: var(--color-text-secondary);
   font-size: 13px;
   cursor: pointer;
@@ -508,7 +598,7 @@ async function handlePasswordChange() {
 .global-loading-overlay {
   position: fixed;
   top: 0;
-  left: 240px;
+  left: 256px;
   right: 0;
   bottom: 0;
   background: rgba(255, 255, 255, 0.95);

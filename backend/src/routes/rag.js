@@ -8,12 +8,14 @@ import {
   createRagAnswerService,
   RAG_ANSWER_TASK_TYPE
 } from '../services/ragAnswerService.js'
-import { createRagRerankService } from '../services/ragRerankService.js'
+import { createRagRerankService, RAG_RERANK_TASK_TYPE } from '../services/ragRerankService.js'
 import { createRagHybridRetriever } from '../services/ragHybridRetriever.js'
 import {
   createRagQueryRuntime,
   RAG_QUERY_EMBED_TASK_TYPE,
   RAG_QUERY_EMBED_PROCESSOR_VERSION,
+  RAG_WORKER_ONLINE_WINDOW_MS,
+  readActiveRagEmbeddingModel,
   readRagWorkerAvailability
 } from '../services/ragQueryRuntime.js'
 import { createRagTextIndexService } from '../services/ragTextIndexService.js'
@@ -885,51 +887,105 @@ function availableValue(value) {
   return value === true || (isPlainObject(value) && value.available === true)
 }
 
-async function readRagStatus({ database, req, workerAvailable, vectorAvailable, model }) {
-  const text = readRagTextStatus(database)
-  let workerStatus = 'unknown'
+async function probeAvailability(provider, context) {
   try {
-    workerStatus = availableValue(await workerAvailable({
-      taskType: RAG_ANSWER_TASK_TYPE,
-      database,
-      req,
-      phase: 'status'
-    })) ? 'online' : 'offline'
+    const value = await provider(context)
+    return Object.freeze({ available: availableValue(value) })
   } catch {
-    workerStatus = 'unknown'
+    return Object.freeze({ available: false, unknown: true })
   }
+}
 
-  let vectorStatus = 'unknown'
-  try {
-    vectorStatus = availableValue(await vectorAvailable({ database, req, phase: 'status' }))
-      ? 'available'
-      : 'unavailable'
-  } catch {
-    vectorStatus = 'unknown'
+function readPcWorkerConnection(database, now = Date.now()) {
+  if (!hasTable(database, 'pc_workers')) {
+    return Object.freeze({ status: 'unknown', reason: 'registry_unavailable' })
   }
+  try {
+    const rows = database.prepare(`
+      SELECT status, last_seen_at
+        FROM pc_workers
+       WHERE status = 'active'
+    `).all()
+    const activeRows = Array.isArray(rows) ? rows.filter((row) => row.status === 'active') : []
+    if (activeRows.length === 0) {
+      return Object.freeze({ status: 'offline', reason: 'not_registered' })
+    }
+    const cutoff = now - RAG_WORKER_ONLINE_WINDOW_MS
+    const lastSeenValues = activeRows
+      .map((row) => Date.parse(row.last_seen_at ?? ''))
+      .filter((value) => Number.isFinite(value) && value <= now + 5_000)
+    if (lastSeenValues.some((value) => value >= cutoff)) {
+      return Object.freeze({ status: 'online', reason: 'heartbeat_recent' })
+    }
+    return Object.freeze({ status: 'offline', reason: 'heartbeat_stale' })
+  } catch {
+    return Object.freeze({ status: 'unknown', reason: 'registry_unavailable' })
+  }
+}
+
+function capabilityState({ configured, probe, connection }) {
+  if (!configured) return Object.freeze({ status: 'not_configured', reason: 'configuration_missing' })
+  if (probe.unknown) return Object.freeze({ status: 'unknown', reason: 'probe_failed' })
+  if (probe.available) return Object.freeze({ status: 'ready', reason: 'capability_advertised' })
+  if (connection.status === 'offline') return Object.freeze({ status: 'worker_offline', reason: connection.reason })
+  return Object.freeze({ status: 'unavailable', reason: 'capability_not_advertised' })
+}
+
+async function readRagStatus({ database, req, workerAvailable, vectorAvailable, model, rerankerModel }) {
+  const text = readRagTextStatus(database)
+  const embeddingModel = readActiveRagEmbeddingModel(database)?.model ?? null
+  const [answerProbe, embeddingProbe, rerankerProbe, vectorProbe] = await Promise.all([
+    probeAvailability(workerAvailable, {
+      taskType: RAG_ANSWER_TASK_TYPE, model, database, req, phase: 'status'
+    }),
+    embeddingModel
+      ? probeAvailability(workerAvailable, {
+        taskType: RAG_QUERY_EMBED_TASK_TYPE, model: embeddingModel, database, req, phase: 'status'
+      })
+      : Object.freeze({ available: false }),
+    rerankerModel
+      ? probeAvailability(workerAvailable, {
+        taskType: RAG_RERANK_TASK_TYPE, model: rerankerModel, database, req, phase: 'status'
+      })
+      : Object.freeze({ available: false }),
+    probeAvailability(vectorAvailable, { database, req, phase: 'status' })
+  ])
+  let connection = readPcWorkerConnection(database)
+  if (connection.status === 'unknown' && (answerProbe.available || embeddingProbe.available || rerankerProbe.available)) {
+    connection = Object.freeze({ status: 'online', reason: 'capability_advertised' })
+  }
+  const answer = capabilityState({ configured: Boolean(model), probe: answerProbe, connection })
+  const embedding = capabilityState({ configured: Boolean(embeddingModel), probe: embeddingProbe, connection })
+  const reranker = capabilityState({ configured: Boolean(rerankerModel), probe: rerankerProbe, connection })
+  const vectorStatus = vectorProbe.unknown ? 'unknown' : vectorProbe.available ? 'available' : 'unavailable'
   const modelStatus = model ? 'configured' : 'unavailable'
   const status = text.status === 'missing'
     ? 'missing'
     : text.status !== 'ready'
       ? 'failed'
-      : workerStatus === 'online' && vectorStatus === 'available' && modelStatus === 'configured'
+      : answer.status === 'ready' && embedding.status === 'ready' && vectorStatus === 'available'
         ? 'ready'
         : 'degraded'
   const degradedReason = status === 'degraded'
-    ? workerStatus === 'offline'
+    ? connection.status === 'offline'
       ? 'worker_offline'
       : modelStatus !== 'configured'
         ? 'model_unavailable'
-        : vectorStatus !== 'available'
-          ? 'vector_unavailable'
-          : 'rag_query_degraded'
+        : answer.status !== 'ready'
+          ? 'answer_unavailable'
+          : vectorStatus !== 'available'
+            ? 'vector_unavailable'
+            : embedding.status !== 'ready'
+              ? 'embedding_unavailable'
+              : 'rag_query_degraded'
     : undefined
   return Object.freeze({
     status,
     text,
     vector: Object.freeze({ status: vectorStatus }),
     model: Object.freeze({ status: modelStatus }),
-    pcWorker: Object.freeze({ status: workerStatus }),
+    pcWorker: connection,
+    capabilities: Object.freeze({ answer, embedding, reranker }),
     ...(degradedReason === undefined ? {} : { degradedReason })
   })
 }
@@ -1391,8 +1447,8 @@ export function createRagRouter({
         workerAvailable: (context) => workerAvailable({ ...context, database, req }),
         phase
       })
-      return runtime && typeof runtime.availability === 'function'
-        ? await runtime.availability()
+      return runtime && typeof runtime.vectorAvailability === 'function'
+        ? await runtime.vectorAvailability()
         : false
     } catch {
       return false
@@ -1407,7 +1463,8 @@ export function createRagRouter({
         req,
         workerAvailable: (context) => workerAvailable({ ...context, database, req }),
         vectorAvailable: (context) => resolvedVectorAvailable({ ...context, database, req }),
-        model: resolveConfiguredModel()
+        model: resolveConfiguredModel(),
+        rerankerModel: resolveConfiguredRerankerModel()
       })
       return res.json({ data: status })
     } catch {
