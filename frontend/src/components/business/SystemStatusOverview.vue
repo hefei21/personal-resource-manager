@@ -23,10 +23,12 @@
             <NativeIcon :name="item.icon" size="18" weight="duotone" />
           </span>
           <div class="status-copy">
-            <strong>{{ item.label }}</strong>
+            <div class="status-title-row">
+              <strong>{{ item.label }}</strong>
+              <span class="status-label" :class="`status-label--${item.tone}`">{{ item.status }}</span>
+            </div>
             <p>{{ item.detail }}</p>
           </div>
-          <span class="status-label" :class="`status-label--${item.tone}`">{{ item.status }}</span>
         </article>
       </div>
 
@@ -102,10 +104,15 @@ function workerDetail(reason) {
 }
 
 function modelItem(key, label, icon, value, { optional = false } = {}) {
+  const unavailableDetail = {
+    answer: 'Worker 未上报回答能力；检查持久模型配置与 LM Studio API Server',
+    embedding: 'Worker 未上报向量能力；检查持久模型配置与 LM Studio API Server',
+    reranker: '独立 BGE TEI 服务或固定模型身份未通过检查；不影响基础检索'
+  }[key]
   return serviceItem(key, label, value, {
     ready: { icon, status: '就绪', detail: 'Worker 已确认模型身份并上报对应能力', tone: 'ok' },
     worker_offline: { icon, status: '等待 Worker', detail: '本地模型可能已加载，但 Worker 尚未连接 NAS', tone: 'warning' },
-    unavailable: { icon, status: '未就绪', detail: 'Worker 在线，但模型未加载、端点不可用或身份不匹配', tone: 'warning' },
+    unavailable: { icon, status: '未就绪', detail: unavailableDetail, tone: 'warning' },
     not_configured: {
       icon,
       status: optional ? '可选未启用' : '未配置',
@@ -247,9 +254,11 @@ h3 { font-size: 15px; }
 .status-card {
   min-width: 0;
   display: grid;
-  grid-template-columns: 36px 1fr;
-  gap: 3px 11px;
-  padding: 14px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  min-height: 112px;
+  padding: 16px;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   background: var(--color-surface-page);
@@ -257,9 +266,8 @@ h3 { font-size: 15px; }
 
 .status-icon {
   display: grid;
-  width: 36px;
-  height: 36px;
-  grid-row: 1 / span 2;
+  width: 42px;
+  height: 42px;
   place-items: center;
   color: var(--color-text-muted);
   border-radius: var(--radius-md);
@@ -270,9 +278,13 @@ h3 { font-size: 15px; }
 .status-card--error .status-icon { color: var(--color-danger-text); background: var(--color-danger-surface); }
 
 .status-copy { min-width: 0; }
+.status-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .status-card strong { color: var(--color-text-primary); font-size: 13px; }
 .status-card p { margin: 5px 0 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
-.status-label { grid-column: 2; width: max-content; margin-top: 7px; color: var(--color-text-muted); font-size: 11px; font-weight: 700; }
+.status-label { flex: 0 0 auto; padding: 2px 7px; border-radius: 999px; background: var(--color-surface-subtle); color: var(--color-text-muted); font-size: 10px; font-weight: 700; line-height: 1.5; }
+.status-label--ok { background: var(--color-success-surface); }
+.status-label--warning { background: var(--color-warning-surface); }
+.status-label--error { background: var(--color-danger-surface); }
 .status-label--ok { color: #047857; }
 .status-label--warning { color: #b45309; }
 .status-label--error { color: #b91c1c; }
@@ -294,6 +306,10 @@ h3 { font-size: 15px; }
 .overview-feedback--warning { background: #fffbeb; color: #92400e; }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 1350px) {
+  .status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 
 @media (max-width: 900px) {
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

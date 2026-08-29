@@ -10,7 +10,12 @@
     <!-- 固定侧边栏 -->
     <aside class="fixed-aside">
       <div class="brand-lockup">
-        <span class="brand-mark" aria-hidden="true">雨</span>
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" role="presentation">
+            <path class="brand-window" d="M5.5 6.5h13v11h-13z" />
+            <path class="brand-rain" d="m9 10.5-1.6 2.6m5.1-2.6-1.6 2.6m5.1-2.6-1.6 2.6" />
+          </svg>
+        </span>
         <span class="brand-copy">
           <small>PERSONAL ARCHIVE</small>
           <strong>雨的空间</strong>
@@ -28,12 +33,14 @@
             @click="navigateTo(section.landing)"
           >
             <span class="menu-group-copy">
-              <NativeIcon :name="section.icon" size="15" weight="duotone" />
-              {{ section.label }}
+              <span class="menu-group-icon">
+                <NativeIcon :name="section.icon" size="18" weight="duotone" />
+              </span>
+              <span>{{ section.label }}</span>
             </span>
             <NativeIcon name="chevron-right" size="14" />
           </button>
-          <span v-else class="menu-group-label">{{ section.label }}</span>
+          <span v-else-if="section.group !== 'home'" class="menu-group-label">{{ section.label }}</span>
           <button
             v-for="item in section.items"
             :key="item.value"
@@ -154,7 +161,7 @@ const menuSections = computed(() => Object.values(NAVIGATION_GROUPS)
     group: group.key,
     label: group.label,
     landing: group.key === 'home' ? null : navigationLandingForGroup(group.key),
-    icon: group.key === 'home' ? 'home' : navigationLandingForGroup(group.key)?.pcIcon ?? 'folder',
+    icon: group.pcIcon ?? navigationLandingForGroup(group.key)?.pcIcon ?? 'folder',
     items: navigationItemsForGroup(group.key, { includeOwner: authStore.isAdmin() })
   })))
 
@@ -366,27 +373,42 @@ async function handlePasswordChange() {
 }
 
 .brand-lockup {
-  height: 72px;
+  height: 78px;
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 0 18px;
+  gap: 12px;
+  padding: 0 20px;
   border-bottom: 1px solid rgba(228, 233, 243, 0.09);
 }
 
 .brand-mark {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
   place-items: center;
-  color: #f8fafc;
   border: 1px solid rgba(165, 180, 252, 0.45);
-  border-radius: 11px;
-  background: rgba(89, 103, 217, 0.24);
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.12);
-  font-size: 18px;
-  font-weight: 700;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(99, 102, 241, 0.3), rgba(34, 211, 238, 0.1));
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.14), 0 10px 22px rgba(7, 12, 28, 0.22);
+}
+
+.brand-mark svg {
+  width: 25px;
+  height: 25px;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.brand-window {
+  stroke: rgba(238, 242, 255, 0.92);
+  stroke-width: 1.25;
+}
+
+.brand-rain {
+  stroke: #67e8f9;
+  stroke-width: 1.45;
 }
 
 .brand-copy {
@@ -397,39 +419,39 @@ async function handlePasswordChange() {
 
 .brand-copy small {
   color: var(--color-sidebar-text-muted);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.14em;
 }
 
 .brand-copy strong {
   color: var(--color-sidebar-text);
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 650;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.025em;
 }
 
 /* 原生菜单样式 */
 .native-menu {
-  padding: 16px 12px 24px;
+  padding: 14px 12px 24px;
   background: transparent;
-  height: calc(100vh - 72px);
+  height: calc(100vh - 78px);
   overflow-y: auto;
 }
 
 .menu-section + .menu-section {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .menu-group,
 .menu-group-label {
   width: 100%;
-  min-height: 28px;
-  padding: 4px 10px;
-  color: rgba(226, 232, 240, 0.55);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+  min-height: 36px;
+  padding: 5px 9px;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.025em;
   text-align: left;
 }
 
@@ -443,9 +465,19 @@ async function handlePasswordChange() {
 }
 
 .menu-group-copy {
-  display: inline-flex;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+}
+
+.menu-group-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  color: rgba(165, 180, 252, 0.8);
 }
 
 .menu-group:hover,
@@ -454,22 +486,24 @@ async function handlePasswordChange() {
 }
 
 .menu-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 8px;
   align-items: center;
   position: relative;
-  gap: 10px;
+  gap: 9px;
   width: 100%;
   margin: 2px 0;
-  min-height: 42px;
-  padding: 5px 10px 5px 7px;
+  min-height: 40px;
+  padding: 5px 10px 5px 9px;
   border: 0;
   border-radius: 10px;
   background: transparent;
   cursor: pointer;
   transition: background-color 0.16s ease, color 0.16s ease;
   color: rgba(255, 255, 255, 0.75);
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 500;
+  text-align: left;
 }
 
 .menu-item:hover {
@@ -500,11 +534,16 @@ async function handlePasswordChange() {
 }
 
 .menu-text {
-  flex: 1;
-  line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.25;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .active-indicator {
+  justify-self: end;
   width: 5px;
   height: 5px;
   border-radius: 50%;

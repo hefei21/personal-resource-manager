@@ -134,7 +134,13 @@ $env:PC_WORKER_MODEL_READINESS_MAX_BACKOFF_MS = '60000'
 `D:\PRManagerAI\cache\huggingface`、`D:\PRManagerAI\runtime\tei`、
 `D:\PRManagerAI\logs\bge-reranker`。现有 Qwen 不移动。
 
-LM Studio API Server 仍需由当前用户启动并监听 `127.0.0.1:1234`。TEI 需要 Docker/NVIDIA
+LM Studio API Server 仍需由当前用户启动；Worker 通过
+`PC_WORKER_ANSWER_BASE_URL` / `PC_WORKER_EMBEDDINGS_BASE_URL` 读取实际端口，以上 `1234` 只是示例，
+不是源码固定值。Windows 若返回 `listen EACCES`，先用
+`netsh interface ipv4 show excludedportrange protocol=tcp` 检查系统排除端口段，再选择一个未排除、
+未占用的端口并同步更新两个 Base URL；不要为单台机器把仓库默认示例整体改成专用端口。
+
+TEI 需要 Docker/NVIDIA
 Container Toolkit；准备、启动、停止和导出日志分别使用 `scripts/reranker-prepare-model.ps1`、
 `scripts/reranker-start.ps1`、`scripts/reranker-stop.ps1`、`scripts/reranker-logs.ps1`。准备脚本只
 接受固定 revision 的六个模型文件及固定 SHA-256/长度，已有 manifest 不会被重新生成；启动脚本

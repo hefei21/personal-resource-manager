@@ -54,6 +54,17 @@ test('complex status selection uses the headless-backed NativeSelect and icons a
   assert.match(layout, /NativeDialog, NativeIcon, NativeInput/)
 })
 
+test('desktop navigation uses a code-native brand mark and fixed alignment columns', () => {
+  const layout = read('pc/layout/Layout.vue')
+  const navigation = read('router/navigation.js')
+
+  assert.doesNotMatch(layout, /class="brand-mark"[^>]*>雨</)
+  assert.match(layout, /class="brand-window"/)
+  assert.match(layout, /grid-template-columns:\s*30px minmax\(0, 1fr\) 8px/)
+  assert.match(layout, /\.menu-text[\s\S]*text-align:\s*left/)
+  assert.match(navigation, /library:[\s\S]*pcIcon:\s*'stack'/)
+})
+
 test('demo workspace exposes four guided journeys and all three evidence layers', () => {
   const demo = read('views/DemoWorkspace.vue')
   const service = read('../../backend/src/services/demoWorkspace.js')
