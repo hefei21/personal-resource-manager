@@ -2,7 +2,6 @@
   <div class="search-page">
     <section class="search-hero">
       <div>
-        <h1>统一搜索</h1>
         <p>由 NAS 本机 SQLite FTS5 与 commit 绑定符号索引提供，PC Worker 离线也可搜索。</p>
       </div>
       <button class="secondary-button" :disabled="refreshing" @click="refreshIndex(false)">
@@ -643,7 +642,6 @@ onBeforeUnmount(() => {
 .search-page { max-width: 1120px; margin: 0 auto; padding: 24px; color: #1f2937; }
 .search-hero, .results-heading, .status-strip, .search-row, .result-title-row, .result-meta, .pagination-row { display: flex; align-items: center; }
 .search-hero { justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-.search-hero h1 { margin: 0 0 6px; font-size: 28px; }
 .search-hero p { margin: 0; color: #64748b; }
 .status-strip { flex-wrap: wrap; justify-content: space-between; gap: 12px; padding: 12px 16px; margin-bottom: 16px; border: 1px solid #dbeafe; border-radius: 10px; background: #eff6ff; }
 .status-strip > div { display: flex; flex-wrap: wrap; gap: 12px; }
@@ -719,7 +717,6 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 @media (max-width: 768px) {
   .search-page { padding: 4px 0 24px; }
   .search-hero { align-items: flex-start; }
-  .search-hero h1 { font-size: 22px; }
   .search-row { align-items: stretch; }
   .filter-grid { grid-template-columns: 1fr 1fr; }
   .status-strip, .feedback, .rag-status-strip { align-items: flex-start; flex-direction: column; }

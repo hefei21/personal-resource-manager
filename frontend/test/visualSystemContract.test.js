@@ -57,12 +57,25 @@ test('complex status selection uses the headless-backed NativeSelect and icons a
 test('desktop navigation uses a code-native brand mark and fixed alignment columns', () => {
   const layout = read('pc/layout/Layout.vue')
   const navigation = read('router/navigation.js')
+  const icons = read('components/native/NativeIcon.vue')
 
   assert.doesNotMatch(layout, /class="brand-mark"[^>]*>雨</)
   assert.match(layout, /class="brand-window"/)
   assert.match(layout, /grid-template-columns:\s*30px minmax\(0, 1fr\) 8px/)
   assert.match(layout, /\.menu-text[\s\S]*text-align:\s*left/)
   assert.match(navigation, /library:[\s\S]*pcIcon:\s*'stack'/)
+  assert.match(navigation, /routeName:\s*'Tasks'[\s\S]*pcIcon:\s*'check-square'/)
+  assert.match(icons, /'check-square':\s*'CheckSquare'/)
+})
+
+test('workspace pages use the global route title without duplicate page headings', () => {
+  const search = read('views/Search.vue')
+  const tasks = read('views/Tasks.vue')
+
+  assert.doesNotMatch(search, /<h1>\s*统一搜索\s*<\/h1>/)
+  assert.doesNotMatch(tasks, /<h1>\s*任务中心\s*<\/h1>/)
+  assert.match(search, /SQLite FTS5/)
+  assert.match(tasks, /class="tasks-toolbar"/)
 })
 
 test('demo workspace exposes four guided journeys and all three evidence layers', () => {

@@ -1,11 +1,8 @@
 <template>
   <div class="tasks-page">
-    <div class="tasks-heading">
-      <div>
-        <h1>任务中心</h1>
-        <p class="tasks-subtitle">查看后台任务进度，管理仍在运行或失败的任务。</p>
-      </div>
-      <div class="tasks-heading-actions">
+    <div class="tasks-toolbar">
+      <p class="tasks-subtitle">查看后台任务进度，管理仍在运行或失败的任务。</p>
+      <div class="tasks-toolbar-actions">
         <NativeButton
           v-if="isDesktop"
           theme="danger"
@@ -499,22 +496,15 @@ onBeforeUnmount(() => {
   margin: 0 auto;
 }
 
-.tasks-heading {
+.tasks-toolbar {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 20px;
 }
 
-.tasks-heading h1 {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: 24px;
-  font-weight: 600;
-}
-
-.tasks-heading-actions {
+.tasks-toolbar-actions {
   display: flex;
   gap: 10px;
 }
@@ -554,7 +544,7 @@ onBeforeUnmount(() => {
 }
 
 .tasks-subtitle {
-  margin: 8px 0 0;
+  margin: 0;
   color: #777;
   font-size: 14px;
 }
@@ -687,20 +677,16 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 768px) {
-  .tasks-heading {
+  .tasks-toolbar {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .tasks-heading h1 {
-    font-size: 20px;
-  }
-
-  .tasks-heading .native-btn {
+  .tasks-toolbar .native-btn {
     align-self: flex-start;
   }
 
-  .tasks-heading-actions {
+  .tasks-toolbar-actions {
     width: 100%;
   }
 

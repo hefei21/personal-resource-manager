@@ -303,6 +303,7 @@ const nameMapping = {
   // 勾选/关闭
   'check': 'Check',
   'check-circle': 'CheckCircle',
+  'check-square': 'CheckSquare',
   'check-rectangle': 'CheckSquare',
   'add-rectangle': 'PlusSquare',
   'close': 'X',
