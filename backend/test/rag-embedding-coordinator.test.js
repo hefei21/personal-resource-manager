@@ -48,7 +48,7 @@ function migrate(database) {
   })
 }
 
-function createFixture({ chunkCount = 2 } = {}) {
+function createFixture({ chunkCount = 2, chunkBodyBytes = null } = {}) {
   const database = new Database(':memory:')
   migrate(database)
   const snapshotId = Number(database.prepare(`
@@ -64,13 +64,17 @@ function createFixture({ chunkCount = 2 } = {}) {
   `).run(snapshotId, snapshotId)
   const chunks = []
   for (let index = 0; index < chunkCount; index += 1) {
-    const chunkSha256 = crypto.createHash('sha256').update(`chunk-${index}`, 'utf8').digest('hex')
+    const prefix = `chunk-${index}:`
+    const body = chunkBodyBytes === null
+      ? `body for chunk ${index}`
+      : `${prefix}${'x'.repeat(Math.max(1, chunkBodyBytes - Buffer.byteLength(prefix, 'utf8')))}`
+    const chunkSha256 = crypto.createHash('sha256').update(body, 'utf8').digest('hex')
     const chunkId = Number(database.prepare(`
       INSERT INTO rag_chunks (
         snapshot_id, ordinal, chunk_sha256, body, token_count, token_count_mode,
         title, section_path_json, locator_json
       ) VALUES (?, ?, ?, ?, NULL, 'deferred', ?, '[]', ?)
-    `).run(snapshotId, index, chunkSha256, `body for chunk ${index}`, `Chunk ${index}`, JSON.stringify({ paragraph: index })).lastInsertRowid)
+    `).run(snapshotId, index, chunkSha256, body, `Chunk ${index}`, JSON.stringify({ paragraph: index })).lastInsertRowid)
     chunks.push({ id: chunkId, chunkSha256 })
   }
   const embeddingModelId = Number(database.prepare(`
@@ -223,6 +227,25 @@ test('enqueues an embedding batch through the real SQLite TaskStore contract', n
     assert.equal(result.task.subjectType, 'rag.embedding.snapshot-model')
     assert.equal(result.task.subjectId, `${fixture.snapshotId}:${fixture.embeddingModelId}`)
     assert.equal(fixture.taskStore.list({ taskType: 'rag.embedding.generate' }).length, 1)
+  } finally {
+    fixture.database.close()
+  }
+})
+
+test('splits a large source into Worker-safe serialized embedding batches before enqueue', nativeTestOptions, async () => {
+  const fixture = createFixture({ chunkCount: 24, chunkBodyBytes: 64 * 1024 })
+  fixture.taskStore = taskStoreFake()
+  fixture.vectorStore = vectorStoreFake()
+  try {
+    const coordinator = createCoordinator(fixture)
+    const queued = await coordinator.enqueueBatch({
+      snapshotId: fixture.snapshotId,
+      embeddingModelId: fixture.embeddingModelId
+    })
+    assert.equal(queued.status, 'enqueued')
+    assert.equal(queued.task.input.chunks.length > 0, true)
+    assert.equal(queued.task.input.chunks.length < 24, true)
+    assert.equal(Buffer.byteLength(JSON.stringify(queued.task.input), 'utf8') <= 1024 * 1024, true)
   } finally {
     fixture.database.close()
   }

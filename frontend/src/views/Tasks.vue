@@ -180,7 +180,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { TASK_ACTIVE_STATUSES, useTasksStore } from '@/stores/tasks'
 import { useToast } from '@/composables/useToast'
 import {
@@ -207,8 +207,6 @@ import {
   NativeTag
 } from '@/components/native'
 
-const ACTIVE_POLL_INTERVAL_MS = 2000
-const IDLE_POLL_INTERVAL_MS = 15000
 const ACTIVE_STATUS_SET = new Set(TASK_ACTIVE_STATUSES)
 const ACTION_CONFLICT_CODES = new Set(['TASK_CANCEL_CONFLICT', 'TASK_RETRY_CONFLICT', 'TASK_ACTION_CONFLICT'])
 
@@ -243,9 +241,6 @@ const LOAD_ERROR_MESSAGES = Object.freeze({
   SESSION_REQUIRED: '登录状态已失效，请重新登录',
   OWNER_REQUIRED: '当前账号无权查看任务'
 })
-
-let pollTimer = null
-let mounted = false
 
 const loadErrorMessage = computed(() => LOAD_ERROR_MESSAGES[store.error] || '任务列表加载失败，请稍后重试')
 
@@ -301,7 +296,6 @@ function handlePageChange({ current, pageSize }) {
 
 async function handleRefresh() {
   await store.refresh()
-  syncPolling()
 }
 
 async function handleAction(action, taskItem) {
@@ -359,61 +353,14 @@ function syncDesktopMedia(event) {
   }
 }
 
-function isPageVisible() {
-  return typeof document !== 'undefined' && document.visibilityState === 'visible'
-}
-
-function stopPolling() {
-  if (pollTimer !== null) {
-    clearTimeout(pollTimer)
-    pollTimer = null
-  }
-}
-
-function syncPolling() {
-  stopPolling()
-  if (!mounted || !isPageVisible()) {
-    stopPolling()
-    return
-  }
-  const delay = store.hasActiveTasks ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS
-  pollTimer = window.setTimeout(() => {
-    pollTimer = null
-    if (!mounted || !isPageVisible()) return
-    void store.refresh().finally(syncPolling)
-  }, delay)
-}
-
-function handleVisibilityChange() {
-  if (!isPageVisible()) {
-    stopPolling()
-    return
-  }
-  void store.refresh().finally(syncPolling)
-}
-
-async function loadTasks() {
-  await store.fetch()
-  if (mounted) syncPolling()
-}
-
-watch(() => store.hasActiveTasks, () => {
-  if (mounted) syncPolling()
-})
-
 onMounted(() => {
-  mounted = true
   desktopMediaQuery = window.matchMedia('(min-width: 769px)')
   syncDesktopMedia(desktopMediaQuery)
   desktopMediaQuery.addEventListener('change', syncDesktopMedia)
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-  void loadTasks()
+  void store.fetch()
 })
 
 onBeforeUnmount(() => {
-  mounted = false
-  stopPolling()
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
   desktopMediaQuery?.removeEventListener('change', syncDesktopMedia)
 })
 </script>

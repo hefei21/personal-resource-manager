@@ -543,3 +543,21 @@ test('Worker preserves deterministic content extraction errors and does not retr
     })
   }
 })
+
+test('Worker preserves deterministic embedding contract errors for task-center diagnosis', () => {
+  for (const code of [
+    'WORKER_EMBEDDING_INPUT_INVALID',
+    'WORKER_EMBEDDING_INPUT_TOO_LARGE',
+    'WORKER_EMBEDDING_BATCH_INVALID',
+    'WORKER_EMBEDDING_MODEL_MISMATCH',
+    'WORKER_EMBEDDING_TASK_INVALID',
+    'WORKER_EMBEDDING_RESULT_INVALID',
+    'WORKER_EMBEDDING_NOT_CONFIGURED'
+  ]) {
+    assert.deepEqual(classifyWorkerFailure({ code }), {
+      code,
+      summary: 'Worker embedding contract rejected the task.',
+      retryable: false
+    })
+  }
+})

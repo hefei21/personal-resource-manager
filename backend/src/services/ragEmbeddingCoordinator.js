@@ -19,6 +19,7 @@ export const RAG_EMBEDDING_TASK_TYPE = 'rag.embedding.generate'
 export const RAG_EMBEDDING_PROCESSOR_VERSION = 'v1'
 export const RAG_EMBEDDING_MAX_BATCH_ITEMS = 256
 export const RAG_EMBEDDING_DOCUMENT_PREFIX = 'search_document: '
+export const RAG_EMBEDDING_TASK_SAFE_INPUT_BYTES = 1024 * 1024
 
 export const RAG_EMBEDDING_COORDINATOR_ERROR_CODES = Object.freeze({
   INPUT_INVALID: 'RAG_EMBEDDING_INPUT_INVALID',
@@ -459,6 +460,14 @@ export class RagEmbeddingCoordinator {
     let projected
     while (chunks.length > 0) {
       const input = this.#buildInput(row, chunks, model)
+      const serializedBytes = Buffer.byteLength(JSON.stringify(input), 'utf8')
+      if (serializedBytes > RAG_EMBEDDING_TASK_SAFE_INPUT_BYTES) {
+        if (chunks.length === 1) {
+          fail(RAG_EMBEDDING_COORDINATOR_ERROR_CODES.TASK_INVALID, 'embedding task input exceeds the Worker-safe byte limit.')
+        }
+        chunks = chunks.slice(0, Math.max(1, Math.floor(chunks.length / 2)))
+        continue
+      }
       try {
         projected = processor.projectInput(input)
         break

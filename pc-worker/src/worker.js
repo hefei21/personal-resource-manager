@@ -34,6 +34,15 @@ const CONTENT_EXTRACT_FAILURE_CODES = new Set([
   'WORKER_CONTENT_EXTRACT_PDF_INVALID',
   'WORKER_ARTIFACT_UPLOAD_FAILED'
 ])
+const EMBEDDING_CONTRACT_FAILURE_CODES = new Set([
+  'WORKER_EMBEDDING_INPUT_INVALID',
+  'WORKER_EMBEDDING_INPUT_TOO_LARGE',
+  'WORKER_EMBEDDING_BATCH_INVALID',
+  'WORKER_EMBEDDING_MODEL_MISMATCH',
+  'WORKER_EMBEDDING_TASK_INVALID',
+  'WORKER_EMBEDDING_RESULT_INVALID',
+  'WORKER_EMBEDDING_NOT_CONFIGURED'
+])
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -54,6 +63,13 @@ function failureFor(error) {
       retryable: error?.retryable === true
     }
   }
+  if (EMBEDDING_CONTRACT_FAILURE_CODES.has(error?.code)) {
+    return {
+      code: error.code,
+      summary: 'Worker embedding contract rejected the task.',
+      retryable: false
+    }
+  }
   if (error?.code === 'WORKER_PROCESSOR_CANCELLED') {
     // A local stop aborts the in-flight request. The lease must be offered
     // again after the worker comes back rather than being lost permanently.
@@ -68,9 +84,7 @@ function failureFor(error) {
     'WORKER_RERANK_HTTP_FAILED', 'WORKER_RERANK_TIMEOUT'].includes(error?.code)) {
     return { code: 'WORKER_MODEL_UNAVAILABLE', summary: 'The configured local model became unavailable.', retryable: true }
   }
-  if (['WORKER_PROCESSOR_UNSUPPORTED', 'WORKER_EMBEDDING_INPUT_INVALID', 'WORKER_EMBEDDING_INPUT_TOO_LARGE', 'WORKER_EMBEDDING_BATCH_INVALID',
-    'WORKER_EMBEDDING_MODEL_MISMATCH', 'WORKER_EMBEDDING_TASK_INVALID', 'WORKER_EMBEDDING_RESPONSE_INVALID',
-    'WORKER_EMBEDDING_RESULT_INVALID', 'WORKER_EMBEDDING_NOT_CONFIGURED', 'WORKER_ANSWER_INPUT_INVALID',
+  if (['WORKER_PROCESSOR_UNSUPPORTED', 'WORKER_ANSWER_INPUT_INVALID',
     'WORKER_ANSWER_INPUT_TOO_LARGE', 'WORKER_ANSWER_MODEL_MISMATCH', 'WORKER_ANSWER_TASK_INVALID',
     'WORKER_ANSWER_RESULT_INVALID', 'WORKER_ANSWER_RESPONSE_INVALID', 'WORKER_ANSWER_NOT_CONFIGURED',
     'WORKER_ANSWER_BUDGET_INVALID', 'WORKER_RERANK_INPUT_INVALID', 'WORKER_RERANK_INPUT_TOO_LARGE',

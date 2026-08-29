@@ -67,6 +67,13 @@ export const TASK_ERROR_MESSAGES = Object.freeze({
   WORKER_CONTENT_EXTRACT_EMPTY: '文件中没有提取到可索引正文',
   WORKER_CONTENT_EXTRACT_PDF_INVALID: 'PDF 结构无效或无法解析',
   WORKER_ARTIFACT_UPLOAD_FAILED: '提取结果上传失败',
+  WORKER_EMBEDDING_INPUT_INVALID: '向量任务输入不符合 Worker 契约',
+  WORKER_EMBEDDING_INPUT_TOO_LARGE: '向量批次超过 Worker 的安全大小限制',
+  WORKER_EMBEDDING_BATCH_INVALID: '向量批次数量或分块标识无效',
+  WORKER_EMBEDDING_MODEL_MISMATCH: '向量任务绑定的模型与当前 Worker 配置不一致',
+  WORKER_EMBEDDING_TASK_INVALID: '向量任务的处理器身份无效',
+  WORKER_EMBEDDING_RESULT_INVALID: 'Worker 生成的向量结果无效',
+  WORKER_EMBEDDING_NOT_CONFIGURED: 'Worker 尚未配置向量模型',
   WORKER_PROCESSING_FAILED: 'Worker 处理失败；旧任务未保留具体原因',
   WORKER_REQUEST_REJECTED: 'NAS 拒绝了 Worker 请求；请检查内容授权与版本',
   WORKER_MODEL_NOT_READY: '所需本地模型未就绪',
@@ -85,6 +92,16 @@ export const TASK_ERROR_MESSAGES = Object.freeze({
 
 const SAFE_TASK_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
 const NON_RETRYABLE_TASK_TYPES = new Set(['rag.query.embed', 'rag.rerank', 'rag.answer.generate'])
+const NON_RETRYABLE_ERROR_CODES = new Set([
+  'WORKER_PROCESSOR_INPUT_INVALID',
+  'WORKER_EMBEDDING_INPUT_INVALID',
+  'WORKER_EMBEDDING_INPUT_TOO_LARGE',
+  'WORKER_EMBEDDING_BATCH_INVALID',
+  'WORKER_EMBEDDING_MODEL_MISMATCH',
+  'WORKER_EMBEDDING_TASK_INVALID',
+  'WORKER_EMBEDDING_RESULT_INVALID',
+  'WORKER_EMBEDDING_NOT_CONFIGURED'
+])
 
 export function taskTypeLabel(taskType) {
   return TASK_TYPE_LABELS[taskType] || '系统后台任务'
@@ -133,5 +150,6 @@ export function taskErrorLabel(errorCode) {
 }
 
 export function taskCanRetry(task) {
-  return task?.status === 'failed' && !NON_RETRYABLE_TASK_TYPES.has(task?.taskType)
+  return task?.status === 'failed' && !NON_RETRYABLE_TASK_TYPES.has(task?.taskType) &&
+    !NON_RETRYABLE_ERROR_CODES.has(task?.errorCode)
 }
