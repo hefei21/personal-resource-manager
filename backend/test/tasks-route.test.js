@@ -19,7 +19,7 @@ import {
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 process.env.DATA_PATH ??= path.join(os.tmpdir(), 'tasks-route-test-data')
 
-const { createTasksRouter } = await import('../src/routes/tasks.js')
+const { createTasksRouter, projectTaskSource } = await import('../src/routes/tasks.js')
 const { countTasks, createTaskStore, listTasks } = await import('../src/services/taskStore.js')
 
 const require = createRequire(import.meta.url)
@@ -304,6 +304,7 @@ test('tasks endpoint applies strict filters, DESC pagination, and matching total
       { headers: ownerHeaders() }
     )
     assert.equal(response.status, 200)
+    assert.equal(response.headers.get('cache-control'), 'no-store')
     const body = await response.json()
     assert.deepEqual(body.data.map(({ id }) => id), [1])
     assert.equal(body.total, 2)
@@ -719,8 +720,89 @@ test('catalog reserves retry metadata for the next task-center node', () => {
     assert.equal(metadata.processorVersion, 'v1')
     assert.equal(typeof metadata.executionClass, 'string')
     assert.ok(metadata.mutexTaskTypes.includes(taskType))
-    assert.deepEqual(metadata.retryableFrom, ['failed'])
+    assert.deepEqual(
+      metadata.retryableFrom,
+      ['rag.query.embed', 'rag.rerank', 'rag.answer.generate'].includes(taskType) ? [] : ['failed']
+    )
   }
+})
+
+test('RAG worker task projections expose bounded operational summaries without query, evidence, or vectors', () => {
+  const model = {
+    provider: 'local-provider', modelId: 'local-model', modelRevision: 'rev-1',
+    dimensions: 3, inputLimit: 8192, configHash: 'a'.repeat(64)
+  }
+  const embedding = projectTask(taskFixture({
+    taskType: 'rag.embedding.generate',
+    executionClass: 'gpu',
+    subjectType: 'rag.embedding.snapshot-model',
+    subjectId: '5:2',
+    input: {
+      schemaVersion: 1, snapshotId: 5, sourceType: 'ebook', sourceId: 23,
+      sourceVersionId: 'ebook:23:sha256', sourceContentSha256: 'b'.repeat(64), contentBytes: 99,
+      model,
+      chunks: [{ chunkId: 7, ordinal: 0, chunkSha256: 'c'.repeat(64), body: 'private chunk body' }]
+    },
+    result: {
+      schemaVersion: 1, processorVersion: 'v1',
+      output: { model, vectors: [{ embedding: [0.1, 0.2, 0.3] }] }
+    }
+  }))
+  assert.ok(embedding)
+  assert.deepEqual(embedding.input, {
+    snapshotId: 5,
+    sourceType: 'ebook',
+    sourceId: 23,
+    model: { modelId: 'local-model' },
+    chunkCount: 1
+  })
+  assert.deepEqual(embedding.result, { dimensions: 3, vectorCount: 1 })
+  assert.doesNotMatch(JSON.stringify(embedding), /private chunk body|0\.1/u)
+
+  const answer = projectTask(taskFixture({
+    taskType: 'rag.answer.generate',
+    executionClass: 'gpu',
+    subjectType: 'rag.answer.query',
+    subjectId: `answer-${'d'.repeat(32)}`,
+    input: {
+      schemaVersion: 1, querySha256: 'd'.repeat(64), query: 'private question', model,
+      evidence: [{ citationId: 'C1', text: 'private evidence' }]
+    },
+    result: {
+      schemaVersion: 1, processorVersion: 'v1',
+      output: { answer: 'private answer', abstained: false, citations: ['C1'] }
+    }
+  }))
+  assert.ok(answer)
+  assert.deepEqual(answer.input, { model: { modelId: 'local-model' }, evidenceCount: 1 })
+  assert.deepEqual(answer.result, { abstained: false, citationCount: 1 })
+  assert.doesNotMatch(JSON.stringify(answer), /private question|private evidence|private answer/u)
+})
+
+test('task source presentation resolves RAG resources to owner-visible titles and keeps system scopes explicit', () => {
+  const database = {
+    prepare(sql) {
+      assert.match(sql, /FROM books/u)
+      return { get: (id) => ({ title: id === 23 ? '无职转生' : null }) }
+    }
+  }
+  const extracted = projectTask(taskFixture({
+    taskType: 'rag.content.extract',
+    executionClass: 'cpu',
+    subjectType: 'rag-source',
+    subjectId: 'ebook:23',
+    input: {
+      schemaVersion: 1, sourceType: 'ebook', sourceId: 23, sourceVersionId: 'ebook:23:sha256',
+      sourceContentSha256: 'a'.repeat(64), contentBytes: 1024, format: 'epub'
+    },
+    result: null
+  }))
+  assert.deepEqual(projectTaskSource(database, extracted), {
+    kind: 'resource', type: 'ebook', id: 23, label: '电子书', title: '无职转生', route: '/books'
+  })
+  assert.deepEqual(projectTaskSource(null, projectTask(taskFixture())), {
+    kind: 'scope', type: 'game-library', label: '游戏库', title: 'Steam 游戏库'
+  })
 })
 
 test('Stage 4 import tasks project only opaque identifiers and bounded counts', () => {

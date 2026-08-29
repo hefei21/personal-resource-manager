@@ -125,3 +125,34 @@ test('rejects malformed input and observes cancellation before collecting', asyn
   )
   assert.equal(collected, false)
 })
+
+test('a selected source with no usable text result fails the parent task and persists source failure state', async () => {
+  const writes = []
+  const database = {
+    prepare(sql) {
+      return { run: (...values) => writes.push({ sql, values }) }
+    }
+  }
+  const processor = createRagIndexTaskProcessor({
+    database,
+    collectSources: async () => ({ sources: [], errors: [] }),
+    serviceFactory: () => ({
+      refresh: async () => ({
+        status: 'partial', sourceCount: 0, indexedCount: 0, skippedCount: 0,
+        failedCount: 0, errorCount: 1,
+        errors: [{ code: 'RAG_SOURCE_EBOOK_READ_FAILED', sourceType: 'ebook', sourceId: 7 }],
+        sources: []
+      })
+    })
+  })
+  const selected = task({
+    input: { source: { type: 'ebook', id: 7 }, filter: { sourceIds: [7] }, rebuild: true }
+  })
+  await assert.rejects(
+    () => processor({ task: selected }),
+    (error) => error?.code === RAG_INDEX_TASK_ERROR_CODES.SOURCE_FAILED && error?.retryable === false
+  )
+  assert.equal(writes.length, 1)
+  assert.match(writes[0].sql, /INSERT INTO rag_source_state/u)
+  assert.deepEqual(writes[0].values.slice(0, 3), ['ebook', 7, 'RAG_SOURCE_EBOOK_READ_FAILED'])
+})

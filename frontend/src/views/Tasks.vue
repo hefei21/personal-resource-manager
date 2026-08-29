@@ -81,13 +81,15 @@
 
           <article v-for="task in store.tasks" :key="task.id" class="task-row" role="row">
             <div class="task-cell task-cell--main" data-label="任务" role="cell">
-              <strong>{{ taskTypeLabel(task.taskType) }}</strong>
-              <NativeTag :theme="statusTheme(task.status)" variant="light">
-                {{ statusLabel(task.status) }}
-              </NativeTag>
+              <div class="task-main-copy">
+                <strong>{{ taskTypeLabel(task.taskType) }}</strong>
+                <small>{{ taskStageLabel(task) }}</small>
+              </div>
+              <NativeTag :theme="taskStatusTheme(task)" variant="light">{{ taskStatusLabel(task) }}</NativeTag>
             </div>
             <div class="task-cell task-cell--subject" data-label="来源资源" role="cell">
-              {{ subjectLabel(task.subject) }}
+              <strong>{{ taskSourcePresentation(task).title }}</strong>
+              <small>{{ taskSourcePresentation(task).meta }}</small>
             </div>
             <div class="task-cell task-cell--progress" data-label="进度" role="cell">
               <NativeProgress
@@ -107,8 +109,10 @@
             </div>
             <div class="task-cell task-cell--error" data-label="错误信息" role="cell">
               <span v-if="task.errorCode" class="task-error-text">
-                {{ taskErrorLabel(task.errorCode) }}
+                <strong>{{ taskErrorLabel(task.errorCode) }}</strong>
+                <small>{{ task.errorCode }}</small>
               </span>
+              <span v-else-if="effectiveTaskStatus(task) === 'partial'" class="task-warning-text">部分来源未完成，请查看来源状态</span>
               <span v-else class="tasks-muted">—</span>
             </div>
             <div class="task-cell task-cell--actions" data-label="操作" role="cell">
@@ -123,7 +127,7 @@
                 取消
               </NativeButton>
               <NativeButton
-                v-else-if="task.status === 'failed'"
+                v-else-if="taskCanRetry(task)"
                 theme="primary"
                 variant="outline"
                 size="small"
@@ -180,6 +184,17 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { TASK_ACTIVE_STATUSES, useTasksStore } from '@/stores/tasks'
 import { useToast } from '@/composables/useToast'
 import {
+  TASK_TYPE_OPTIONS,
+  effectiveTaskStatus,
+  taskCanRetry,
+  taskErrorLabel,
+  taskSourcePresentation,
+  taskStageLabel,
+  taskStatusLabel,
+  taskStatusTheme,
+  taskTypeLabel
+} from '@/domain/taskPresentation'
+import {
   NativeButton,
   NativeCard,
   NativeEmpty,
@@ -192,8 +207,8 @@ import {
   NativeTag
 } from '@/components/native'
 
-const POLL_INTERVAL_MS = 2000
-const SAFE_TASK_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
+const ACTIVE_POLL_INTERVAL_MS = 2000
+const IDLE_POLL_INTERVAL_MS = 15000
 const ACTIVE_STATUS_SET = new Set(TASK_ACTIVE_STATUSES)
 const ACTION_CONFLICT_CODES = new Set(['TASK_CANCEL_CONFLICT', 'TASK_RETRY_CONFLICT', 'TASK_ACTION_CONFLICT'])
 
@@ -213,69 +228,13 @@ const statusOptions = [
   { value: 'cancelled', label: '已取消' }
 ]
 
-const taskTypeOptions = [
-  { value: 'code.repository.clone', label: '代码仓库克隆' },
-  { value: 'code.repository.sync', label: '代码仓库同步' },
-  { value: 'code.repository.reclone', label: '代码仓库安全重克隆' },
-  { value: 'music.lyrics.batch', label: '批量下载歌词' },
-  { value: 'games.steam.sync', label: 'Steam 游戏同步' },
-  { value: 'anime.bangumi.refresh', label: '动漫信息刷新' },
-  { value: 'ebook.cover.generate', label: '电子书封面生成' },
-  { value: 'ebook.metadata.reparse', label: '电子书元数据重解析' },
-  { value: 'music.metadata.reparse', label: '音乐元数据重解析' },
-  { value: 'search.index.refresh', label: '统一搜索索引刷新' }
-]
+const taskTypeOptions = TASK_TYPE_OPTIONS
 
 const orderOptions = [
   { value: 'desc', label: '最新优先' },
   { value: 'asc', label: '最早优先' }
 ]
 
-const TASK_TYPE_LABELS = Object.freeze(Object.fromEntries(taskTypeOptions.map(({ value, label }) => [value, label])))
-const STATUS_LABELS = Object.freeze({
-  pending: '排队中',
-  leased: '运行中',
-  running: '运行中',
-  succeeded: '已完成',
-  failed: '失败',
-  cancelled: '已取消'
-})
-const STATUS_THEMES = Object.freeze({
-  pending: 'warning',
-  leased: 'primary',
-  running: 'primary',
-  succeeded: 'success',
-  failed: 'danger',
-  cancelled: 'default'
-})
-const SUBJECT_LABELS = Object.freeze({
-  'code-repository': '代码仓库',
-  anime: '动漫',
-  ebook: '电子书',
-  music: '音乐',
-  'music-library': '音乐库',
-  'game-library': 'Steam游戏库',
-  'search-index': '统一搜索索引'
-})
-const TASK_ERROR_MESSAGES = Object.freeze({
-  TASK_PROCESSOR_FAILED: '任务处理失败，请稍后重试',
-  TASK_HEARTBEAT_FAILED: '任务运行状态异常，请稍后重试',
-  TASK_LEASE_EXPIRED: '任务运行超时，请稍后重试',
-  TASK_PROGRESS_REJECTED: '任务进度更新失败',
-  TASK_INPUT_INVALID: '任务输入无效',
-  TASK_ID_INVALID: '来源资源标识无效',
-  TASK_TYPE_UNSUPPORTED: '任务类型暂不支持',
-  EBOOK_METADATA_PARSE_FAILED: '电子书元数据解析失败，可重试',
-  EBOOK_METADATA_PARSE_TIMEOUT: '电子书元数据解析超时，可重试',
-  MUSIC_METADATA_PARSE_FAILED: '音乐元数据解析失败，可重试',
-  MUSIC_METADATA_PARSE_TIMEOUT: '音乐元数据解析超时，可重试',
-  TASK_CANCELLED: '任务已取消',
-  EBOOK_COVER_TASK_TIMEOUT: '封面生成超时，请稍后重试',
-  EBOOK_COVER_TASK_MISSING: '封面任务不存在',
-  EBOOK_COVER_TASK_FAILED: '封面生成失败，请稍后重试',
-  PROXY_DNS_FAILED: '代理服务名称无法解析，请检查容器网络',
-  PROXY_CONNECTION_FAILED: '代理服务暂时无法连接'
-})
 const LOAD_ERROR_MESSAGES = Object.freeze({
   TASK_QUERY_INVALID: '筛选条件无效，请重试',
   TASK_QUERY_FAILED: '任务列表加载失败，请稍后重试',
@@ -289,27 +248,6 @@ let pollTimer = null
 let mounted = false
 
 const loadErrorMessage = computed(() => LOAD_ERROR_MESSAGES[store.error] || '任务列表加载失败，请稍后重试')
-
-function statusLabel(status) {
-  return STATUS_LABELS[status] || '未知状态'
-}
-
-function statusTheme(status) {
-  return STATUS_THEMES[status] || 'default'
-}
-
-function taskTypeLabel(taskType) {
-  return TASK_TYPE_LABELS[taskType] || '其他任务'
-}
-
-function subjectLabel(subject) {
-  if (!subject || typeof subject !== 'object') return '未关联资源'
-  const label = SUBJECT_LABELS[subject.type]
-  if (!label) return '未关联资源'
-  if (subject.type === 'music-library' || subject.type === 'game-library') return label
-  const id = typeof subject.id === 'string' && /^[1-9]\d*$/u.test(subject.id) ? subject.id : null
-  return id ? `${label}#${id}` : label
-}
 
 function hasProgress(taskItem) {
   return typeof taskItem?.progress === 'number' && Number.isFinite(taskItem.progress) &&
@@ -335,14 +273,6 @@ function formatTime(timestamp) {
 
 function timestampLabel(taskItem) {
   return formatTime(taskItem?.timestamps?.updatedAt || taskItem?.timestamps?.createdAt)
-}
-
-function taskErrorLabel(errorCode) {
-  const safeCode = typeof errorCode === 'string' && SAFE_TASK_ERROR_CODE_PATTERN.test(errorCode)
-    ? errorCode
-    : null
-  if (!safeCode) return '任务失败（代码：未知）'
-  return TASK_ERROR_MESSAGES[safeCode] || `任务失败（代码：${safeCode}）`
 }
 
 function canCancel(taskItem) {
@@ -435,24 +365,23 @@ function isPageVisible() {
 
 function stopPolling() {
   if (pollTimer !== null) {
-    clearInterval(pollTimer)
+    clearTimeout(pollTimer)
     pollTimer = null
   }
 }
 
 function syncPolling() {
-  if (!mounted || !isPageVisible() || !store.hasActiveTasks) {
+  stopPolling()
+  if (!mounted || !isPageVisible()) {
     stopPolling()
     return
   }
-  if (pollTimer !== null) return
-  pollTimer = setInterval(() => {
-    if (!isPageVisible() || !store.hasActiveTasks) {
-      stopPolling()
-      return
-    }
+  const delay = store.hasActiveTasks ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS
+  pollTimer = window.setTimeout(() => {
+    pollTimer = null
+    if (!mounted || !isPageVisible()) return
     void store.refresh().finally(syncPolling)
-  }, POLL_INTERVAL_MS)
+  }, delay)
 }
 
 function handleVisibilityChange() {
@@ -637,6 +566,19 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
+.task-main-copy,
+.task-cell--subject {
+  display: grid;
+  gap: 4px;
+}
+
+.task-main-copy small,
+.task-cell--subject small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .task-cell--subject,
 .task-cell--time,
 .task-cell--error {
@@ -663,7 +605,22 @@ onBeforeUnmount(() => {
 }
 
 .task-error-text {
+  display: grid;
+  gap: 4px;
   color: #b42318;
+  line-height: 1.5;
+}
+
+.task-error-text small {
+  color: #c2410c;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.task-warning-text {
+  color: #a15c07;
   line-height: 1.5;
 }
 

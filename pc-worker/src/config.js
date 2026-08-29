@@ -287,6 +287,7 @@ export function loadConfig(env = process.env) {
   }
   const localData = env.LOCALAPPDATA || path.join(os.homedir(), '.local', 'share')
   const statePath = path.resolve(env.PC_WORKER_STATE_PATH || path.join(localData, 'PRManagerWorker', 'state.json'))
+  const logPath = path.resolve(env.PC_WORKER_LOG_PATH || path.join(localData, 'PRManagerWorker', 'worker.log'))
   const requestTimeoutMs = integer(env.PC_WORKER_REQUEST_TIMEOUT_MS, 30_000, 5_000, 5 * 60_000, 'PC_WORKER_REQUEST_TIMEOUT_MS')
   const modelReadinessIntervalMs = integer(
     env.PC_WORKER_MODEL_READINESS_INTERVAL_MS,
@@ -305,6 +306,7 @@ export function loadConfig(env = process.env) {
   return Object.freeze({
     baseUrl: baseUrl.toString().replace(/\/$/u, ''),
     statePath,
+    logPath,
     enrollmentToken: env.PC_WORKER_ENROLLMENT_TOKEN || null,
     displayName: (env.PC_WORKER_DISPLAY_NAME || os.hostname()).slice(0, 80),
     pollIntervalMs: integer(env.PC_WORKER_POLL_INTERVAL_MS, 1_000, 1_000, 60_000, 'PC_WORKER_POLL_INTERVAL_MS'),

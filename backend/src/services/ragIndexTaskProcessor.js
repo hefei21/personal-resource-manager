@@ -19,6 +19,7 @@ export const RAG_INDEX_TASK_ERROR_CODES = Object.freeze({
   INPUT_INVALID: 'RAG_INDEX_INPUT_INVALID',
   DATABASE_BUSY: 'RAG_INDEX_DATABASE_BUSY',
   CANCELLED: 'RAG_INDEX_CANCELLED',
+  SOURCE_FAILED: 'RAG_INDEX_SOURCE_FAILED',
   FAILED: 'RAG_INDEX_REFRESH_FAILED'
 })
 
@@ -214,6 +215,50 @@ function mapError(error, signal) {
   return taskError(RAG_INDEX_TASK_ERROR_CODES.FAILED, 'RAG index refresh failed.', false)
 }
 
+function selectedSource(input) {
+  const type = input?.source?.type
+  const id = positiveId(input?.source?.id)
+  return SOURCE_TYPES.has(type) && id !== null ? Object.freeze({ type, id }) : null
+}
+
+function sourceRefreshSucceeded(result) {
+  if (!isPlainObject(result)) return false
+  const indexed = Number(result.indexedCount)
+  const skipped = Number(result.skippedCount)
+  const failed = Number(result.failedCount)
+  return Number.isSafeInteger(indexed) && indexed >= 0 && Number.isSafeInteger(skipped) && skipped >= 0 &&
+    Number.isSafeInteger(failed) && failed === 0 && indexed + skipped > 0
+}
+
+function sourceFailureCode(result, selected) {
+  if (!Array.isArray(result?.errors)) return RAG_INDEX_TASK_ERROR_CODES.SOURCE_FAILED
+  const matching = result.errors.find((error) => isPlainObject(error) &&
+    (!error.sourceType || error.sourceType === selected.type) &&
+    (!error.sourceId || Number(error.sourceId) === selected.id) &&
+    typeof error.code === 'string' && /^[A-Z][A-Z0-9_.-]{0,127}$/u.test(error.code))
+  return matching?.code ?? RAG_INDEX_TASK_ERROR_CODES.SOURCE_FAILED
+}
+
+function recordSelectedSourceFailure(database, selected, result) {
+  if (!database?.prepare || !selected) return
+  const timestamp = new Date().toISOString()
+  const errorCode = sourceFailureCode(result, selected)
+  try {
+    database.prepare(`
+      INSERT INTO rag_source_state (
+        source_type, source_id, status, last_error_code,
+        last_started_at, last_completed_at, updated_at
+      ) VALUES (?, ?, 'failed', ?, ?, ?, ?)
+      ON CONFLICT(source_type, source_id) DO UPDATE SET
+        status = CASE WHEN rag_source_state.active_snapshot_id IS NULL THEN 'failed' ELSE 'stale' END,
+        last_error_code = excluded.last_error_code,
+        last_started_at = excluded.last_started_at,
+        last_completed_at = excluded.last_completed_at,
+        updated_at = excluded.updated_at
+    `).run(selected.type, selected.id, errorCode, timestamp, timestamp, timestamp)
+  } catch {}
+}
+
 export function createRagIndexTaskProcessor({
   database,
   databaseProvider = getDatabase,
@@ -330,6 +375,15 @@ export function createRagIndexTaskProcessor({
         signal: context.signal,
         onProgress: async (value) => progress(50 + Math.round(Number(value) * 0.5))
       })
+      const selected = selectedSource(input)
+      if (selected && !sourceRefreshSucceeded(result)) {
+        recordSelectedSourceFailure(databaseConnection, selected, result)
+        throw taskError(
+          RAG_INDEX_TASK_ERROR_CODES.SOURCE_FAILED,
+          'The selected RAG source did not produce a usable text index.',
+          false
+        )
+      }
       await enqueueEmbeddingWork(result, databaseConnection, context)
       return result
     } catch (error) {

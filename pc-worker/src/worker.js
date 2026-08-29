@@ -22,6 +22,18 @@ import { createModelReadiness, modelKindForTaskType } from './modelReadiness.js'
 
 const ACCESS_REFRESH_MARGIN_MS = 60_000
 const PROFILE_REFRESH_MS = 5 * 60_000
+const CONTENT_EXTRACT_FAILURE_CODES = new Set([
+  'WORKER_INPUT_STREAM_INVALID',
+  'WORKER_CONTENT_EXTRACT_INPUT_INVALID',
+  'WORKER_CONTENT_EXTRACT_INPUT_TOO_LARGE',
+  'WORKER_CONTENT_EXTRACT_ARCHIVE_INVALID',
+  'WORKER_CONTENT_EXTRACT_ARCHIVE_UNSAFE',
+  'WORKER_CONTENT_EXTRACT_ARCHIVE_TOO_LARGE',
+  'WORKER_CONTENT_EXTRACT_ARTIFACT_TOO_LARGE',
+  'WORKER_CONTENT_EXTRACT_EMPTY',
+  'WORKER_CONTENT_EXTRACT_PDF_INVALID',
+  'WORKER_ARTIFACT_UPLOAD_FAILED'
+])
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -34,6 +46,13 @@ function safeLog(logger, level, event, details = {}) {
 function failureFor(error) {
   if (error?.code === 'WORKER_INPUT_MISMATCH') {
     return { code: 'WORKER_INPUT_MISMATCH', summary: 'Authorized content identity mismatch.', retryable: false }
+  }
+  if (CONTENT_EXTRACT_FAILURE_CODES.has(error?.code)) {
+    return {
+      code: error.code,
+      summary: 'Worker content extraction failed.',
+      retryable: error?.retryable === true
+    }
   }
   if (error?.code === 'WORKER_PROCESSOR_CANCELLED') {
     // A local stop aborts the in-flight request. The lease must be offered
@@ -295,6 +314,13 @@ export class PcWorker {
     } catch (error) {
       await this.publishReadinessAfterFailure(modelKindForTaskType(task.taskType), error)
       const failure = failureFor(error)
+      safeLog(this.logger, 'warn', 'task_failed', {
+        taskId: task.id,
+        taskType: task.taskType,
+        code: error?.code || 'UNKNOWN',
+        reportedCode: failure.code,
+        retryable: failure.retryable
+      })
       try {
         await this.api.fail(this.state.accessToken, task, failure.code, failure.summary, failure.retryable)
       } catch (reportError) {

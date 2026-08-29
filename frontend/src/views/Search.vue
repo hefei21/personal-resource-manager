@@ -574,7 +574,9 @@ async function pollRagIndexTask(taskId) {
     ragRefreshing.value = false
     await Promise.all([loadRagCoverage(), loadRagStatus()])
     ragRefreshFeedback.value = task.status === 'succeeded'
-      ? 'RAG 索引刷新完成。'
+      ? task.result?.status === 'partial'
+        ? 'RAG 基础索引已生成，但部分内容存在警告；可在任务中心查看详情。'
+        : 'RAG 索引刷新完成。'
       : `RAG 索引任务未完成：${task.errorCode || task.status}`
   } catch {
     ragRefreshing.value = false

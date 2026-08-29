@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
+import { lookupPcWorkerProcessor } from './pcWorkerProcessorCatalog.js'
+
 const TASK_STATUS_SET = new Set([
   'pending',
   'leased',
@@ -184,6 +186,14 @@ function projectSearchIndexInput(input) {
   return Object.freeze({ rebuild, includeCodeFiles })
 }
 
+function safeOpaqueIdentifier(value, pattern, maxLength = 512) {
+  if (typeof value !== 'string') return null
+  const normalized = value.normalize('NFKC').trim()
+  if (!normalized || normalized.length > maxLength || /[\u0000-\u001f\u007f]/u.test(normalized) ||
+      (pattern && !pattern.test(normalized))) return null
+  return normalized
+}
+
 function projectRagSourceType(value, allowAll = false) {
   if (typeof value !== 'string') return null
   const normalized = value.normalize('NFKC').trim().toLowerCase()
@@ -283,6 +293,69 @@ function projectRagContentExtractSubjectId(value) {
 
 function ragContentExtractSubjectMatches(subjectId, input) {
   return isPlainObject(input) && subjectId === `${input.sourceType}:${input.sourceId}`
+}
+
+function clonePcWorkerInput(taskType, input) {
+  try {
+    return lookupPcWorkerProcessor(taskType, 'v1')?.projectInput(input) ?? null
+  } catch {
+    return null
+  }
+}
+
+function projectWorkerModelSummary(model) {
+  if (!isPlainObject(model) || typeof model.modelId !== 'string') return null
+  const modelId = model.modelId.normalize('NFKC').trim()
+  return modelId && modelId.length <= 512 && !/[\u0000-\u001f\u007f]/u.test(modelId)
+    ? Object.freeze({ modelId })
+    : null
+}
+
+function projectRagEmbeddingInput(input) {
+  const projected = clonePcWorkerInput('rag.embedding.generate', input)
+  const model = projectWorkerModelSummary(projected?.model)
+  if (!projected || !model || !Array.isArray(projected.chunks)) return null
+  return Object.freeze({
+    snapshotId: projected.snapshotId,
+    sourceType: projected.sourceType,
+    sourceId: projected.sourceId,
+    model,
+    chunkCount: projected.chunks.length
+  })
+}
+
+function projectRagQueryInput(taskType, input, collectionKey = null, countField = null) {
+  const projected = clonePcWorkerInput(taskType, input)
+  const model = projectWorkerModelSummary(projected?.model)
+  if (!projected || !model) return null
+  const count = collectionKey && Array.isArray(projected[collectionKey]) ? projected[collectionKey].length : null
+  return Object.freeze({ model, ...(count === null || !countField ? {} : { [countField]: count }) })
+}
+
+function projectRagQueryEmbedInput(input) {
+  return projectRagQueryInput('rag.query.embed', input)
+}
+
+function projectRagRerankInput(input) {
+  return projectRagQueryInput('rag.rerank', input, 'candidates', 'candidateCount')
+}
+
+function projectRagAnswerInput(input) {
+  return projectRagQueryInput('rag.answer.generate', input, 'evidence', 'evidenceCount')
+}
+
+function projectEmbeddingSubjectId(value) {
+  const normalized = safeOpaqueIdentifier(value, /^([1-9]\d*):([1-9]\d*)$/u, 64)
+  if (normalized === null) return null
+  return normalized.split(':').every((part) => safePositiveInteger(part) !== null) ? normalized : null
+}
+
+function projectQueryHashSubjectId(value) {
+  return safeOpaqueIdentifier(value, /^[a-f0-9]{64}$/u, 64)
+}
+
+function projectAnswerSubjectId(value) {
+  return safeOpaqueIdentifier(value, /^answer-[a-f0-9]{32}$/u, 39)
 }
 
 function projectAnimeRefreshInput(input) {
@@ -585,6 +658,42 @@ function projectRagContentExtractResult(result) {
   return Object.freeze({ extractorVersion, artifactBytes, sectionCount, format })
 }
 
+function workerResultOutput(result) {
+  return isPlainObject(result) && result.schemaVersion === 1 && result.processorVersion === 'v1' &&
+    isPlainObject(result.output)
+    ? result.output
+    : null
+}
+
+function projectRagEmbeddingResult(result) {
+  const output = workerResultOutput(result)
+  if (!output || !Array.isArray(output.vectors)) return null
+  const dimensions = safePositiveInteger(output.model?.dimensions)
+  const vectorCount = safeCounter(output.vectors.length)
+  return dimensions === null || vectorCount === null ? null : Object.freeze({ dimensions, vectorCount })
+}
+
+function projectRagQueryEmbedResult(result) {
+  const output = workerResultOutput(result)
+  const dimensions = safePositiveInteger(output?.model?.dimensions)
+  return dimensions === null || !Array.isArray(output?.embedding)
+    ? null
+    : Object.freeze({ dimensions })
+}
+
+function projectRagRerankResult(result) {
+  const output = workerResultOutput(result)
+  const candidateCount = safeCounter(output?.candidates?.length)
+  return candidateCount === null ? null : Object.freeze({ candidateCount })
+}
+
+function projectRagAnswerResult(result) {
+  const output = workerResultOutput(result)
+  const citationCount = safeCounter(output?.citations?.length)
+  if (!output || typeof output.abstained !== 'boolean' || citationCount === null) return null
+  return Object.freeze({ abstained: output.abstained, citationCount })
+}
+
 function projectResourceDomainResult(result) {
   return projectCounterResult(result, [
     'processed', 'resourcesCreated', 'resourcesReused', 'sourcesCreated',
@@ -642,7 +751,8 @@ function createDefinition({
   mutexTaskTypes,
   projectInput,
   cloneInput,
-  projectResult
+  projectResult,
+  retryableFrom = ['failed']
 }) {
   return Object.freeze({
     taskType,
@@ -654,7 +764,7 @@ function createDefinition({
     projectSubjectId,
     subjectMatchesInput: subjectMatchesInput ?? null,
     mutexTaskTypes: Object.freeze([...mutexTaskTypes]),
-    retryableFrom: Object.freeze(['failed']),
+    retryableFrom: Object.freeze([...retryableFrom]),
     projectInput,
     cloneInput,
     projectResult
@@ -809,6 +919,49 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     cloneInput: projectRagContentExtractInput,
     projectResult: projectRagContentExtractResult,
     mutexTaskTypes: ['rag.content.extract']
+  }),
+  'rag.embedding.generate': createDefinition({
+    taskType: 'rag.embedding.generate',
+    executionClass: 'gpu',
+    subjectType: 'rag.embedding.snapshot-model',
+    projectSubjectId: projectEmbeddingSubjectId,
+    projectInput: projectRagEmbeddingInput,
+    cloneInput: (input) => clonePcWorkerInput('rag.embedding.generate', input),
+    projectResult: projectRagEmbeddingResult,
+    mutexTaskTypes: ['rag.embedding.generate']
+  }),
+  'rag.query.embed': createDefinition({
+    taskType: 'rag.query.embed',
+    executionClass: 'gpu',
+    subjectType: 'rag-query-embed',
+    projectSubjectId: projectQueryHashSubjectId,
+    projectInput: projectRagQueryEmbedInput,
+    cloneInput: (input) => clonePcWorkerInput('rag.query.embed', input),
+    projectResult: projectRagQueryEmbedResult,
+    mutexTaskTypes: ['rag.query.embed'],
+    retryableFrom: []
+  }),
+  'rag.rerank': createDefinition({
+    taskType: 'rag.rerank',
+    executionClass: 'gpu',
+    subjectType: 'rag-rerank-query',
+    projectSubjectId: projectQueryHashSubjectId,
+    projectInput: projectRagRerankInput,
+    cloneInput: (input) => clonePcWorkerInput('rag.rerank', input),
+    projectResult: projectRagRerankResult,
+    mutexTaskTypes: ['rag.rerank'],
+    retryableFrom: []
+  }),
+  'rag.answer.generate': createDefinition({
+    taskType: 'rag.answer.generate',
+    executionClass: 'gpu',
+    subjectType: 'rag.answer.query',
+    projectSubjectId: projectAnswerSubjectId,
+    projectInput: projectRagAnswerInput,
+    cloneInput: (input) => clonePcWorkerInput('rag.answer.generate', input),
+    projectResult: projectRagAnswerResult,
+    mutexTaskTypes: ['rag.answer.generate'],
+    retryableFrom: []
   }),
   'code.repository.git_nas.discover': createDefinition({
     taskType: 'code.repository.git_nas.discover',

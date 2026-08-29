@@ -32,14 +32,16 @@ test('search UI preserves the Stage 6A scope, feedback, and safe locator contrac
   assert.doesNotMatch(source, /bookSearch|anime\.searchResources|fetch\s*\(/u)
 })
 
-test('frontend API and task center expose only the controlled search endpoints and task type', () => {
+test('frontend API and task presentation expose only the controlled search endpoints and task type', () => {
   const api = readFrontend('src/api/index.js')
   const tasks = readFrontend('src/views/Tasks.vue')
+  const presentation = readFrontend('src/domain/taskPresentation.js')
   assert.match(api, /global:\s*\(params\)\s*=>\s*api\.get\('\/search'/u)
   assert.match(api, /status:\s*\(\)\s*=>\s*api\.get\('\/search\/status'/u)
   assert.match(api, /refreshIndex:[\s\S]*api\.post\('\/search\/index\/refresh'/u)
-  assert.match(tasks, /search\.index\.refresh/u)
-  assert.match(tasks, /'search-index':\s*'统一搜索索引'/u)
+  assert.match(presentation, /search\.index\.refresh/u)
+  assert.match(presentation, /统一搜索索引刷新/u)
+  assert.match(tasks, /taskSourcePresentation/u)
 })
 
 test('resource pages consume public search locators on both layouts', () => {

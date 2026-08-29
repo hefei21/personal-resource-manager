@@ -76,6 +76,22 @@ const CLEANUP_INPUT_ERROR_CODES = new Set([
   'TASK_STORE_INPUT_INVALID'
 ])
 
+const TASK_RESOURCE_SPECS = Object.freeze({
+  document: Object.freeze({ label: '文档', route: '/documents', table: 'documents', titleSql: 'title' }),
+  ebook: Object.freeze({ label: '电子书', route: '/books', table: 'books', titleSql: 'title' }),
+  code_repository: Object.freeze({ label: '代码仓库', route: '/code', table: 'code_repositories', titleSql: 'name' }),
+  anime: Object.freeze({ label: '动漫', route: '/anime', table: 'anime', titleSql: "COALESCE(NULLIF(name_cn, ''), title)" }),
+  music: Object.freeze({ label: '音乐', route: '/music', table: 'music', titleSql: 'title' })
+})
+
+const TASK_SCOPE_PRESENTATIONS = Object.freeze({
+  'music-library': Object.freeze({ type: 'music-library', label: '音乐库', title: '全部音乐' }),
+  'game-library': Object.freeze({ type: 'game-library', label: '游戏库', title: 'Steam 游戏库' }),
+  'search-index': Object.freeze({ type: 'search-index', label: '统一搜索', title: '全文与符号索引' }),
+  'resource-domain-import': Object.freeze({ type: 'resource-domain-import', label: '资源库', title: '资源域适配' }),
+  'rag-query': Object.freeze({ type: 'rag-query', label: '问资料', title: 'RAG 查询请求' })
+})
+
 async function defaultDatabaseProvider(req) {
   const { getDatabase } = await import('../config/database.js')
   return getDatabase(req)
@@ -331,6 +347,102 @@ function safeProjectTask(task) {
   }
 }
 
+function positiveResourceId(value) {
+  const normalized = typeof value === 'string' && /^[1-9]\d*$/u.test(value.trim()) ? Number(value) : value
+  return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : null
+}
+
+function safeResourceTitle(value) {
+  if (typeof value !== 'string') return null
+  const normalized = value.normalize('NFKC').replace(/[\u0000-\u001f\u007f]/gu, ' ').trim()
+  return normalized ? normalized.slice(0, 256) : null
+}
+
+function taskResourceIdentity(task) {
+  const input = task?.input
+  if (input?.source && input.source.type !== 'all') {
+    const id = positiveResourceId(input.source.id)
+    if (TASK_RESOURCE_SPECS[input.source.type] && id !== null) return { type: input.source.type, id }
+  }
+  if (TASK_RESOURCE_SPECS[input?.sourceType]) {
+    const id = positiveResourceId(input.sourceId)
+    if (id !== null) return { type: input.sourceType, id }
+  }
+  const directSubjectTypes = Object.freeze({
+    'code-repository': 'code_repository',
+    ebook: 'ebook',
+    anime: 'anime',
+    music: 'music'
+  })
+  const type = directSubjectTypes[task?.subject?.type]
+  const id = positiveResourceId(task?.subject?.id)
+  return type && id !== null ? { type, id } : null
+}
+
+function taskScopePresentation(task) {
+  if (['rag.query.embed', 'rag.rerank', 'rag.answer.generate'].includes(task?.taskType)) {
+    return TASK_SCOPE_PRESENTATIONS['rag-query']
+  }
+  if (task?.taskType === 'rag.index.refresh') {
+    return Object.freeze({ type: 'rag-index', label: 'RAG 索引', title: '全部可索引资料' })
+  }
+  if (task?.taskType === 'rag.embedding.generate') {
+    return Object.freeze({ type: 'rag-embedding', label: 'RAG 向量', title: '索引分块向量化' })
+  }
+  if (task?.subject?.type === 'nas-scan-root') {
+    const id = positiveResourceId(task.subject.id)
+    return Object.freeze({ type: 'nas-scan-root', label: 'NAS 扫描范围', title: id === null ? 'NAS 资源扫描' : `扫描范围 #${id}` })
+  }
+  if (task?.subject?.type === 'git-nas-candidate') {
+    const id = positiveResourceId(task.subject.id)
+    return Object.freeze({ type: 'git-nas-candidate', label: 'Git NAS 候选', title: id === null ? '待导入仓库' : `候选 #${id}` })
+  }
+  if (task?.subject?.type === 'resource-version') {
+    const id = positiveResourceId(task.subject.id)
+    return Object.freeze({ type: 'resource-version', label: '资源版本', title: id === null ? '内容检查' : `版本 #${id}` })
+  }
+  return TASK_SCOPE_PRESENTATIONS[task?.subject?.type] ?? null
+}
+
+function lookupTaskResource(database, identity, cache) {
+  const spec = TASK_RESOURCE_SPECS[identity?.type]
+  if (!spec || !database || typeof database.prepare !== 'function') return null
+  const cacheKey = `${identity.type}:${identity.id}`
+  if (cache?.has(cacheKey)) return cache.get(cacheKey)
+  try {
+    const row = database.prepare(`SELECT ${spec.titleSql} AS title FROM ${spec.table} WHERE id = ? LIMIT 1`).get(identity.id)
+    const title = safeResourceTitle(row?.title)
+    cache?.set(cacheKey, title)
+    return title
+  } catch {
+    cache?.set(cacheKey, null)
+    return null
+  }
+}
+
+export function projectTaskSource(database, task, cache = null) {
+  const identity = taskResourceIdentity(task)
+  if (identity) {
+    const spec = TASK_RESOURCE_SPECS[identity.type]
+    const title = lookupTaskResource(database, identity, cache) ?? `${spec.label} #${identity.id}`
+    return Object.freeze({
+      kind: 'resource',
+      type: identity.type,
+      id: identity.id,
+      label: spec.label,
+      title,
+      route: spec.route
+    })
+  }
+  const scope = taskScopePresentation(task)
+  return scope ? Object.freeze({ kind: 'scope', ...scope }) : Object.freeze({ kind: 'system', type: 'system', label: '系统', title: '后台系统任务' })
+}
+
+function projectTaskForResponse(database, task, cache = null) {
+  const projected = safeProjectTask(task)
+  return projected === null ? null : Object.freeze({ ...projected, source: projectTaskSource(database, projected, cache) })
+}
+
 function normalizeTaskIdParam(value) {
   if (typeof value !== 'string' || !/^[1-9]\d*$/u.test(value)) return null
   const id = Number(value)
@@ -401,8 +513,10 @@ export function createTasksRouter({
       const options = listOptions(query)
       const total = countTasks(database, options)
       const tasks = listTasks(database, options)
-      const data = tasks.map(projectTask).filter((task) => task !== null)
+      const sourceCache = new Map()
+      const data = tasks.map((task) => projectTaskForResponse(database, task, sourceCache)).filter((task) => task !== null)
       const totalPages = total === 0 ? 0 : Math.ceil(total / query.pageSize)
+      res.setHeader('Cache-Control', 'no-store')
       return res.json({
         data,
         pagination: {
@@ -503,9 +617,12 @@ export function createTasksRouter({
     if (id === null) return sendNotFound(res)
 
     try {
-      const task = getTaskById(await databaseProvider(req), id)
-      const data = projectTask(task)
-      return data === null ? sendNotFound(res) : res.json({ data })
+      const database = await databaseProvider(req)
+      const task = getTaskById(database, id)
+      const data = projectTaskForResponse(database, task)
+      if (data === null) return sendNotFound(res)
+      res.setHeader('Cache-Control', 'no-store')
+      return res.json({ data })
     } catch (error) {
       if (error?.code === 'TASK_NOT_FOUND' || error?.code === 'TASK_ID_INVALID') return sendNotFound(res)
       return sendQueryFailure(res)

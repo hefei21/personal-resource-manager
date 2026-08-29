@@ -6,13 +6,15 @@ import {
   parentProcessIdFromCommandLine
 } from './config.js'
 import { PcWorker } from './worker.js'
+import { createFileLogger } from './fileLogger.js'
 
 applyCommandLineConfig()
 const config = loadConfig()
 ensureNoProxyForUrl(process.env, config.baseUrl)
 const worker = new PcWorker({
   config,
-  api: new WorkerApiClient({ baseUrl: config.baseUrl, requestTimeoutMs: config.requestTimeoutMs })
+  api: new WorkerApiClient({ baseUrl: config.baseUrl, requestTimeoutMs: config.requestTimeoutMs }),
+  logger: createFileLogger(config.logPath)
 })
 const parentProcessId = parentProcessIdFromCommandLine()
 let parentWatch

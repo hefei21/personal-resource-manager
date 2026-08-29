@@ -526,3 +526,20 @@ test('Worker does not retry deterministic reranker contract failures', () => {
   }
   assert.equal(classifyWorkerFailure({ code: 'WORKER_RERANK_TIMEOUT' }).retryable, true)
 })
+
+test('Worker preserves deterministic content extraction errors and does not retry them', () => {
+  for (const code of [
+    'WORKER_CONTENT_EXTRACT_ARCHIVE_INVALID',
+    'WORKER_CONTENT_EXTRACT_ARCHIVE_UNSAFE',
+    'WORKER_CONTENT_EXTRACT_ARCHIVE_TOO_LARGE',
+    'WORKER_CONTENT_EXTRACT_ARTIFACT_TOO_LARGE',
+    'WORKER_CONTENT_EXTRACT_EMPTY',
+    'WORKER_CONTENT_EXTRACT_PDF_INVALID'
+  ]) {
+    assert.deepEqual(classifyWorkerFailure({ code, retryable: false }), {
+      code,
+      summary: 'Worker content extraction failed.',
+      retryable: false
+    })
+  }
+})

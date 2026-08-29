@@ -98,6 +98,7 @@ test('Worker only enables explicit complete embedding configuration', () => {
   assert.equal(answerEnabled.pollIntervalMs, 1_000)
   assert.equal(answerEnabled.followUpPollIntervalMs, 25)
   assert.equal(answerEnabled.followUpPollAttempts, 8)
+  assert.match(answerEnabled.logPath, /PRManagerWorker[\\/]worker\.log$/u)
   assert.throws(() => loadConfig({
     PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',
     PC_WORKER_EMBEDDINGS_BASE_URL: 'https://worker.example.test',
