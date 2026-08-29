@@ -7,7 +7,7 @@
     <!-- 搜索栏和排序 -->
     <NativeCard>
       <!-- 第一行：搜索和视图切换 -->
-      <div v-if="!showTrash" class="search-sort-row">
+      <div class="search-sort-row">
         <div class="search-controls">
           <NativeInput
             v-model="searchKeyword"
@@ -70,7 +70,7 @@
       <!-- 第二行：查找资源或返回按钮 -->
       <div class="action-row">
         <NativeButton
-          v-if="!currentCategoryId && !showTrash"
+          v-if="!currentCategoryId"
           theme="warning"
           variant="outline"
           @click="showBookSearch = true"
@@ -81,67 +81,23 @@
         </NativeButton>
 
         <!-- 返回按钮 -->
-        <NativeButton v-if="currentCategoryId && !showTrash" @click="backToRoot">
+        <NativeButton v-if="currentCategoryId" @click="backToRoot">
           <template #icon><NativeIcon name="arrow-left" /></template>
           返回
         </NativeButton>
         <NativeButton
-          :theme="showTrash ? 'primary' : 'default'"
+          theme="default"
           variant="outline"
           @click="toggleTrash"
         >
           <template #icon><NativeIcon name="trash" /></template>
-          {{ showTrash ? '返回书库' : '回收站' }}
+          回收站
         </NativeButton>
       </div>
     </NativeCard>
 
-    <!-- 电子书回收站 -->
-    <NativeCard v-if="showTrash" class="books-trash-view">
-      <h3 class="section-title">电子书回收站</h3>
-      <p class="trash-retention-hint">普通删除会移入回收站，默认保留 30 天；永久删除不可恢复。</p>
-      <div v-if="trashLoading" class="content-loading">
-        <NativeLoading size="small" />
-      </div>
-      <NativeTable
-        v-else-if="trashBooks.length > 0"
-        :data-source="trashBooks"
-        :columns="trashColumns"
-        row-key="id"
-        hover
-      >
-        <template #cell-originalCategoryName="{ row }">
-          {{ row.originalCategoryName || '未分类' }}
-        </template>
-        <template #cell-deletedAt="{ row }">
-          {{ formatDate(row.deletedAt) }}
-        </template>
-        <template #cell-purgeAfter="{ row }">
-          {{ formatDate(row.purgeAfter) }}
-        </template>
-        <template #cell-operation="{ row }">
-          <NativeSpace :size="8">
-            <NativePopconfirm content="恢复后优先返回原分类，确定恢复吗？" @confirm="handleRestoreTrash(row.id)">
-              <template #trigger>
-                <NativeButton theme="primary" size="small" :disabled="isGuest">恢复</NativeButton>
-              </template>
-            </NativePopconfirm>
-            <NativePopconfirm theme="danger" content="永久删除不可恢复，确定继续吗？" @confirm="handlePermanentlyDeleteTrash(row.id)">
-              <template #trigger>
-                <NativeButton theme="danger" variant="outline" size="small" :disabled="isGuest">永久删除</NativeButton>
-              </template>
-            </NativePopconfirm>
-          </NativeSpace>
-        </template>
-      </NativeTable>
-      <div v-else class="empty-state-inline">
-        <NativeIcon name="trash" size="48" />
-        <p>回收站为空</p>
-      </div>
-    </NativeCard>
-
     <!-- 分类浏览 -->
-    <NativeCard v-if="!currentCategoryId && !showTrash" class="category-view">
+    <NativeCard v-if="!currentCategoryId" class="category-view">
       <!-- 加载状态 - 骨架屏 -->
       <div v-if="categoriesLoading" class="categories-skeleton">
         <div v-for="i in 4" :key="i" class="skeleton-card">
@@ -203,7 +159,7 @@
     </NativeCard>
 
     <!-- 书籍列表（列表视图） -->
-    <NativeCard v-if="!showTrash && books.length > 0 && viewMode === 'list'" class="books-list">
+    <NativeCard v-if="books.length > 0 && viewMode === 'list'" class="books-list">
       <h3 v-if="currentCategoryId" class="section-title">
         {{ currentCategoryName }} - 书籍列表
       </h3>
@@ -288,7 +244,7 @@
     </NativeCard>
 
     <!-- 书籍封面视图 loading 骨架屏 -->
-    <NativeCard v-if="!showTrash && loading && viewMode === 'cover'" class="books-cover-view">
+    <NativeCard v-if="loading && viewMode === 'cover'" class="books-cover-view">
       <h3 class="section-title">加载中...</h3>
       <div class="books-skeleton-grid">
         <div v-for="i in 8" :key="i" class="book-skeleton-card">
@@ -300,7 +256,7 @@
     </NativeCard>
 
     <!-- 书籍封面视图 -->
-    <NativeCard v-else-if="!showTrash && books.length > 0 && viewMode === 'cover'" class="books-cover-view">
+    <NativeCard v-else-if="books.length > 0 && viewMode === 'cover'" class="books-cover-view">
       <h3 v-if="currentCategoryId" class="section-title">
         {{ currentCategoryName }} - 书籍列表
       </h3>
@@ -368,12 +324,12 @@
     </NativeCard>
 
     <!-- 空状态 -->
-    <NativeCard v-if="!showTrash && books.length === 0 && !loading && currentCategoryId" class="empty-state">
+    <NativeCard v-if="books.length === 0 && !loading && currentCategoryId" class="empty-state">
       <NativeIcon name="book" size="64" />
       <p>当前分类下暂无书籍</p>
       <NativeButton theme="primary" @click="handleUpload" :disabled="isGuest">上传第一本书</NativeButton>
     </NativeCard>
-    <NativeCard v-else-if="!showTrash && books.length === 0 && !loading && !currentCategoryId && categories.length > 0" class="empty-state">
+    <NativeCard v-else-if="books.length === 0 && !loading && !currentCategoryId && categories.length > 0" class="empty-state">
       <NativeIcon name="book" size="64" />
       <p>暂无书籍</p>
       <NativeButton theme="primary" @click="handleUpload" :disabled="isGuest">上传第一本书</NativeButton>
@@ -653,7 +609,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import BookSearchDialog from '@/components/BookSearchDialog.vue'
@@ -670,6 +626,7 @@ import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 
 const toast = useToast()
 const route = useRoute()
+const router = useRouter()
 
 const { isGuest } = usePermission()
 
@@ -692,9 +649,6 @@ const sortBy = ref('last_read_at')
 const sortOrder = ref('desc')
 const selectedRowKeys = ref([])
 const viewMode = ref('cover') // 'list' 或 'cover'
-const showTrash = ref(false)
-const trashBooks = ref([])
-const trashLoading = ref(false)
 
 // 分类相关
 const createCategoryDialogVisible = ref(false)
@@ -762,15 +716,6 @@ const columns = [
   { key: 'progress', title: '阅读进度', width: 150 },
   { key: 'lastReadAt', title: '最近阅读', width: 180 },
   { key: 'operation', title: '操作', width: 280 }
-]
-
-const trashColumns = [
-  { key: 'title', title: '书名', minWidth: 200 },
-  { key: 'author', title: '作者', minWidth: 120 },
-  { key: 'originalCategoryName', title: '原分类', minWidth: 140 },
-  { key: 'deletedAt', title: '移入时间', width: 180 },
-  { key: 'purgeAfter', title: '保护期至', width: 180 },
-  { key: 'operation', title: '操作', width: 220 }
 ]
 
 // 计算当前章节内容
@@ -854,54 +799,8 @@ async function loadBooks() {
   }
 }
 
-async function loadTrashBooks() {
-  trashLoading.value = true
-  try {
-    const response = await api.books.trash()
-    trashBooks.value = response.data?.data || []
-  } catch (error) {
-    console.error('加载电子书回收站失败:', error)
-    toast.error(error.response?.data?.message || '加载回收站失败')
-    trashBooks.value = []
-  } finally {
-    trashLoading.value = false
-  }
-}
-
 async function toggleTrash() {
-  if (showTrash.value) {
-    showTrash.value = false
-    await Promise.all([loadCategories(), loadBooks()])
-    return
-  }
-
-  currentCategoryId.value = null
-  currentCategoryName.value = ''
-  selectedRowKeys.value = []
-  showTrash.value = true
-  await loadTrashBooks()
-}
-
-async function handleRestoreTrash(id) {
-  try {
-    await api.books.restoreTrash(id)
-    toast.success('书籍已恢复')
-    await Promise.all([loadTrashBooks(), loadCategories(), loadBooks()])
-  } catch (error) {
-    console.error('恢复电子书失败:', error)
-    toast.error(error.response?.data?.message || '恢复电子书失败')
-  }
-}
-
-async function handlePermanentlyDeleteTrash(id) {
-  try {
-    await api.books.permanentlyDeleteTrash(id)
-    toast.success('书籍已永久删除')
-    await loadTrashBooks()
-  } catch (error) {
-    console.error('永久删除电子书失败:', error)
-    toast.error(error.response?.data?.message || '永久删除电子书失败')
-  }
+  await router.push({ name: 'Trash', query: { type: 'ebook' } })
 }
 
 // 切换排序顺序
@@ -2549,34 +2448,6 @@ onUnmounted(() => {
 
 .books-list {
   margin-top: 16px;
-}
-
-.books-trash-view {
-  margin-top: 16px;
-}
-
-.trash-retention-hint {
-  margin: -4px 0 16px;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.empty-state-inline {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 220px;
-  color: var(--color-text-muted);
-  gap: 12px;
-}
-
-.empty-state-inline .native-icon {
-  color: #d0d0d0;
-}
-
-.empty-state-inline p {
-  margin: 0;
 }
 
 /* 批量操作栏 */

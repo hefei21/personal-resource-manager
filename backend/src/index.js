@@ -72,6 +72,7 @@ import privateSpaceMigrationRoutes from './routes/privateSpaceMigration.js'
 import tasksRoutes from './routes/tasks.js'
 import nasScanRootsRoutes from './routes/nasScanRoots.js'
 import resourceDomainImportsRoutes from './routes/resourceDomainImports.js'
+import resourceTrashRoutes from './routes/resourceTrash.js'
 import gitNasRepositoriesRoutes from './routes/gitNasRepositories.js'
 import { createPcWorkerAgentRouter, createPcWorkerOwnerRouter } from './routes/pcWorkers.js'
 import { getDatabase } from './config/database.js'
@@ -320,6 +321,7 @@ app.use('/api/private-space-migration', ...ownerOnly, privateSpaceMigrationRoute
 app.use('/api/tasks', ...ownerOnly, tasksRoutes)
 app.use('/api/nas-scan-roots', ...ownerOnly, nasScanRootsRoutes)
 app.use('/api/resource-domain-imports', ...ownerOnly, resourceDomainImportsRoutes)
+app.use('/api/trash', ...ownerOnly, resourceTrashRoutes)
 app.use('/api/git-nas-repositories', ...ownerOnly, gitNasRepositoriesRoutes)
 app.use('/api/pc-workers', ...ownerOnly, createPcWorkerOwnerRouter())
 app.use('/api/pc-worker-agent', createPcWorkerAgentRouter())

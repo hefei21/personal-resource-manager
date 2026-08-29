@@ -9,6 +9,7 @@ const mobileSource = (name) => fs.readFileSync(
 
 const sources = {
   music: mobileSource('MusicMobile.vue'),
+  trash: fs.readFileSync(new URL('../../frontend/src/views/Trash.vue', import.meta.url), 'utf8'),
   bookmarks: mobileSource('BookmarksMobile.vue'),
   games: mobileSource('GamesMobile.vue'),
   anime: mobileSource('AnimeMobile.vue'),
@@ -68,7 +69,9 @@ test('mobile resource modules omit batch, permanent, credential, and external sy
 })
 
 test('mobile resource modules retain the approved reversible single-item actions', () => {
-  assert.match(sources.music, /api\.music\.restoreTrash\(/u)
+  assert.match(sources.music, /name: 'Trash', query: \{ type: 'music' \}/u)
+  assert.match(sources.trash, /api\.trash\.restore\(/u)
+  assert.match(sources.trash, /v-if="!isMobile"[\s\S]*?永久删除/u)
   assert.match(sources.music, /api\.music\.update\(/u)
   assert.match(sources.bookmarks, /api\.bookmarks\.(?:create|update)\(/u)
   assert.match(sources.animeDetail, /api\.anime\.updateStatus\(/u)

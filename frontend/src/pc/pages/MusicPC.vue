@@ -600,32 +600,13 @@
       </div>
     </NativeDialog>
 
-    <NativeDialog v-model="showTrashDialog" title="音乐回收站" width="900px" :footer="false">
-      <p class="trash-retention-hint">音乐默认保留 30 天，可在保护期内恢复；永久删除后不可恢复。</p>
-      <div v-if="trashLoading" class="trash-state">加载中...</div>
-      <NativeTable v-else-if="trashMusic.length" :dataSource="trashMusic" :columns="trashColumns" rowKey="id" hover>
-        <template #cell-artist="{ row }">{{ row.artist || '未知艺术家' }}</template>
-        <template #cell-deletedAt="{ row }">{{ formatTrashDate(row.deletedAt) }}</template>
-        <template #cell-purgeAfter="{ row }">{{ formatTrashDate(row.purgeAfter) }}</template>
-        <template #cell-operation="{ row }">
-          <div class="operation-btns">
-            <NativePopconfirm content="确定恢复这首音乐吗？" @confirm="restoreTrashMusic(row.id)">
-              <template #trigger><NativeButton theme="primary" size="small">恢复</NativeButton></template>
-            </NativePopconfirm>
-            <NativePopconfirm theme="danger" content="永久删除不可恢复，确定继续吗？" @confirm="permanentlyDeleteTrashMusic(row.id)">
-              <template #trigger><NativeButton theme="danger" variant="outline" size="small">永久删除</NativeButton></template>
-            </NativePopconfirm>
-          </div>
-        </template>
-      </NativeTable>
-      <div v-else class="trash-state">回收站为空</div>
-    </NativeDialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useToast } from '@/composables/useToast'
+import { useRouter } from 'vue-router'
 import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeSelect, NativeTable, NativePagination, NativePopconfirm, NativeTag, NativeProgress, NativeForm, NativeFormItem, NativeTextarea, NativeDivider, NativeRadio, NativeRadioGroup } from '@/components/native'
 import api from '@/api'
 import { initCoverDB, getCoverFromCache, saveCoverToCache } from '@/utils/coverCache'
@@ -633,6 +614,7 @@ import { initUploadDB, saveUploadState, getAllPendingUploads, deleteUploadState,
 import { usePermission } from '@/composables/usePermission'
 
 const toast = useToast()
+const router = useRouter()
 const { isGuest } = usePermission()
 
 // 状态
@@ -641,9 +623,6 @@ const musicList = ref([])
 const total = ref(0)
 const allMusicTotal = ref(0) // 全部音乐总数（用于显示）
 const pagination = ref({ current: 1, pageSize: 30 })
-const showTrashDialog = ref(false)
-const trashMusic = ref([])
-const trashLoading = ref(false)
 
 // 筛选和排序
 const searchKeyword = ref('')
@@ -804,14 +783,6 @@ const columns = [
   { key: 'duration', dataIndex: 'duration', title: '时长', width: 70, align: 'left' },
   { key: 'fileSize', dataIndex: 'fileSize', title: '大小', width: 80, align: 'left' },
   { key: 'operation', title: '操作', width: 130, align: 'left' }
-]
-
-const trashColumns = [
-  { key: 'title', dataIndex: 'title', title: '标题', minWidth: 200, align: 'left' },
-  { key: 'artist', dataIndex: 'artist', title: '艺术家', width: 130, align: 'left' },
-  { key: 'deletedAt', dataIndex: 'deletedAt', title: '移入时间', width: 180, align: 'left' },
-  { key: 'purgeAfter', dataIndex: 'purgeAfter', title: '保护期至', width: 180, align: 'left' },
-  { key: 'operation', title: '操作', width: 190, align: 'left' }
 ]
 
 // 计算是否全选
@@ -1985,55 +1956,8 @@ async function reparseSongMetadata(song) {
   }
 }
 
-function formatTrashDate(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN')
-}
-
-async function loadTrashMusic() {
-  trashLoading.value = true
-  try {
-    const response = await api.music.trash()
-    trashMusic.value = response.data.data || []
-  } catch (error) {
-    toast.error(error.response?.data?.message || '加载音乐回收站失败')
-  } finally {
-    trashLoading.value = false
-  }
-}
-
 async function openTrashDialog() {
-  showTrashDialog.value = true
-  await loadTrashMusic()
-}
-
-async function refreshMusicSurfaces() {
-  await Promise.all([refreshCurrentPage(), loadFilters(), loadPlaylists()])
-}
-
-async function restoreTrashMusic(id) {
-  try {
-    await api.music.restoreTrash(id)
-    toast.success('音乐已恢复')
-    await Promise.all([loadTrashMusic(), refreshMusicSurfaces()])
-  } catch (error) {
-    toast.error(error.response?.data?.message || '恢复音乐失败')
-  }
-}
-
-async function permanentlyDeleteTrashMusic(id) {
-  try {
-    await api.music.permanentlyDeleteTrash(id)
-    toast.success('音乐已永久删除')
-    await Promise.all([loadTrashMusic(), refreshMusicSurfaces()])
-  } catch (error) {
-    const code = error.response?.data?.code
-    const message = code === 'MUSIC_TRASH_LEGACY_MIGRATION_REQUIRED'
-      ? '该音乐仍使用旧存储，完成存储迁移后才能永久删除'
-      : (error.response?.data?.message || '永久删除音乐失败')
-    toast.error(message)
-  }
+  await router.push({ name: 'Trash', query: { type: 'music' } })
 }
 
 // 批量获取歌词

@@ -71,6 +71,12 @@ const routes = [
         meta: routeNavigationMeta('Code')
       },
       {
+        path: 'trash',
+        name: 'Trash',
+        component: () => import('@/views/Trash.vue'),
+        meta: routeNavigationMeta('Trash')
+      },
+      {
         path: 'bookmarks',
         name: 'Bookmarks',
         component: () => import('@/views/Bookmarks.vue'),

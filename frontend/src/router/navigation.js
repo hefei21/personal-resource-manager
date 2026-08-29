@@ -107,6 +107,19 @@ const moduleItems = [
     kind: 'module'
   },
   {
+    routeName: 'Trash',
+    value: 'trash',
+    path: '/trash',
+    label: '回收站',
+    title: '统一回收站',
+    group: 'library',
+    pcIcon: 'trash',
+    mobileIconPath: 'M6 7h12l-1 14H7L6 7zm3-4h6l1 2h4v2H4V5h4l1-2zm1 6v8h2V9h-2zm4 0v8h2V9h-2z',
+    mobile: true,
+    ownerOnly: false,
+    kind: 'module'
+  },
+  {
     routeName: 'Bookmarks',
     value: 'bookmarks',
     path: '/bookmarks',

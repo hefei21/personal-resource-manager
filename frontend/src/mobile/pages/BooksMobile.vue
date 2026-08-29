@@ -1,7 +1,7 @@
 <template>
   <div class="books-mobile">
     <!-- 搜索栏 -->
-    <div v-if="!showTrash" class="search-section">
+    <div class="search-section">
       <div class="search-bar">
         <input
           v-model="searchKeyword"
@@ -19,7 +19,7 @@
       <div class="tab-scroll">
         <div
           class="tab-item"
-          :class="{ active: !showTrash && !currentCategoryId }"
+          :class="{ active: !currentCategoryId }"
           @click="selectCategory(null)"
         >
           <span>全部</span>
@@ -28,26 +28,25 @@
           v-for="category in validCategories"
           :key="category.id"
           class="tab-item"
-          :class="{ active: !showTrash && currentCategoryId === category.id }"
+          :class="{ active: currentCategoryId === category.id }"
           @click="selectCategory(category)"
         >
           <span>{{ category.name }}</span>
         </div>
-        <div v-if="!isGuest && !showTrash" class="tab-item add-btn" @click="showCreateCategory = true">
+        <div v-if="!isGuest" class="tab-item add-btn" @click="showCreateCategory = true">
           <span>+</span>
         </div>
         <div
           class="tab-item trash-tab"
-          :class="{ active: showTrash }"
           @click="toggleTrash"
         >
-          <span>{{ showTrash ? '返回书库' : '回收站' }}</span>
+          <span>回收站</span>
         </div>
       </div>
     </div>
 
     <!-- 书籍网格 -->
-    <div v-if="!showTrash" class="books-container">
+    <div class="books-container">
       <div v-if="loading" class="loading-state">
         <div class="spinner"></div>
         <span>加载中...</span>
@@ -106,44 +105,8 @@
       </div>
     </div>
 
-    <!-- 电子书回收站 -->
-    <div v-else class="trash-container">
-      <div class="trash-heading">
-        <span>电子书回收站</span>
-        <span class="trash-hint">普通删除默认保留 30 天</span>
-      </div>
-      <div v-if="trashLoading" class="loading-state">
-        <div class="spinner"></div>
-        <span>加载中...</span>
-      </div>
-      <div v-else-if="trashBooks.length === 0" class="empty-state">
-        <svg class="empty-icon" viewBox="0 0 24 24">
-          <path fill="currentColor" d="M3 6h18v2H3V6zm2 3h14v11H5V9zm3-6h6l1 2H7l1-2z"/>
-        </svg>
-        <p>回收站为空</p>
-      </div>
-      <div v-else class="trash-list">
-        <div v-for="item in trashBooks" :key="item.id" class="trash-item">
-          <div class="trash-item-info">
-            <div class="trash-item-title">{{ item.title }}</div>
-            <div class="trash-item-meta">
-              {{ item.author || '未知作者' }} · {{ item.originalCategoryName || '未分类' }} · {{ formatTrashDate(item.deletedAt) }}
-            </div>
-          </div>
-          <NativeButton
-            theme="primary"
-            size="small"
-            @click.stop="handleRestoreTrash(item.id)"
-            :disabled="isGuest"
-          >
-            恢复
-          </NativeButton>
-        </div>
-      </div>
-    </div>
-
     <!-- 浮动上传按钮 -->
-    <button v-if="!isGuest && !showTrash" class="fab-upload" @click="handleUpload">
+    <button v-if="!isGuest" class="fab-upload" @click="handleUpload">
       <svg viewBox="0 0 24 24" width="24" height="24">
         <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
       </svg>
@@ -270,7 +233,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { useAuthStore } from '@/stores/auth'
@@ -279,6 +242,7 @@ import { NativeButton, NativeIcon, NativePopconfirm } from '@/components/native'
 
 const authStore = useAuthStore()
 const route = useRoute()
+const router = useRouter()
 const isGuest = computed(() => authStore.isGuest())
 
 // 搜索
@@ -287,9 +251,6 @@ const searchKeyword = ref('')
 // 分类
 const categories = ref([])
 const currentCategoryId = ref(null)
-const showTrash = ref(false)
-const trashBooks = ref([])
-const trashLoading = ref(false)
 const showCreateCategory = ref(false)
 const newCategoryName = ref('')
 const creatingCategory = ref(false)
@@ -377,21 +338,12 @@ async function loadCategories() {
 
 // 选择分类
 function selectCategory(category) {
-  showTrash.value = false
   currentCategoryId.value = category?.id || null
   loadBooks()
 }
 
 async function toggleTrash() {
-  if (showTrash.value) {
-    showTrash.value = false
-    await loadBooks()
-    return
-  }
-
-  currentCategoryId.value = null
-  showTrash.value = true
-  await loadTrashBooks()
+  await router.push({ name: 'Trash', query: { type: 'ebook' } })
 }
 
 // 创建分类
@@ -444,20 +396,6 @@ async function loadBooks() {
   }
 }
 
-async function loadTrashBooks() {
-  trashLoading.value = true
-  try {
-    const response = await api.books.trash()
-    trashBooks.value = response.data?.data || []
-  } catch (error) {
-    console.error('[BooksMobile] 加载回收站失败:', error)
-    showToast(error.response?.data?.message || '加载回收站失败', 'error')
-    trashBooks.value = []
-  } finally {
-    trashLoading.value = false
-  }
-}
-
 async function handleDelete(id) {
   try {
     await api.books.delete(id)
@@ -467,23 +405,6 @@ async function handleDelete(id) {
     console.error('[BooksMobile] 移入回收站失败:', error)
     showToast(error.response?.data?.message || '移入回收站失败', 'error')
   }
-}
-
-async function handleRestoreTrash(id) {
-  try {
-    await api.books.restoreTrash(id)
-    showToast('书籍已恢复')
-    await Promise.all([loadTrashBooks(), loadCategories(), loadBooks()])
-  } catch (error) {
-    console.error('[BooksMobile] 恢复书籍失败:', error)
-    showToast(error.response?.data?.message || '恢复书籍失败', 'error')
-  }
-}
-
-function formatTrashDate(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
 
 // 获取封面URL
@@ -864,66 +785,6 @@ async function handleMetadataReparse(book) {
   color: var(--color-text-muted);
   margin-top: 3px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 回收站 */
-.trash-container {
-  min-height: 300px;
-}
-
-.trash-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 12px;
-  color: var(--color-text-primary);
-  font-size: 16px;
-  font-weight: 500;
-}
-
-.trash-hint {
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-weight: 400;
-}
-
-.trash-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.trash-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-.trash-item-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.trash-item-title {
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-size: 13px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.trash-item-meta {
-  margin-top: 4px;
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

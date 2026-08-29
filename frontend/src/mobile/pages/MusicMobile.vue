@@ -210,33 +210,6 @@
       </div>
     </div>
 
-    <div v-if="showTrash" class="modal-overlay" @click.self="showTrash = false">
-      <div class="modal-container trash-modal">
-        <div class="modal-header trash-modal-header">
-          <span>音乐回收站</span>
-          <button class="close-btn" @click="showTrash = false"><NativeIcon name="close" /></button>
-        </div>
-        <div class="modal-body trash-body">
-          <p class="trash-retention-hint">默认保留 30 天；移动端支持单项恢复。</p>
-          <div v-if="trashLoading" class="trash-empty">加载中...</div>
-          <div v-else-if="trashMusic.length === 0" class="trash-empty">回收站为空</div>
-          <div v-else class="trash-list">
-            <div v-for="song in trashMusic" :key="song.id" class="trash-item">
-              <div class="trash-item-info">
-                <strong>{{ song.title }}</strong>
-                <span>{{ song.artist || '未知艺术家' }}</span>
-                <small>移入：{{ formatTrashDate(song.deletedAt) }}</small>
-                <small>保护期至：{{ formatTrashDate(song.purgeAfter) }}</small>
-              </div>
-              <div class="trash-item-actions">
-                <button class="btn-primary" @click="restoreTrash(song.id)">恢复</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- 创建歌单弹窗 -->
     <div v-if="showCreatePlaylist" class="modal-overlay" @click.self="showCreatePlaylist = false">
       <div class="modal-container small">
@@ -280,6 +253,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/api'
 import { NativeIcon } from '@/components/native'
@@ -287,6 +261,7 @@ import ResourceListState from '@/components/common/ResourceListState.vue'
 import { useToast } from '@/composables/useToast'
 const authStore = useAuthStore()
 const toast = useToast()
+const router = useRouter()
 const isGuest = computed(() => authStore.isGuest())
 
 // 列表数据
@@ -330,9 +305,6 @@ const editForm = ref({ id: null, title: '', artist: '', album: '' })
 // 删除
 const deleteConfirmVisible = ref(false)
 const songToDelete = ref(null)
-const showTrash = ref(false)
-const trashMusic = ref([])
-const trashLoading = ref(false)
 
 // 创建歌单
 const showCreatePlaylist = ref(false)
@@ -668,41 +640,8 @@ const metadataStatusLabel = (status) => ({
   failed: '元数据解析失败'
 })[status] || ''
 
-const formatTrashDate = (value) => {
-  if (!value) return '-'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN')
-}
-
-const loadTrashMusic = async () => {
-  trashLoading.value = true
-  try {
-    const response = await api.music.trash()
-    trashMusic.value = response.data.data || []
-  } catch (error) {
-    toast.error(error.response?.data?.message || '加载音乐回收站失败')
-  } finally {
-    trashLoading.value = false
-  }
-}
-
 const openTrash = async () => {
-  showTrash.value = true
-  await loadTrashMusic()
-}
-
-const refreshMusicSurfaces = async () => {
-  await Promise.all([loadMusic(), loadFilterOptions(), loadPlaylists()])
-}
-
-const restoreTrash = async (id) => {
-  try {
-    await api.music.restoreTrash(id)
-    toast.success('音乐已恢复')
-    await Promise.all([loadTrashMusic(), refreshMusicSurfaces()])
-  } catch (error) {
-    toast.error(error.response?.data?.message || '恢复音乐失败')
-  }
+  await router.push({ name: 'Trash', query: { type: 'music' } })
 }
 
 // 创建歌单
@@ -1458,71 +1397,6 @@ onUnmounted(() => {
 
 .modal-container.small {
   max-width: 320px;
-}
-
-.trash-modal {
-  max-width: 520px;
-}
-
-.trash-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.trash-body {
-  max-height: 70vh;
-  overflow-y: auto;
-}
-
-.trash-retention-hint {
-  margin: 0 0 14px;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.trash-empty {
-  padding: 32px 0;
-  color: var(--color-text-muted);
-  text-align: center;
-}
-
-.trash-list,
-.trash-item-info {
-  display: flex;
-  flex-direction: column;
-}
-
-.trash-list {
-  gap: 12px;
-}
-
-.trash-item {
-  padding: 14px;
-  border: 1px solid #eee;
-  border-radius: 10px;
-}
-
-.trash-item-info {
-  gap: 4px;
-}
-
-.trash-item-info span,
-.trash-item-info small {
-  color: #777;
-}
-
-.trash-item-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.trash-item-actions button {
-  flex: 1;
-  padding: 9px;
-  border: none;
-  border-radius: 7px;
 }
 
 @keyframes scaleIn {

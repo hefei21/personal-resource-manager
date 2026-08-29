@@ -107,6 +107,12 @@ export default {
     update: (type, id, data) => api.put(`/demo/resources/${type}/${id}`, data),
     delete: (type, id) => api.delete(`/demo/resources/${type}/${id}`)
   },
+  trash: {
+    list: (params) => api.get('/trash', { params }),
+    restore: (resourceType, resourceId) => api.post(`/trash/${resourceType}/${resourceId}/restore`),
+    batchRestore: (items) => api.post('/trash/batch-restore', { items }),
+    permanentlyDelete: (resourceType, resourceId) => api.delete(`/trash/${resourceType}/${resourceId}`)
+  },
   documents: {
     list: (params) => api.get('/documents', { params }),
     categories: () => api.get('/documents/categories'),

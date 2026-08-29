@@ -11,6 +11,7 @@ const readFrontend = (...segments) => fs.readFileSync(path.join(projectRoot, 'fr
 const apiSource = readFrontend('api', 'index.js')
 const pcSource = readFrontend('pc', 'pages', 'MusicPC.vue')
 const mobileSource = readFrontend('mobile', 'pages', 'MusicMobile.vue')
+const trashSource = readFrontend('views', 'Trash.vue')
 
 test('music frontend API exposes the exact trash lifecycle routes', () => {
   assert.match(apiSource, /trash: \(\) => api\.get\('\/music\/trash'\)/u)
@@ -18,22 +19,22 @@ test('music frontend API exposes the exact trash lifecycle routes', () => {
   assert.match(apiSource, /permanentlyDeleteTrash: \(id\) => api\.delete\(`\/music\/trash\/\$\{id\}\/permanent`\)/u)
 })
 
-test('PC music UI presents reversible deletion and the full trash lifecycle', () => {
+test('PC music UI presents reversible deletion and delegates the trash lifecycle to the unified page', () => {
   assert.match(pcSource, /@click="openTrashDialog"/u)
   assert.match(pcSource, /移入回收站/u)
-  assert.match(pcSource, /api\.music\.trash\(\)/u)
-  assert.match(pcSource, /api\.music\.restoreTrash\(id\)/u)
-  assert.match(pcSource, /api\.music\.permanentlyDeleteTrash\(id\)/u)
-  assert.match(pcSource, /永久删除不可恢复/u)
-  assert.match(pcSource, /MUSIC_TRASH_LEGACY_MIGRATION_REQUIRED/u)
+  assert.match(pcSource, /name: 'Trash', query: \{ type: 'music' \}/u)
+  assert.doesNotMatch(pcSource, /api\.music\.(?:trash|restoreTrash|permanentlyDeleteTrash)/u)
+  assert.match(trashSource, /api\.trash\.restore\(item\.resourceType, item\.resourceId\)/u)
+  assert.match(trashSource, /api\.trash\.permanentlyDelete\(item\.resourceType, item\.resourceId\)/u)
+  assert.match(trashSource, /永久删除资源/u)
 })
 
-test('mobile music UI presents reversible deletion and cleans the player queue without permanent deletion', () => {
+test('mobile music UI links to unified restore and cleans the player queue without permanent deletion', () => {
   assert.match(mobileSource, /@click="openTrash"/u)
   assert.match(mobileSource, /默认保留 30 天，可在回收站恢复/u)
-  assert.match(mobileSource, /api\.music\.trash\(\)/u)
-  assert.match(mobileSource, /api\.music\.restoreTrash\(id\)/u)
-  assert.doesNotMatch(mobileSource, /api\.music\.permanentlyDeleteTrash\(id\)/u)
+  assert.match(mobileSource, /name: 'Trash', query: \{ type: 'music' \}/u)
+  assert.doesNotMatch(mobileSource, /api\.music\.(?:trash|restoreTrash|permanentlyDeleteTrash)/u)
+  assert.match(trashSource, /v-if="!isMobile"[\s\S]*?永久删除/u)
   assert.doesNotMatch(mobileSource, /永久删除不可恢复/u)
   assert.match(mobileSource, /new CustomEvent\('remove-music'/u)
   assert.doesNotMatch(mobileSource, /彻底删除选中的/u)

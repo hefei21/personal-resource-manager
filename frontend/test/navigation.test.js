@@ -66,6 +66,12 @@ test('confirmed information architecture labels and groups are registered', () =
     assert.equal(item.title, label)
     assert.equal(item.group, group)
   }
+
+  const trash = navigationForRoute('Trash')
+  assert.equal(trash.label, '回收站')
+  assert.equal(trash.title, '统一回收站')
+  assert.equal(trash.group, 'library')
+  assert.equal(trash.mobile, true)
 })
 
 test('owner and mobile boundaries keep logs out of mobile primary navigation', () => {
@@ -120,4 +126,5 @@ test('mobile modules expose an explicit return target to their group chooser', (
   assert.equal(mobileGroupParentForRoute('Dashboard'), undefined)
   assert.equal(mobileGroupParentForRoute('LibraryHub'), undefined)
   assert.equal(mobileGroupParentForRoute('Logs'), undefined)
+  assert.equal(mobileGroupParentForRoute('Trash')?.routeName, 'LibraryHub')
 })
