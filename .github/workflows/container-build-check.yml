@@ -74,8 +74,9 @@ jobs:
         shell: bash
         run: |
           image="local/container-check-backend:${{ env.PLATFORM_SLUG }}"
-          docker run --rm --entrypoint sh "$image" -c '
+          docker run --rm --platform "${{ matrix.platform }}" --entrypoint sh "$image" -c '
             set -eu
+            echo "backend probe: runtime tools and contents"
             command -v node >/dev/null
             command -v git >/dev/null
             command -v ffmpeg >/dev/null
@@ -91,32 +92,55 @@ jobs:
             test ! -e /app/test
             test ! -e /app/.test-runtime
             test -f /app/migrate-access-logs.js
+            echo "backend probe: migration entrypoint"
             node --check /app/migrate-access-logs.js
             DATA_PATH=/app/data DB_PATH=/app/data/database/app.db \
               node -e "import(process.argv[1]).then(m => { if (typeof m.migrate !== process.argv[2]) process.exit(1) })" /app/migrate-access-logs.js function
+            echo "backend probe: application syntax"
             node --check /app/src/index.js
             node --check /app/src/demoOnly.js
+            echo "backend probe: demo-only startup and route isolation"
             DEMO_ENABLED=true DEMO_MAX_INFLIGHT=8 PORT=3100 npm run start:demo >/tmp/demo-only.log 2>&1 &
             demo_pid="$!"
             trap "kill $demo_pid 2>/dev/null || true" EXIT
-            node -e "
+            if ! node -e "
               const base = \"http://127.0.0.1:3100\";
-              for (let attempt = 0; attempt < 30; attempt += 1) {
+              let ready = false;
+              let lastError = \"demo-only health endpoint did not become ready\";
+              for (let attempt = 0; attempt < 120; attempt += 1) {
                 try {
                   const health = await fetch(base + \"/health\");
-                  if (health.ok && (await health.json()).mode === \"demo-only\") break;
-                } catch {}
-                if (attempt === 29) process.exit(1);
+                  const payload = health.ok ? await health.json() : null;
+                  if (health.ok && payload?.mode === \"demo-only\") {
+                    ready = true;
+                    break;
+                  }
+                  lastError = \"unexpected health response: \" + health.status;
+                } catch (error) {
+                  lastError = error?.message || String(error);
+                }
                 await new Promise(resolve => setTimeout(resolve, 100));
+              }
+              if (!ready) {
+                console.error(lastError);
+                process.exit(1);
               }
               for (const routePath of [\"/api/auth/check\", \"/api/documents\", \"/api/tasks\", \"/api/pc-workers\"]) {
                 const response = await fetch(base + routePath);
-                if (response.status !== 404) process.exit(1);
+                if (response.status !== 404) {
+                  console.error(\"unexpected Owner route status: \" + routePath + \" -> \" + response.status);
+                  process.exit(1);
+                }
               }
-            "
+            "; then
+              echo "backend probe: demo-only runtime failed" >&2
+              cat /tmp/demo-only.log >&2 || true
+              exit 1
+            fi
             kill "$demo_pid"
             wait "$demo_pid" || true
             trap - EXIT
+            echo "backend probe: outbound Git TLS"
             GIT_TERMINAL_PROMPT=0 timeout 60 \
               git -c http.sslVerify=true ls-remote --exit-code \
               https://github.com/hefei21/personal-resource-manager.git HEAD >/dev/null
