@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import axios from 'axios'
 import { getDatabase } from '../config/database.js'
 import { registerTaskProcessor } from './taskRuntime.js'
+import { scheduleRagSourceRefresh } from './ragLifecycleService.js'
 import { TaskProcessorError } from './taskProcessorError.js'
 import { classifyNetworkTaskFailure, taskNetworkError } from './networkTaskError.js'
 import {
@@ -744,13 +745,15 @@ export function createCodeRepositoryTaskProcessor({
   codeBasePath = CODE_BASE_PATH,
   runGit = createDefaultGitRunner(),
   spawnProcess = spawn,
-  fetchLanguages = defaultFetchAndSaveLanguages
+  fetchLanguages = defaultFetchAndSaveLanguages,
+  scheduleRefresh = scheduleRagSourceRefresh
 } = {}) {
   const getDatabaseForTask = database ? () => database : databaseProvider
   if (typeof getDatabaseForTask !== 'function') throw new TypeError('databaseProvider must be a function')
   if (typeof runGit !== 'function') throw new TypeError('runGit must be a function')
   if (typeof spawnProcess !== 'function') throw new TypeError('spawnProcess must be a function')
   if (typeof fetchLanguages !== 'function') throw new TypeError('fetchLanguages must be a function')
+  if (typeof scheduleRefresh !== 'function') throw new TypeError('scheduleRefresh must be a function')
 
   return async function processCodeRepositoryTask(context = {}) {
     const task = context.task
@@ -771,8 +774,9 @@ export function createCodeRepositoryTaskProcessor({
       const repoId = getRepositoryId(task)
       const repository = loadRepository(databaseConnection, repoId, codeBasePath)
       const taskId = normalizeTaskId(task)
+      let result
       if (operation === 'clone') {
-        return await executeClone({
+        result = await executeClone({
           database: databaseConnection,
           repo: repository,
           runGit,
@@ -781,9 +785,8 @@ export function createCodeRepositoryTaskProcessor({
           progress,
           fetchLanguages
         })
-      }
-      if (operation === 'sync') {
-        return await executeSync({
+      } else if (operation === 'sync') {
+        result = await executeSync({
           database: databaseConnection,
           repo: repository,
           runGit,
@@ -792,18 +795,28 @@ export function createCodeRepositoryTaskProcessor({
           progress,
           fetchLanguages
         })
+      } else {
+        result = await executeReclone({
+          database: databaseConnection,
+          repo: repository,
+          taskId,
+          storageRoot: codeBasePath,
+          runGit,
+          spawnProcess,
+          signal,
+          progress,
+          fetchLanguages
+        })
       }
-      return await executeReclone({
-        database: databaseConnection,
-        repo: repository,
-        taskId,
-        storageRoot: codeBasePath,
-        runGit,
-        spawnProcess,
-        signal,
-        progress,
-        fetchLanguages
-      })
+      try {
+        await scheduleRefresh({
+          database: databaseConnection,
+          sourceType: 'code_repository',
+          sourceId: repoId,
+          reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
+        })
+      } catch {}
+      return result
     } catch (error) {
       throw mapProcessorError(error, operation)
     }

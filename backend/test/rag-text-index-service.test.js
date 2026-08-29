@@ -315,3 +315,29 @@ test('authoritative visibility callback filters active results after SQL and cli
     database.close()
   }
 })
+
+test('query sourceId scope returns only the exact active resource', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const service = createService(database)
+    await service.index({
+      sources: [
+        source({ id: 21, text: '# First\n\nshared exact phrase.' }),
+        source({ id: 22, text: '# Second\n\nshared exact phrase.' })
+      ],
+      errors: []
+    })
+    const result = service.query({
+      q: 'shared exact phrase',
+      sourceType: 'document',
+      sourceId: 22,
+      limit: 20
+    })
+    assert.equal(result.total, 1)
+    assert.equal(result.data[0].sourceId, 22)
+    assert.throws(() => service.query({ q: 'shared', sourceId: 22 }))
+  } finally {
+    database.close()
+  }
+})

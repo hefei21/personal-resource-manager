@@ -176,6 +176,52 @@ test('query runtime validates the active model, queues query embedding, and retu
   assert.equal(retrieval.data[0].body, 'authorized body')
 })
 
+test('query runtime narrows active vector snapshots to the exact source scope', async () => {
+  let searchOptions = null
+  const scoped = runtime({
+    vectorStore: {
+      modelConfig: MODEL,
+      async health() { return { available: true } },
+      async search(_embedding, options) {
+        searchOptions = options
+        return {
+          points: [{
+            id: 11,
+            score: 0.9,
+            payload: {
+              chunkId: 11,
+              snapshotId: 9,
+              sourceType: 'document',
+              sourceId: 7,
+              sourceVersionId: 'v1'
+            }
+          }]
+        }
+      }
+    }
+  })
+  const result = await scoped.runtime.query({
+    query: scoped.query,
+    sourceType: 'document',
+    sourceId: 7
+  })
+  assert.equal(result.vectorCandidates.length, 1)
+  assert.deepEqual(searchOptions.activeSnapshotSources, [{
+    snapshotId: 9,
+    sourceType: 'document',
+    sourceId: 7,
+    sourceVersionId: 'v1'
+  }])
+
+  const missing = await scoped.runtime.query({
+    query: scoped.query,
+    sourceType: 'ebook',
+    sourceId: 23
+  })
+  assert.equal(missing.vectorCandidates.length, 0)
+  assert.equal(missing.vectorError.code, RAG_QUERY_RUNTIME_ERROR_CODES.STALE)
+})
+
 test('query runtime preserves ordinary multiline query whitespace across task identity', async () => {
   const { query, runtime: service } = runtime({ queryText: 'find the document\nsecond constraint\tvalue' })
   const result = await service.query({ query, limit: 5 })

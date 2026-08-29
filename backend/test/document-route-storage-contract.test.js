@@ -9,7 +9,8 @@ const source = fs.readFileSync(path.join(directory, '..', 'src', 'routes', 'docu
 
 test('ordinary document deletion is owner-write protected and uses the trash service', () => {
   assert.match(source, /router\.delete\('\/:id', authenticateToken, requireWritePermission,/u)
-  assert.match(source, /softDeleteDocument\(\{ database: getDatabase\(\), id: req\.params\.id \}\)/u)
+  assert.match(source, /const database = getDatabase\(\)[\s\S]*softDeleteDocument\(\{ database, id: req\.params\.id \}\)/u)
+  assert.match(source, /invalidateRagSource\(database,[\s\S]*reasonCode: 'RAG_SOURCE_TRASHED'/u)
   const ordinaryDelete = source.slice(source.indexOf("router.delete('/:id'"), source.indexOf('// 私密空间'))
   assert.doesNotMatch(ordinaryDelete, /unlinkSync|DELETE FROM documents|DELETE FROM document_versions/u)
 })

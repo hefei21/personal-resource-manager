@@ -1,6 +1,7 @@
 import { getDatabase } from '../config/database.js'
 import { registerTaskProcessor } from './taskRuntime.js'
 import { TaskProcessorError } from './taskProcessorError.js'
+import { scheduleRagSourceRefresh } from './ragLifecycleService.js'
 import {
   GIT_NAS_CANDIDATE_SUBJECT_TYPE,
   GIT_NAS_DISCOVER_TASK_TYPE,
@@ -135,12 +136,14 @@ export function createGitNasTaskProcessor({
   database,
   databaseProvider = getDatabase,
   discover = discoverGitNasRepositories,
-  importCandidate = importGitNasCandidate
+  importCandidate = importGitNasCandidate,
+  scheduleRefresh = scheduleRagSourceRefresh
 } = {}) {
   const getDatabaseForTask = database ? () => database : databaseProvider
   if (typeof getDatabaseForTask !== 'function') throw new TypeError('databaseProvider must be a function')
   if (typeof discover !== 'function') throw new TypeError('discover must be a function')
   if (typeof importCandidate !== 'function') throw new TypeError('importCandidate must be a function')
+  if (typeof scheduleRefresh !== 'function') throw new TypeError('scheduleRefresh must be a function')
 
   return async function processGitNasTask(context = {}) {
     const normalized = normalizeTask(context.task)
@@ -178,6 +181,14 @@ export function createGitNasTaskProcessor({
         signal: context.signal
       })
       if (context.signal?.aborted) throw taskError(GIT_NAS_TASK_ERROR_CODES.CANCELLED, 'The NAS Git operation was cancelled.')
+      try {
+        await scheduleRefresh({
+          database: databaseConnection,
+          sourceType: 'code_repository',
+          sourceId: result.repositoryId,
+          reasonCode: result.status === 'already-imported' ? 'RAG_SOURCE_VERSION_CHANGED' : 'RAG_SOURCE_CREATED'
+        })
+      } catch {}
       return safeImportResult(result)
     } catch (error) {
       throw mapError(error)

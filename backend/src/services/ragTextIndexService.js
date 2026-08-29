@@ -661,6 +661,12 @@ function normalizeQuery(input) {
   if (unique.length === 0) fail(RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID, 'query has no searchable terms.')
   const sourceType = typeof input === 'object' && input?.sourceType !== undefined ? input.sourceType : null
   if (sourceType !== null && !SOURCE_TYPES.has(sourceType)) fail(RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID, 'sourceType is invalid.')
+  const sourceId = typeof input === 'object' && input?.sourceId !== undefined
+    ? isPositiveInteger(input.sourceId)
+    : null
+  if ((input?.sourceId !== undefined && sourceId === null) || (sourceId !== null && sourceType === null)) {
+    fail(RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID, 'sourceId is invalid.')
+  }
   const limit = input?.limit === undefined ? 20 : Number(input.limit)
   const offset = input?.offset === undefined ? 0 : Number(input.offset)
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_QUERY_LIMIT ||
@@ -670,6 +676,7 @@ function normalizeQuery(input) {
   return Object.freeze({
     keyword,
     sourceType,
+    sourceId,
     limit,
     offset,
     ftsQuery: unique.map((token) => `"${token.replaceAll('"', '""')}"*`).join(' AND '),
@@ -902,6 +909,9 @@ export class RagTextIndexService {
     if (query.sourceType) {
       clauses.push('snapshot.source_type = ?')
     }
+    if (query.sourceId) {
+      clauses.push('snapshot.source_id = ?')
+    }
     const statement = this.database.prepare(`
       SELECT chunks.id AS chunk_id, chunks.snapshot_id, chunks.ordinal,
              chunks.body, chunks.token_count, chunks.token_count_mode,
@@ -920,6 +930,7 @@ export class RagTextIndexService {
     const readCandidates = (ftsQuery) => statement.all(
       ftsQuery,
       ...(query.sourceType ? [query.sourceType] : []),
+      ...(query.sourceId ? [query.sourceId] : []),
       candidateLimit
     )
     let rows = readCandidates(query.ftsQuery)

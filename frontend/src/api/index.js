@@ -280,6 +280,9 @@ export default {
   },
   rag: {
     status: () => api.get('/rag/status'),
+    coverage: (params = {}) => api.get('/rag/coverage', { params }),
+    sourceStatus: (type, id) => api.get(`/rag/sources/${encodeURIComponent(String(type))}/${encodeURIComponent(String(id))}/status`),
+    refreshIndex: (data = {}) => api.post('/rag/index/refresh', data),
     createQuery: (data) => api.post('/rag/queries', data),
     getQuery: (id) => api.get(`/rag/queries/${encodeURIComponent(String(id))}`),
     cancelQuery: (id) => api.post(`/rag/queries/${encodeURIComponent(String(id))}/cancel`)

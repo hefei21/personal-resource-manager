@@ -15,6 +15,11 @@ import { documentOriginalName, getDocumentStorageRuntime } from '../services/doc
 import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
 import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
 import {
+  invalidateRagSource,
+  scheduleRagSourceRefresh,
+  scheduleRagSourcesRefresh
+} from '../services/ragLifecycleService.js'
+import {
   appendDocumentVersion,
   assertDocumentVersionNotTrashed,
   DocumentVersionError,
@@ -703,6 +708,12 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
         versionNote: initialVersionNote
       })
       stagedToken = null
+      await scheduleRagSourceRefresh({
+        database: db,
+        sourceType: 'document',
+        sourceId: target.id,
+        reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
+      })
       return res.json({
         id: target.id,
         title: target.title,
@@ -758,6 +769,13 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
     try { await cache.del(CacheKeys.DOC_TAGS) } catch (error) {
       console.warn('文档标签缓存清理失败:', error?.code ?? error?.name)
     }
+
+    await scheduleRagSourceRefresh({
+      database: db,
+      sourceType: 'document',
+      sourceId: documentId,
+      reasonCode: 'RAG_SOURCE_CREATED'
+    })
 
     res.json({ id: documentId, title, resolution: 'create', message: '上传成功' })
   } catch (error) {
@@ -852,8 +870,9 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
 router.put('/:id/content', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const body = req.body ?? {}
+    const database = getDatabase()
     const update = {
-      database: getDatabase(),
+      database,
       runtime: getDocumentStorageRuntime(),
       id: req.params.id,
       content: body.content,
@@ -862,6 +881,12 @@ router.put('/:id/content', authenticateToken, requireWritePermission, async (req
     if (Object.prototype.hasOwnProperty.call(body, 'newVersion')) update.newVersion = body.newVersion
     if (Object.prototype.hasOwnProperty.call(body, 'version')) update.version = body.version
     const result = await updateDocumentContent(update)
+    await scheduleRagSourceRefresh({
+      database,
+      sourceType: 'document',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
+    })
     res.json({ message: '保存成功', version: result.version })
   } catch (error) {
     console.error('更新文档内容失败:', error?.code ?? error?.name)
@@ -891,8 +916,15 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
 // 更新文档
 router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const result = updateDocumentMetadata(getDatabase(), req.params.id, req.body)
+    const database = getDatabase()
+    const result = updateDocumentMetadata(database, req.params.id, req.body)
     try { await cache.del(CacheKeys.DOC_TAGS); await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    await scheduleRagSourceRefresh({
+      database,
+      sourceType: 'document',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_METADATA_CHANGED'
+    })
     return res.json({ message: '更新成功', categoryId: result.categoryId, tags: result.tags })
   } catch (error) {
     console.error('更新失败:', error)
@@ -903,8 +935,15 @@ router.put('/:id', authenticateToken, requireWritePermission, async (req, res) =
 // 批量更新文档
 router.put('/batch/update', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const result = batchUpdateDocumentMetadata(getDatabase(), req.body.ids, req.body)
+    const database = getDatabase()
+    const result = batchUpdateDocumentMetadata(database, req.body.ids, req.body)
     try { await cache.del(CacheKeys.DOC_TAGS); await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    await scheduleRagSourcesRefresh({
+      database,
+      sourceType: 'document',
+      sourceIds: req.body.ids || [],
+      reasonCode: 'RAG_SOURCE_METADATA_CHANGED'
+    })
     return res.json({ message: '批量更新成功', count: result.count, categoryId: result.categoryId })
   } catch (error) {
     console.error('批量更新失败:', error)
@@ -985,7 +1024,14 @@ router.get('/trash', authenticateToken, async (req, res) => {
 
 router.post('/trash/:id/restore', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const result = restoreDocumentFromTrash({ database: getDatabase(), id: req.params.id })
+    const database = getDatabase()
+    const result = restoreDocumentFromTrash({ database, id: req.params.id })
+    await scheduleRagSourceRefresh({
+      database,
+      sourceType: 'document',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_RESTORED'
+    })
     res.json({ message: '恢复成功', categoryId: result.categoryId })
   } catch (error) {
     console.error('恢复文档失败:', error?.code ?? error?.name)
@@ -1021,12 +1067,19 @@ router.delete('/:id/versions/:versionId', authenticateToken, requireWritePermiss
 
 router.post('/:id/versions/:versionId/trash/restore', authenticateToken, requireWritePermission, async (req, res) => {
   try {
+    const database = getDatabase()
     const result = await restoreDocumentVersionFromTrash({
-      database: getDatabase(),
+      database,
       runtime: getDocumentStorageRuntime(),
       id: req.params.id,
       versionId: req.params.versionId,
       versionNote: req.body?.versionNote
+    })
+    await scheduleRagSourceRefresh({
+      database,
+      sourceType: 'document',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
     })
     res.json({ message: '历史版本恢复成功', version: result.version })
   } catch (error) {
@@ -1037,12 +1090,19 @@ router.post('/:id/versions/:versionId/trash/restore', authenticateToken, require
 
 router.post('/:id/versions/:versionId/restore', authenticateToken, requireWritePermission, async (req, res) => {
   try {
+    const database = getDatabase()
     const result = await restoreDocumentVersion({
-      database: getDatabase(),
+      database,
       runtime: getDocumentStorageRuntime(),
       id: req.params.id,
       versionId: req.params.versionId,
       versionNote: req.body?.versionNote
+    })
+    await scheduleRagSourceRefresh({
+      database,
+      sourceType: 'document',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
     })
     res.json({ message: '恢复成功', version: result.version })
   } catch (error) {
@@ -1054,7 +1114,13 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, requireWriteP
 // 删除文档
 router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const result = softDeleteDocument({ database: getDatabase(), id: req.params.id })
+    const database = getDatabase()
+    const result = softDeleteDocument({ database, id: req.params.id })
+    invalidateRagSource(database, {
+      sourceType: 'document',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_TRASHED'
+    })
     try { await cache.del(CacheKeys.DOC_TAGS) } catch {}
     res.json({ message: '已移入回收站', purgeAfter: result.purgeAfter })
   } catch (error) {

@@ -53,6 +53,44 @@
       <p v-if="mode === 'ask'" class="mode-hint">
         只使用当前 Owner 可见资料回答；证据不足时会明确拒答，PC Worker 离线时保留可打开的引用式结果。
       </p>
+      <div v-if="mode === 'ask'" class="ask-scope-panel">
+        <label class="ask-source-field">
+          <span>回答范围</span>
+          <select v-model="askSourceKey" :disabled="coverageLoading || askLoading" @change="resetAskForScopeChange">
+            <option value="">全部已索引资料</option>
+            <optgroup v-for="group in askSourceGroups" :key="group.type" :label="group.label">
+              <option v-for="item in group.items" :key="item.key" :value="item.key">
+                {{ item.title }} · {{ ragCoverageStatusLabel(item.status) }}
+              </option>
+            </optgroup>
+          </select>
+        </label>
+        <div class="ask-scope-summary">
+          <template v-if="selectedAskSource">
+            <strong>{{ selectedAskSource.title }}</strong>
+            <span :class="`coverage-${selectedAskSource.status}`">
+              {{ selectedAskSource.chunkCount }} 个文本块 · {{ ragCoverageStatusLabel(selectedAskSource.status) }}
+            </span>
+          </template>
+          <template v-else-if="ragCoverage?.summary">
+            <strong>{{ ragCoverage.summary.indexed || 0 }} / {{ ragCoverage.summary.total || 0 }} 项已进入 RAG</strong>
+            <span>询问某一本书或某份文档时，建议先绑定具体资源。</span>
+          </template>
+          <span v-else>{{ coverageLoading ? '正在读取 RAG 覆盖状态…' : '暂时无法读取 RAG 覆盖状态。' }}</span>
+        </div>
+        <button
+          type="button"
+          class="secondary-button rag-refresh-button"
+          :class="{ 'desktop-only': !selectedAskSource }"
+          :disabled="ragRefreshing || coverageLoading"
+          @click="refreshRagIndex"
+        >
+          {{ ragRefreshing ? 'RAG 索引任务运行中…' : (selectedAskSource ? '更新此资源索引' : '刷新全部 RAG') }}
+        </button>
+      </div>
+      <p v-if="mode === 'ask' && ragRefreshFeedback" class="rag-refresh-feedback" role="status">
+        {{ ragRefreshFeedback }}
+      </p>
       <div class="search-row">
         <input
           v-model.trim="filters.q"
@@ -242,12 +280,18 @@ const errorCode = ref('')
 const elapsedMs = ref(null)
 const offset = ref(0)
 const ragStatus = ref(null)
+const ragCoverage = ref(null)
+const coverageLoading = ref(false)
+const ragRefreshing = ref(false)
+const ragRefreshFeedback = ref('')
+const askSourceKey = ref('')
 const askState = ref('idle')
 const askResult = ref(null)
 const askFeedback = ref('')
 const askQueryId = ref('')
 let pollTimer = null
 let ragPollTimer = null
+let ragIndexPollTimer = null
 let askGeneration = 0
 
 const filters = reactive({
@@ -302,6 +346,21 @@ const askModeLabel = computed(() => {
   return '引用式回答'
 })
 const askCitations = computed(() => askResult.value?.citations || [])
+const askSourceItems = computed(() => (ragCoverage.value?.data || []).map((item) => ({
+  key: `${item.source.type}:${item.source.id}`,
+  type: item.source.type,
+  id: item.source.id,
+  title: item.source.title,
+  status: item.status,
+  chunkCount: item.chunkCount || 0,
+  embeddingStatus: item.embeddingStatus || 'missing'
+})))
+const askSourceGroups = computed(() => [
+  { type: 'document', label: '文档', items: askSourceItems.value.filter((item) => item.type === 'document') },
+  { type: 'ebook', label: '电子书', items: askSourceItems.value.filter((item) => item.type === 'ebook') },
+  { type: 'code_repository', label: '代码仓库', items: askSourceItems.value.filter((item) => item.type === 'code_repository') }
+].filter((group) => group.items.length > 0))
+const selectedAskSource = computed(() => askSourceItems.value.find((item) => item.key === askSourceKey.value) || null)
 
 const ASK_REASON_LABELS = Object.freeze({
   no_evidence: '当前资料不足以支持可靠回答。',
@@ -309,6 +368,11 @@ const ASK_REASON_LABELS = Object.freeze({
   worker_offline: '回答模型当前离线，已保留可用的检索引用。',
   model_unavailable: '回答模型当前不可用，已保留可用的检索引用。',
   index_missing: '资料索引尚未建立，请先刷新索引。',
+  source_not_indexed: '所选资源尚未进入 RAG，请先为它建立索引。',
+  source_index_pending: '所选资源的 RAG 索引正在生成，请稍后再问。',
+  source_index_failed: '所选资源的 RAG 索引生成失败，可重试索引并在任务中心查看原因。',
+  source_index_stale: '所选资源已有更新，当前 RAG 快照已过期，请刷新索引。',
+  source_ambiguous: '问题中匹配到多个同名或同系列资源，请先在“回答范围”中选择具体一项。',
   cancelled: '本次提问已取消。'
 })
 const ASK_ERROR_LABELS = Object.freeze({
@@ -328,9 +392,11 @@ function buildParams() {
 }
 
 function buildRagPayload() {
-  // The current Owner query contract accepts only q/query and a bounded limit.
-  // Visibility and lifecycle filtering remain authoritative on the NAS.
-  return { q: filters.q, limit: 10 }
+  const payload = { q: filters.q, limit: 10 }
+  if (selectedAskSource.value) {
+    payload.source = { type: selectedAskSource.value.type, id: selectedAskSource.value.id }
+  }
+  return payload
 }
 
 function safeText(value, maxLength) {
@@ -402,6 +468,40 @@ async function loadRagStatus() {
   }
 }
 
+async function loadRagCoverage() {
+  coverageLoading.value = true
+  try {
+    const response = await api.rag.coverage({ limit: 200 })
+    ragCoverage.value = response.data?.data || null
+    if (askSourceKey.value && !askSourceItems.value.some((item) => item.key === askSourceKey.value)) {
+      askSourceKey.value = ''
+    }
+  } catch {
+    ragCoverage.value = null
+  } finally {
+    coverageLoading.value = false
+  }
+}
+
+function ragCoverageStatusLabel(status) {
+  return ({
+    ready: '可问', partial: '部分可问', pending: '索引中', stale: '待更新',
+    failed: '索引失败', missing: '未索引'
+  })[status] || '状态未知'
+}
+
+function resetAskForScopeChange() {
+  askGeneration += 1
+  const queryId = askQueryId.value
+  stopRagPolling()
+  askQueryId.value = ''
+  if (queryId) api.rag.cancelQuery(queryId).catch(() => {})
+  askState.value = 'idle'
+  askResult.value = null
+  askFeedback.value = ''
+  ragRefreshFeedback.value = ''
+}
+
 function submitForm() {
   if (mode.value === 'ask') runAsk()
   else runSearch(true)
@@ -430,10 +530,55 @@ function setMode(nextMode) {
     askResult.value = null
     askFeedback.value = ''
     loadRagStatus()
+    loadRagCoverage()
   } else {
     askState.value = 'idle'
     askResult.value = null
     askFeedback.value = ''
+  }
+}
+
+async function refreshRagIndex() {
+  if (ragRefreshing.value) return
+  ragRefreshing.value = true
+  ragRefreshFeedback.value = ''
+  const source = selectedAskSource.value
+  const input = source
+    ? { source: { type: source.type, id: source.id }, filter: { sourceIds: [source.id] }, rebuild: true }
+    : { rebuild: false }
+  try {
+    const response = await api.rag.refreshIndex(input)
+    const taskId = response.data?.data?.id
+    if (!taskId) throw new Error('missing task id')
+    ragRefreshFeedback.value = source
+      ? `“${source.title}”的 RAG 索引任务已进入 NAS 持久队列。`
+      : 'RAG 增量索引任务已进入 NAS 持久队列。'
+    await pollRagIndexTask(taskId)
+  } catch (error) {
+    ragRefreshing.value = false
+    ragRefreshFeedback.value = error.response?.status === 409
+      ? '已有 RAG 索引任务正在运行。'
+      : '无法启动 RAG 索引任务。'
+  }
+}
+
+async function pollRagIndexTask(taskId) {
+  try {
+    const response = await api.tasks.get(taskId)
+    const task = response.data?.data
+    if (!task) throw new Error('missing task')
+    if (['pending', 'leased', 'running'].includes(task.status)) {
+      ragIndexPollTimer = window.setTimeout(() => pollRagIndexTask(taskId), 1500)
+      return
+    }
+    ragRefreshing.value = false
+    await Promise.all([loadRagCoverage(), loadRagStatus()])
+    ragRefreshFeedback.value = task.status === 'succeeded'
+      ? 'RAG 索引刷新完成。'
+      : `RAG 索引任务未完成：${task.errorCode || task.status}`
+  } catch {
+    ragRefreshing.value = false
+    ragRefreshFeedback.value = 'RAG 索引任务状态暂时不可用，可在任务中心查看。'
   }
 }
 
@@ -634,6 +779,7 @@ function nextPage() { offset.value += pageSize; runSearch(false) }
 onMounted(loadStatus)
 onBeforeUnmount(() => {
   if (pollTimer) window.clearTimeout(pollTimer)
+  if (ragIndexPollTimer) window.clearTimeout(ragIndexPollTimer)
   stopRagPolling()
 })
 </script>
@@ -654,6 +800,15 @@ onBeforeUnmount(() => {
 .mode-tabs button { border: 0; border-radius: 7px; padding: 8px 18px; background: transparent; color: #64748b; }
 .mode-tabs button.active { background: #fff; color: #4338ca; box-shadow: 0 1px 4px rgba(15, 23, 42, .12); font-weight: 600; }
 .mode-hint { margin: 0 0 12px; color: #64748b; font-size: 13px; line-height: 1.5; }
+.ask-scope-panel { display: grid; grid-template-columns: minmax(220px, 1.1fr) minmax(260px, 1.5fr) auto; gap: 12px; align-items: end; margin-bottom: 14px; padding: 13px; border: 1px solid #dbe3f0; border-radius: 11px; background: #f8fafc; }
+.ask-source-field { display: flex; flex-direction: column; gap: 6px; color: #475569; font-size: 13px; }
+.ask-source-field select { width: 100%; min-height: 42px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 9px; padding: 8px 10px; background: #fff; color: #1f2937; }
+.ask-scope-summary { display: flex; min-height: 42px; flex-direction: column; justify-content: center; gap: 4px; color: #64748b; font-size: 13px; }
+.ask-scope-summary strong { color: #334155; }
+.coverage-ready { color: #047857; }
+.coverage-partial, .coverage-pending, .coverage-stale, .coverage-failed, .coverage-missing { color: #b45309; }
+.rag-refresh-button { min-height: 42px; white-space: nowrap; }
+.rag-refresh-feedback { margin: -4px 0 12px; color: #475569; font-size: 13px; }
 .search-input, .filter-grid input, .filter-grid select { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 9px; padding: 10px 12px; background: #fff; color: #1f2937; }
 .search-input { min-height: 46px; font-size: 16px; }
 button { cursor: pointer; }
@@ -722,6 +877,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .status-strip, .feedback, .rag-status-strip { align-items: flex-start; flex-direction: column; }
   .result-title-row { align-items: flex-start; flex-wrap: wrap; }
   .answer-heading { align-items: flex-start; }
+  .ask-scope-panel { grid-template-columns: 1fr; align-items: stretch; }
+  .ask-scope-panel .desktop-only { display: none; }
 }
 @media (max-width: 480px) {
   .search-hero, .search-row { flex-direction: column; }

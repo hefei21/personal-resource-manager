@@ -100,6 +100,15 @@ function normalizeQueryText(value) {
   return query
 }
 
+function normalizeSourceScope(sourceType, sourceId) {
+  if (sourceType === undefined && sourceId === undefined) return null
+  const id = positiveInteger(sourceId)
+  if (!SOURCE_TYPES.has(sourceType) || id === null) {
+    throw fail(RAG_QUERY_RUNTIME_ERROR_CODES.INPUT_INVALID, 'source scope is invalid.')
+  }
+  return Object.freeze({ sourceType, sourceId: id })
+}
+
 function sha256(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex')
 }
@@ -702,11 +711,15 @@ export class RagQueryRuntime {
     return normalized.output
   }
 
-  async #activeSources(model) {
+  async #activeSources(model, sourceScope = null) {
     const result = this.activeSourcesResolver
       ? await Promise.resolve(this.activeSourcesResolver({ database: this.database, model }))
       : readActiveSourcesFromDatabase(this.database, model.embeddingModelId)
-    return normalizeActiveSources(result)
+    const sources = normalizeActiveSources(result)
+    if (!sources || !sourceScope) return sources
+    const scoped = sources.filter((source) => source.sourceType === sourceScope.sourceType &&
+      source.sourceId === sourceScope.sourceId)
+    return scoped.length > 0 ? Object.freeze(scoped) : null
   }
 
   #readCandidate(candidate, model) {
@@ -760,9 +773,10 @@ export class RagQueryRuntime {
     return resolvedModel ? this.#readCandidate(candidate, resolvedModel) : null
   }
 
-  async query({ query, limit = 10, signal, retryTerminal = this.retryTerminal } = {}) {
+  async query({ query, limit = 10, sourceType, sourceId, signal, retryTerminal = this.retryTerminal } = {}) {
     const normalizedQuery = normalizeQueryText(query)
     const normalizedLimit = boundedInteger(limit, 'limit', 1, 100, 10)
+    const sourceScope = normalizeSourceScope(sourceType, sourceId)
     if (typeof retryTerminal !== 'boolean') throw fail(RAG_QUERY_RUNTIME_ERROR_CODES.INPUT_INVALID, 'retryTerminal is invalid.')
     const availability = await this.availability()
     if (!availability.available) return degradedResult(availability.reason)
@@ -777,7 +791,7 @@ export class RagQueryRuntime {
     if (!modelAfter || modelAfter.embeddingModelId !== modelBefore.embeddingModelId || !sameModel(modelAfter.model, modelBefore.model)) {
       return degradedResult(RAG_QUERY_RUNTIME_ERROR_CODES.STALE)
     }
-    const activeSources = await this.#activeSources(modelAfter)
+    const activeSources = await this.#activeSources(modelAfter, sourceScope)
     if (!activeSources) return degradedResult(RAG_QUERY_RUNTIME_ERROR_CODES.STALE)
     try {
       const result = await availability.vectorStore.search(embedding.embedding, {

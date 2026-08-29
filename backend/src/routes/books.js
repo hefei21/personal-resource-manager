@@ -43,6 +43,7 @@ import {
 } from '../services/ebookMetadataTaskProcessor.js'
 import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
 import { projectTask } from '../services/taskTypeCatalog.js'
+import { invalidateRagSource, scheduleRagSourceRefresh } from '../services/ragLifecycleService.js'
 import {
   listDeletedEbooks,
   permanentlyDeleteEbook,
@@ -920,6 +921,12 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
 
     // 清除分类缓存，确保分类数量统计实时更新
     await cache.del(CacheKeys.BOOK_CATEGORIES)
+    await scheduleRagSourceRefresh({
+      database: db,
+      sourceType: 'ebook',
+      sourceId: created.id,
+      reasonCode: 'RAG_SOURCE_CREATED'
+    })
 
     res.json({
       id: created.id,
@@ -1476,6 +1483,13 @@ router.post('/upload-with-path', authenticateToken, requireWritePermission, asyn
       封面: coverImagePath ? '已提取' : '无'
     })
 
+    await scheduleRagSourceRefresh({
+      database: db,
+      sourceType: 'ebook',
+      sourceId: created.id,
+      reasonCode: 'RAG_SOURCE_CREATED'
+    })
+
     res.json({
       id: created.id,
       title: created.title,
@@ -1541,6 +1555,11 @@ router.delete('/:id', authenticateToken, requireWritePermission, async (req, res
   try {
     const db = getDatabase()
     const result = softDeleteEbook({ database: db, id: req.params.id })
+    invalidateRagSource(db, {
+      sourceType: 'ebook',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_TRASHED'
+    })
     await cache.del(CacheKeys.BOOK_CATEGORIES)
     res.json({ data: result, message: '已移入回收站' })
   } catch (error) {
@@ -1559,6 +1578,13 @@ router.post('/batch-delete', authenticateToken, requireWritePermission, async (r
 
     const db = getDatabase()
     const result = softDeleteEbooks({ database: db, ids })
+    for (const id of ids) {
+      invalidateRagSource(db, {
+        sourceType: 'ebook',
+        sourceId: id,
+        reasonCode: 'RAG_SOURCE_TRASHED'
+      })
+    }
     await cache.del(CacheKeys.BOOK_CATEGORIES)
     res.json({ data: result, message: '已批量移入回收站' })
   } catch (error) {
@@ -1578,7 +1604,14 @@ router.get('/trash', authenticateToken, async (req, res) => {
 
 router.post('/trash/:id/restore', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const result = restoreEbookFromTrash({ database: getDatabase(), id: req.params.id })
+    const database = getDatabase()
+    const result = restoreEbookFromTrash({ database, id: req.params.id })
+    await scheduleRagSourceRefresh({
+      database,
+      sourceType: 'ebook',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_RESTORED'
+    })
     await cache.del(CacheKeys.BOOK_CATEGORIES)
     res.setHeader('Cache-Control', 'no-store')
     res.json({ data: result, message: '恢复成功' })
@@ -1616,6 +1649,12 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     // 清除分类缓存，确保分类数量统计实时更新
     await cache.del(CacheKeys.BOOK_CATEGORIES)
+    await scheduleRagSourceRefresh({
+      database: db,
+      sourceType: 'ebook',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_METADATA_CHANGED'
+    })
 
     res.json({ message: '更新成功' })
   } catch (error) {

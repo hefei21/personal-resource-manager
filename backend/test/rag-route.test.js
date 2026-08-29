@@ -11,6 +11,7 @@ process.env.DATA_PATH ??= path.join(os.tmpdir(), 'rag-route-test-data')
 const {
   createAuthoritativeChecks,
   createRagRouter,
+  normalizeCoverageQuery,
   normalizeQueryBody,
   normalizeRagIndexRefreshBody
 } = await import('../src/routes/rag.js')
@@ -152,10 +153,21 @@ test('normalizes a bounded query and rejects client-controlled evidence/filter k
   assert.deepEqual(normalizeQueryBody({ query: '  资料问题  ', limit: 2 }), { query: '资料问题', limit: 2 })
   assert.deepEqual(normalizeQueryBody({ q: 'same contract' }), { query: 'same contract', limit: 10 })
   assert.deepEqual(normalizeQueryBody({ query: '第一行\n第二行\t值' }), { query: '第一行\n第二行\t值', limit: 10 })
+  assert.deepEqual(normalizeQueryBody({ query: '章节数', source: { type: 'ebook', id: 23 } }), {
+    query: '章节数',
+    limit: 10,
+    source: { sourceType: 'ebook', sourceId: 23 }
+  })
   assert.throws(() => normalizeQueryBody({ query: 'bad\u0001query' }))
   assert.throws(() => normalizeQueryBody({ query: 'q', evidence: [] }))
   assert.throws(() => normalizeQueryBody({ query: 'q', filter: { sourceType: 'document' } }))
   assert.throws(() => normalizeQueryBody({ query: 'q', weights: { vector: 100 } }))
+  assert.throws(() => normalizeQueryBody({ query: 'q', source: { type: 'ebook', id: 0 } }))
+  assert.throws(() => normalizeQueryBody({ query: 'q', source: { type: 'ebook', id: 1, path: '/private' } }))
+  assert.deepEqual(normalizeCoverageQuery({ type: 'ebook', limit: '20', offset: '0' }), {
+    type: 'ebook', limit: 20, offset: 0
+  })
+  assert.equal(normalizeCoverageQuery({ type: 'audio' }), null)
 })
 
 test('default final visibility binds document candidates to sourceVersionId and version recycle state', () => {
@@ -919,5 +931,160 @@ test('Owner source status passes only the allowlisted source identity and hides 
     assert.equal(body.data.embedding.status, 'pending')
     assert.deepEqual(seen, [['document', 8], ['document', 7]])
     assert.doesNotMatch(JSON.stringify(body), /absolutePath|storageKey|modelUrl|collection|secret|token/iu)
+  })
+})
+
+test('Owner coverage is bounded, authenticated, and returns only projected source state', async () => {
+  const seen = []
+  const router = createRagRouter({
+    databaseProvider: () => ({ database: true }),
+    authoritativeChecksFactory: () => ({ authoritativeVisibility: () => true }),
+    coverageProvider: (input) => {
+      seen.push({ type: input.type, limit: input.limit, offset: input.offset })
+      return {
+        summary: { total: 1, indexed: 0, ready: 0, partial: 0, pending: 0, stale: 0, failed: 0, missing: 1 },
+        data: [{
+          source: { type: 'ebook', id: 23, title: 'Owner ebook' },
+          status: 'missing',
+          chunkCount: 0,
+          embeddingStatus: 'missing'
+        }],
+        total: 1,
+        limit: input.limit,
+        offset: input.offset
+      }
+    }
+  })
+  await withServer(router, async (baseUrl) => {
+    assert.equal((await fetch(`${baseUrl}/api/rag/coverage`)).status, 401)
+    assert.equal((await fetch(`${baseUrl}/api/rag/coverage?type=audio`, {
+      headers: { 'x-test-principal': 'owner' }
+    })).status, 400)
+    const response = await fetch(`${baseUrl}/api/rag/coverage?type=ebook&limit=20`, {
+      headers: { 'x-test-principal': 'owner' }
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.data.data[0].source.title, 'Owner ebook')
+    assert.equal(body.data.data[0].status, 'missing')
+    assert.deepEqual(seen, [{ type: 'ebook', limit: 20, offset: 0 }])
+    assert.doesNotMatch(JSON.stringify(body), /path|hash|secret|token/iu)
+  })
+})
+
+test('exact source scope is forwarded and unrelated retrieval evidence is rejected', async () => {
+  const calls = []
+  let answerCalls = 0
+  const router = createRagRouter({
+    databaseProvider: () => ({ database: true }),
+    authoritativeChecksFactory: () => checks(),
+    sourceStatusProvider: () => ({
+      sourceState: { status: 'ready' },
+      snapshot: { status: 'ready' },
+      chunks: { status: 'ready', count: 2 },
+      embedding: { status: 'ready', models: [] }
+    }),
+    structuredAnswerProvider: () => null,
+    candidateProvider: (input) => {
+      calls.push(input.source)
+      return { ftsCandidates: [] }
+    },
+    hybridRetrieverFactory: () => ({ retrieve: async () => retrieval() }),
+    answerServiceFactory: () => ({ generate: async () => { answerCalls += 1 } })
+  })
+  await withServer(router, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/rag/queries`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+      body: JSON.stringify({ query: '只问这本书', source: { type: 'ebook', id: 23 } })
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.data.abstained, true)
+    assert.equal(body.data.reasonCode, 'no_evidence')
+    assert.deepEqual(calls, [{ sourceType: 'ebook', sourceId: 23 }])
+    assert.equal(answerCalls, 0)
+  })
+})
+
+test('exact source fails closed before retrieval when its RAG index is missing', async () => {
+  let candidateCalls = 0
+  const router = createRagRouter({
+    databaseProvider: () => ({ database: true }),
+    authoritativeChecksFactory: () => checks(),
+    sourceStatusProvider: () => ({
+      sourceState: { status: 'missing' },
+      chunks: { status: 'missing', count: 0 },
+      embedding: { status: 'missing', models: [] }
+    }),
+    structuredAnswerProvider: () => null,
+    candidateProvider: () => { candidateCalls += 1; return { ftsCandidates: [] } }
+  })
+  await withServer(router, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/rag/queries`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+      body: JSON.stringify({ query: '这本书讲了什么', source: { type: 'ebook', id: 23 } })
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.data.abstained, true)
+    assert.equal(body.data.reasonCode, 'source_not_indexed')
+    assert.equal(candidateCalls, 0)
+  })
+})
+
+test('structured source facts bypass retrieval and model generation', async () => {
+  let candidateCalls = 0
+  const router = createRagRouter({
+    databaseProvider: () => ({ database: true }),
+    authoritativeChecksFactory: () => checks(),
+    sourceStatusProvider: () => ({ sourceState: { status: 'missing' }, chunks: { count: 0 } }),
+    structuredAnswerProvider: ({ query, source }) => ({
+      status: 'complete', query, language: 'zh', answer: '《目标书》当前可读取的正文共 26 章。',
+      abstained: false, reasonCode: 'structured_fact', degraded: false,
+      citations: [{ citationId: 'C1', title: '目标书', openUrl: `/books?bookId=${source.sourceId}` }]
+    }),
+    candidateProvider: () => { candidateCalls += 1; return { ftsCandidates: [] } }
+  })
+  await withServer(router, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/rag/queries`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+      body: JSON.stringify({ query: '正文一共多少章', source: { type: 'ebook', id: 23 } })
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.data.answer, '《目标书》当前可读取的正文共 26 章。')
+    assert.equal(body.data.reasonCode, 'structured_fact')
+    assert.equal(candidateCalls, 0)
+  })
+})
+
+test('a uniquely inferred title scope reaches structured facts without unrelated retrieval', async () => {
+  let candidateCalls = 0
+  const router = createRagRouter({
+    databaseProvider: () => ({ database: true }),
+    authoritativeChecksFactory: () => checks(),
+    querySourceResolver: () => ({
+      source: { sourceType: 'ebook', sourceId: 23 },
+      inferred: true
+    }),
+    sourceStatusProvider: () => ({ sourceState: { status: 'missing' }, chunks: { count: 0 } }),
+    structuredAnswerProvider: ({ source }) => ({
+      status: 'complete', language: 'zh', answer: `已绑定电子书 ${source.sourceId}。`,
+      abstained: false, reasonCode: 'structured_fact', degraded: false, citations: []
+    }),
+    candidateProvider: () => { candidateCalls += 1; return { ftsCandidates: [] } }
+  })
+  await withServer(router, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/rag/queries`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+      body: JSON.stringify({ query: '无职转生正文一共多少章' })
+    })
+    assert.equal(response.status, 200)
+    assert.equal((await response.json()).data.answer, '已绑定电子书 23。')
+    assert.equal(candidateCalls, 0)
   })
 })

@@ -3,6 +3,7 @@ import path from 'node:path'
 import AdmZip from 'adm-zip'
 
 import { getDatabase } from '../config/database.js'
+import { scheduleRagSourceRefresh } from './ragLifecycleService.js'
 import { validateArchiveEntries } from './uploadSecurity.js'
 import { TaskProcessorError } from './taskProcessorError.js'
 
@@ -424,12 +425,14 @@ export function createEbookMetadataTaskProcessor({
   databaseProvider = getDatabase,
   resolveBookPath,
   parseMetadata = parseEpubMetadata,
-  parseTimeoutMs = PARSE_TIMEOUT_MS
+  parseTimeoutMs = PARSE_TIMEOUT_MS,
+  scheduleRefresh = scheduleRagSourceRefresh
 } = {}) {
   const getDatabaseForTask = database === undefined ? databaseProvider : () => database
   if (typeof getDatabaseForTask !== 'function') throw new TypeError('databaseProvider must be a function')
   if (typeof resolveBookPath !== 'function') throw new TypeError('resolveBookPath must be a function')
   if (typeof parseMetadata !== 'function') throw new TypeError('parseMetadata must be a function')
+  if (typeof scheduleRefresh !== 'function') throw new TypeError('scheduleRefresh must be a function')
 
   return async function processEbookMetadataTask(context = {}) {
     const signal = context.signal
@@ -489,7 +492,16 @@ export function createEbookMetadataTaskProcessor({
       const metadata = await parseWithTimeout(parseMetadata, filePath, signal, parseTimeoutMs)
       throwIfAborted(signal)
       const normalized = normalizeParsedMetadata(metadata)
-      return applyParsedMetadata(databaseConnection, bookId, contentHash, normalized)
+      const result = applyParsedMetadata(databaseConnection, bookId, contentHash, normalized)
+      try {
+        await scheduleRefresh({
+          database: databaseConnection,
+          sourceType: 'ebook',
+          sourceId: bookId,
+          reasonCode: 'RAG_SOURCE_METADATA_CHANGED'
+        })
+      } catch {}
+      return result
     } catch (error) {
       if (error instanceof TaskProcessorError && error.code === 'TASK_CANCELLED') {
         try {

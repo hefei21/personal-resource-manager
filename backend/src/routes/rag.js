@@ -19,6 +19,9 @@ import {
   readRagWorkerAvailability
 } from '../services/ragQueryRuntime.js'
 import { createRagTextIndexService } from '../services/ragTextIndexService.js'
+import { readRagCoverage } from '../services/ragCoverageService.js'
+import { readRagStructuredAnswer } from '../services/ragStructuredQueryService.js'
+import { resolveRagSourceFromQuery } from '../services/ragSourceResolver.js'
 import {
   normalizeRagIndexTaskInput,
   RAG_INDEX_EXECUTION_CLASS,
@@ -42,7 +45,7 @@ const SOURCE_TABLES = Object.freeze({
   ebook: 'books',
   code_repository: 'code_repositories'
 })
-const ALLOWED_QUERY_KEYS = new Set(['query', 'q', 'limit'])
+const ALLOWED_QUERY_KEYS = new Set(['query', 'q', 'limit', 'source'])
 const PUBLIC_LOCATOR_KEYS = new Set([
   'route',
   'sectionPath',
@@ -59,6 +62,8 @@ const PUBLIC_LOCATOR_KEYS = new Set([
 const MAX_QUERY_BYTES = 16_384
 const DEFAULT_LIMIT = 10
 const MAX_LIMIT = 50
+const DEFAULT_COVERAGE_LIMIT = 100
+const MAX_COVERAGE_LIMIT = 200
 const QUERY_RUN_TTL_MS = RAG_QUERY_RUN_TTL_SECONDS * 1000
 const QUERY_PENDING_STATUSES = new Set(['pending', 'leased', 'running', 'queued', 'active'])
 const QUERY_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'canceled', 'complete', 'degraded', 'abstained'])
@@ -83,7 +88,9 @@ export const RAG_ROUTE_ERROR_CODES = Object.freeze({
   INDEX_REFRESH_FAILED: 'RAG_INDEX_REFRESH_FAILED',
   SOURCE_STATUS_INPUT_INVALID: 'RAG_SOURCE_STATUS_INPUT_INVALID',
   SOURCE_NOT_FOUND: 'RAG_SOURCE_NOT_FOUND',
-  SOURCE_STATUS_UNAVAILABLE: 'RAG_SOURCE_STATUS_UNAVAILABLE'
+  SOURCE_STATUS_UNAVAILABLE: 'RAG_SOURCE_STATUS_UNAVAILABLE',
+  COVERAGE_INPUT_INVALID: 'RAG_COVERAGE_INPUT_INVALID',
+  COVERAGE_UNAVAILABLE: 'RAG_COVERAGE_UNAVAILABLE'
 })
 
 function isPlainObject(value) {
@@ -301,7 +308,14 @@ function normalizeQueryBody(body) {
 
   const limit = body.limit === undefined ? DEFAULT_LIMIT : body.limit
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) failInput()
-  return Object.freeze({ query, limit })
+  let source = null
+  if (body.source !== undefined) {
+    if (!isPlainObject(body.source) ||
+        Object.keys(body.source).some((key) => !['type', 'id'].includes(key))) failInput()
+    source = normalizeRagSourceParams(body.source.type, body.source.id)
+    if (source === null) failInput()
+  }
+  return Object.freeze({ query, limit, ...(source ? { source } : {}) })
 }
 
 function normalizeRagIndexRefreshBody(body) {
@@ -319,6 +333,20 @@ function normalizeRagSourceParams(type, id) {
   if (typeof type !== 'string' || !RAG_SOURCE_TYPE_PATTERN.test(type)) return null
   const sourceId = positiveId(id)
   return sourceId === null ? null : Object.freeze({ sourceType: type, sourceId })
+}
+
+function normalizeCoverageQuery(query) {
+  const input = query ?? {}
+  if (!isPlainObject(input) || Object.keys(input).some((key) => !['type', 'limit', 'offset'].includes(key))) {
+    return null
+  }
+  const type = input.type === undefined || input.type === '' ? null : input.type
+  if (type !== null && !RAG_SOURCE_TYPE_PATTERN.test(type)) return null
+  const limit = input.limit === undefined ? DEFAULT_COVERAGE_LIMIT : Number(input.limit)
+  const offset = input.offset === undefined ? 0 : Number(input.offset)
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_COVERAGE_LIMIT ||
+      !Number.isSafeInteger(offset) || offset < 0 || offset > 100_000) return null
+  return Object.freeze({ type, limit, offset })
 }
 
 function safeStatus(value) {
@@ -755,6 +783,7 @@ async function defaultCandidateProvider({
   req,
   query,
   limit,
+  source,
   authoritativeVisibility,
   authoritativeActiveSnapshot,
   textIndexServiceFactory,
@@ -771,7 +800,12 @@ async function defaultCandidateProvider({
     error.code = RAG_ROUTE_ERROR_CODES.CANDIDATES_INVALID
     throw error
   }
-  const result = await Promise.resolve(service.query({ q: query, limit, offset: 0 }))
+  const result = await Promise.resolve(service.query({
+    q: query,
+    limit,
+    offset: 0,
+    ...(source ? { sourceType: source.sourceType, sourceId: source.sourceId } : {})
+  }))
   if (!isPlainObject(result) || !Array.isArray(result.data)) {
     const error = new Error('RAG text candidates are invalid.')
     error.code = RAG_ROUTE_ERROR_CODES.CANDIDATES_INVALID
@@ -791,7 +825,11 @@ async function defaultCandidateProvider({
       authoritativeActiveSnapshot
     })
     if (runtime && typeof runtime.query === 'function') {
-      vectorOutput = await runtime.query({ query, limit })
+      vectorOutput = await runtime.query({
+        query,
+        limit,
+        ...(source ? { sourceType: source.sourceType, sourceId: source.sourceId } : {})
+      })
     }
   } catch (error) {
     vectorOutput = { vectorCandidates: [], vectorError: Object.freeze({ code: error?.code ?? 'VECTOR_UNAVAILABLE' }) }
@@ -1378,10 +1416,34 @@ function queryError(res, error) {
   if (code === RAG_ROUTE_ERROR_CODES.INPUT_INVALID) return sendCode(res, 400, code)
   if (code === RAG_ROUTE_ERROR_CODES.CANDIDATES_INVALID) return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.UNAVAILABLE)
   if (code === RAG_ROUTE_ERROR_CODES.NOT_FOUND) return sendCode(res, 404, code)
+  if (code === RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND) return sendCode(res, 404, code)
   if (code === RAG_ROUTE_ERROR_CODES.CANCEL_CONFLICT) return sendCode(res, 409, code)
   if (code === RAG_ROUTE_ERROR_CODES.CANCEL_FAILED) return sendCode(res, 503, code)
   if (isVisibilityError(error)) return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.VISIBILITY_FAILED)
   return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.UNAVAILABLE)
+}
+
+function scopedIndexReason(status) {
+  const state = status?.sourceState?.status ?? status?.snapshot?.status ?? 'missing'
+  const chunkCount = safeCount(status?.chunks?.count)
+  if ((state === 'ready' || state === 'partial') && chunkCount > 0) return null
+  if (state === 'pending') return 'source_index_pending'
+  if (state === 'failed') return 'source_index_failed'
+  if (state === 'stale') return 'source_index_stale'
+  return 'source_not_indexed'
+}
+
+function scopedAbstention(query, reasonCode) {
+  return Object.freeze({
+    status: 'abstained',
+    query,
+    language: languageForQuery(query),
+    answer: null,
+    abstained: true,
+    reasonCode,
+    degraded: false,
+    citations: Object.freeze([])
+  })
 }
 
 export function createRagRouter({
@@ -1401,6 +1463,9 @@ export function createRagRouter({
   taskRuntimeProvider = defaultTaskRuntimeProvider,
   enqueue = enqueueExclusiveRun,
   sourceStatusProvider = defaultRagSourceStatusProvider,
+  coverageProvider = readRagCoverage,
+  structuredAnswerProvider = readRagStructuredAnswer,
+  querySourceResolver = resolveRagSourceFromQuery,
   workerAvailable = defaultWorkerAvailable,
   vectorAvailable = null,
   model = undefined,
@@ -1469,6 +1534,31 @@ export function createRagRouter({
       return res.json({ data: status })
     } catch {
       return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.UNAVAILABLE)
+    }
+  })
+
+  router.get('/coverage', async (req, res) => {
+    const input = normalizeCoverageQuery(req.query)
+    if (input === null) return sendCode(res, 400, RAG_ROUTE_ERROR_CODES.COVERAGE_INPUT_INVALID)
+    try {
+      const database = await Promise.resolve(databaseProvider(req))
+      const checks = await Promise.resolve(authoritativeChecksFactory({ database, req }))
+      if (!checks || typeof checks.authoritativeVisibility !== 'function') {
+        return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.COVERAGE_UNAVAILABLE)
+      }
+      const data = await Promise.resolve(coverageProvider({
+        database,
+        req,
+        checks,
+        sourceStatusProvider,
+        ...input
+      }))
+      if (!isPlainObject(data) || !Array.isArray(data.data) || !isPlainObject(data.summary)) {
+        return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.COVERAGE_UNAVAILABLE)
+      }
+      return res.json({ data })
+    } catch {
+      return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.COVERAGE_UNAVAILABLE)
     }
   })
 
@@ -1574,11 +1664,50 @@ export function createRagRouter({
         error.code = RAG_ROUTE_ERROR_CODES.VISIBILITY_FAILED
         throw error
       }
+      let querySource = input.source ?? null
+      if (!querySource && typeof querySourceResolver === 'function') {
+        const resolved = await Promise.resolve(querySourceResolver({
+          database,
+          req,
+          checks,
+          query: input.query,
+          coverageProvider,
+          sourceStatusProvider
+        }))
+        if (resolved?.ambiguous === true) {
+          return res.json({ data: scopedAbstention(input.query, 'source_ambiguous') })
+        }
+        querySource = resolved?.source ?? null
+      }
+      if (querySource) {
+        const sourceStatus = await Promise.resolve(sourceStatusProvider({
+          database,
+          req,
+          checks,
+          sourceType: querySource.sourceType,
+          sourceId: querySource.sourceId
+        }))
+        if (sourceStatus === null || sourceStatus === undefined) {
+          const error = new Error('RAG query source was not found.')
+          error.code = RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND
+          throw error
+        }
+        const structured = await Promise.resolve(structuredAnswerProvider({
+          database,
+          req,
+          query: input.query,
+          source: querySource
+        }))
+        if (structured) return res.json({ data: structured })
+        const reasonCode = scopedIndexReason(sourceStatus)
+        if (reasonCode) return res.json({ data: scopedAbstention(input.query, reasonCode) })
+      }
       const providerOutput = await Promise.resolve(resolvedCandidateProvider({
         database,
         req,
         query: input.query,
         limit: input.limit,
+        source: querySource,
         authoritativeVisibility: checks.authoritativeVisibility,
         authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot
       }))
@@ -1617,11 +1746,20 @@ export function createRagRouter({
         query: input.query,
         req
       })
+      const scopedRetrieval = querySource
+        ? Object.freeze({
+            ...authorizedRetrieval,
+            data: Object.freeze(authorizedRetrieval.data.filter((candidate) =>
+              candidate.sourceType === querySource.sourceType && candidate.sourceId === querySource.sourceId)),
+            total: authorizedRetrieval.data.filter((candidate) =>
+              candidate.sourceType === querySource.sourceType && candidate.sourceId === querySource.sourceId).length
+          })
+        : authorizedRetrieval
 
       let taskStore = null
       try { taskStore = await Promise.resolve(taskStoreProvider({ database, req })) } catch {}
-      let rankedRetrieval = authorizedRetrieval
-      if (authorizedRetrieval.data.length > 0) {
+      let rankedRetrieval = scopedRetrieval
+      if (scopedRetrieval.data.length > 0) {
         try {
           const resolvedReranker = await resolveComponent(resolvedRerankerServiceFactory, {
             database,
@@ -1632,16 +1770,16 @@ export function createRagRouter({
             rerankerConfig
           })
           if (resolvedReranker && typeof resolvedReranker.rerank === 'function') {
-            const window = authorizedRetrieval.data.slice(0, 10)
+            const window = scopedRetrieval.data.slice(0, 10)
             const reranked = await resolvedReranker.rerank({ query: input.query, candidates: window })
             if (Array.isArray(reranked?.candidates) && reranked.candidates.length === window.length) {
-              const combined = [...reranked.candidates, ...authorizedRetrieval.data.slice(window.length)]
+              const combined = [...reranked.candidates, ...scopedRetrieval.data.slice(window.length)]
               rankedRetrieval = Object.freeze({
-                ...authorizedRetrieval,
+                ...scopedRetrieval,
                 data: Object.freeze(combined),
                 total: combined.length,
                 retrieval: Object.freeze({
-                  ...authorizedRetrieval.retrieval,
+                  ...scopedRetrieval.retrieval,
                   reranker: Object.freeze({
                     status: reranked.applied === true ? 'applied' : 'unavailable',
                     ...(typeof reranked.reason === 'string' ? { reason: reranked.reason } : {})
@@ -1835,6 +1973,6 @@ export function createRagRouter({
   return router
 }
 
-export { createAuthoritativeChecks, normalizeQueryBody, normalizeRagIndexRefreshBody }
+export { createAuthoritativeChecks, normalizeCoverageQuery, normalizeQueryBody, normalizeRagIndexRefreshBody }
 export const createRagQueryRouter = createRagRouter
 export default createRagRouter()

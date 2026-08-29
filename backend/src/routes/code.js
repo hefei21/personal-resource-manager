@@ -12,6 +12,7 @@ import {
   getTaskById,
   getTaskByIdempotencyKey
 } from '../services/taskStore.js'
+import { invalidateRagSource, scheduleRagSourceRefresh } from '../services/ragLifecycleService.js'
 import {
   CODE_REPOSITORY_EXECUTION_CLASS,
   CODE_REPOSITORY_PROCESSOR_VERSION,
@@ -612,6 +613,11 @@ router.delete('/:id', authenticateToken, requireWritePermission, async (req, res
 
     // 删除数据库记录
     db.prepare('DELETE FROM code_repositories WHERE id = ?').run(req.params.id)
+    invalidateRagSource(db, {
+      sourceType: 'code_repository',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_DELETED'
+    })
     res.json({ message: '删除成功' })
   } catch (error) {
     if (sendGitNasError(res, error)) return
@@ -639,6 +645,12 @@ router.put('/:id', authenticateToken, requireWritePermission, async (req, res) =
     
     db.prepare('UPDATE code_repositories SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(name, description, req.params.id)
+    await scheduleRagSourceRefresh({
+      database: db,
+      sourceType: 'code_repository',
+      sourceId: req.params.id,
+      reasonCode: 'RAG_SOURCE_METADATA_CHANGED'
+    })
     
     res.json({ message: '更新成功' })
   } catch (error) {
