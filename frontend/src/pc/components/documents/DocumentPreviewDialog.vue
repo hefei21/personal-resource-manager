@@ -39,7 +39,7 @@
         <div ref="pdfCanvasStage" class="pdf-canvas-stage"><canvas ref="pdfCanvas"></canvas></div>
         <div class="pdf-controls" aria-label="PDF 页面导航">
           <NativeButton class="pdf-page-button" size="small" variant="outline" @click="previousPage" :disabled="currentPage <= 1">
-            <template #icon><NativeIcon name="chevron-left" /></template>
+            <NativeIcon name="chevron-left" size="15" />
             上一页
           </NativeButton>
           <div class="pdf-page-status">
@@ -50,7 +50,7 @@
           </div>
           <NativeButton class="pdf-page-button" size="small" variant="outline" @click="nextPage" :disabled="currentPage >= totalPages">
             下一页
-            <NativeIcon name="chevron-right" />
+            <NativeIcon name="chevron-right" size="15" />
           </NativeButton>
         </div>
       </div>
@@ -490,6 +490,7 @@ onBeforeUnmount(() => {
 .pdf-page-input { width: 72px; }
 .pdf-page-input :deep(.native-input) { text-align: center; font-variant-numeric: tabular-nums; }
 .pdf-page-jump { border-radius: var(--radius-sm); }
+.pdf-page-button :deep(.native-icon) { width: 15px; height: 15px; flex: 0 0 15px; }
 .pdf-page-button { min-width: 92px; background: var(--color-surface-raised); }
 .markdown-preview, .text-preview, .code-preview, .image-preview, .word-html-preview, .office-preview, .unsupported-preview, .preview-error-state { min-height: 0; margin: 20px; flex: 1 1 auto; overflow: auto; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); background: var(--color-surface-raised); }
 .code-preview { padding: 20px; background: #282c34; }

@@ -81,6 +81,7 @@ const props = defineProps({
   closeOnOverlayClick: { type: Boolean, default: true },
   closeBtn: { type: Boolean, default: true },
   showTitle: { type: Boolean, default: true },
+  topOffset: { type: [String, Number], default: 56 },
   zIndex: { type: Number, default: 1500 },
   closeOnEsc: { type: Boolean, default: true }
 })
@@ -120,8 +121,11 @@ const contentStyle = computed(() => {
   const style = { zIndex: props.zIndex + 1 }
   
   if (props.placement === 'left' || props.placement === 'right') {
+    const topOffset = typeof props.topOffset === 'number' ? `${props.topOffset}px` : props.topOffset
     style.width = typeof props.size === 'number' ? `${props.size}px` : props.size
-    style.height = '100%'
+    style.top = topOffset
+    style.bottom = '0'
+    style.height = 'auto'
   } else {
     style.height = typeof props.size === 'number' ? `${props.size}px` : props.size
     style.width = '100%'

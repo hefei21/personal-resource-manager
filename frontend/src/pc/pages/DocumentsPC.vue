@@ -39,6 +39,7 @@
         <div class="workbench-search">
           <NativeInput
             v-model="searchKeyword"
+            class="workbench-query"
             placeholder="搜索标题或标签"
             clearable
             @clear="handleSearch"
@@ -46,27 +47,31 @@
           >
             <template #suffix-icon><NativeIcon name="magnifying-glass" /></template>
           </NativeInput>
+          <div class="workbench-sort-group" aria-label="文档排序">
+            <NativeSelect
+              v-model="sortBy"
+              class="workbench-sort"
+              aria-label="排序字段"
+              :options="[
+                { value: 'updated_at', label: '最近更新' },
+                { value: 'title', label: '文件名' },
+                { value: 'file_type', label: '文件类型' },
+                { value: 'size', label: '文件大小' }
+              ]"
+              @change="handleDropdownSortChange"
+            />
+            <NativeButton class="sort-direction-button" variant="text" shape="circle" :title="sortOrder === 'desc' ? '降序' : '升序'" @click="toggleSortOrder">
+              <template #icon><NativeIcon :name="sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'" size="18" /></template>
+            </NativeButton>
+          </div>
           <NativeButton
+            class="workbench-filter-toggle"
             :variant="advancedSearchVisible ? 'base' : 'outline'"
             :theme="advancedSearchVisible ? 'primary' : 'default'"
             @click="advancedSearchVisible = !advancedSearchVisible"
           >
             <template #icon><NativeIcon name="filter" /></template>
             筛选
-          </NativeButton>
-          <NativeSelect
-            v-model="sortBy"
-            class="workbench-sort"
-            :options="[
-              { value: 'updated_at', label: '最近更新' },
-              { value: 'title', label: '文件名' },
-              { value: 'file_type', label: '文件类型' },
-              { value: 'size', label: '文件大小' }
-            ]"
-            @change="handleDropdownSortChange"
-          />
-          <NativeButton class="sort-direction-button" variant="text" shape="circle" :title="sortOrder === 'desc' ? '降序' : '升序'" @click="toggleSortOrder">
-            <template #icon><NativeIcon :name="sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'" size="18" /></template>
           </NativeButton>
         </div>
       </div>
@@ -972,7 +977,7 @@ const columns = computed(() => [
   { key: 'type', dataIndex: 'filePath', title: '类型', width: 80, sorter: true },
   { key: 'indexStatus', dataIndex: 'indexStatus', title: '资料索引', width: 110 },
   { key: 'updatedAt', dataIndex: 'updatedAt', title: '更新时间', width: 180, sorter: true },
-  { key: 'operation', title: '操作', width: 156, align: 'right', headerAlign: 'right' }
+  { key: 'operation', title: '操作', width: 156, align: 'center', headerAlign: 'center' }
 ])
 
 const versionColumns = [
@@ -3083,17 +3088,29 @@ onMounted(async () => {
 }
 
 .workbench-search {
-  flex: 0 1 620px;
+  flex: 0 1 540px;
   justify-content: flex-end;
+}
+
+.workbench-query {
+  min-width: 220px;
+  max-width: 280px;
+  flex: 1 1 250px;
 }
 
 .workbench-search :deep(.native-input) {
   min-width: 220px;
 }
 
+.workbench-sort-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .workbench-sort {
-  width: 132px;
-  flex: 0 0 132px;
+  width: 116px;
+  flex: 0 0 116px;
 }
 
 .workbench-search :deep(.sort-direction-button.native-btn) {
@@ -3114,7 +3131,7 @@ onMounted(async () => {
 }
 
 .workbench-filters {
-  margin: 12px 16px 0;
+  margin: 12px 16px 14px;
   padding: 14px 16px;
   display: grid;
   grid-template-columns: 176px minmax(0, 1fr) auto;
@@ -3200,9 +3217,10 @@ onMounted(async () => {
 }
 
 .document-row-actions {
-  display: inline-flex;
+  width: 100%;
+  display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 5px;
 }
 

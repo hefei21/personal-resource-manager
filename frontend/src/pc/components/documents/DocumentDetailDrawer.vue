@@ -3,6 +3,7 @@
     :model-value="visible"
     :title="document?.title || '文档详情'"
     :show-title="false"
+    :top-offset="72"
     placement="right"
     size="460px"
     @update:model-value="emit('update:visible', $event)"
@@ -137,11 +138,11 @@ function formatFileSize(bytes) {
 
 <style scoped>
 .document-detail { display: flex; flex-direction: column; gap: 16px; }
-.document-detail-hero { padding: 2px 48px 16px 0; display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border-subtle); }
+.document-detail-hero { padding: 4px 48px 16px 0; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); }
 .document-detail-hero > div { min-width: 0; display: grid; gap: 5px; }
 .document-detail-hero strong { overflow-wrap: anywhere; color: var(--color-text-primary); font-size: 16px; }
 .document-detail-hero span { color: var(--color-text-secondary); font-size: 13px; }
-.document-detail-icon { width: 52px; height: 52px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); color: var(--color-primary); background: var(--color-primary-surface); }
+.document-detail-icon { width: 48px; height: 48px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: var(--radius-md); color: var(--color-primary); background: color-mix(in srgb, var(--color-primary-surface) 76%, var(--color-surface-raised)); }
 .document-type-icon--pdf { color: var(--color-danger-text); background: var(--color-danger-surface); }
 .document-type-icon--word { color: #3564b8; background: #edf4ff; }
 .document-type-icon--sheet { color: var(--color-success-text); background: var(--color-success-surface); }
@@ -162,8 +163,9 @@ function formatFileSize(bytes) {
 .document-action-card:hover:not(:disabled) { border-color: var(--color-primary-border); background: var(--color-primary-surface); transform: translateY(-1px); }
 .document-action-card:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
 .document-action-card:disabled { opacity: .48; cursor: not-allowed; }
-.document-action-card > span { width: 34px; height: 34px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); color: var(--color-primary); background: var(--color-primary-surface); }
+.document-action-card > span { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); color: var(--color-text-secondary); background: var(--color-surface-subtle); }
 .document-action-card--primary { border-color: var(--color-primary-border); }
+.document-action-card--primary > span { color: var(--color-primary); border-color: var(--color-primary-border); background: var(--color-primary-surface); }
 .document-action-card > div { min-width: 0; display: grid; gap: 2px; }
 .document-action-card strong { font-size: 13px; white-space: nowrap; }
 .document-action-card small { overflow: hidden; color: var(--color-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
