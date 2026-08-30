@@ -2,50 +2,59 @@
   <div id="mobile-documents-host" class="mobile-documents">
     <!-- 顶部导航栏（标题由Layout统一提供，此处不再重复） -->
 
-    <!-- 浏览模式切换 -->
-    <div class="view-mode-tabs">
-      <div 
+    <div class="mobile-browse-toolbar">
+      <!-- 浏览模式切换 -->
+      <div class="view-mode-tabs" role="tablist" aria-label="文档浏览方式">
+      <button
+        type="button"
         class="tab-item" 
         :class="{ active: viewMode === 'category' }"
+        role="tab"
+        :aria-selected="viewMode === 'category'"
         @click="switchViewMode('category')"
       >
         <NativeIcon name="folder" />
         <span>分类</span>
-      </div>
-      <div 
+      </button>
+      <button
+        type="button"
         class="tab-item" 
         :class="{ active: viewMode === 'list' }"
+        role="tab"
+        :aria-selected="viewMode === 'list'"
         @click="switchViewMode('list')"
       >
         <NativeIcon name="view-list" />
-        <span>列表</span>
+        <span>全部</span>
+      </button>
       </div>
-      <div
-        class="tab-item"
-        @click="switchViewMode('trash')"
+      <NativeButton
+        class="mobile-trash-button"
+        variant="outline"
+        shape="circle"
+        title="文档回收站"
+        aria-label="打开文档回收站"
+        @click="openTrashPage"
       >
-        <NativeIcon name="trash" />
-        <span>回收站</span>
-      </div>
+        <template #icon><NativeIcon name="trash" /></template>
+      </NativeButton>
     </div>
 
-    <!-- 搜索栏 -->
-    <div class="search-bar">
+    <div class="mobile-search-actions">
       <NativeInput
         v-model="searchKeyword"
-        placeholder="搜索文档..."
+        class="search-bar"
+        placeholder="搜索标题或标签"
         clearable
         @clear="handleSearch"
         @enter="handleSearch"
       >
-        <template #prefix-icon>
-          <NativeIcon name="search" />
+        <template #suffix>
+          <NativeIcon name="magnifying-glass" />
         </template>
       </NativeInput>
-    </div>
-
-    <div class="mobile-document-actions">
-      <NativeButton theme="primary" size="small" @click="openUploadDialog" :disabled="!canWrite">
+      <NativeButton class="mobile-upload-button" theme="primary" @click="openUploadDialog" :disabled="!canWrite">
+        <template #icon><NativeIcon name="plus" /></template>
         上传文档
       </NativeButton>
       <input
@@ -67,14 +76,28 @@
       :confirm-disabled="uploading || !canWrite"
       class="centered-dialog"
     >
-      <div class="mobile-upload-form">
-        <NativeButton variant="outline" size="small" @click="openFilePicker" :disabled="uploading">
-          {{ uploadFiles[0]?.name || '选择文件' }}
-        </NativeButton>
-        <NativeInput v-model="uploadForm.title" placeholder="文档标题" :disabled="uploading" />
-        <NativeInput v-model="uploadForm.tags" placeholder="标签，用逗号分隔" :disabled="uploading" />
-        <NativeInput v-model="uploadForm.versionNote" placeholder="版本说明（可选）" :disabled="uploading" />
-      </div>
+      <NativeForm class="mobile-upload-form">
+        <NativeFormItem label="文件" required>
+          <NativeButton class="mobile-file-picker" variant="outline" @click="openFilePicker" :disabled="uploading">
+            <template #icon><NativeIcon name="upload" /></template>
+            {{ uploadFiles[0]?.name || '选择文件' }}
+          </NativeButton>
+        </NativeFormItem>
+        <NativeFormItem label="标题" required><NativeInput v-model="uploadForm.title" placeholder="文档标题" :disabled="uploading" /></NativeFormItem>
+        <NativeFormItem label="分类">
+          <NativeSelect
+            v-model="uploadForm.categoryId"
+            placeholder="选择分类"
+            filter-placeholder="搜索分类"
+            :options="categoryOptions"
+            clearable
+            filterable
+            :disabled="uploading"
+          />
+        </NativeFormItem>
+        <NativeFormItem label="标签"><NativeInput v-model="uploadForm.tags" placeholder="用逗号分隔" :disabled="uploading" /></NativeFormItem>
+        <NativeFormItem label="版本说明"><NativeInput v-model="uploadForm.versionNote" placeholder="可选" :disabled="uploading" /></NativeFormItem>
+      </NativeForm>
     </NativeDialog>
 
     <!-- 上传冲突对话框：两端使用同一组显式决策 -->
@@ -136,7 +159,7 @@
     <!-- 分类浏览模式（主分类：小图标风格，与子分类统一） -->
     <div v-if="viewMode === 'category' && !currentCategoryId" class="categories-section">
       <div class="section-title-row">
-        <span class="section-title">分类</span>
+        <div><span class="section-title">按分类浏览</span><small>选择分类后查看其文档与子分类</small></div>
       </div>
       <NativeAlert v-if="categoriesError" theme="error" title="分类加载失败">
         <NativeButton size="small" variant="outline" @click="loadCategories">重试</NativeButton>
@@ -145,39 +168,46 @@
         <span class="empty-text">无</span>
       </div>
       <div class="category-list" v-else>
-        <div
+        <button
           v-for="cat in categories"
           :key="cat.id"
+          type="button"
           class="category-item"
           @click="enterCategory(cat)"
         >
           <NativeIcon name="folder" size="20" />
           <span>{{ cat.name }}</span>
-        </div>
+          <small v-if="Number.isFinite(Number(cat.count))">{{ cat.count }}</small>
+        </button>
       </div>
     </div>
 
     <!-- 子分类 -->
     <div v-if="viewMode === 'category' && currentCategoryId" class="subcategories-section">
-      <div class="section-title-row">
-        <span class="section-title">分类</span>
-        <NativeButton shape="circle" variant="text" size="small" @click="handleBack">
-          <NativeIcon name="chevron-left" size="20" />
-        </NativeButton>
+      <nav class="category-breadcrumb" aria-label="当前分类路径">
+        <button type="button" @click="backToCategoryRoot">全部文档</button>
+        <template v-for="(category, index) in categoryPath" :key="category.id">
+          <NativeIcon name="chevron-right" size="13" />
+          <button type="button" :aria-current="index === categoryPath.length - 1 ? 'page' : undefined" @click="navigateToCategory(index)">
+            {{ category.name }}
+          </button>
+        </template>
+      </nav>
+      <div v-if="currentSubcategories.length > 0" class="section-title-row section-title-row--subcategories">
+        <span class="section-title">子分类</span>
       </div>
       <div v-if="currentSubcategories.length > 0" class="subcategory-list">
-        <div
+        <button
           v-for="sub in currentSubcategories"
           :key="sub.id"
+          type="button"
           class="subcategory-item"
           @click="enterCategory(sub)"
         >
           <NativeIcon name="folder" size="20" />
           <span>{{ sub.name }}</span>
-        </div>
-      </div>
-      <div v-else class="empty-categories">
-        <span class="empty-text">无</span>
+          <small v-if="Number.isFinite(Number(sub.count))">{{ sub.count }}</small>
+        </button>
       </div>
     </div>
 
@@ -189,50 +219,58 @@
 
       <div class="section-title" v-if="documents.length > 0">
         {{ viewMode === 'category' && currentCategoryName ? currentCategoryName : '所有文件' }}
-        <span class="count">({{ documents.length }})</span>
+        <span class="count">({{ total }})</span>
       </div>
       
-      <div class="document-list">
-        <div
-          v-for="doc in documents"
-          :key="doc.id"
-          class="document-item"
-          :class="{ 'guest-mode': isGuest, 'previewing': isPreviewing(doc.id) }"
-          @click="(e) => onDocItemClick(doc, e)"
-        >
-          <!-- 文件图标 -->
-          <div class="file-icon" :class="getFileIconClass(doc.filePath)">
-            <NativeIcon :name="getFileIcon(doc.filePath)" size="24" />
-          </div>
-          
-          <!-- 文件信息 -->
-          <div class="file-info">
-            <div class="file-name">{{ getFileNameWithExt(doc) }}</div>
-            <div class="file-meta">
-              <span class="file-size">{{ formatFileSize(doc.size || 0) }}</span>
-              <span class="divider">|</span>
-              <span class="file-date">{{ formatDate(doc.updatedAt) }}</span>
-              <NativeTag :theme="ragStatusTheme(doc.indexStatus)" size="small" variant="light">
-                {{ ragStatusLabel(doc.indexStatus) }}
-              </NativeTag>
-            </div>
-            <div class="file-tags-row" v-if="doc.tags">
-              <NativeTag v-for="(tag, idx) in parseTags(doc.tags)" :key="idx" size="small" variant="light" theme="primary">
-                {{ tag }}
-              </NativeTag>
-            </div>
-          </div>
+       <div class="document-list">
+         <div
+           v-for="doc in documents"
+           :key="doc.id"
+           class="document-item"
+           :class="{ 'guest-mode': isGuest, 'previewing': isPreviewing(doc.id) }"
+         >
+           <button
+             type="button"
+             class="document-open-target"
+             :aria-label="`预览 ${getFileNameWithExt(doc)}`"
+             @click="previewDocument(doc)"
+           >
+             <!-- 文件图标 -->
+             <div class="file-icon" :class="`document-type-icon--${documentFileTone(doc.filePath)}`">
+               <NativeIcon :name="documentFileIcon(doc.filePath)" size="24" />
+             </div>
+
+             <!-- 文件信息 -->
+             <div class="file-info">
+               <div class="file-name">{{ getFileNameWithExt(doc) }}</div>
+               <div class="file-meta">
+                 <span class="file-size">{{ formatFileSize(doc.size || 0) }}</span>
+                 <span class="divider">|</span>
+                 <span class="file-date">{{ formatDate(doc.updatedAt) }}</span>
+                 <NativeTag :theme="ragStatusTheme(doc.indexStatus)" size="small" variant="light">
+                   {{ ragStatusLabel(doc.indexStatus) }}
+                 </NativeTag>
+               </div>
+               <div class="file-tags-row" v-if="doc.tags">
+                 <NativeTag v-for="tag in visibleTags(doc.tags)" :key="tag" size="small" variant="light" theme="primary">
+                   {{ tag }}
+                 </NativeTag>
+                 <span v-if="hiddenTagCount(doc.tags)" class="file-tags-more">+{{ hiddenTagCount(doc.tags) }}</span>
+               </div>
+             </div>
+           </button>
           
           <!-- 预览loading转圈 -->
           <div v-if="isPreviewing(doc.id)" class="item-loading-spinner">
             <NativeLoading size="small" />
           </div>
           
-          <div v-if="!isGuest && !isPreviewing(doc.id)" class="action-menu"
+          <button v-if="!isGuest && !isPreviewing(doc.id)" type="button" class="action-menu"
+            :aria-label="`打开 ${getFileNameWithExt(doc)} 的操作菜单`"
             @click.stop.prevent="showActionMenu(doc)"
           >
             <NativeIcon name="ellipsis" size="22" />
-          </div>
+          </button>
         </div>
       </div>
       
@@ -256,46 +294,60 @@
     </div>
 
     <!-- 操作菜单弹窗（底部弹出菜单） -->
-    <div v-if="actionMenuVisible" class="native-action-overlay" @click.self="actionMenuVisible = false">
-      <div class="native-action-sheet">
-        <div class="action-sheet-title">{{ currentDoc?.title || '操作' }}</div>
+    <div v-if="actionMenuVisible" class="native-action-overlay" @click.self="closeActionMenu">
+      <div class="native-action-sheet" role="dialog" aria-modal="true" aria-label="文档操作">
+        <div class="action-sheet-handle" aria-hidden="true"></div>
+        <div class="action-sheet-title">
+          <span class="action-sheet-file-icon" :class="`document-type-icon--${documentFileTone(currentDoc?.filePath)}`">
+            <NativeIcon :name="documentFileIcon(currentDoc?.filePath)" size="20" />
+          </span>
+          <span><strong>{{ currentDoc ? getFileNameWithExt(currentDoc) : '文档操作' }}</strong><small>{{ formatFileSize(currentDoc?.size || 0) }}</small></span>
+        </div>
         <div class="action-sheet-list">
-          <div class="action-sheet-item" @click="handleActionSelect({ value: 'edit' })">
-            <NativeIcon name="edit-1" size="20" />
-            <span>更改</span>
-          </div>
-          <div class="action-sheet-item" @click="handleActionSelect({ value: 'versions' })">
+          <button type="button" class="action-sheet-item" @click="handleActionSelect({ value: 'download' })">
+            <NativeIcon name="download" size="20" />
+            <span><strong>下载原件</strong><small>保存当前版本</small></span>
+          </button>
+          <button type="button" class="action-sheet-item" @click="handleActionSelect({ value: 'versions' })">
             <NativeIcon name="history" size="20" />
-            <span>历史版本</span>
-          </div>
-          <div class="action-sheet-item delete" @click="handleDeleteClick">
-            <NativeIcon name="delete" size="20" />
-            <span>删除</span>
-          </div>
+            <span><strong>版本历史</strong><small>查看并下载旧版本</small></span>
+          </button>
+          <button type="button" class="action-sheet-item" @click="handleActionSelect({ value: 'edit' })">
+            <NativeIcon name="pencil" size="20" />
+            <span><strong>编辑信息</strong><small>修改分类与标签</small></span>
+          </button>
+          <button type="button" class="action-sheet-item delete" @click="handleDeleteClick">
+            <NativeIcon name="trash" size="20" />
+            <span><strong>移入回收站</strong><small>保护期内可以恢复</small></span>
+          </button>
         </div>
-        <div class="action-sheet-cancel" @click="actionMenuVisible = false">
+        <button type="button" class="action-sheet-cancel" @click="closeActionMenu">
           <span>取消</span>
-        </div>
+        </button>
       </div>
     </div>
 
     <!-- 单项信息编辑弹窗 -->
     <NativeDialog
       v-model="batchEditDialogVisible"
-      title="更改文档信息"
+      title="编辑文档信息"
       :show-close="true"
       :close-on-overlay-click="true"
       class="centered-dialog"
     >
-      <div class="edit-form">
-        <NativeSelect
-          v-model="batchEditForm.categoryPath"
-          placeholder="更改分类"
-          :options="categoryOptions"
-          clearable
-        />
-        <NativeInput v-model="batchEditForm.tags" placeholder="更改标签，用逗号分隔" class="mt-4" />
-      </div>
+      <NativeForm class="edit-form">
+        <NativeFormItem label="分类">
+          <NativeSelect
+            v-model="batchEditForm.categoryId"
+            placeholder="选择分类"
+            filter-placeholder="搜索分类"
+            :options="categoryOptions"
+            clearable
+            filterable
+          />
+        </NativeFormItem>
+        <NativeFormItem label="标签"><NativeInput v-model="batchEditForm.tags" placeholder="用逗号分隔" /></NativeFormItem>
+      </NativeForm>
       <template #footer>
         <div class="dialog-footer-btns">
           <NativeButton variant="outline" @click="batchEditDialogVisible = false">取消</NativeButton>
@@ -305,12 +357,7 @@
     </NativeDialog>
 
     <!-- 版本历史弹窗 -->
-    <div v-if="versionsDialogVisible" class="native-dialog-overlay" @click.self="versionsDialogVisible = false">
-      <div class="native-dialog-container">
-        <div class="native-dialog-header">
-          <span>版本历史</span>
-          <span class="dialog-close" @click="versionsDialogVisible = false">×</span>
-        </div>
+    <NativeDialog v-model="versionsDialogVisible" title="版本历史" :show-footer="false" class="centered-dialog mobile-version-dialog">
         <div class="versions-list">
           <div v-for="ver in versions" :key="ver.id" class="version-item">
             <div class="version-info">
@@ -326,45 +373,67 @@
               <button class="version-preview-btn" @click.stop="handleDownloadVersion(ver)">下载</button>
             </div>
           </div>
+          <div v-if="versions.length === 0" class="version-empty-state">
+            <NativeIcon name="archive" size="32" /><span>暂无历史版本</span>
+          </div>
         </div>
-      </div>
-    </div>
+    </NativeDialog>
 
     <!-- 删除确认弹窗 -->
-    <div v-if="deleteConfirmVisible" class="native-dialog-overlay" @click.self="deleteConfirmVisible = false">
-      <div class="native-dialog-container small">
-        <div class="native-dialog-header">确认删除</div>
+    <NativeDialog
+      v-model="deleteConfirmVisible"
+      title="移入回收站"
+      :confirm-btn="{ content: '移入回收站', theme: 'danger' }"
+      @confirm="confirmDelete"
+      class="centered-dialog"
+    >
         <div class="delete-confirm-content">
-          <p>确定要删除文件「{{ currentDoc?.title }}」吗？</p>
-          <p class="delete-warning">删除后将进入回收站，可在保留期内恢复</p>
+          <p>确定要将「{{ currentDoc?.title }}」移入回收站吗？</p>
+          <p class="delete-warning">保护期内可以恢复，原件不会立即永久删除。</p>
         </div>
-        <div class="native-dialog-footer">
-          <button class="btn-cancel" @click="deleteConfirmVisible = false">取消</button>
-          <button class="btn-confirm delete" @click="confirmDelete">删除</button>
-        </div>
-      </div>
-    </div>
+    </NativeDialog>
 
     <!-- 文件预览弹窗（原生全屏方案，最大化显示面积） -->
     <div v-if="previewDialogVisible" class="native-preview-overlay" @click.self="closePreview">
-      <div class="native-preview-container">
+      <div class="native-preview-container" role="dialog" aria-modal="true" :aria-label="`预览 ${previewFileName}`">
         <!-- 头部标题栏 -->
         <div class="native-preview-header">
           <span class="preview-title">{{ previewFileName }}</span>
-          <span class="preview-close" @click="closePreview">×</span>
+          <div class="preview-header-actions">
+            <button v-if="!isGuest" type="button" class="preview-header-button" aria-label="下载原件" @click="handleDownloadFile">
+              <NativeIcon name="download" size="20" />
+            </button>
+            <button type="button" class="preview-header-button preview-close" aria-label="关闭预览" @click="closePreview">
+              <NativeIcon name="x" size="20" />
+            </button>
+          </div>
         </div>
         <!-- 内容区 -->
-        <div class="native-preview-body" v-if="!previewLoading">
+        <div
+          v-if="!previewLoading"
+          ref="previewScrollSurface"
+          class="native-preview-body"
+          :class="{ 'native-preview-body--pdf': previewType === 'pdf' }"
+        >
+        <div v-if="previewError" class="mobile-preview-error">
+          <NativeIcon name="warning" size="36" />
+          <strong>暂时无法预览</strong>
+          <p>{{ previewError }}</p>
+          <div>
+            <NativeButton variant="outline" @click="previewDocument(currentDoc)">重新加载</NativeButton>
+            <NativeButton v-if="!isGuest" theme="primary" @click="handleDownloadFile">下载原件</NativeButton>
+          </div>
+        </div>
         <!-- PDF预览 -->
-        <div v-if="previewType === 'pdf'" class="pdf-preview">
-          <canvas ref="pdfCanvas"></canvas>
-          <div class="pdf-controls" v-if="totalPages > 1">
-            <NativeButton size="small" @click="prevPage" :disabled="currentPage <= 1">
-              <NativeIcon name="chevron-left" />
+        <div v-else-if="previewType === 'pdf'" class="pdf-preview">
+          <div ref="pdfCanvasStage" class="pdf-canvas-stage"><canvas ref="pdfCanvas"></canvas></div>
+          <div class="pdf-controls" aria-label="PDF 页面导航">
+            <NativeButton class="pdf-page-button" size="small" variant="outline" @click="prevPage" :disabled="currentPage <= 1">
+              <NativeIcon name="chevron-left" size="15" />
             </NativeButton>
-            <span>{{ currentPage }} / {{ totalPages }}</span>
-            <NativeButton size="small" @click="nextPage" :disabled="currentPage >= totalPages">
-              <NativeIcon name="chevron-right" />
+            <span>第 {{ currentPage }} / {{ totalPages }} 页</span>
+            <NativeButton class="pdf-page-button" size="small" variant="outline" @click="nextPage" :disabled="currentPage >= totalPages">
+              <NativeIcon name="chevron-right" size="15" />
             </NativeButton>
           </div>
         </div>
@@ -388,9 +457,9 @@
 
         <!-- 图片预览 -->
         <img
-          v-else-if="previewType === 'image' && previewIsBase64"
-          :src="'data:image/' + getImageMimeType(previewFileName) + ';base64,' + previewContent"
-          style="max-width:100%;display:block;margin:0 auto;"
+          v-else-if="previewType === 'image'"
+          :src="previewIsBase64 ? 'data:image/' + getImageMimeType(previewFileName) + ';base64,' + previewContent : previewImageUrl"
+          class="image-preview-content"
           :alt="previewFileName"
         />
 
@@ -413,37 +482,35 @@
         </div>
       </div>
       <!-- 加载中状态 -->
-      <div v-if="previewLoading" class="loading-state"><NativeLoading text="加载中..." /></div>
+      <div v-if="previewLoading" class="loading-state preview-loading-state"><NativeLoading text="加载中..." /></div>
     </div>
     </div>
 
-    <!-- 图片预览弹窗 -->
-    <div v-if="imagePreviewVisible" class="native-image-preview-overlay" @click.self="imagePreviewVisible = false">
-      <div class="native-image-preview-container">
-        <img :src="previewImageUrl" alt="预览" @click.stop />
-        <button class="close-preview-btn" @click="imagePreviewVisible = false">
-          <NativeIcon name="close" size="24" />
-        </button>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, shallowRef, computed, onMounted, watch, nextTick } from 'vue'
+import { ref, shallowRef, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
-import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/atom-one-dark.css'
 import mammoth from 'mammoth'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { normalizeDocumentTags } from '@/utils/documentTags'
+import {
+  documentDisplayFileName,
+  documentFileIcon,
+  documentFileTone,
+  pruneDocumentPreviewPositions,
+  updateDocumentPreviewPosition
+} from '@/utils/documentWorkbench'
 import { openPdfDocument } from '@/utils/pdfPreview'
 import { usePermission } from '@/composables/usePermission'
-import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeIcon, NativeTag, NativeSelect, NativeAlert, NativeLoading } from '@/components/native'
+import { acquireBodyScrollLock } from '@/composables/useModalFocus'
+import { NativeAlert, NativeButton, NativeDialog, NativeForm, NativeFormItem, NativeIcon, NativeInput, NativeLoading, NativeSelect, NativeTag } from '@/components/native'
 import { useToast } from '@/composables/useToast'
 import {
   escapeHtml,
@@ -455,18 +522,6 @@ const toast = useToast()
 const route = useRoute()
 const router = useRouter()
 const { isGuest, canWrite } = usePermission()
-
-// 配置 marked 选项
-marked.setOptions({
-  highlight: function (code, lang) {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value
-    }
-    return hljs.highlightAuto(code).value
-  },
-  breaks: true,
-  gfm: true
-})
 
 // 状态定义
 const loading = ref(false)
@@ -517,13 +572,13 @@ const selectedUploadConflictCandidateId = ref(null)
 const uploadForm = ref({
   title: '',
   tags: '',
-  categoryPath: '',
+  categoryId: null,
   versionNote: ''
 })
 // 单项信息编辑
 const batchEditDialogVisible = ref(false)
 const batchEditForm = ref({
-  categoryPath: '',
+  categoryId: null,
   tags: ''
 })
 
@@ -533,15 +588,15 @@ const versionsDialogVisible = ref(false)
 
 // 预览
 const previewDialogVisible = ref(false)
-const imagePreviewVisible = ref(false)
 const previewLoading = ref(false)
+const previewError = ref('')
 const previewContent = ref('')
 const previewIsBase64 = ref(false)
 const previewType = ref('text')
 const previewLanguage = ref('plaintext')
 const previewFileName = ref('')
 const previewImageUrl = ref('')
-const previewDocumentId = ref(null)
+const previewScrollSurface = ref(null)
 
 // 预览中的文档ID（用于条目loading效果）
 const previewingDocIds = ref(new Set())
@@ -552,9 +607,15 @@ function isPreviewing(docId) {
 
 // PDF预览状态
 const pdfCanvas = ref(null)
+const pdfCanvasStage = ref(null)
 const pdfDoc = shallowRef(null)
 const currentPage = ref(1)
 const totalPages = ref(0)
+let pdfRenderTask = null
+let pdfRenderSequence = 0
+let resizeTimer = null
+
+const PREVIEW_POSITION_STORAGE_KEY = 'pr-manager:document-preview-position:v1'
 
 // 代码高亮结果
 const highlightedCode = computed(() => {
@@ -582,24 +643,73 @@ const selectedUploadConflictCandidate = computed(() => {
   return candidates.find(candidate => String(candidate.id) === String(selectedUploadConflictCandidateId.value)) || null
 })
 
-// 创建分类
-const createCategoryDialogVisible = ref(false)
-const newCategoryName = ref('')
+function previewPositionKey() {
+  const document = currentDoc.value
+  return document?.id ? `${document.id}:${document.version || 1}` : ''
+}
+
+function readPreviewPositionStore() {
+  try {
+    return pruneDocumentPreviewPositions(JSON.parse(localStorage.getItem(PREVIEW_POSITION_STORAGE_KEY) || '{}'))
+  } catch {
+    return {}
+  }
+}
+
+function currentPreviewScrollElement() {
+  return previewType.value === 'pdf' ? pdfCanvasStage.value : previewScrollSurface.value
+}
+
+function savedPreviewPosition() {
+  const key = previewPositionKey()
+  return key ? readPreviewPositionStore()[key] || null : null
+}
+
+function savePreviewPosition() {
+  const key = previewPositionKey()
+  if (!key || previewLoading.value) return
+  const surface = currentPreviewScrollElement()
+  try {
+    localStorage.setItem(PREVIEW_POSITION_STORAGE_KEY, JSON.stringify(updateDocumentPreviewPosition(
+      readPreviewPositionStore(),
+      key,
+      {
+        type: previewType.value,
+        page: currentPage.value,
+        scrollTop: surface?.scrollTop || 0,
+        scrollLeft: surface?.scrollLeft || 0
+      }
+    )))
+  } catch {
+    // 本地阅读位置属于增强能力，存储失败不阻断预览。
+  }
+}
+
+async function restorePreviewPosition(position = savedPreviewPosition()) {
+  if (!position) return
+  await nextTick()
+  currentPreviewScrollElement()?.scrollTo?.({
+    top: Math.max(0, Number(position.scrollTop) || 0),
+    left: Math.max(0, Number(position.scrollLeft) || 0),
+    behavior: 'auto'
+  })
+}
 
 // 方法定义
 
 // 切换视图模式
 function switchViewMode(mode) {
-  if (mode === 'trash') {
-    void router.push({ name: 'Trash', query: { type: 'document' } })
-    return
-  }
   viewMode.value = mode
   currentCategoryId.value = null
   categoryPath.value = []
   documents.value = []
   page.value = 1
-  loadDocuments()
+  syncMobileListRoute()
+  void loadDocuments()
+}
+
+function openTrashPage() {
+  void router.push({ name: 'Trash', query: { type: 'document' } })
 }
 
 // 加载文档
@@ -614,15 +724,8 @@ async function loadDocuments() {
     }
     
     if (currentCategoryId.value) {
-      const currentCat = findCategoryById(categories.value, currentCategoryId.value)
-      if (currentCat) {
-        const pathParts = currentCat.path.split('/')
-        params.category = pathParts[0]
-        if (pathParts.length > 1) {
-          params.subcategory = pathParts.slice(1).join('/')
-          params.includeSubcategories = 'true'
-        }
-      }
+      params.categoryId = currentCategoryId.value
+      params.includeSubcategories = 'true'
     }
     
     const response = await api.documents.list(params)
@@ -637,10 +740,12 @@ async function loadDocuments() {
     } else {
       documents.value.push(...data)
     }
+    return true
   } catch (error) {
     console.error('加载文档失败:', error)
     documentsError.value = documentErrorMessage(error, '暂时无法加载文档，请稍后重试。')
     if (page.value === 1) documents.value = []
+    return false
   } finally {
     loading.value = false
   }
@@ -672,71 +777,97 @@ async function loadDocumentCoverage() {
   }
 }
 
-// 创建分类
-async function handleCreateCategory() {
-  if (!newCategoryName.value.trim()) {
-    toast.warning('请输入分类名称')
-    return
-  }
-  
-  try {
-    await api.documents.createCategory({ name: newCategoryName.value.trim() })
-    toast.success('创建成功')
-    newCategoryName.value = ''
-    createCategoryDialogVisible.value = false
-    loadCategories()
-  } catch (error) {
-    toast.error(error.response?.data?.message || '创建失败')
-  }
-}
-
 // 进入分类
 function enterCategory(cat) {
   currentCategoryId.value = cat.id
   categoryPath.value.push(cat)
   page.value = 1
   documents.value = []
-  loadDocuments()
+  syncMobileListRoute()
+  void loadDocuments()
 }
 
-// 返回上级
-function handleBack() {
-  if (categoryPath.value.length > 0) {
-    categoryPath.value.pop()
-    if (categoryPath.value.length === 0) {
-      currentCategoryId.value = null
-    } else {
-      currentCategoryId.value = categoryPath.value[categoryPath.value.length - 1].id
-    }
-    page.value = 1
-    documents.value = []
-    loadDocuments()
-  }
+function backToCategoryRoot() {
+  currentCategoryId.value = null
+  categoryPath.value = []
+  page.value = 1
+  documents.value = []
+  syncMobileListRoute()
+  void loadDocuments()
+}
+
+function navigateToCategory(index) {
+  const target = categoryPath.value[index]
+  if (!target || index === categoryPath.value.length - 1) return
+  categoryPath.value = categoryPath.value.slice(0, index + 1)
+  currentCategoryId.value = target.id
+  page.value = 1
+  documents.value = []
+  syncMobileListRoute()
+  void loadDocuments()
 }
 
 // 搜索
 function handleSearch() {
   page.value = 1
   documents.value = []
-  loadDocuments()
+  syncMobileListRoute()
+  void loadDocuments()
 }
 
 // 加载更多
-function loadMore() {
-  page.value++
-  loadDocuments()
+async function loadMore() {
+  if (loading.value || !hasMore.value) return
+  const previousPage = page.value
+  page.value = previousPage + 1
+  const succeeded = await loadDocuments()
+  if (!succeeded) page.value = previousPage
 }
 
 // 查找分类
 function findCategoryById(categories, id) {
   for (const cat of categories) {
-    if (cat.id === id) return cat
+    if (String(cat.id) === String(id)) return cat
     if (cat.subcategories?.length) {
       const found = findCategoryById(cat.subcategories, id)
       if (found) return found
     }
   }
   return null
+}
+
+function findCategoryTrail(categoryItems, id, ancestors = []) {
+  for (const category of categoryItems) {
+    const trail = [...ancestors, category]
+    if (String(category.id) === String(id)) return trail
+    if (category.subcategories?.length) {
+      const found = findCategoryTrail(category.subcategories, id, trail)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+function routeQueryText(value) {
+  if (Array.isArray(value)) return value[0] || ''
+  return typeof value === 'string' ? value : ''
+}
+
+function syncMobileListRoute() {
+  const nextQuery = { ...route.query }
+  const keyword = searchKeyword.value.trim()
+  if (keyword) nextQuery.q = keyword
+  else delete nextQuery.q
+
+  if (viewMode.value === 'list') nextQuery.view = 'all'
+  else delete nextQuery.view
+
+  if (viewMode.value === 'category' && currentCategoryId.value != null) {
+    nextQuery.categoryId = String(currentCategoryId.value)
+  } else {
+    delete nextQuery.categoryId
+  }
+  void router.replace({ query: nextQuery })
 }
 
 // 预览类型判断函数
@@ -775,15 +906,6 @@ function getOfficeTypeLabel(type) {
   return labels[type] || 'Office'
 }
 
-// base64转Uint8Array
-function base64ToUint8Array(base64) {
-  const binaryString = atob(base64)
-  const len = binaryString.length
-  const bytes = new Uint8Array(len)
-  for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i)
-  return bytes
-}
-
 // 加载Office文档内容
 async function loadOfficeContent(base64Content, ext) {
   if (ext !== 'docx') {
@@ -812,15 +934,9 @@ async function loadOfficeContent(base64Content, ext) {
 // PDF渲染相关函数
 async function loadPDFDocument(pdfData) {
   try {
-    let uint8Array = pdfData
-    if (typeof pdfData === 'string') uint8Array = base64ToUint8Array(pdfData)
-
     if (pdfDoc.value) await pdfDoc.value.destroy()
-    pdfDoc.value = await openPdfDocument(uint8Array)
+    pdfDoc.value = await openPdfDocument(pdfData)
     totalPages.value = pdfDoc.value.numPages
-    currentPage.value = 1
-    // 注意: 不在此处渲染和关闭loading，由previewDocument统一控制
-    // （先停止loading让canvas挂载到DOM，再nextTick，再renderPage）
   } catch (error) {
     console.error('PDF加载失败:', error)
     toast.error('PDF加载失败')
@@ -831,29 +947,60 @@ async function loadPDFDocument(pdfData) {
 
 async function renderPage(pageNum) {
   if (!pdfDoc.value || !pdfCanvas.value) return
+  const sequence = ++pdfRenderSequence
   try {
+    pdfRenderTask?.cancel?.()
     const page = await pdfDoc.value.getPage(pageNum)
+    if (sequence !== pdfRenderSequence) return
     const canvas = pdfCanvas.value
     const ctx = canvas.getContext('2d')
-    const viewport = page.getViewport({ scale: 2.2 })
-    canvas.width = viewport.width
-    canvas.height = viewport.height
-    await page.render({ canvasContext: ctx, viewport }).promise
+    const baseViewport = page.getViewport({ scale: 1 })
+    const stageWidth = pdfCanvasStage.value?.clientWidth || window.innerWidth
+    const cssScale = Math.max(0.4, Math.min(2, (stageWidth - 24) / baseViewport.width))
+    const viewport = page.getViewport({ scale: cssScale })
+    const outputScale = Math.max(1, window.devicePixelRatio || 1)
+    canvas.width = Math.floor(viewport.width * outputScale)
+    canvas.height = Math.floor(viewport.height * outputScale)
+    canvas.style.width = `${Math.floor(viewport.width)}px`
+    canvas.style.height = `${Math.floor(viewport.height)}px`
+    pdfRenderTask = page.render({
+      canvasContext: ctx,
+      viewport,
+      transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0]
+    })
+    await pdfRenderTask.promise
   } catch (e) {
+    if (e?.name === 'RenderingCancelledException') return
     console.error('渲染页面失败:', e)
+  } finally {
+    if (sequence === pdfRenderSequence) pdfRenderTask = null
   }
 }
 
+async function changePdfPage(nextPage) {
+  if (!pdfDoc.value) return
+  currentPage.value = Math.min(totalPages.value, Math.max(1, nextPage))
+  await nextTick()
+  await renderPage(currentPage.value)
+  pdfCanvasStage.value?.scrollTo?.({ top: 0, left: 0, behavior: 'auto' })
+}
+
 function prevPage() {
-  if (currentPage.value > 1) { currentPage.value--; renderPage(currentPage.value) }
+  if (currentPage.value > 1) void changePdfPage(currentPage.value - 1)
 }
 function nextPage() {
-  if (currentPage.value < totalPages.value) { currentPage.value++; renderPage(currentPage.value) }
+  if (currentPage.value < totalPages.value) void changePdfPage(currentPage.value + 1)
+}
+
+function handlePreviewResize() {
+  if (!previewDialogVisible.value || previewType.value !== 'pdf' || !pdfDoc.value) return
+  clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => { void renderPage(currentPage.value) }, 120)
 }
 
 // 下载文件
 function handleDownloadFile() {
-  const doc = documents.value.find(d => d.id === previewDocumentId.value)
+  const doc = currentDoc.value
   if (!doc) return
   const downloadUrl = authenticatedAssetUrl(`/api/documents/download/${doc.id}`)
   window.open(downloadUrl, '_blank')
@@ -861,9 +1008,15 @@ function handleDownloadFile() {
 
 // 预览文档（与PC端逻辑完全对齐）
 async function previewDocument(doc) {
+  if (!doc?.id) return
   try {
     // 标记该条目为loading状态
     previewingDocIds.value.add(doc.id)
+    currentDoc.value = { ...doc }
+    previewFileName.value = documentDisplayFileName(doc.title, doc.filePath)
+    previewIsBase64.value = false
+    previewError.value = ''
+    void router.replace({ query: { ...route.query, documentId: String(doc.id) } })
 
     const ext = getFileExtension(doc.filePath).toLowerCase()
 
@@ -873,31 +1026,49 @@ async function previewDocument(doc) {
         const response = await api.documents.getContent(doc.id)
         const data = response.data || {}
         if (data.isBase64 && data.content) {
-          currentDoc.value = doc; previewContent.value = data.content
+          previewContent.value = data.content
           previewIsBase64.value = true; previewType.value = 'image'
-          previewFileName.value = doc.title || getFileNameWithExt(doc)
           previewLoading.value = false; previewDialogVisible.value = true
           previewingDocIds.value.delete(doc.id)
+          await restorePreviewPosition()
           return
         }
       } catch (e) { console.warn('图片base64获取失败，回退URL模式') }
-      currentDoc.value = doc
       previewImageUrl.value = authenticatedAssetUrl(`/api/documents/${doc.id}/content`)
-      imagePreviewVisible.value = true
+      previewType.value = 'image'
+      previewLoading.value = false
+      previewDialogVisible.value = true
       previewingDocIds.value.delete(doc.id)
+      await restorePreviewPosition()
       return
     }
 
     if (ext === 'xls' || ext === 'xlsx') {
-      currentDoc.value = doc
       previewingDocIds.value.delete(doc.id)
       previewDialogVisible.value = true
       previewLoading.value = false
       previewContent.value = ''
-      previewFileName.value = doc.title || getFileNameWithExt(doc)
-      previewDocumentId.value = doc.id
       previewType.value = 'office'
       previewLanguage.value = 'excel'
+      return
+    }
+
+    if (ext === 'pdf') {
+      previewDialogVisible.value = true
+      previewLoading.value = true
+      previewContent.value = ''
+      previewType.value = 'pdf'
+      previewLanguage.value = 'pdf'
+      currentPage.value = 1
+      totalPages.value = 0
+      const position = savedPreviewPosition()
+      await loadPDFDocument(authenticatedAssetUrl(`/api/documents/preview/${doc.id}`))
+      currentPage.value = Math.min(totalPages.value, Math.max(1, Number(position?.page) || 1))
+      previewLoading.value = false
+      previewingDocIds.value.delete(doc.id)
+      await nextTick()
+      await renderPage(currentPage.value)
+      await restorePreviewPosition(position)
       return
     }
 
@@ -906,41 +1077,42 @@ async function previewDocument(doc) {
     const data = response.data || {}
     const content = data.content || ''
     const isBase64 = data.isBase64 || false
+    const sourceName = data.fileName || doc.filePath
+    const sourceExtension = getFileExtension(sourceName).toLowerCase()
+    if (data.title) currentDoc.value = { ...currentDoc.value, title: data.title }
 
     // 数据到达，打开弹窗并显示内部loading
     previewingDocIds.value.delete(doc.id)
     previewDialogVisible.value = true; previewLoading.value = true
-    previewContent.value = ''; previewFileName.value = doc.title || getFileNameWithExt(doc)
-    previewDocumentId.value = doc.id; pdfDoc.value = null; currentPage.value = 1; totalPages.value = 0
+    previewContent.value = ''
+    previewFileName.value = documentDisplayFileName(data.title || doc.title, sourceName)
+    pdfDoc.value = null; currentPage.value = 1; totalPages.value = 0
 
     // 根据扩展名确定预览类型
-    const previewInfo = getPreviewType(ext)
+    const previewInfo = getPreviewType(sourceExtension)
     previewType.value = previewInfo.type
     previewLanguage.value = previewInfo.language
 
-    if (previewType.value === 'pdf') {
-      // 先加载PDF文档
-      const pdfData = isBase64 ? base64ToUint8Array(content) : content
-      await loadPDFDocument(pdfData)
-      previewLoading.value = false
-      await nextTick()
-      await renderPage(currentPage.value)
-    } else if (isBase64) {
+    if (isBase64) {
       if (previewType.value === 'image') {
         previewContent.value = content; previewIsBase64.value = true; previewLoading.value = false
       } else if (previewType.value === 'office') {
-        await loadOfficeContent(content, ext)
+        await loadOfficeContent(content, sourceExtension)
       } else {
         previewType.value = 'unsupported'; previewLoading.value = false
       }
     } else {
       previewContent.value = content; previewLoading.value = false
     }
+    await restorePreviewPosition()
   } catch (error) {
     previewingDocIds.value.clear()
-    console.error('预览失败:', error); previewLoading.value = false
-    if (error.response?.status === 400) previewType.value = 'unsupported'
-    else toast.error('预览失败: ' + (error.message || '未知错误'))
+    console.error('预览失败:', error)
+    previewDialogVisible.value = true
+    previewLoading.value = false
+    previewError.value = error.response?.status === 400
+      ? '此文件暂不支持在线预览，你仍可以下载原件。'
+      : '内容加载失败，请检查网络后重试；原件下载不受影响。'
   }
 }
 
@@ -950,24 +1122,28 @@ function showActionMenu(doc) {
   actionMenuVisible.value = true
 }
 
+function closeActionMenu() {
+  actionMenuVisible.value = false
+}
+
 // 关闭预览
 function closePreview() {
+  savePreviewPosition()
   previewDialogVisible.value = false
   previewContent.value = ''
+  previewImageUrl.value = ''
   previewType.value = ''
-  highlightedCode.value = ''
+  previewError.value = ''
+  pdfRenderSequence += 1
+  pdfRenderTask?.cancel?.()
+  pdfRenderTask = null
   if (pdfDoc.value) {
     pdfDoc.value.destroy()
     pdfDoc.value = null
   }
-}
-
-// 文档条目点击直接预览；移动端不通过长按暴露批量写操作。
-function onDocItemClick(doc, event) {
-  if (event && event.target && event.target.closest('.action-menu')) {
-    return
-  }
-  previewDocument(doc)
+  const nextQuery = { ...route.query }
+  delete nextQuery.documentId
+  void router.replace({ query: nextQuery })
 }
 
 // 处理操作选择
@@ -984,6 +1160,9 @@ function handleActionSelect(item) {
       break
     case 'edit':
       handleChangeSingle(doc)
+      break
+    case 'download':
+      handleDownloadFile()
       break
   }
 }
@@ -1022,8 +1201,8 @@ async function handleViewVersions(doc) {
 function handleChangeSingle(doc) {
   currentDoc.value = doc
   batchEditForm.value = {
-    categoryPath: doc.subcategory ? `${doc.category}/${doc.subcategory}` : (doc.category || ''),
-    tags: doc.tags || ''
+    categoryId: doc.categoryId || null,
+    tags: normalizeDocumentTags(doc.tags).join(', ')
   }
   batchEditDialogVisible.value = true
 }
@@ -1037,15 +1216,8 @@ async function handleSingleEditConfirm() {
   try {
     const updateData = {
       title: currentDoc.value.title,
-      tags: batchEditForm.value.tags || ''
-    }
-    if (batchEditForm.value.categoryPath) {
-      const pathParts = batchEditForm.value.categoryPath.split('/')
-      updateData.category = pathParts[0]
-      updateData.subcategory = pathParts.length > 1 ? pathParts.slice(1).join('/') : ''
-    } else {
-      updateData.category = ''
-      updateData.subcategory = ''
+      tags: batchEditForm.value.tags || '',
+      categoryId: batchEditForm.value.categoryId ? Number(batchEditForm.value.categoryId) : null
     }
     const response = await api.documents.update(documentId, updateData)
     toast.success(response.data?.message || '更改成功')
@@ -1066,21 +1238,6 @@ async function handleDelete(id) {
     await Promise.all([loadDocuments(), loadCategories()])
   } catch (error) {
     toast.error(documentErrorMessage(error, '移入回收站失败'))
-  }
-}
-
-// 重命名
-async function handleRename(doc) {
-  // 简化版：直接弹出输入框
-  const newName = prompt('请输入新文件名:', doc.title)
-  if (!newName || newName === doc.title) return
-  
-  try {
-    await api.documents.update(doc.id, { title: newName })
-    toast.success('重命名成功')
-    loadDocuments()
-  } catch (error) {
-    toast.error('重命名失败')
   }
 }
 
@@ -1118,7 +1275,7 @@ function openUploadDialog() {
   uploadForm.value = {
     title: '',
     tags: '',
-    categoryPath: currentCategory?.path || '',
+    categoryId: currentCategory?.id || null,
     versionNote: ''
   }
   uploadDialogVisible.value = true
@@ -1160,11 +1317,7 @@ async function submitUpload({ resolution = null, title = uploadForm.value.title,
     const formData = new FormData()
     formData.append('file', uploadFiles.value[0].raw)
     formData.append('title', title || uploadFiles.value[0].name)
-    if (uploadForm.value.categoryPath) {
-      const pathParts = uploadForm.value.categoryPath.split('/')
-      formData.append('category', pathParts[0])
-      if (pathParts.length > 1) formData.append('subcategory', pathParts.slice(1).join('/'))
-    }
+    if (uploadForm.value.categoryId) formData.append('categoryId', String(uploadForm.value.categoryId))
     if (uploadForm.value.tags) formData.append('tags', uploadForm.value.tags)
     if (uploadForm.value.versionNote) formData.append('versionNote', uploadForm.value.versionNote)
     if (resolution === 'create') formData.append('resolution', 'create')
@@ -1180,7 +1333,7 @@ async function submitUpload({ resolution = null, title = uploadForm.value.title,
     uploadConflict.value = null
     selectedUploadConflictCandidateId.value = null
     uploadFiles.value = []
-    uploadForm.value = { title: '', tags: '', categoryPath: '', versionNote: '' }
+    uploadForm.value = { title: '', tags: '', categoryId: null, versionNote: '' }
     await loadDocumentCoverage()
     await Promise.all([loadDocuments(), loadCategories()])
     return true
@@ -1234,39 +1387,7 @@ function getFileExtension(fileName) {
 }
 
 function getFileNameWithExt(doc) {
-  if (!doc.filePath) return doc.title
-  const ext = getFileExtension(doc.filePath)
-  if (ext && !doc.title.toLowerCase().endsWith(`.${ext}`)) {
-    return `${doc.title}.${ext}`
-  }
-  return doc.title
-}
-
-function getFileIcon(filePath) {
-  const ext = getFileExtension(filePath)
-  const iconMap = {
-    'pdf': 'file-pdf',
-    'doc': 'file-text',
-    'docx': 'file-text',
-    'xls': 'file-text',
-    'xlsx': 'file-text',
-    'ppt': 'file-text',
-    'pptx': 'file-text',
-    'txt': 'file-text',
-    'md': 'file-text',
-    'log': 'file-text',
-    'csv': 'file-text',
-    'jpg': 'image',
-    'jpeg': 'image',
-    'png': 'image',
-    'gif': 'image'
-  }
-  return iconMap[ext] || 'file'
-}
-
-function getFileIconClass(filePath) {
-  const ext = getFileExtension(filePath)
-  return `file-icon-${ext}`
+  return documentDisplayFileName(doc?.title, doc?.filePath)
 }
 
 function formatFileSize(bytes) {
@@ -1293,6 +1414,14 @@ function parseTags(tagsStr) {
   return normalizeDocumentTags(tagsStr)
 }
 
+function visibleTags(tags) {
+  return parseTags(tags).slice(0, 2)
+}
+
+function hiddenTagCount(tags) {
+  return Math.max(0, parseTags(tags).length - 2)
+}
+
 function getImageMimeType(fileName) {
   if (!fileName) return 'png'
   const ext = fileName.split('.').pop().toLowerCase()
@@ -1307,7 +1436,7 @@ const categoryOptions = computed(() => {
   const buildOptions = (categories, prefix = '') => {
     for (const cat of categories) {
       const path = prefix ? `${prefix}/${cat.name}` : cat.name
-      options.push({ label: path, value: path })
+      options.push({ label: path, value: cat.id })
       if (cat.subcategories?.length) {
         buildOptions(cat.subcategories, path)
       }
@@ -1320,7 +1449,22 @@ const categoryOptions = computed(() => {
 // 生命周期
 
 onMounted(async () => {
+  window.addEventListener('resize', handlePreviewResize)
   await Promise.all([loadCategories(), loadDocumentCoverage()])
+
+  searchKeyword.value = routeQueryText(route.query.q)
+  viewMode.value = routeQueryText(route.query.view) === 'all' ? 'list' : 'category'
+  if (viewMode.value === 'category') {
+    const requestedCategoryId = routeQueryText(route.query.categoryId)
+    const requestedTrail = requestedCategoryId
+      ? findCategoryTrail(categories.value, requestedCategoryId)
+      : null
+    if (requestedTrail?.length) {
+      categoryPath.value = requestedTrail
+      currentCategoryId.value = requestedTrail[requestedTrail.length - 1].id
+    }
+  }
+
   await loadDocuments()
   const documentId = Number(route.query.documentId)
   if (Number.isSafeInteger(documentId) && documentId > 0) {
@@ -1333,69 +1477,107 @@ onMounted(async () => {
   }
 })
 
-// 监听视图模式变化
-watch(viewMode, (newMode) => {
-  if (newMode === 'trash') return
-  page.value = 1
-  documents.value = []
-  loadDocuments()
+const customOverlayVisible = computed(() => actionMenuVisible.value || previewDialogVisible.value)
+let releaseOverlayScrollLock = null
+
+watch(customOverlayVisible, (visible) => {
+  if (visible && !releaseOverlayScrollLock) releaseOverlayScrollLock = acquireBodyScrollLock()
+  if (!visible && releaseOverlayScrollLock) {
+    releaseOverlayScrollLock()
+    releaseOverlayScrollLock = null
+  }
+})
+
+onBeforeUnmount(() => {
+  savePreviewPosition()
+  window.removeEventListener('resize', handlePreviewResize)
+  clearTimeout(resizeTimer)
+  pdfRenderSequence += 1
+  pdfRenderTask?.cancel?.()
+  if (pdfDoc.value) void pdfDoc.value.destroy()
+  releaseOverlayScrollLock?.()
+  releaseOverlayScrollLock = null
 })
 </script>
 
 <style scoped>
 .mobile-documents {
-  padding: 12px;
+  padding: 12px 12px calc(88px + env(safe-area-inset-bottom));
   min-height: 100vh;
   background: var(--color-surface-subtle);
 }
 
-.mobile-header {
+.mobile-browse-toolbar,
+.mobile-search-actions {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
-}
-
-.mobile-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.header-actions {
-  display: flex;
   gap: 8px;
-  align-items: center;
+}
+
+.mobile-browse-toolbar {
+  margin-bottom: 10px;
+}
+
+.mobile-trash-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
 }
 
 .view-mode-tabs {
+  min-width: 0;
+  flex: 1;
   display: flex;
-  background: #fff;
-  border-radius: 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
   padding: 4px;
-  margin-bottom: 12px;
+  background: var(--color-surface-raised);
 }
 
 .tab-item {
+  min-height: 36px;
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 6px 0;
-  border-radius: 6px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
   font-size: 13px;
   color: var(--color-text-secondary);
-  transition: all 0.2s;
+  background: transparent;
+  transition: color var(--motion-duration-fast) var(--motion-easing-standard), background-color var(--motion-duration-fast) var(--motion-easing-standard), transform var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .tab-item.active {
-  background: var(--color-primary);
-  color: #fff;
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+  font-weight: 650;
+}
+
+.tab-item:active {
+  transform: scale(.98);
+}
+
+.mobile-search-actions {
+  margin-bottom: 12px;
 }
 
 .search-bar {
-  margin-bottom: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mobile-upload-button {
+  min-width: 96px;
+  min-height: 40px;
+}
+
+.mobile-upload-input {
+  display: none;
 }
 
 .batch-bar {
@@ -1432,6 +1614,20 @@ watch(viewMode, (newMode) => {
   margin-bottom: 10px;
 }
 
+.section-title-row > div {
+  display: grid;
+  gap: 2px;
+}
+
+.section-title-row small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.section-title-row--subcategories {
+  margin: 12px 2px 8px;
+}
+
 .section-title .count {
   font-size: 12px;
   color: var(--color-text-muted);
@@ -1439,7 +1635,11 @@ watch(viewMode, (newMode) => {
 }
 
 .categories-section {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
 }
 
 /* 主分类列表（小图标风格，与子分类统一） */
@@ -1450,16 +1650,24 @@ watch(viewMode, (newMode) => {
 }
 
 .category-item {
+  min-height: 40px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: #fff;
+  gap: 6px;
   padding: 8px 12px;
-  border-radius: 16px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
   font-size: 13px;
   color: var(--color-text-primary);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  background: var(--color-surface-raised);
+  transition: color var(--motion-duration-fast) var(--motion-easing-standard), border-color var(--motion-duration-fast) var(--motion-easing-standard), background-color var(--motion-duration-fast) var(--motion-easing-standard), transform var(--motion-duration-fast) var(--motion-easing-standard);
 }
+
+.category-item small,
+.subcategory-item small { color: var(--color-text-muted); font-size: 11px; }
+
+.category-item:active,
+.subcategory-item:active { color: var(--color-primary); border-color: var(--color-primary-border); background: var(--color-primary-surface); transform: scale(.98); }
 
 .category-icon {
   width: 40px;
@@ -1498,8 +1706,25 @@ watch(viewMode, (newMode) => {
 }
 
 .subcategories-section {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
+
+.category-breadcrumb {
+  min-height: 40px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  scrollbar-width: none;
+}
+
+.category-breadcrumb::-webkit-scrollbar { display: none; }
+.category-breadcrumb button { padding: 6px 4px; flex: 0 0 auto; border: 0; color: var(--color-text-secondary); background: transparent; font: inherit; font-size: 12px; white-space: nowrap; }
+.category-breadcrumb button[aria-current="page"] { color: var(--color-primary); font-weight: 650; }
 
 .subcategory-list {
   display: flex;
@@ -1508,20 +1733,22 @@ watch(viewMode, (newMode) => {
 }
 
 .subcategory-item {
+  min-height: 40px;
   display: flex;
   align-items: center;
-  gap: 4px;
-  background: #fff;
+  gap: 6px;
   padding: 8px 12px;
-  border-radius: 16px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
   font-size: 13px;
   color: var(--color-text-primary);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  background: var(--color-surface-raised);
 }
 
 .documents-section {
-  background: #fff;
-  border-radius: 8px;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-lg);
   padding: 12px;
 }
 
@@ -1545,11 +1772,31 @@ watch(viewMode, (newMode) => {
 .document-item {
   display: flex;
   align-items: center;
-  gap: 10px;
   padding: 12px 0;
-  border-bottom: 1px solid #f0f0f0;
-  transition: background 0.2s;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
 }
+
+.document-open-target {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard), transform var(--motion-duration-fast) var(--motion-easing-standard);
+}
+
+.document-open-target:active { background: var(--color-surface-subtle); transform: scale(.995); }
+.document-open-target:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
 
 .document-item:last-child {
   border-bottom: none;
@@ -1572,51 +1819,6 @@ watch(viewMode, (newMode) => {
   cursor: default;
 }
 
-/* 图片预览弹窗 */
-.native-image-preview-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.9);
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.native-image-preview-container {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.native-image-preview-container img {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-}
-
-.close-preview-btn {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
 .file-icon {
   flex-shrink: 0;
   width: 40px;
@@ -1625,16 +1827,19 @@ watch(viewMode, (newMode) => {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
   background: var(--color-surface-subtle);
   color: var(--color-text-secondary);
 }
 
-.file-icon-pdf { color: #e53935; }
-.file-icon-doc, .file-icon-docx { color: #1e88e5; }
-.file-icon-xls, .file-icon-xlsx { color: #43a047; }
-.file-icon-ppt, .file-icon-pptx { color: #fb8c00; }
-.file-icon-jpg, .file-icon-jpeg, .file-icon-png, .file-icon-gif { color: #8e24aa; }
-.file-icon-txt, .file-icon-md { color: #546e7a; }
+.document-type-icon--pdf { color: var(--color-danger-text); background: var(--color-danger-surface); }
+.document-type-icon--word { color: #3564b8; background: #edf4ff; }
+.document-type-icon--sheet { color: var(--color-success-text); background: var(--color-success-surface); }
+.document-type-icon--slides { color: var(--color-warning-text); background: var(--color-warning-surface); }
+.document-type-icon--markdown { color: #6a4fb0; background: #f2efff; }
+.document-type-icon--image { color: #087c8f; background: #e9f7f8; }
+.document-type-icon--code { color: #4f6078; background: #edf0f5; }
+.document-type-icon--text { color: var(--color-text-secondary); background: var(--color-surface-subtle); }
 
 .file-info {
   flex: 1;
@@ -1680,14 +1885,34 @@ watch(viewMode, (newMode) => {
   margin-top: 4px;
 }
 
-.action-menu {
-  flex-shrink: 0;
-  padding: 12px 10px;
+.file-tags-more {
+  min-height: 20px;
+  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
   color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.action-menu {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--color-text-muted);
+  background: transparent;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
 }
+
+.action-menu:active { color: var(--color-primary); background: var(--color-primary-surface); }
+.action-menu:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
 
 .load-more {
   text-align: center;
@@ -1929,70 +2154,36 @@ watch(viewMode, (newMode) => {
   font-size: 14px;
 }
 
-/* 右侧多选框 */
-.checkbox-right {
-  padding: 8px;
+.mobile-upload-form,
+.edit-form {
+  display: grid;
+  gap: 12px;
 }
 
-/* 预览弹窗 - 全屏显示 */
-.mobile-documents :deep(.preview-fullscreen-dialog) {
-  margin: 0 !important;
-  width: 100vw !important;
-  max-width: 100vw !important;
-  min-width: 100vw !important;
-  max-height: calc(100vh - env(safe-area-inset-top)) !important;
-  padding: 0 !important;
-}
-/* Dialog 每一层容器的 padding 全部清零 */
-.mobile-documents :deep(.t-dialog__ctx) {
-  padding: 0 !important;
-}
-.mobile-documents :deep(.t-dialog__position) {
-  padding: 0 !important;
-}
-.mobile-documents :deep(.t-dialog__wrap) {
-  align-items: flex-start !important;
-  padding: 0 !important;
-}
-/* 标题区：只保留上下padding，左右归零 */
-.mobile-documents :deep(.preview-fullscreen-dialog .t-dialog__header) {
-  padding: 12px 8px 8px !important;
-  margin: 0 !important;
-}
-/* 内容区：只保留上边距，左右下全部归零 */
-.mobile-documents :deep(.preview-fullscreen-dialog .t-dialog__body) {
-  max-height: calc(calc(100vh - env(safe-area-inset-top)) - 52px) !important;
-  overflow-y: auto;
-  padding: 4px 0 0 0 !important;
-  margin: 0 !important;
-  scrollbar-width: thin;
-}
-/* 压缩滚动条 */
-.mobile-documents :deep(.preview-fullscreen-dialog .t-dialog__body::-webkit-scrollbar) {
-  width: 3px;
-}
-.mobile-documents :deep(.preview-fullscreen-dialog .t-dialog__body::-webkit-scrollbar-track) {
-  background: transparent;
-}
-.mobile-documents :deep(.preview-fullscreen-dialog .t-dialog__body::-webkit-scrollbar-thumb) {
-  background: rgba(0,0,0,0.2);
-  border-radius: 2px;
-}
-  .mobile-document-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin: -4px 0 12px;
-  }
+.mobile-upload-form :deep(.native-form-item),
+.edit-form :deep(.native-form-item) { margin: 0; }
 
-  .mobile-upload-input {
-    display: none;
-  }
+.mobile-file-picker {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  justify-content: flex-start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-  .mobile-upload-form {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
+.mobile-version-dialog :deep(.native-dialog__body) { padding: 8px 0 16px; }
+
+.version-empty-state {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
 
   .version-current-label {
     color: var(--color-primary);
@@ -2071,148 +2262,186 @@ watch(viewMode, (newMode) => {
   }
 </style>
 
-/* ==================== 全局样式：TDesign Dialog 兜底覆盖 ==================== */
 <style>
-/* TDesign Dialog 最外层遮罩层 - 铺满屏幕 */
-.t-dialog__ctx,
-.t-overlay {
-  padding: 0 !important;
-  margin: 0 !important;
-}
-.t-dialog__position {
-  padding: 0 !important;
-  margin: 0 !important;
-  width: 100vw !important;
-  max-width: 100vw !important;
-}
-.t-dialog__wrap {
-  padding: 0 !important;
-  margin: 0 !important;
-}
-/* 预览弹窗本身 - 使用 !important 层层覆盖 */
-.t-dialog.preview-fullscreen-dialog {
-  width: 100vw !important;
-  max-width: 100vw !important;
-  min-width: 100vw !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border-radius: 0 !important;
-}
-/* 标题区 */
-.t-dialog.preview-fullscreen-dialog .t-dialog__header {
-  padding: 12px 4px 8px !important;
-  margin: 0 !important;
-}
-/* 内容区 - 关键：左右padding设为0 */
-.t-dialog.preview-fullscreen-dialog .t-dialog__body {
-  padding: 4px 0 0 0 !important;
-  margin: 0 !important;
-}
-/* 内容区内部 */
-.preview-fullscreen-dialog .preview-body {
-  padding: 0 !important;
-  margin: 0 !important;
-}
-.preview-fullscreen-dialog .text-preview pre {
-  margin: 0 !important;
-  padding: 0 !important;
-}
-.preview-fullscreen-dialog .code-preview pre {
-  padding: 4px 0 !important;
-}
-/* ==================== 原生全屏预览弹窗样式（最大化显示面积）==================== */
+/* 移动端全屏预览与底部操作单需要 Teleport 外同样稳定的全局层级。 */
 .native-preview-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 9999;
+  inset: 0;
+  z-index: 10020;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px;
+  padding: 0;
+  background: var(--color-surface-raised);
+  animation: mobile-preview-fade-in var(--motion-duration-fast) var(--motion-easing-standard);
 }
 .native-preview-container {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  max-width: 100%;
+  max-height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: #fff;
+  min-height: 0;
   overflow: hidden;
-  border-radius: 8px;
-  width: 100%;
-  max-width: 100%;
-  max-height: calc(100vh - 140px);
-  /* 小文件时根据内容自适应高度，不超过屏幕 */
-  height: auto;
+  border-radius: 0;
+  background: var(--color-surface-raised);
+  animation: mobile-preview-rise-in var(--motion-duration-standard) var(--motion-easing-emphasized);
 }
 .native-preview-header {
+  min-height: calc(56px + env(safe-area-inset-top));
+  padding: calc(8px + env(safe-area-inset-top)) 10px 8px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  background: #fff;
+  gap: 8px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: color-mix(in srgb, var(--color-surface-raised) 94%, transparent);
+  backdrop-filter: blur(12px);
   color: var(--color-text-primary);
-  font-size: 16px;
   flex-shrink: 0;
-  border-bottom: 1px solid #eee;
 }
 .preview-title {
+  min-width: 0;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-right: 16px;
+  font-size: 15px;
+  font-weight: 650;
 }
-.preview-close {
-  font-size: 28px;
-  line-height: 1;
-  padding: 0 4px;
-  cursor: pointer;
-  color: var(--color-text-muted);
+.preview-header-actions { display: inline-flex; align-items: center; gap: 4px; }
+.preview-header-button {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--color-text-secondary);
+  background: transparent;
 }
-.preview-close:active {
-  color: #fff;
-}
+.preview-header-button:active { color: var(--color-primary); background: var(--color-primary-surface); transform: scale(.96); }
 .native-preview-body {
+  min-height: 0;
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0;
-  background: #fff;
+  overscroll-behavior: contain;
+  background: var(--color-surface-subtle);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-primary) 54%, transparent) transparent;
 }
+.native-preview-body--pdf { overflow: hidden; }
+.native-preview-body::-webkit-scrollbar { width: 5px; height: 5px; }
+.native-preview-body::-webkit-scrollbar-thumb { border-radius: var(--radius-pill); background: color-mix(in srgb, var(--color-primary) 54%, transparent); }
 /* 内容区各种预览类型适配 */
 .native-preview-body .pdf-preview {
+  position: relative;
   width: 100%;
+  height: 100%;
+  min-height: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.native-preview-body .pdf-canvas-stage {
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+  flex: 1 1 auto;
+  justify-content: center;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .native-preview-body .pdf-preview canvas {
-  width: 100% !important;
-  height: auto !important;
+  align-self: flex-start;
+  max-width: none;
   display: block;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: white;
+  box-shadow: var(--shadow-md);
 }
+.native-preview-body .pdf-controls {
+  min-height: calc(62px + env(safe-area-inset-bottom));
+  padding: 9px 16px calc(9px + env(safe-area-inset-bottom));
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-surface-raised) 94%, transparent);
+  box-shadow: 0 -8px 24px rgba(23, 32, 51, .06);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.native-preview-body .pdf-page-button {
+  width: 44px;
+  min-width: 44px;
+  height: 40px;
+  padding: 0;
+}
+.native-preview-body .pdf-page-button .native-icon { width: 15px; height: 15px; flex: 0 0 15px; }
+.preview-loading-state {
+  min-height: 0;
+  flex: 1;
+  align-items: center;
+}
+.mobile-preview-error {
+  min-height: 100%;
+  padding: 32px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-raised);
+}
+.mobile-preview-error strong { color: var(--color-text-primary); }
+.mobile-preview-error p { max-width: 28rem; margin: 0; font-size: 13px; line-height: 1.6; }
+.mobile-preview-error > div { margin-top: 6px; display: flex; gap: 8px; }
 .native-preview-body .mobile-md-preview,
 .native-preview-body .code-preview,
 .native-preview-body .text-preview {
   width: 100%;
-  padding: 8px 4px;
+  min-height: 100%;
+  margin: 0;
+  padding: 16px 14px;
+  border: 0;
+  border-radius: 0;
+  background: var(--color-surface-raised);
 }
 .native-preview-body .code-preview pre {
   margin: 0;
-  padding: 8px 4px;
+  padding: 0;
 }
 .native-preview-body .text-preview pre {
   margin: 0;
-  padding: 8px 4px;
+  padding: 0;
   color: var(--color-text-primary);
 }
-.native-preview-body .image-preview img {
+.native-preview-body .image-preview-content {
+  width: 100%;
+  min-height: 100%;
+  padding: 12px;
   max-width: 100%;
   display: block;
   margin: 0 auto;
+  object-fit: contain;
+  background: var(--color-surface-raised);
 }
 .native-preview-body .office-content {
-  padding: 8px 4px;
+  min-height: 100%;
+  padding: 16px 14px;
+  background: var(--color-surface-raised);
   color: var(--color-text-primary);
 }
 .native-preview-body .office-content table {
@@ -2227,88 +2456,24 @@ watch(viewMode, (newMode) => {
   color: var(--color-text-primary);
 }
 
+@keyframes mobile-preview-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mobile-preview-rise-in { from { opacity: .86; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
 /* 原生底部操作菜单 */
 .native-action-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 10000;
+  inset: 0;
+  z-index: 10030;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+  background: rgba(23, 32, 51, .5);
+  backdrop-filter: blur(2px);
+  animation: mobile-action-fade-in var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
-/* 原生对话框（垂直居中） */
-.native-dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  z-index: 10001;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-}
-.native-dialog-container {
-  background: #fff;
-  border-radius: 12px;
-  width: 90%;
-  max-width: 400px;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-}
-.native-dialog-container.small {
-  width: 80%;
-  max-width: 320px;
-}
-.native-dialog-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px;
-  font-size: 16px;
-  font-weight: 600;
-  border-bottom: 1px solid #eee;
-}
-.dialog-close {
-  font-size: 24px;
-  color: var(--color-text-muted);
-  cursor: pointer;
-}
-.native-dialog-footer {
-  display: flex;
-  gap: 12px;
-  padding: 16px;
-  border-top: 1px solid #eee;
-}
-.native-dialog-footer button {
-  flex: 1;
-  padding: 12px;
-  border-radius: 6px;
-  border: none;
-  font-size: 15px;
-  cursor: pointer;
-}
-.btn-cancel {
-  background: var(--color-surface-subtle);
-  color: var(--color-text-secondary);
-}
-.btn-confirm {
-  background: var(--color-primary);
-  color: #fff;
-}
-.btn-confirm.delete {
-  background: var(--color-danger);
-}
 .delete-confirm-content {
-  padding: 24px 16px;
+  padding: 8px 2px;
   text-align: center;
 }
 .delete-confirm-content p {
@@ -2316,41 +2481,76 @@ watch(viewMode, (newMode) => {
   font-size: 15px;
 }
 .delete-warning {
-  color: var(--color-danger);
+  color: var(--color-text-secondary);
   font-size: 13px;
 }
 .native-action-sheet {
-  background: #fff;
-  border-radius: 12px 12px 0 0;
-  padding: 16px 0 0;
-  animation: slideUp 0.2s ease-out;
+  max-height: min(82dvh, 640px);
+  padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+  overflow: hidden;
+  border-radius: 20px 20px 0 0;
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-lg);
+  animation: mobile-action-slide-up var(--motion-duration-standard) var(--motion-easing-emphasized);
 }
-@keyframes slideUp {
+.action-sheet-handle {
+  width: 36px;
+  height: 4px;
+  margin: 0 auto 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-default);
+}
+@keyframes mobile-action-slide-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }
 }
+@keyframes mobile-action-fade-in { from { opacity: 0; } to { opacity: 1; } }
 .action-sheet-title {
-  text-align: center;
-  font-size: 14px;
-  color: var(--color-text-muted);
-  padding: 8px 16px 16px;
-  border-bottom: 1px solid #f0f0f0;
+  min-width: 0;
+  padding: 10px 18px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.action-sheet-title > span:last-child { min-width: 0; display: grid; gap: 2px; }
+.action-sheet-title strong { overflow: hidden; color: var(--color-text-primary); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.action-sheet-title small { color: var(--color-text-muted); font-size: 11px; }
+.action-sheet-file-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: var(--radius-sm);
 }
 .action-sheet-list {
   padding: 8px 0;
+  overflow-y: auto;
 }
 .action-sheet-item {
+  width: 100%;
+  min-height: 58px;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 16px 20px;
-  font-size: 16px;
+  padding: 10px 20px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  text-align: left;
   color: var(--color-text-primary);
+  background: transparent;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background-color var(--motion-duration-fast) var(--motion-easing-standard), transform var(--motion-duration-fast) var(--motion-easing-standard);
 }
+.action-sheet-item > span { display: grid; gap: 2px; }
+.action-sheet-item strong { font-size: 14px; font-weight: 600; }
+.action-sheet-item small { color: var(--color-text-muted); font-size: 11px; }
 .action-sheet-item:active {
   background: var(--color-surface-subtle);
+  transform: scale(.99);
 }
 .action-sheet-item.delete {
   color: var(--color-danger);
@@ -2359,30 +2559,27 @@ watch(viewMode, (newMode) => {
   background: #fff0f0;
 }
 .action-sheet-cancel {
+  width: calc(100% - 24px);
+  min-height: 48px;
+  margin: 8px 12px 0;
+  border: 0;
+  border-radius: var(--radius-md);
   text-align: center;
-  padding: 16px 20px;
-  font-size: 16px;
+  font-size: 15px;
   color: var(--color-text-secondary);
-  border-top: 8px solid var(--color-surface-subtle);
+  background: var(--color-surface-subtle);
   cursor: pointer;
 }
 .action-sheet-cancel:active {
   background: var(--color-surface-subtle);
 }
-</style>
 
-/* ==================== 全局样式：对话框垂直居中 ==================== */
-<style>
-/* TDesign Dialog 垂直居中 */
-.centered-dialog .t-dialog__wrap {
-  align-items: center !important;
-  justify-content: center !important;
-  display: flex !important;
-}
-.centered-dialog .t-dialog__position {
-  align-items: center !important;
-  justify-content: center !important;
-  display: flex !important;
-  padding-top: 0 !important;
+@media (prefers-reduced-motion: reduce) {
+  .native-preview-overlay,
+  .native-preview-container,
+  .native-action-overlay,
+  .native-action-sheet { animation: none; }
+  .preview-header-button,
+  .action-sheet-item { transition: none; }
 }
 </style>

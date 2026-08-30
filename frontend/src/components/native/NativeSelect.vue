@@ -481,7 +481,7 @@ function updateDropdownPosition() {
     bottom: isUpward ? `${viewportHeight - rect.top + 4}px` : undefined,
     width: `${rect.width}px`,
     maxHeight: `${maxHeight}px`,
-    zIndex: 10000
+    zIndex: 12000
   }
 }
 
@@ -806,7 +806,8 @@ onUnmounted(() => {
   overflow: hidden;
   opacity: 1;
   isolation: isolate;
-  z-index: 10000;
+  pointer-events: auto;
+  z-index: 12000;
 }
 
 :global(.native-select__dropdown--reka) {

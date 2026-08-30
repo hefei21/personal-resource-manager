@@ -17,6 +17,7 @@
         :style="[dialogStyle, attrs.style]"
         @escape-key-down="handleEscapeKeyDown"
         @pointer-down-outside="handlePointerDownOutside"
+        @focus-outside="handleFocusOutside"
       >
         <div class="native-dialog__header">
           <DialogTitle
@@ -157,18 +158,28 @@ function handleEscapeKeyDown(event) {
   if (!closeOnEscape.value) event.preventDefault()
 }
 
-function handlePointerDownOutside(event) {
+const ownedPortalSelector = [
+  '.native-tree-select__dropdown',
+  '.native-select__dropdown',
+  '.native-date-range-picker__dropdown',
+  '.native-dropdown__menu'
+].join(', ')
+
+function isOwnedPortalInteraction(event) {
   const target = event?.detail?.originalEvent?.target || event?.target
-  if (target?.closest?.([
-    '.native-tree-select__dropdown',
-    '.native-select__dropdown',
-    '.native-date-range-picker__dropdown',
-    '.native-dropdown__menu'
-  ].join(', '))) {
+  return Boolean(target?.closest?.(ownedPortalSelector))
+}
+
+function handlePointerDownOutside(event) {
+  if (isOwnedPortalInteraction(event)) {
     event.preventDefault()
     return
   }
   if (!props.closeOnOverlayClick) event.preventDefault()
+}
+
+function handleFocusOutside(event) {
+  if (isOwnedPortalInteraction(event)) event.preventDefault()
 }
 
 function handleOverlayClick() {

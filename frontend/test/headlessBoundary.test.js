@@ -50,6 +50,8 @@ test('NativeDialog preserves legacy close and footer compatibility props', () =>
   assert.match(source, /defineEmits\(\['update:modelValue', 'close', 'confirm', 'cancel', 'closed'\]\)/)
   assert.match(source, /value !== false && value !== 'false'/)
   assert.match(source, /@click="handleOverlayClick"/)
+  assert.match(source, /@focus-outside="handleFocusOutside"/)
+  assert.match(source, /\.native-select__dropdown/u)
 })
 
 test('native controls keep platform keyboard semantics and recursive component identity', () => {
@@ -67,4 +69,6 @@ test('native controls keep platform keyboard semantics and recursive component i
   assert.match(select, /const useRekaSelect = computed\(\(\) => !props\.filterable && !props\.multiple\)/)
   assert.match(select, /native-select-option-/)
   assert.match(select, /:body-lock="false"/)
+  assert.match(select, /:global\(\.native-select__dropdown\)[\s\S]*pointer-events: auto/u)
+  assert.match(select, /z-index: 12000/u)
 })
