@@ -8,9 +8,9 @@ export function documentFileIcon(filePath) {
     xlsx: 'file-excel',
     ppt: 'file-powerpoint',
     pptx: 'file-powerpoint',
-    txt: 'file-text',
-    md: 'file-markdown',
-    log: 'file-text',
+    txt: 'file-txt',
+    md: 'file-md',
+    log: 'file-txt',
     csv: 'file-excel',
     jpg: 'file-image',
     jpeg: 'file-image',
@@ -36,6 +36,41 @@ export function documentFileIcon(filePath) {
   }
 
   return iconMap[extension] || 'file'
+}
+
+export const DOCUMENT_PREVIEW_POSITION_MAX_ENTRIES = 100
+export const DOCUMENT_PREVIEW_POSITION_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
+
+export function pruneDocumentPreviewPositions(value, now = Date.now()) {
+  const entries = Object.entries(value && typeof value === 'object' ? value : {})
+    .filter(([key, position]) => (
+      key
+      && position
+      && typeof position === 'object'
+      && Number.isFinite(Number(position.savedAt))
+      && now - Number(position.savedAt) <= DOCUMENT_PREVIEW_POSITION_MAX_AGE_MS
+    ))
+    .sort(([, left], [, right]) => Number(right.savedAt) - Number(left.savedAt))
+    .slice(0, DOCUMENT_PREVIEW_POSITION_MAX_ENTRIES)
+
+  return Object.fromEntries(entries)
+}
+
+export function updateDocumentPreviewPosition(value, key, position, now = Date.now()) {
+  if (!key || !position || typeof position !== 'object') {
+    return pruneDocumentPreviewPositions(value, now)
+  }
+
+  return pruneDocumentPreviewPositions({
+    ...(value && typeof value === 'object' ? value : {}),
+    [key]: {
+      type: String(position.type || 'text'),
+      page: Math.max(1, Number(position.page) || 1),
+      scrollTop: Math.max(0, Number(position.scrollTop) || 0),
+      scrollLeft: Math.max(0, Number(position.scrollLeft) || 0),
+      savedAt: now
+    }
+  }, now)
 }
 
 export function documentFileTone(filePath) {

@@ -8,7 +8,9 @@ import {
   collectExpandableCategoryIds,
   documentFileIcon,
   documentFileTone,
-  flattenVisibleDocumentCategories
+  flattenVisibleDocumentCategories,
+  pruneDocumentPreviewPositions,
+  updateDocumentPreviewPosition
 } from '../src/utils/documentWorkbench.js'
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
@@ -34,7 +36,9 @@ const categories = [
 
 test('document workbench maps file names to stable semantic icons', () => {
   assert.equal(documentFileIcon('guide.PDF'), 'file-pdf')
-  assert.equal(documentFileIcon('notes.md'), 'file-markdown')
+  assert.equal(documentFileIcon('notes.md'), 'file-md')
+  assert.equal(documentFileIcon('notes.txt'), 'file-txt')
+  assert.equal(documentFileIcon('report.docx'), 'file-word')
   assert.equal(documentFileIcon('cover.png'), 'file-image')
   assert.equal(documentFileIcon('archive.unknown'), 'file')
   assert.equal(documentFileIcon(''), 'file')
@@ -46,6 +50,39 @@ test('document workbench maps file names to stable semantic icons', () => {
   assert.equal(documentFileTone('cover.png'), 'image')
   assert.equal(documentFileTone('worker.py'), 'code')
   assert.equal(documentFileTone('plain.txt'), 'text')
+})
+
+test('document preview position memory expires stale entries and keeps the newest 100', () => {
+  const now = Date.UTC(2026, 7, 30)
+  const stale = now - 91 * 24 * 60 * 60 * 1000
+  const initial = {
+    stale: { savedAt: stale, page: 2 },
+    recent: { savedAt: now - 1000, page: 3 }
+  }
+  const updated = updateDocumentPreviewPosition(initial, '23:4', {
+    type: 'pdf',
+    page: 7,
+    scrollTop: 280,
+    scrollLeft: 12
+  }, now)
+
+  assert.equal(updated.stale, undefined)
+  assert.deepEqual(updated['23:4'], {
+    type: 'pdf',
+    page: 7,
+    scrollTop: 280,
+    scrollLeft: 12,
+    savedAt: now
+  })
+
+  const oversized = Object.fromEntries(Array.from({ length: 120 }, (_, index) => [
+    `entry-${index}`,
+    { savedAt: now - index, page: 1 }
+  ]))
+  const pruned = pruneDocumentPreviewPositions(oversized, now)
+  assert.equal(Object.keys(pruned).length, 100)
+  assert.ok(pruned['entry-0'])
+  assert.equal(pruned['entry-119'], undefined)
 })
 
 test('document category tree only flattens descendants of expanded folders', () => {
@@ -95,9 +132,20 @@ test('document PC refinement keeps categories collapsed and preview controls usa
   assert.match(documents, /window\.devicePixelRatio/u)
   assert.match(documents, /transform: outputScale/u)
   assert.match(documents, /resizable[\s\S]*@closed="handlePreviewClosed"/u)
+  assert.match(documents, /@close="handlePreviewClosing"/u)
+  assert.match(documents, /DOCUMENT_PREVIEW_POSITION_STORAGE_KEY/u)
+  assert.match(documents, /previewDialogHeight/u)
+  assert.match(documents, /\.batch-actions-bar[\s\S]*position: absolute/u)
+  assert.match(documents, /\.pdf-controls[\s\S]*position: absolute/u)
+  assert.equal((documents.match(/@click="handleDownloadPreviewFile"/gu) || []).length, 1)
   assert.match(documents, /documentFileTone/u)
   assert.match(treeSelect, /class="native-tree-select"[\s\S]*v-click-outside="close"/u)
   assert.doesNotMatch(treeSelect, /native-tree-select__dropdown" v-click-outside/u)
+  assert.match(treeSelect, /<Teleport to="body">/u)
+  assert.match(treeSelect, /zIndex: 12000/u)
+  assert.match(read('src/components/native/NativeIcon.vue'), /'archive': 'Archive'/u)
+  assert.match(read('src/components/native/NativeIcon.vue'), /'file-md': 'FileMd'/u)
+  assert.match(read('src/components/native/NativeIcon.vue'), /'file-word': 'FileDoc'/u)
   assert.match(dialog, /native-dialog--resizable/u)
   assert.match(dialog, /resize: both/u)
 })

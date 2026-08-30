@@ -664,8 +664,10 @@
       :title="previewTitle"
       width="min(1560px, calc(100vw - 48px))"
       class="document-dialog document-preview-dialog"
+      :style="{ height: previewDialogHeight }"
       :show-footer="false"
       resizable
+      @close="handlePreviewClosing"
       @closed="handlePreviewClosed"
     >
       <div v-if="previewLoading" class="loading-container">
@@ -689,7 +691,6 @@
           <p>{{ previewError }}</p>
           <div>
             <NativeButton theme="primary" @click="retryPreview">重新加载</NativeButton>
-            <NativeButton variant="outline" @click="handleDownloadPreviewFile">下载原件</NativeButton>
           </div>
         </div>
         <!-- PDF 预览 -->
@@ -721,6 +722,7 @@
         <!-- Markdown 预览 -->
         <MdPreview
           v-else-if="previewType === 'markdown'"
+          ref="previewScrollSurface"
           :modelValue="previewContent"
           :sanitize="sanitizeRichHtml"
           :theme="editorTheme"
@@ -730,41 +732,36 @@
         />
 
         <!-- 代码预览 -->
-        <div v-else-if="previewType === 'code'" class="code-preview">
+        <div v-else-if="previewType === 'code'" ref="previewScrollSurface" class="code-preview">
           <pre><code v-html="highlightedCode" :class="`language-${previewLanguage}`"></code></pre>
         </div>
 
         <!-- 文本预览 -->
-        <div v-else-if="previewType === 'text'" class="text-preview">
+        <div v-else-if="previewType === 'text'" ref="previewScrollSurface" class="text-preview">
           <pre>{{ previewContent }}</pre>
         </div>
 
         <!-- 图片预览 -->
-        <div v-else-if="previewType === 'image'" class="image-preview">
+        <div v-else-if="previewType === 'image'" ref="previewScrollSurface" class="image-preview">
           <img :src="`data:image/${getImageMimeType(previewFileName)};base64,${previewContent}`" :alt="previewFileName" />
         </div>
 
         <!-- Word HTML 预览 -->
-        <div v-else-if="previewType === 'word-html'" class="word-html-preview">
-          <div class="office-toolbar">
-            <NativeButton size="small" theme="default" @click="handleDownloadPreviewFile">下载文件</NativeButton>
-          </div>
+        <div v-else-if="previewType === 'word-html'" ref="previewScrollSurface" class="word-html-preview">
           <div class="word-content" v-html="sanitizedPreviewContent"></div>
         </div>
 
         <!-- Office 文档预览 -->
-        <div v-else-if="previewType === 'office'" class="office-preview">
+        <div v-else-if="previewType === 'office'" ref="previewScrollSurface" class="office-preview">
           <NativeIcon :name="getOfficeIconName(previewLanguage)" size="64" />
           <h3>{{ getOfficeTypeLabel(previewLanguage) }}文档</h3>
-          <p>此文件格式不支持在线预览,请下载后使用 Microsoft Office 或 WPS 打开</p>
-          <NativeButton theme="primary" @click="handleDownloadPreviewFile">下载文件</NativeButton>
+          <p>此文件格式暂不支持在线预览，可使用右上角“下载原件”后通过 Microsoft Office 或 WPS 打开。</p>
         </div>
 
         <!-- 其他格式 -->
-        <div v-else class="unsupported-preview">
+        <div v-else ref="previewScrollSurface" class="unsupported-preview">
           <NativeIcon name="info" size="48" />
-          <p>此文件格式不支持在线预览,请下载后查看</p>
-          <NativeButton theme="primary" @click="handleDownloadPreviewFile">下载文件</NativeButton>
+          <p>此文件格式暂不支持在线预览，可使用右上角“下载原件”查看。</p>
         </div>
 
       </div>
@@ -783,7 +780,9 @@ import {
   collectExpandableCategoryIds,
   documentFileIcon,
   documentFileTone,
-  flattenVisibleDocumentCategories
+  flattenVisibleDocumentCategories,
+  pruneDocumentPreviewPositions,
+  updateDocumentPreviewPosition
 } from '@/utils/documentWorkbench'
 import { openPdfDocument } from '@/utils/pdfPreview'
 import { marked } from 'marked'
@@ -885,7 +884,9 @@ const previewFileName = ref('')
 const previewFileSize = ref(0)
 const previewTitle = ref('')
 const previewDocumentId = ref(null)
+const previewDocumentVersion = ref(1)
 const previewError = ref('')
+const previewScrollSurface = ref(null)
 const pdfCanvas = ref(null)
 const pdfCanvasStage = ref(null)
 const currentPage = ref(1)
@@ -897,6 +898,23 @@ let pdfRenderSequence = 0
 let pdfResizeObserver = null
 let pdfResizeTimer = null
 let pdfLastStageWidth = 0
+const DOCUMENT_PREVIEW_POSITION_STORAGE_KEY = 'pr-manager:document-preview-position:v1'
+
+const previewDialogHeight = computed(() => {
+  if (previewType.value === 'pdf') return 'min(92vh, 980px)'
+  if (previewLoading.value) return 'min(520px, calc(100vh - 40px))'
+  if (previewType.value === 'image') return 'min(78vh, 820px)'
+  if (['office', 'unsupported'].includes(previewType.value)) return 'min(520px, calc(100vh - 40px))'
+
+  const plainContent = previewType.value === 'word-html'
+    ? String(previewContent.value || '').replace(/<[^>]*>/g, ' ')
+    : String(previewContent.value || '')
+  const explicitLines = Math.max(1, plainContent.split('\n').length)
+  const wrappedLines = Math.ceil(plainContent.length / 110)
+  const visualLines = Math.min(24, Math.max(explicitLines, wrappedLines))
+  const estimatedHeight = Math.min(820, Math.max(390, 270 + visualLines * 22))
+  return `min(${estimatedHeight}px, calc(100vh - 40px))`
+})
 
 // 分类悬停相关状态
 const hoveredCategoryId = ref(null)
@@ -2008,8 +2026,71 @@ function formatDateTime(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
 
+function previewPositionKey() {
+  if (!previewDocumentId.value) return ''
+  return `${previewDocumentId.value}:${previewDocumentVersion.value || 1}`
+}
+
+function readPreviewPositionStore() {
+  if (typeof window === 'undefined') return {}
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DOCUMENT_PREVIEW_POSITION_STORAGE_KEY) || '{}')
+    return pruneDocumentPreviewPositions(parsed)
+  } catch {
+    return {}
+  }
+}
+
+function writePreviewPositionStore(store) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(DOCUMENT_PREVIEW_POSITION_STORAGE_KEY, JSON.stringify(store))
+  } catch {
+    // Preview position memory is a progressive enhancement; storage failure must not block reading.
+  }
+}
+
+function currentPreviewScrollElement() {
+  const candidate = previewType.value === 'pdf' ? pdfCanvasStage.value : previewScrollSurface.value
+  return candidate?.$el || candidate || null
+}
+
+function readCurrentPreviewPosition() {
+  const key = previewPositionKey()
+  return key ? readPreviewPositionStore()[key] || null : null
+}
+
+function savePreviewPosition() {
+  const key = previewPositionKey()
+  if (!key || previewLoading.value) return
+  const surface = currentPreviewScrollElement()
+  const nextStore = updateDocumentPreviewPosition(readPreviewPositionStore(), key, {
+    type: previewType.value,
+    page: currentPage.value,
+    scrollTop: surface?.scrollTop || 0,
+    scrollLeft: surface?.scrollLeft || 0
+  })
+  writePreviewPositionStore(nextStore)
+}
+
+async function restorePreviewScrollPosition(position = readCurrentPreviewPosition()) {
+  if (!position) return
+  await nextTick()
+  const surface = currentPreviewScrollElement()
+  surface?.scrollTo?.({
+    top: Math.max(0, Number(position.scrollTop) || 0),
+    left: Math.max(0, Number(position.scrollLeft) || 0),
+    behavior: 'auto'
+  })
+}
+
 async function loadPreviewContent(row) {
   try {
+    if (previewDialogVisible.value && previewDocumentId.value) savePreviewPosition()
+    const listedExt = row.filePath?.split('.').pop()?.toLowerCase() || ''
+    const listedPreviewInfo = getPreviewType(listedExt)
+    previewType.value = listedPreviewInfo.type
+    previewLanguage.value = listedPreviewInfo.language
     previewDialogVisible.value = true
     previewLoading.value = true
     previewContent.value = ''
@@ -2017,6 +2098,7 @@ async function loadPreviewContent(row) {
     previewFileName.value = row.title || row.filePath?.split('/').pop() || '未知文件'
     previewTitle.value = `预览 - ${previewFileName.value}`
     previewDocumentId.value = row.id
+    previewDocumentVersion.value = row.version || 1
     currentPage.value = 1
     jumpPageNum.value = 1
     totalPages.value = 0
@@ -2034,12 +2116,12 @@ async function loadPreviewContent(row) {
       }
     }
 
-    const listedExt = row.filePath?.split('.').pop()?.toLowerCase()
     if (listedExt === 'xls' || listedExt === 'xlsx') {
       previewType.value = 'office'
       previewLanguage.value = 'excel'
       previewFileSize.value = row.size || 0
       previewLoading.value = false
+      await restorePreviewScrollPosition()
       return
     }
 
@@ -2050,6 +2132,7 @@ async function loadPreviewContent(row) {
     const isBase64 = data.isBase64 || false
     const fileSize = data.fileSize || 0
 
+    previewFileName.value = fileName || previewFileName.value
     previewFileSize.value = fileSize
 
     // 根据文件扩展名确定预览类型
@@ -2058,6 +2141,7 @@ async function loadPreviewContent(row) {
 
     previewType.value = previewInfo.type
     previewLanguage.value = previewInfo.language
+    const savedPosition = readCurrentPreviewPosition()
 
     if (previewType.value === 'pdf') {
       // 处理 PDF 预览：将 base64 转换为 Uint8Array
@@ -2072,9 +2156,13 @@ async function loadPreviewContent(row) {
       // 等待 DOM 更新完成
       await nextTick()
 
-      // 现在渲染第一页
+      currentPage.value = Math.min(totalPages.value, Math.max(1, Number(savedPosition?.page) || 1))
+      jumpPageNum.value = currentPage.value
+
+      // 现在渲染上次阅读页或第一页
       await renderPage(currentPage.value)
       setupPdfResizeObserver()
+      await restorePreviewScrollPosition(savedPosition)
     } else if (isBase64) {
       // 其他二进制和图片文件
       if (previewType.value === 'image') {
@@ -2094,6 +2182,8 @@ async function loadPreviewContent(row) {
       previewContent.value = content
       previewLoading.value = false
     }
+
+    if (previewType.value !== 'pdf') await restorePreviewScrollPosition(savedPosition)
 
   } catch (error) {
     console.error('加载预览内容失败:', error)
@@ -2256,6 +2346,10 @@ async function handlePreviewClosed() {
       // Closing the dialog can race with an already-cancelled render task.
     }
   }
+}
+
+function handlePreviewClosing() {
+  savePreviewPosition()
 }
 
 async function prevPage() {
@@ -2499,11 +2593,10 @@ function getImageMimeType(fileName) {
 }
 
 function getOfficeIconName(type) {
-  // Phosphor Icons 图标名称映射
   const icons = {
-    'word': 'file-text',
-    'ppt': 'file-text',
-    'excel': 'file-text'
+    'word': 'file-word',
+    'ppt': 'file-powerpoint',
+    'excel': 'file-excel'
   }
   return icons[type] || 'file'
 }
@@ -2542,6 +2635,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  savePreviewPosition()
   teardownPdfResizeObserver()
   if (pdfRenderTask) pdfRenderTask.cancel()
   pdfRenderTask = null
@@ -3320,19 +3414,10 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
-.office-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 16px;
-  background: #f6f8fa;
-  border-radius: 8px 8px 0 0;
-}
-
 .word-content {
   padding: 20px;
   background: #fff;
-  border-radius: 0 0 8px 8px;
-  min-height: 400px;
+  border-radius: 8px;
   overflow-x: auto;
 }
 
@@ -3956,6 +4041,7 @@ onBeforeUnmount(() => {
 }
 
 .document-file-pane {
+  position: relative;
   min-width: 0;
   padding: 16px 18px 20px;
   overflow: hidden;
@@ -4369,8 +4455,13 @@ onBeforeUnmount(() => {
 }
 
 .batch-actions-bar {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  left: 18px;
+  z-index: 4;
   min-height: 48px;
-  margin-bottom: 10px;
+  margin: 0;
   padding: 8px 10px;
   display: flex;
   align-items: center;
@@ -4378,6 +4469,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--color-primary-border);
   border-radius: var(--radius-md);
   background: var(--color-primary-surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .batch-selection-summary {
@@ -4430,6 +4522,10 @@ onBeforeUnmount(() => {
 }
 
 .pdf-preview {
+  position: relative;
+  height: 100%;
+  padding-bottom: 54px;
+  box-sizing: border-box;
   min-height: 0;
   flex: 1 1 auto;
   gap: 0;
@@ -4438,6 +4534,10 @@ onBeforeUnmount(() => {
 }
 
 .pdf-controls {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
   min-height: 52px;
   padding: 8px 14px;
   justify-content: center;
@@ -4451,6 +4551,7 @@ onBeforeUnmount(() => {
 }
 
 .pdf-canvas-stage {
+  height: 100%;
   min-height: 0;
   padding: 24px;
   display: flex;
@@ -4496,8 +4597,12 @@ onBeforeUnmount(() => {
 }
 
 :deep(.document-preview-dialog.native-dialog) {
-  height: min(92vh, 980px);
   max-height: 92vh;
+}
+
+:deep(.document-preview-dialog.native-dialog--resizable) {
+  min-width: min(720px, calc(100vw - 40px));
+  min-height: min(360px, calc(100vh - 40px));
 }
 
 :deep(.document-preview-dialog .native-dialog__body) {

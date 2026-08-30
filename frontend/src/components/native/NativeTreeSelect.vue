@@ -28,6 +28,7 @@
     </div>
     
     <!-- 下拉面板 -->
+    <Teleport to="body">
     <div v-if="isOpen" ref="dropdownRef" class="native-tree-select__dropdown" :style="dropdownStyle">
       <!-- 搜索框 -->
       <div v-if="filterable" class="native-tree-select__search">
@@ -63,6 +64,7 @@
         {{ emptyText }}
       </div>
     </div>
+    </Teleport>
   </div>
 </template>
 
@@ -212,7 +214,7 @@ function close() {
   filterText.value = ''
 }
 
-// 计算下拉位置（使用 fixed 定位）
+// 下拉面板传送到 body，避免被 Dialog 的 transform/overflow 裁剪。
 function updateDropdownPosition() {
   if (!triggerRef.value || !dropdownRef.value) return
   const rect = triggerRef.value.getBoundingClientRect()
@@ -226,7 +228,7 @@ function updateDropdownPosition() {
       left: `${rect.left}px`,
       top: `${rect.top - Math.min(dropdownHeight, spaceAbove) - 4}px`,
       width: `${rect.width}px`,
-      zIndex: 10000
+      zIndex: 12000
     }
   } else {
     dropdownStyle.value = {
@@ -234,7 +236,7 @@ function updateDropdownPosition() {
       left: `${rect.left}px`,
       top: `${rect.bottom + 4}px`,
       width: `${rect.width}px`,
-      zIndex: 10000
+      zIndex: 12000
     }
   }
 }
@@ -260,7 +262,7 @@ onUnmounted(() => {
 const vClickOutside = {
   mounted(el, binding) {
     el._clickOutside = (e) => {
-      if (!el.contains(e.target)) {
+      if (!el.contains(e.target) && !dropdownRef.value?.contains(e.target)) {
         binding.value()
       }
     }
@@ -368,6 +370,7 @@ const vClickOutside = {
 }
 
 .native-tree-select__dropdown {
+  position: fixed;
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
