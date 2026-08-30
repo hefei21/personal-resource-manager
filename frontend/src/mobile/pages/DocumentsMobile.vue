@@ -15,9 +15,16 @@
           <NativeIcon name="magnifying-glass" />
         </template>
       </NativeInput>
-      <NativeButton class="mobile-upload-button" theme="primary" @click="openUploadDialog" :disabled="!canWrite">
+      <NativeButton
+        class="mobile-upload-button"
+        theme="primary"
+        shape="circle"
+        title="上传文档"
+        aria-label="上传文档"
+        @click="openUploadDialog"
+        :disabled="!canWrite"
+      >
         <template #icon><NativeIcon name="plus" /></template>
-        上传文档
       </NativeButton>
       <input
         ref="uploadInput"
@@ -232,9 +239,6 @@
                  <span class="file-size">{{ formatFileSize(doc.size) }}</span>
                  <span class="divider">|</span>
                  <span class="file-date">{{ formatDate(doc.updatedAt) }}</span>
-                 <NativeTag :theme="ragStatusTheme(doc.indexStatus)" size="small" variant="light">
-                   {{ ragStatusLabel(doc.indexStatus) }}
-                 </NativeTag>
                </div>
                <div class="file-tags-row" v-if="doc.tags">
                  <NativeTag v-for="tag in visibleTags(doc.tags)" :key="tag" size="small" variant="light" theme="primary">
@@ -295,6 +299,12 @@
             <NativeIcon :name="documentFileIcon(currentDoc?.filePath)" size="20" />
           </span>
           <span><strong>{{ currentDoc ? getFileNameWithExt(currentDoc) : '文档操作' }}</strong><small>{{ formatFileSize(currentDoc?.size) }}</small></span>
+        </div>
+        <div class="action-sheet-index-status">
+          <span><NativeIcon name="database" size="16" />资料索引</span>
+          <NativeTag :theme="ragStatusTheme(currentDoc?.indexStatus)" size="small" variant="light">
+            {{ ragStatusLabel(currentDoc?.indexStatus) }}
+          </NativeTag>
         </div>
         <div class="action-sheet-list">
           <button type="button" class="action-sheet-item" @click="handleActionSelect({ value: 'download' })">
@@ -513,7 +523,7 @@ import {
   pruneDocumentPreviewPositions,
   updateDocumentPreviewPosition
 } from '@/utils/documentWorkbench'
-import { disposePdfDocument, openAuthenticatedPdfDocument } from '@/utils/pdfPreview'
+import { disposePdfDocument, openMobilePdfDocument } from '@/utils/pdfPreview'
 import { usePermission } from '@/composables/usePermission'
 import { acquireBodyScrollLock } from '@/composables/useModalFocus'
 import { NativeAlert, NativeButton, NativeDialog, NativeForm, NativeFormItem, NativeIcon, NativeInput, NativeLoading, NativeSelect, NativeTag } from '@/components/native'
@@ -963,7 +973,7 @@ async function teardownPDFDocument() {
 async function loadPDFDocument(pdfData) {
   try {
     await teardownPDFDocument()
-    pdfDoc.value = await openAuthenticatedPdfDocument(pdfData)
+    pdfDoc.value = await openMobilePdfDocument(pdfData)
     totalPages.value = pdfDoc.value.numPages
   } catch (error) {
     console.error('PDF加载失败:', error)
@@ -1612,8 +1622,11 @@ onBeforeUnmount(() => {
 }
 
 .mobile-upload-button {
-  min-width: 96px;
-  min-height: 40px;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
 }
 
 .mobile-upload-input {
@@ -2571,6 +2584,18 @@ onBeforeUnmount(() => {
   border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
   border-radius: var(--radius-sm);
 }
+.action-sheet-index-status {
+  min-height: 42px;
+  padding: 7px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.action-sheet-index-status > span:first-child { display: inline-flex; align-items: center; gap: 7px; }
 .action-sheet-list {
   padding: 8px 0;
   overflow-y: auto;

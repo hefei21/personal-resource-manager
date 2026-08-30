@@ -166,9 +166,8 @@ function formatFileSize(bytes) {
 .document-action-card:hover:not(:disabled) { border-color: var(--color-primary-border); background: var(--color-primary-surface); transform: translateY(-1px); }
 .document-action-card:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
 .document-action-card:disabled { opacity: .48; cursor: not-allowed; }
-.document-action-card > span { width: 30px; height: 30px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); color: var(--color-text-secondary); background: var(--color-surface-subtle); }
+.document-action-card > span { width: 34px; height: 34px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); color: var(--color-primary); background: var(--color-primary-surface); }
 .document-action-card--primary { border-color: var(--color-primary-border); }
-.document-action-card--primary > span { color: var(--color-primary); border-color: var(--color-primary-border); background: var(--color-primary-surface); }
 .document-action-card > div { min-width: 0; display: grid; gap: 2px; }
 .document-action-card strong { font-size: 13px; white-space: nowrap; }
 .document-action-card small { overflow: hidden; color: var(--color-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
