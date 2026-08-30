@@ -38,14 +38,19 @@
       <div v-else-if="previewType === 'pdf'" class="pdf-preview">
         <div ref="pdfCanvasStage" class="pdf-canvas-stage"><canvas ref="pdfCanvas"></canvas></div>
         <div class="pdf-controls" aria-label="PDF 页面导航">
-          <NativeButton size="small" @click="previousPage" :disabled="currentPage <= 1">
-            <NativeIcon name="chevron-left" /> 上一页
+          <NativeButton class="pdf-page-button" size="small" variant="outline" @click="previousPage" :disabled="currentPage <= 1">
+            <template #icon><NativeIcon name="chevron-left" /></template>
+            上一页
           </NativeButton>
-          <NativeInput v-model="jumpPage" :min="1" :max="totalPages" size="small" style="width: 100px" type="number" />
-          <NativeButton size="small" theme="primary" @click="jumpToPage">确定</NativeButton>
-          <span>共 {{ totalPages }} 页</span>
-          <NativeButton size="small" @click="nextPage" :disabled="currentPage >= totalPages">
-            下一页 <NativeIcon name="chevron-right" />
+          <div class="pdf-page-status">
+            <span>第</span>
+            <NativeInput v-model="jumpPage" :min="1" :max="totalPages" size="small" class="pdf-page-input" type="number" />
+            <span>/ {{ totalPages }} 页</span>
+            <NativeButton class="pdf-page-jump" size="small" theme="primary" @click="jumpToPage">跳转</NativeButton>
+          </div>
+          <NativeButton class="pdf-page-button" size="small" variant="outline" @click="nextPage" :disabled="currentPage >= totalPages">
+            下一页
+            <NativeIcon name="chevron-right" />
           </NativeButton>
         </div>
       </div>
@@ -477,10 +482,15 @@ onBeforeUnmount(() => {
 .document-type-icon--markdown { color: #6a4fb0; background: #f2efff; }
 .document-type-icon--image { color: #087c8f; background: #e9f7f8; }
 .document-type-icon--code { color: #4f6078; background: #edf0f5; }
-.pdf-preview { position: relative; height: 100%; min-height: 0; padding-bottom: 54px; display: flex; flex: 1 1 auto; overflow: hidden; }
+.pdf-preview { position: relative; height: 100%; min-height: 0; padding-bottom: 72px; display: flex; flex: 1 1 auto; overflow: hidden; }
 .pdf-canvas-stage { height: 100%; min-height: 0; padding: 24px; display: flex; flex: 1 1 auto; justify-content: center; overflow: auto; background: var(--color-surface-subtle); }
 .pdf-preview canvas { align-self: flex-start; max-width: none; border: 1px solid var(--color-border-default); border-radius: var(--radius-sm); background: white; box-shadow: var(--shadow-md); }
-.pdf-controls { position: absolute; right: 0; bottom: 0; left: 0; z-index: 1; min-height: 52px; padding: 8px 14px; display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--color-border-subtle); background: var(--color-surface-raised); box-shadow: 0 -5px 18px rgba(23, 32, 51, .05); }
+.pdf-controls { position: absolute; right: 0; bottom: 0; left: 0; z-index: 1; min-height: 72px; padding: 11px 18px; display: flex; align-items: center; justify-content: center; gap: 10px; border-top: 1px solid var(--color-border-subtle); background: color-mix(in srgb, var(--color-surface-page) 72%, var(--color-surface-raised)); box-shadow: 0 -8px 24px rgba(23, 32, 51, .06); }
+.pdf-page-status { min-height: 42px; padding: 4px 5px 4px 12px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); color: var(--color-text-secondary); background: var(--color-surface-raised); box-shadow: var(--shadow-sm); font-size: 13px; white-space: nowrap; }
+.pdf-page-input { width: 72px; }
+.pdf-page-input :deep(.native-input) { text-align: center; font-variant-numeric: tabular-nums; }
+.pdf-page-jump { border-radius: var(--radius-sm); }
+.pdf-page-button { min-width: 92px; background: var(--color-surface-raised); }
 .markdown-preview, .text-preview, .code-preview, .image-preview, .word-html-preview, .office-preview, .unsupported-preview, .preview-error-state { min-height: 0; margin: 20px; flex: 1 1 auto; overflow: auto; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); background: var(--color-surface-raised); }
 .code-preview { padding: 20px; background: #282c34; }
 .code-preview pre, .text-preview pre { min-width: max-content; margin: 0; padding: 16px; font: 14px/1.65 Consolas, Monaco, monospace; }

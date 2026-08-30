@@ -27,9 +27,17 @@
             :style="contentStyle"
           >
             <!-- 头部 -->
-            <div v-if="showHeader || $slots.header" class="native-drawer__header">
+            <div
+              v-if="showHeader || $slots.header"
+              class="native-drawer__header"
+              :class="{ 'native-drawer__header--title-hidden': !showTitle }"
+            >
               <slot name="header">
-                <h3 :id="titleId" class="native-drawer__title">{{ title }}</h3>
+                <h3
+                  :id="titleId"
+                  class="native-drawer__title"
+                  :class="{ 'native-drawer__title--sr-only': !showTitle }"
+                >{{ title }}</h3>
                 <button 
                   v-if="closeBtn" 
                   class="native-drawer__close" 
@@ -72,6 +80,7 @@ const props = defineProps({
   showOverlay: { type: Boolean, default: true },
   closeOnOverlayClick: { type: Boolean, default: true },
   closeBtn: { type: Boolean, default: true },
+  showTitle: { type: Boolean, default: true },
   zIndex: { type: Number, default: 1500 },
   closeOnEsc: { type: Boolean, default: true }
 })
@@ -247,6 +256,36 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 600;
   color: var(--color-text-primary);
+}
+
+.native-drawer__title--sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.native-drawer__header--title-hidden {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 2;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  pointer-events: none;
+}
+
+.native-drawer__header--title-hidden .native-drawer__close {
+  margin: 0;
+  pointer-events: auto;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-subtle);
 }
 
 .native-drawer__close {

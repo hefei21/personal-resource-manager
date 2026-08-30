@@ -76,7 +76,7 @@
           <span class="workbench-filter-icon"><NativeIcon name="filter" size="18" /></span>
           <div>
             <strong>筛选文档</strong>
-            <span>组合标签和更新时间缩小范围</span>
+            <span>{{ activeDocumentFilterCount > 0 ? `已设置 ${activeDocumentFilterCount} 项条件` : '组合标签和更新时间缩小范围' }}</span>
           </div>
         </div>
         <div class="workbench-filter-fields">
@@ -94,8 +94,14 @@
           </NativeFormItem>
         </div>
         <div class="workbench-filter-actions">
-          <NativeButton theme="primary" @click="handleAdvancedSearch">应用筛选</NativeButton>
-          <NativeButton variant="text" @click="resetAdvancedSearch">清除</NativeButton>
+          <NativeButton theme="primary" @click="handleAdvancedSearch">
+            <template #icon><NativeIcon name="check" /></template>
+            应用筛选
+          </NativeButton>
+          <NativeButton variant="outline" @click="resetAdvancedSearch">
+            <template #icon><NativeIcon name="x" /></template>
+            清除
+          </NativeButton>
         </div>
       </div>
 
@@ -218,10 +224,16 @@
               </NativeTag>
             </template>
             <template #cell-operation="{ row }">
-              <NativeSpace>
-                <NativeButton theme="primary" variant="outline" size="small" @click="handleView(row)">预览</NativeButton>
-                <NativeButton variant="outline" size="small" @click="openDocumentDetails(row)">详情</NativeButton>
-              </NativeSpace>
+              <div class="document-row-actions">
+                <button type="button" class="document-row-action document-row-action--preview" @click="handleView(row)">
+                  <NativeIcon name="eye" size="15" />
+                  <span>预览</span>
+                </button>
+                <button type="button" class="document-row-action" @click="openDocumentDetails(row)">
+                  <NativeIcon name="info" size="15" />
+                  <span>详情</span>
+                </button>
+              </div>
             </template>
           </NativeTable>
 
@@ -763,6 +775,10 @@ const advancedSearchVisible = ref(false)
 const selectedTags = ref([])
 const dateRange = ref([])
 const allTags = ref([])
+const activeDocumentFilterCount = computed(() => (
+  (selectedTags.value.length > 0 ? 1 : 0)
+  + (dateRange.value?.length === 2 ? 1 : 0)
+))
 
 // 分类树数据（用于树形选择器）
 const categoryTreeData = computed(() => {
@@ -956,7 +972,7 @@ const columns = computed(() => [
   { key: 'type', dataIndex: 'filePath', title: '类型', width: 80, sorter: true },
   { key: 'indexStatus', dataIndex: 'indexStatus', title: '资料索引', width: 110 },
   { key: 'updatedAt', dataIndex: 'updatedAt', title: '更新时间', width: 180, sorter: true },
-  { key: 'operation', title: '操作', width: 150, align: 'left', headerAlign: 'left' }
+  { key: 'operation', title: '操作', width: 156, align: 'right', headerAlign: 'right' }
 ])
 
 const versionColumns = [
@@ -2910,10 +2926,10 @@ onMounted(async () => {
   display: inline-block;
 }
 
-/* 操作列样式：内容左对齐，但列整体靠右 */
+/* 操作列与表格右缘收齐，减少无意义留白。 */
 ::deep(.native-table th:last-child),
 ::deep(.native-table td:last-child) {
-  text-align: left;
+  text-align: right;
   white-space: nowrap;
 }
   .version-dialog-toolbar {
@@ -3098,15 +3114,16 @@ onMounted(async () => {
 }
 
 .workbench-filters {
-  margin: 0;
-  padding: 16px 18px;
+  margin: 12px 16px 0;
+  padding: 14px 16px;
   display: grid;
-  grid-template-columns: 190px minmax(0, 1fr) auto;
+  grid-template-columns: 176px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 18px;
-  border-bottom: 1px solid var(--color-border-subtle);
-  border-radius: 0;
-  background: color-mix(in srgb, var(--color-surface-subtle) 70%, var(--color-surface-raised));
+  gap: 16px;
+  border: 1px solid color-mix(in srgb, var(--color-primary-border) 50%, var(--color-border-subtle));
+  border-radius: var(--radius-lg);
+  background: linear-gradient(112deg, color-mix(in srgb, var(--color-primary-surface) 66%, var(--color-surface-raised)), var(--color-surface-raised) 46%);
+  box-shadow: var(--shadow-sm);
 }
 
 .workbench-filter-heading,
@@ -3153,6 +3170,11 @@ onMounted(async () => {
   background: var(--color-primary-surface);
 }
 
+.workbench-filter-icon {
+  border: 1px solid var(--color-primary-border);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
 .workbench-filter-fields {
   min-width: 0;
   display: grid;
@@ -3162,6 +3184,67 @@ onMounted(async () => {
 
 .workbench-filter-fields :deep(.native-form-item) {
   margin: 0;
+}
+
+.workbench-filter-fields :deep(.native-form-item__label) {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workbench-filter-actions {
+  padding: 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface-subtle) 72%, var(--color-surface-raised));
+}
+
+.document-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.document-row-action {
+  min-height: 30px;
+  padding: 5px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  transition: color .16s ease, border-color .16s ease, background-color .16s ease;
+}
+
+.document-row-action:hover,
+.document-row-action:focus-visible {
+  color: var(--color-text-primary);
+  border-color: var(--color-border-default);
+  background: var(--color-surface-subtle);
+}
+
+.document-row-action--preview {
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+}
+
+.document-row-action--preview:hover,
+.document-row-action--preview:focus-visible {
+  color: var(--color-primary-hover);
+  border-color: var(--color-primary-border);
+  background: color-mix(in srgb, var(--color-primary) 13%, var(--color-surface-raised));
+}
+
+.document-row-action:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
 }
 
 .workbench-body {

@@ -29,7 +29,14 @@
     
     <!-- 下拉面板 -->
     <Teleport to="body">
-    <div v-if="isOpen" ref="dropdownRef" class="native-tree-select__dropdown" :style="dropdownStyle">
+    <div
+      v-if="isOpen"
+      ref="dropdownRef"
+      class="native-tree-select__dropdown"
+      :style="dropdownStyle"
+      @pointerdown.stop
+      @click.stop
+    >
       <!-- 搜索框 -->
       <div v-if="filterable" class="native-tree-select__search">
         <NativeIcon name="search" size="14" />
@@ -371,6 +378,9 @@ const vClickOutside = {
 
 .native-tree-select__dropdown {
   position: fixed;
+  z-index: 12000;
+  pointer-events: auto;
+  isolation: isolate;
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);

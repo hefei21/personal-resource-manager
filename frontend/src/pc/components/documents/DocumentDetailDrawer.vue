@@ -2,6 +2,7 @@
   <NativeDrawer
     :model-value="visible"
     :title="document?.title || '文档详情'"
+    :show-title="false"
     placement="right"
     size="460px"
     @update:model-value="emit('update:visible', $event)"
@@ -136,7 +137,7 @@ function formatFileSize(bytes) {
 
 <style scoped>
 .document-detail { display: flex; flex-direction: column; gap: 16px; }
-.document-detail-hero { padding-bottom: 16px; display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border-subtle); }
+.document-detail-hero { padding: 2px 48px 16px 0; display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--color-border-subtle); }
 .document-detail-hero > div { min-width: 0; display: grid; gap: 5px; }
 .document-detail-hero strong { overflow-wrap: anywhere; color: var(--color-text-primary); font-size: 16px; }
 .document-detail-hero span { color: var(--color-text-secondary); font-size: 13px; }
