@@ -23,10 +23,8 @@
             <slot :name="`header-${col.key || col.dataIndex}`" :column="col">
               {{ col.title }}
             </slot>
-            <!-- 排序图标：仅当前排序列显示，单个箭头 -->
-            <span v-if="col.sorter && sortKey === (col.key || col.dataIndex)" class="sort-icon">
-              <span v-if="sortOrder === 'desc'" class="sort-arrow sort-arrow--desc">▼</span>
-              <span v-else-if="sortOrder === 'asc'" class="sort-arrow sort-arrow--asc">▲</span>
+            <span v-if="col.sorter && sortKey === (col.key || col.dataIndex)" class="sort-icon" aria-hidden="true">
+              <NativeIcon :name="sortOrder === 'desc' ? 'caret-down' : 'caret-up'" size="13" />
             </span>
           </th>
         </tr>
@@ -273,13 +271,16 @@ function handleSort(col) {
 .native-table-wrapper {
   position: relative;
   overflow-x: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
 }
 
 .native-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
-  background: #fff;
+  background: var(--color-surface-raised);
 }
 
 .native-table th,
@@ -292,24 +293,25 @@ function handleSort(col) {
 .native-table th {
   font-weight: 600;
   color: var(--color-text-primary);
-  background: #fafafa;
+  background: var(--color-surface-subtle);
   white-space: nowrap;
 }
 
 .native-table tbody tr:hover {
-  background: #f5f7fa;
+  background: color-mix(in srgb, var(--color-primary-surface) 45%, var(--color-surface-raised));
 }
 
 .native-table tbody tr.native-table__row--selected {
-  background: #e6f7ff;
+  background: var(--color-primary-surface);
+  box-shadow: inset 3px 0 0 var(--color-primary);
 }
 
 .native-table--striped tbody tr:nth-child(even) {
-  background: #fafafa;
+  background: color-mix(in srgb, var(--color-surface-subtle) 58%, var(--color-surface-raised));
 }
 
 .native-table--striped tbody tr:nth-child(even):hover {
-  background: #f5f7fa;
+  background: color-mix(in srgb, var(--color-primary-surface) 55%, var(--color-surface-raised));
 }
 
 .native-table--bordered th,
@@ -337,14 +339,10 @@ function handleSort(col) {
 
 .sort-icon {
   display: inline-flex;
+  align-items: center;
   margin-left: 4px;
-  font-size: 12px;
   color: var(--color-primary);
   line-height: 1;
-}
-
-.sort-arrow {
-  display: inline-block;
 }
 
 .native-table__empty {
@@ -366,7 +364,8 @@ function handleSort(col) {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.7);
+  background: color-mix(in srgb, var(--color-surface-raised) 72%, transparent);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;

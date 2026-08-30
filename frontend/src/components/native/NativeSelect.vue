@@ -795,17 +795,21 @@ onUnmounted(() => {
   transform: rotate(180deg);
 }
 
-.native-select__dropdown {
-  background: var(--color-surface-raised);
+:global(.native-select__dropdown) {
+  padding: 4px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-raised, #fff);
   border: 1px solid var(--color-border-default);
-  border-radius: 6px;
-  box-shadow: var(--shadow-md);
-  max-height: 200px;
-  overflow-y: auto;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  max-height: 240px;
+  overflow: hidden;
+  opacity: 1;
+  isolation: isolate;
   z-index: 10000;
 }
 
-.native-select__dropdown--reka {
+:global(.native-select__dropdown--reka) {
   width: var(--reka-select-trigger-width);
   max-height: var(--reka-select-content-available-height);
 }
@@ -822,30 +826,32 @@ onUnmounted(() => {
   transform: translateY(-50%);
 }
 
-.native-select__option {
-  padding: 8px 12px;
+:global(.native-select__option) {
+  min-height: 36px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: background var(--motion-duration-fast) var(--motion-easing-standard), color var(--motion-duration-fast) var(--motion-easing-standard);
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.native-select__option:hover {
+:global(.native-select__option:hover) {
   background: var(--color-surface-subtle);
 }
 
-.native-select__option[data-highlighted] {
+:global(.native-select__option[data-highlighted]) {
   background: var(--color-primary-surface);
   outline: none;
 }
 
-.native-select__option--active {
+:global(.native-select__option--active) {
   background: var(--color-primary-surface);
 }
 
-.native-select__option--selected {
+:global(.native-select__option--selected) {
   background: var(--color-primary-surface);
   color: var(--color-primary);
 }
@@ -946,12 +952,12 @@ onUnmounted(() => {
   border-color: var(--color-primary);
 }
 
-.native-select__options-list {
-  max-height: 200px;
+:global(.native-select__options-list) {
+  max-height: 232px;
   overflow-y: auto;
 }
 
-.native-select__option--disabled {
+:global(.native-select__option--disabled) {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -963,7 +969,7 @@ onUnmounted(() => {
   border-radius: 2px;
 }
 
-.native-select__empty {
+:global(.native-select__empty) {
   padding: 16px;
   text-align: center;
   color: var(--color-text-muted);

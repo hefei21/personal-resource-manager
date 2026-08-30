@@ -72,21 +72,30 @@
       </div>
 
       <div v-if="advancedSearchVisible" class="advanced-search-panel workbench-filters">
-        <NativeFormItem label="标签">
-          <NativeSelect
-            v-model="selectedTags"
-            placeholder="选择标签"
-            multiple
-            clearable
-            :options="allTags.map(tag => ({ value: tag, label: tag }))"
-          />
-        </NativeFormItem>
-        <NativeFormItem label="更新时间">
-          <NativeDateRangePicker v-model="dateRange" />
-        </NativeFormItem>
+        <div class="workbench-filter-heading">
+          <span class="workbench-filter-icon"><NativeIcon name="filter" size="18" /></span>
+          <div>
+            <strong>筛选文档</strong>
+            <span>组合标签和更新时间缩小范围</span>
+          </div>
+        </div>
+        <div class="workbench-filter-fields">
+          <NativeFormItem label="标签">
+            <NativeSelect
+              v-model="selectedTags"
+              placeholder="选择一个或多个标签"
+              multiple
+              clearable
+              :options="allTags.map(tag => ({ value: tag, label: tag }))"
+            />
+          </NativeFormItem>
+          <NativeFormItem label="更新时间">
+            <NativeDateRangePicker v-model="dateRange" />
+          </NativeFormItem>
+        </div>
         <div class="workbench-filter-actions">
           <NativeButton theme="primary" @click="handleAdvancedSearch">应用筛选</NativeButton>
-          <NativeButton variant="outline" @click="resetAdvancedSearch">重置</NativeButton>
+          <NativeButton variant="text" @click="resetAdvancedSearch">清除</NativeButton>
         </div>
       </div>
 
@@ -152,9 +161,13 @@
           </NativeAlert>
 
           <div v-if="selectedRowKeys.length > 0" class="batch-actions-bar">
+            <span class="batch-selection-summary">
+              <NativeIcon name="check-square" size="17" />
+              已选择 <strong>{{ selectedRowKeys.length }}</strong> 项
+            </span>
             <NativeButton theme="primary" size="small" @click="handleBatchEdit" :disabled="!canWrite">
               <template #icon><NativeIcon name="pencil" /></template>
-              更改所选 ({{ selectedRowKeys.length }})
+              编辑信息
             </NativeButton>
             <NativePopconfirm content="所选文档将进入回收站，确定继续吗？" @confirm="handleBatchDelete">
               <template #trigger>
@@ -164,7 +177,7 @@
                 </NativeButton>
               </template>
             </NativePopconfirm>
-            <span class="batch-actions-hint">已选择 {{ selectedRowKeys.length }} 项</span>
+            <NativeButton variant="text" size="small" @click="selectedRowKeys = []">取消选择</NativeButton>
           </div>
 
           <NativeLoading v-if="loading && documents.length === 0" center text="加载文档中..." />
@@ -203,9 +216,9 @@
           </NativeTable>
 
           <div v-else-if="!documentsError" class="empty-state document-empty-state">
-            <NativeIcon name="file" size="48" />
+            <span class="document-empty-icon"><NativeIcon name="file" size="34" /></span>
             <strong>{{ currentCategoryId ? '当前分类还没有文档' : '还没有文档' }}</strong>
-            <span>上传后可在这里预览、管理版本并查看索引状态。</span>
+            <span>{{ currentCategoryId ? '可以上传到当前分类，或从左侧选择其他分类。' : '上传后可在这里预览内容、管理版本并查看资料索引状态。' }}</span>
             <NativeButton v-if="canWrite" theme="primary" @click="handleUpload">上传第一个文档</NativeButton>
           </div>
 
@@ -271,7 +284,7 @@
             <NativeButton variant="outline" @click="handleView(detailDocument)">预览</NativeButton>
             <NativeButton variant="outline" @click="handleDownload(detailDocument)">下载原件</NativeButton>
             <NativeButton variant="outline" @click="openVersionUpload(detailDocument)" :disabled="!canWrite">上传新版本</NativeButton>
-            <NativeButton variant="outline" @click="handleViewVersions(detailDocument)">版本历史</NativeButton>
+            <NativeButton variant="outline" @click="handleViewVersions(detailDocument)">版本与回收</NativeButton>
             <NativeButton variant="outline" @click="handleChangeSingle(detailDocument)" :disabled="!canWrite">编辑信息</NativeButton>
             <NativeButton
               v-if="canEditFile(detailDocument.filePath)"
@@ -385,7 +398,8 @@
       v-model="uploadDialogVisible"
       title="上传文档"
       @confirm="handleUploadConfirm"
-      width="600px"
+      width="760px"
+      class="document-dialog document-upload-dialog"
       :class="{ 'drag-active': isDraggingFile }"
       @dragenter.prevent="handleDialogDragEnter"
       @dragover.prevent
@@ -395,7 +409,11 @@
       :confirm-disabled="uploading || !canWrite"
       :close-btn="!uploading"
     >
-      <NativeForm :modelValue="uploadForm" :rules="uploadRules">
+      <div class="dialog-intro">
+        <span class="dialog-intro-icon"><NativeIcon name="upload" size="20" /></span>
+        <div><strong>添加新的资料原件</strong><span>上传成功后保留原文件，并自动进入资料索引流程。</span></div>
+      </div>
+      <NativeForm :modelValue="uploadForm" :rules="uploadRules" class="document-upload-form">
         <!-- 上传进度显示 -->
         <div v-if="uploading" class="upload-progress">
           <NativeIcon name="spinner" spin size="24" />
@@ -495,18 +513,28 @@
     <NativeDialog
       v-model="versionsDialogVisible"
       title="版本历史"
-      width="800px"
+      width="1080px"
+      class="document-dialog version-history-dialog"
       :show-footer="false"
     >
       <div class="version-dialog-toolbar">
-        <NativeButton theme="primary" size="small" :disabled="!canWrite" @click="openVersionUpload">
+        <div class="version-view-switch" role="tablist" aria-label="版本视图">
+          <button type="button" role="tab" :aria-selected="versionHistoryView === 'active'" :class="{ active: versionHistoryView === 'active' }" @click="versionHistoryView = 'active'">
+            版本记录 <span>{{ versions.length }}</span>
+          </button>
+          <button type="button" role="tab" :aria-selected="versionHistoryView === 'trash'" :class="{ active: versionHistoryView === 'trash' }" @click="showVersionTrash">
+            已删除版本 <span>{{ versionTrash.length }}</span>
+          </button>
+        </div>
+        <NativeButton theme="primary" :disabled="!canWrite" @click="openVersionUpload">
+          <template #icon><NativeIcon name="upload" /></template>
           上传新版本
         </NativeButton>
-        <NativeButton variant="outline" size="small" @click="openVersionTrash">
-          版本回收站
-        </NativeButton>
       </div>
-      <NativeTable :dataSource="versions" :columns="versionColumns" rowKey="id">
+      <p class="version-dialog-description">
+        {{ versionHistoryView === 'active' ? '恢复历史版本会创建新的当前版本，不会覆盖或删除原记录。' : '这里保留已删除的历史版本；保护期内可以恢复，当前版本不会出现在此处。' }}
+      </p>
+      <NativeTable v-if="versionHistoryView === 'active'" :dataSource="versions" :columns="versionColumns" rowKey="id">
         <template #cell-version="{ row }">
           <span>{{ row.version ? (row.version.toString().includes('.') ? row.version : `${row.version}.0`) : '1.0' }}</span>
         </template>
@@ -515,8 +543,8 @@
           <span v-else>历史版本</span>
         </template>
         <template #cell-operation="{ row }">
-          <NativeSpace>
-            <NativeButton theme="primary" size="small" @click="handleDownloadVersion(row)">
+          <NativeSpace wrap>
+            <NativeButton variant="outline" size="small" @click="handleDownloadVersion(row)">
               <NativeIcon name="download" /> 下载
             </NativeButton>
             <template v-if="!row.isCurrent">
@@ -534,19 +562,38 @@
           </NativeSpace>
         </template>
       </NativeTable>
+      <div v-else-if="versionTrashLoading" class="content-loading compact-loading">
+        <NativeLoading size="small" text="加载已删除版本..." />
+      </div>
+      <div v-else-if="versionTrash.length === 0" class="version-trash-empty">
+        <span><NativeIcon name="archive" size="28" /></span>
+        <strong>没有已删除版本</strong>
+        <p>从版本记录移除的历史版本会在保护期内显示在这里。</p>
+      </div>
+      <div v-else class="version-trash-list">
+        <div v-for="row in versionTrash" :key="row.id" class="version-trash-item">
+          <span class="version-trash-number">v{{ row.version }}</span>
+          <div><strong>{{ row.note || '无版本说明' }}</strong><span>删除于 {{ formatDateTime(row.deletedAt || row.trashedAt) }}</span></div>
+          <NativeButton v-if="!row.isCurrent" size="small" variant="outline" @click="handleRestoreVersionTrash(row)" :disabled="!canWrite">
+            恢复版本
+          </NativeButton>
+        </div>
+      </div>
     </NativeDialog>
 
     <NativeDialog
       v-model="versionUploadDialogVisible"
       title="上传新版本"
-      width="560px"
+      width="720px"
+      class="document-dialog version-upload-dialog"
       :confirm-loading="versionUploading"
       :confirm-disabled="versionUploading || !canWrite"
       @confirm="submitVersionUpload"
     >
-      <NativeAlert theme="info" title="保留文档身份">
-        新文件需与当前文档类型一致，并会成为当前版本；标题、分类和标签保持不变，旧版本仍可在版本历史中下载或恢复。
-      </NativeAlert>
+      <div class="dialog-intro dialog-intro--info">
+        <span class="dialog-intro-icon"><NativeIcon name="info" size="20" /></span>
+        <div><strong>文档身份保持不变</strong><span>文件类型需一致；新文件成为当前版本，标题、分类和标签不变，旧版本仍可下载或恢复。</span></div>
+      </div>
       <NativeForm class="version-upload-form">
         <NativeFormItem label="新版本文件" required>
           <NativeUpload
@@ -567,31 +614,6 @@
           />
         </NativeFormItem>
       </NativeForm>
-    </NativeDialog>
-
-    <!-- 版本回收列表 -->
-    <NativeDialog
-      v-model="versionTrashDialogVisible"
-      title="版本回收站"
-      width="700px"
-      :show-footer="false"
-    >
-      <div v-if="versionTrashLoading" class="content-loading">
-        <NativeLoading size="small" />
-      </div>
-      <div v-else-if="versionTrash.length === 0" class="empty-state-inline">
-        <p>版本回收站为空</p>
-      </div>
-      <div v-else class="version-trash-list">
-        <div v-for="row in versionTrash" :key="row.id" class="version-trash-item">
-          <span>v{{ row.version }}</span>
-          <span>{{ row.note || '无说明' }}</span>
-          <span>{{ formatDateTime(row.deletedAt || row.trashedAt) }}</span>
-          <NativeButton v-if="!row.isCurrent" size="small" theme="primary" @click="handleRestoreVersionTrash(row)" :disabled="!canWrite">
-            恢复
-          </NativeButton>
-        </div>
-      </div>
     </NativeDialog>
 
     <!-- 编辑对话框 -->
@@ -636,16 +658,36 @@
     <NativeDialog
       v-model="previewDialogVisible"
       :title="previewTitle"
-      width="85%"
+      width="min(1560px, calc(100vw - 48px))"
+      class="document-dialog document-preview-dialog"
       :show-footer="false"
     >
       <div v-if="previewLoading" class="loading-container">
         <NativeLoading text="加载中..." />
       </div>
       <div v-else class="preview-container">
+        <div class="preview-toolbar">
+          <div class="preview-file-meta">
+            <span class="document-type-icon"><NativeIcon :name="documentFileIcon(previewFileName)" size="18" /></span>
+            <div><strong>{{ previewFileName }}</strong><span>{{ formatFileSize(previewFileSize) }}</span></div>
+          </div>
+          <NativeButton variant="outline" @click="handleDownloadPreviewFile">
+            <template #icon><NativeIcon name="download" /></template>
+            下载原件
+          </NativeButton>
+        </div>
+
+        <div v-if="previewError" class="preview-error-state">
+          <span><NativeIcon name="warning-circle" size="30" /></span>
+          <strong>暂时无法显示预览</strong>
+          <p>{{ previewError }}</p>
+          <div>
+            <NativeButton theme="primary" @click="retryPreview">重新加载</NativeButton>
+            <NativeButton variant="outline" @click="handleDownloadPreviewFile">下载原件</NativeButton>
+          </div>
+        </div>
         <!-- PDF 预览 -->
-        <div v-if="previewType === 'pdf'" class="pdf-preview">
-          <canvas ref="pdfCanvas"></canvas>
+        <div v-else-if="previewType === 'pdf'" class="pdf-preview">
           <div class="pdf-controls">
             <NativeButton size="small" @click="prevPage" :disabled="currentPage <= 1">
               <NativeIcon name="chevron-left" /> 上一页
@@ -667,6 +709,7 @@
               下一页 <NativeIcon name="chevron-right" />
             </NativeButton>
           </div>
+          <div class="pdf-canvas-stage"><canvas ref="pdfCanvas"></canvas></div>
         </div>
 
         <!-- Markdown 预览 -->
@@ -718,10 +761,6 @@
           <NativeButton theme="primary" @click="handleDownloadPreviewFile">下载文件</NativeButton>
         </div>
 
-        <div class="preview-footer">
-          <span class="file-info">文件名: {{ previewFileName }}</span>
-          <span class="file-info">文件大小: {{ formatFileSize(previewFileSize) }}</span>
-        </div>
       </div>
     </NativeDialog>
 
@@ -791,7 +830,7 @@ const versionUploadNote = ref('')
 const versionUploading = ref(false)
 const versionTrash = ref([])
 const versionTrashLoading = ref(false)
-const versionTrashDialogVisible = ref(false)
+const versionHistoryView = ref('active')
 const uploadDialogVisible = ref(false)
 const uploadConflictDialogVisible = ref(false)
 const uploadConflict = ref(null)
@@ -839,6 +878,7 @@ const previewFileName = ref('')
 const previewFileSize = ref(0)
 const previewTitle = ref('')
 const previewDocumentId = ref(null)
+const previewError = ref('')
 const pdfCanvas = ref(null)
 const currentPage = ref(1)
 const totalPages = ref(0)
@@ -1147,11 +1187,11 @@ const columns = computed(() => [
 ])
 
 const versionColumns = [
-  { key: 'version', dataIndex: 'version', title: '版本号', width: 100 },
-  { key: 'isCurrent', dataIndex: 'isCurrent', title: '状态', width: 100 },
-  { key: 'note', dataIndex: 'note', title: '说明' },
+  { key: 'version', dataIndex: 'version', title: '版本号', width: 90 },
+  { key: 'isCurrent', dataIndex: 'isCurrent', title: '状态', width: 110 },
+  { key: 'note', dataIndex: 'note', title: '说明', minWidth: 180 },
   { key: 'createdAt', dataIndex: 'createdAt', title: '创建时间', width: 180 },
-  { key: 'operation', title: '操作', width: 420 }
+  { key: 'operation', title: '操作', width: 300 }
 ]
 
 const lineCount = computed(() => {
@@ -1828,14 +1868,19 @@ async function handleDeleteAndClose(id) {
   }
 }
 
+async function loadActiveVersions() {
+  if (!versionDocumentId.value) return
+  const response = await api.documents.versions(versionDocumentId.value)
+  const data = response.data?.data || response.data || []
+  versions.value = Array.isArray(data) ? data : []
+}
+
 async function handleViewVersions(row) {
+  versionDocumentId.value = row.id
+  versionHistoryView.value = 'active'
+  versionsDialogVisible.value = true
   try {
-    versionDocumentId.value = row.id
-    const response = await api.documents.versions(row.id)
-    console.log('版本响应:', response)
-    const data = response.data?.data || response.data || []
-    versions.value = Array.isArray(data) ? data : []
-    versionsDialogVisible.value = true
+    await Promise.all([loadActiveVersions(), loadVersionTrash()])
   } catch (error) {
     console.error('加载版本失败:', error)
     toast.error(documentErrorMessage(error, '加载版本失败'))
@@ -1886,9 +1931,8 @@ async function handleRestoreVersion(row) {
   try {
     const response = await api.documents.restoreVersion(versionDocumentId.value, row.id)
     toast.success(response.data?.message || '版本恢复成功，已创建新的当前版本')
-    versionsDialogVisible.value = false
     await loadDocumentCoverage()
-    await loadDocuments()
+    await Promise.all([loadActiveVersions(), loadVersionTrash(), loadDocuments()])
   } catch (error) {
     console.error('恢复版本失败:', error)
     toast.error(documentErrorMessage(error, '恢复版本失败'))
@@ -1900,21 +1944,20 @@ async function handleDeleteVersion(row) {
   try {
     await api.documents.deleteVersion(versionDocumentId.value, row.id)
     toast.success('版本已移入回收站')
-    await Promise.all([handleViewVersions({ id: versionDocumentId.value }), loadVersionTrash(false)])
+    await Promise.all([loadActiveVersions(), loadVersionTrash()])
   } catch (error) {
     console.error('移入版本回收站失败:', error)
     toast.error(documentErrorMessage(error, '移入版本回收站失败'))
   }
 }
 
-async function loadVersionTrash(showDialog = true) {
+async function loadVersionTrash() {
   if (!versionDocumentId.value) return
   versionTrashLoading.value = true
   try {
     const response = await api.documents.versionsTrash(versionDocumentId.value)
     const data = response.data?.data || response.data || []
     versionTrash.value = Array.isArray(data) ? data : []
-    if (showDialog) versionTrashDialogVisible.value = true
   } catch (error) {
     console.error('加载版本回收站失败:', error)
     toast.error(documentErrorMessage(error, '加载版本回收站失败'))
@@ -1924,8 +1967,9 @@ async function loadVersionTrash(showDialog = true) {
   }
 }
 
-function openVersionTrash() {
-  loadVersionTrash(true)
+async function showVersionTrash() {
+  versionHistoryView.value = 'trash'
+  await loadVersionTrash()
 }
 
 async function handleRestoreVersionTrash(row) {
@@ -1935,8 +1979,8 @@ async function handleRestoreVersionTrash(row) {
     toast.success(response.data?.message || '版本已恢复，已创建新的当前版本')
     await loadDocumentCoverage()
     await Promise.all([
-      loadVersionTrash(false),
-      handleViewVersions({ id: versionDocumentId.value }),
+      loadVersionTrash(),
+      loadActiveVersions(),
       loadDocuments()
     ])
   } catch (error) {
@@ -1956,6 +2000,7 @@ async function loadPreviewContent(row) {
     previewDialogVisible.value = true
     previewLoading.value = true
     previewContent.value = ''
+    previewError.value = ''
     previewFileName.value = row.title || row.filePath?.split('/').pop() || '未知文件'
     previewTitle.value = `预览 - ${previewFileName.value}`
     previewDocumentId.value = row.id
@@ -1973,8 +2018,6 @@ async function loadPreviewContent(row) {
     }
 
     const response = await api.documents.getContent(row.id)
-    console.log('预览内容响应:', response)
-
     const data = response.data || {}
     const content = data.content || ''
     const fileName = data.fileName || ''
@@ -2025,14 +2068,15 @@ async function loadPreviewContent(row) {
       previewLoading.value = false
     }
 
-    console.log('预览类型:', previewType.value, '语言:', previewLanguage.value, '是否Base64:', isBase64)
   } catch (error) {
     console.error('加载预览内容失败:', error)
     if (error.response?.status === 400) {
       previewType.value = 'unsupported'
+      previewError.value = ''
     } else {
-      toast.error('加载预览失败')
-      previewDialogVisible.value = false
+      previewError.value = previewType.value === 'pdf'
+        ? 'PDF 预览组件加载失败。你可以重新加载；若仍失败，原件仍可正常下载。'
+        : '预览内容加载失败。你可以重新加载或下载原件。'
     }
     previewLoading.value = false
   }
@@ -2081,38 +2125,19 @@ async function loadOfficeContent(base64Content, ext) {
 
 async function loadPDFDocument(pdfData) {
   try {
-    console.log('开始加载 PDF,数据类型:', typeof pdfData, '长度:', pdfData?.length)
-    console.log('PDF 数据前 100 字符:', typeof pdfData === 'string' ? pdfData.substring(0, 100) : 'binary data')
-
     // 确保数据是 Uint8Array
     let uint8Array = pdfData
     if (typeof pdfData === 'string') {
       uint8Array = base64ToUint8Array(pdfData)
-      console.log('转换为 Uint8Array,长度:', uint8Array.length)
     }
-
-    // 使用 Promise 方式加载,添加详细错误处理
-    console.log('开始加载 PDF 文档...')
-    console.log('PDF 数据前 16 字节(Array):', Array.from(uint8Array.slice(0, 16)).map(b => b.toString(16).padStart(2, '0')).join(' '))
 
     if (pdfDoc.value) await pdfDoc.value.destroy()
     const doc = await openPdfDocument(uint8Array)
-    console.log('PDF 文档加载成功,页数:', doc.numPages)
 
     pdfDoc.value = doc
     totalPages.value = doc.numPages
   } catch (error) {
     console.error('加载 PDF 文档失败:', error)
-    console.error('错误名称:', error.name)
-    console.error('错误消息:', error.message)
-    console.error('错误堆栈:', error.stack)
-
-    // 尝试提供更多诊断信息
-    if (error.message.includes('private member')) {
-      console.error('这是私有字段访问错误,可能需要降级 PDF.js 版本')
-    }
-
-    toast.error('PDF 加载失败: ' + (error.message || '未知错误'))
     throw error
   }
 }
@@ -2422,6 +2447,13 @@ function handleDownloadPreviewFile() {
   if (row) {
     handleDownload(row)
   }
+}
+
+function retryPreview() {
+  const row = documents.value.find(document => Number(document.id) === Number(previewDocumentId.value))
+    || (Number(detailDocument.value?.id) === Number(previewDocumentId.value) ? detailDocument.value : null)
+    || { id: previewDocumentId.value, title: previewFileName.value, filePath: previewFileName.value, size: previewFileSize.value }
+  loadPreviewContent(row)
 }
 
 onMounted(async () => {
@@ -3445,7 +3477,8 @@ onMounted(async () => {
   }
 
 .documents {
-  max-width: 1600px;
+  width: 100%;
+  max-width: 1900px;
   margin: 0 auto;
 }
 
@@ -3480,7 +3513,7 @@ onMounted(async () => {
 .document-workbench {
   overflow: hidden;
   border-color: var(--color-border-default);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
 }
 
 .document-workbench :deep(.native-card__body) {
@@ -3539,20 +3572,75 @@ onMounted(async () => {
 
 .workbench-filters {
   margin: 0;
-  padding: 14px 18px;
+  padding: 16px 18px;
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.3fr) auto;
-  align-items: end;
-  gap: 14px;
+  grid-template-columns: 190px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
   border-bottom: 1px solid var(--color-border-subtle);
   border-radius: 0;
-  background: var(--color-surface-subtle);
+  background: color-mix(in srgb, var(--color-surface-subtle) 70%, var(--color-surface-raised));
+}
+
+.workbench-filter-heading,
+.workbench-filter-heading > div,
+.dialog-intro > div,
+.preview-file-meta > div,
+.version-trash-item > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.workbench-filter-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.workbench-filter-heading strong,
+.dialog-intro strong {
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.workbench-filter-heading span,
+.dialog-intro span,
+.preview-file-meta span,
+.version-trash-item span,
+.version-dialog-description {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.workbench-filter-icon,
+.dialog-intro-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+}
+
+.workbench-filter-fields {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(280px, 1.2fr);
+  gap: 14px;
+}
+
+.workbench-filter-fields :deep(.native-form-item) {
+  margin: 0;
 }
 
 .workbench-body {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
-  min-height: 540px;
+  grid-template-columns: 244px minmax(0, 1fr);
+  min-height: clamp(620px, calc(100vh - 260px), 820px);
   background: var(--color-surface-raised);
 }
 
@@ -3704,7 +3792,7 @@ onMounted(async () => {
 
 .document-file-pane {
   min-width: 0;
-  padding: 14px 16px 18px;
+  padding: 16px 18px 20px;
   overflow: hidden;
 }
 
@@ -3760,14 +3848,40 @@ onMounted(async () => {
 }
 
 .document-empty-state {
-  min-height: 390px;
-  gap: 10px;
+  min-height: 520px;
+  margin: 0;
+  padding: 40px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
   color: var(--color-text-secondary);
 }
 
 .document-empty-state strong {
   color: var(--color-text-primary);
   font-size: 16px;
+}
+
+.document-empty-state > span:not(.document-empty-icon) {
+  max-width: 460px;
+  margin-bottom: 8px;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.document-empty-icon {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-xl);
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
 }
 
 .document-detail {
@@ -3856,7 +3970,299 @@ onMounted(async () => {
 }
 
 .version-dialog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.version-view-switch {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.version-view-switch button {
+  min-height: 34px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  background: transparent;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.version-view-switch button.active {
+  color: var(--color-primary);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+
+.version-view-switch button span {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  color: inherit;
+  background: var(--color-primary-surface);
+  font-size: 11px;
+}
+
+.version-dialog-description {
+  margin: 12px 0 14px;
+}
+
+.version-current-label {
+  display: inline-flex;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  color: var(--color-success-text);
+  background: var(--color-success-surface);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.version-trash-list {
+  display: grid;
   gap: 8px;
+}
+
+.version-trash-item {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 14px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.version-trash-item strong {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-trash-number {
+  color: var(--color-primary) !important;
+  font-weight: 700;
+}
+
+.version-trash-empty,
+.preview-error-state {
+  min-height: 250px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-subtle);
+  text-align: center;
+}
+
+.version-trash-empty > span,
+.preview-error-state > span {
+  width: 52px;
+  height: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+}
+
+.version-trash-empty strong,
+.preview-error-state strong {
+  color: var(--color-text-primary);
+}
+
+.version-trash-empty p,
+.preview-error-state p {
+  margin: 0;
+}
+
+.preview-error-state > div {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.preview-error-state > span {
+  color: var(--color-danger);
+  background: var(--color-danger-surface);
+}
+
+.compact-loading {
+  min-height: 250px;
+}
+
+.dialog-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 14px;
+  margin-bottom: 18px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.dialog-intro--info {
+  border-color: var(--color-info-border);
+  background: var(--color-info-surface);
+}
+
+.document-upload-form :deep(.native-upload__drag),
+.version-upload-form :deep(.native-upload__drag) {
+  min-height: 164px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.batch-actions-bar {
+  min-height: 48px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--color-primary-border);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-surface);
+}
+
+.batch-selection-summary {
+  margin-right: auto;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-primary);
+  font-size: 13px;
+}
+
+.preview-container {
+  min-height: 560px;
+  max-height: none;
+  gap: 0;
+  overflow: hidden;
+  background: var(--color-surface-page);
+}
+
+.preview-toolbar {
+  min-height: 62px;
+  padding: 10px 16px;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-raised);
+}
+
+.preview-file-meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.preview-file-meta strong {
+  max-width: min(760px, 60vw);
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-preview {
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: 0;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.pdf-controls {
+  min-height: 52px;
+  padding: 8px 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: 0;
+  background: var(--color-surface-raised);
+}
+
+.pdf-canvas-stage {
+  min-height: 0;
+  padding: 24px;
+  display: flex;
+  flex: 1 1 auto;
+  justify-content: center;
+  overflow: auto;
+  background: var(--color-surface-subtle);
+}
+
+.pdf-preview canvas {
+  align-self: flex-start;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-md);
+}
+
+.markdown-preview,
+.text-preview,
+.code-preview,
+.image-preview,
+.word-html-preview,
+.office-preview,
+.unsupported-preview,
+.preview-error-state {
+  margin: 20px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.text-preview pre,
+.word-content {
+  background: var(--color-surface-raised);
+}
+
+:deep(.document-dialog.native-dialog) {
+  overflow: hidden;
+}
+
+:deep(.document-preview-dialog.native-dialog) {
+  height: min(92vh, 980px);
+  max-height: 92vh;
+}
+
+:deep(.document-preview-dialog .native-dialog__body) {
+  padding: 0;
+  overflow: hidden;
+}
+
+:deep(.version-history-dialog .native-dialog__body) {
+  padding-top: 16px;
 }
 
 @media (max-width: 1180px) {

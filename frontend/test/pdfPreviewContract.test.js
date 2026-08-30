@@ -35,6 +35,7 @@ test('PDF preview uses one pinned local PDF.js runtime on PC and mobile', () => 
 test('PDF.js CMaps, standard fonts, WASM and ICC assets are served locally', () => {
   const runtimeSource = read('src/utils/pdfPreview.js')
   const viteSource = read('vite.config.js')
+  const nginxSource = read('nginx.conf')
 
   assert.match(runtimeSource, /cMapUrl:[\s\S]*cMapPacked: true/u)
   assert.match(runtimeSource, /standardFontDataUrl:/u)
@@ -44,4 +45,7 @@ test('PDF.js CMaps, standard fonts, WASM and ICC assets are served locally', () 
     assert.match(viteSource, new RegExp(`['\"]${directory}['\"]`, 'u'))
     assert.match(viteSource, new RegExp(`pdfjs/\\$\\{directory\\}`, 'u'))
   }
+  assert.match(nginxSource, /location ~\* \\.mjs\$/u)
+  assert.match(nginxSource, /default_type application\/javascript/u)
+  assert.match(nginxSource, /wasm\|bcmap\|icc\|pfb/u)
 })

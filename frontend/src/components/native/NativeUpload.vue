@@ -554,22 +554,24 @@ defineExpose({
 }
 
 .native-upload__drag {
-  border: 2px dashed #dcdcdc;
-  border-radius: 8px;
-  padding: 40px 20px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  padding: 30px 20px;
   text-align: center;
   cursor: pointer;
-  transition: all 0.3s;
-  background: #fafafa;
+  transition: border-color var(--motion-duration-fast) var(--motion-easing-standard), background-color var(--motion-duration-fast) var(--motion-easing-standard);
+  background: color-mix(in srgb, var(--color-surface-subtle) 56%, var(--color-surface-raised));
 }
 
 .native-upload__drag:hover {
   border-color: var(--color-primary);
+  background: var(--color-primary-surface);
 }
 
 .native-upload__drag--over {
   border-color: var(--color-primary);
-  background: #e8f4ff;
+  background: var(--color-primary-surface);
+  box-shadow: inset 0 0 0 1px var(--color-primary-border);
 }
 
 .native-upload__drag-content {
@@ -601,7 +603,8 @@ defineExpose({
   justify-content: space-between;
   padding: 8px 12px;
   background: var(--color-surface-subtle);
-  border-radius: 4px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
   margin-bottom: 8px;
   font-size: 13px;
 }
@@ -638,15 +641,15 @@ defineExpose({
 }
 
 .native-upload__file--success .native-upload__status {
-  color: #389e0d;
+  color: var(--color-success-text);
 }
 
 .native-upload__file--error .native-upload__status {
-  color: #cf1322;
+  color: var(--color-danger-text);
 }
 
 .native-upload__file--cancelled .native-upload__status {
-  color: #8c8c8c;
+  color: var(--color-text-muted);
 }
 
 .native-upload__progress {
@@ -671,11 +674,11 @@ defineExpose({
 }
 
 .native-upload__status-icon--success {
-  color: #52c41a;
+  color: var(--color-success);
 }
 
 .native-upload__status-icon--error {
-  color: #ff4d4f;
+  color: var(--color-danger);
 }
 
 .native-upload__status-icon--cancelled {

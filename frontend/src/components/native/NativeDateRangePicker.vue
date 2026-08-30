@@ -325,34 +325,29 @@ function updateDropdownPosition() {
   if (!pickerRef.value) return
   
   const rect = pickerRef.value.getBoundingClientRect()
+  const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
-  const dropdownHeight = Math.min(380, viewportHeight * 0.5)
+  const viewportMargin = 12
+  const dropdownGap = 8
+  const dropdownWidth = Math.max(240, Math.min(372, viewportWidth - viewportMargin * 2))
+  const dropdownHeight = Math.min(492, viewportHeight - 24)
   const spaceBelow = viewportHeight - rect.bottom
   const spaceAbove = rect.top
-  
-  let top, maxHeight
-  
-  if (spaceBelow >= dropdownHeight) {
-    top = rect.bottom + 4
-    maxHeight = Math.min(dropdownHeight, spaceBelow - 8)
-  } else if (spaceAbove >= dropdownHeight) {
-    top = rect.top - Math.min(dropdownHeight, spaceAbove) - 4
-    maxHeight = Math.min(dropdownHeight, spaceAbove - 8)
-  } else {
-    if (spaceBelow > spaceAbove) {
-      top = rect.bottom + 4
-      maxHeight = Math.max(200, spaceBelow - 8)
-    } else {
-      top = Math.max(4, rect.top - spaceAbove + 4)
-      maxHeight = Math.max(200, spaceAbove - 8)
-    }
-  }
-  
+  const openBelow = spaceBelow >= Math.min(dropdownHeight, 320) || spaceBelow >= spaceAbove
+  const availableHeight = (openBelow ? spaceBelow : spaceAbove) - dropdownGap - viewportMargin
+  const maxHeight = Math.max(160, Math.min(dropdownHeight, availableHeight))
+  const top = openBelow
+    ? Math.min(rect.bottom + dropdownGap, viewportHeight - maxHeight - viewportMargin)
+    : Math.max(viewportMargin, rect.top - dropdownGap - maxHeight)
+
+  const preferredLeft = rect.right - dropdownWidth
+  const left = Math.max(viewportMargin, Math.min(preferredLeft, viewportWidth - dropdownWidth - viewportMargin))
+
   dropdownStyle.value = {
     position: 'fixed',
-    left: `${rect.left}px`,
+    left: `${left}px`,
     top: `${top}px`,
-    width: `${rect.width}px`,
+    width: `${dropdownWidth}px`,
     maxHeight: `${maxHeight}px`,
     zIndex: 10000
   }
@@ -432,9 +427,9 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  border: 1px solid #dcdcdc;
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
   cursor: pointer;
   transition: all 0.2s;
   min-height: 36px;
@@ -446,6 +441,7 @@ onUnmounted(() => {
 
 .native-date-range-picker__trigger--active {
   border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-alpha-10);
 }
 
 .native-date-range-picker__value {
@@ -463,12 +459,13 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__dropdown {
-  background: #fff;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  padding: 16px;
-  min-width: 280px;
+  overflow-y: auto;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 14px;
+  min-width: 320px;
 }
 
 .native-date-range-picker__header {
@@ -479,8 +476,14 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__nav {
-  background: none;
-  border: none;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   padding: 4px;
   color: var(--color-text-secondary);
@@ -489,6 +492,7 @@ onUnmounted(() => {
 
 .native-date-range-picker__nav:hover {
   color: var(--color-primary);
+  background: var(--color-primary-surface);
 }
 
 .native-date-range-picker__current {
@@ -518,22 +522,22 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__day {
-  aspect-ratio: 1;
+  height: 36px;
   border: none;
   background: none;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
   color: var(--color-text-primary);
   transition: all 0.2s;
 }
 
 .native-date-range-picker__day:hover:not(:disabled) {
-  background: #f0f0f0;
+  background: var(--color-surface-subtle);
 }
 
 .native-date-range-picker__day--other-month {
-  color: #ccc;
+  color: var(--color-text-disabled);
 }
 
 .native-date-range-picker__day--today {
@@ -543,44 +547,44 @@ onUnmounted(() => {
 
 .native-date-range-picker__day--selected {
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-text-inverse);
   font-weight: 500;
 }
 
 .native-date-range-picker__day--selected:hover {
-  background: #0043b5;
+  background: var(--color-primary-hover);
 }
 
 /* 开始日期 - 蓝色背景白字 */
 .native-date-range-picker__day--start {
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-text-inverse);
   font-weight: 500;
 }
 
 .native-date-range-picker__day--start:hover {
-  background: #0043b5;
+  background: var(--color-primary-hover);
 }
 
 /* 结束日期 - 蓝色背景白字 */
 .native-date-range-picker__day--end {
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-text-inverse);
   font-weight: 500;
 }
 
 .native-date-range-picker__day--end:hover {
-  background: #0043b5;
+  background: var(--color-primary-hover);
 }
 
 /* 范围内日期 - 浅蓝色背景，深色文字 */
 .native-date-range-picker__day--in-range {
-  background: #e8f4ff;
+  background: var(--color-primary-surface);
   color: var(--color-text-primary);
 }
 
 .native-date-range-picker__day--disabled {
-  color: #ccc;
+  color: var(--color-text-disabled);
   cursor: not-allowed;
 }
 
@@ -596,9 +600,9 @@ onUnmounted(() => {
 .native-date-range-picker__preset {
   padding: 4px 12px;
   font-size: 12px;
-  border: 1px solid #dcdcdc;
-  background: #fff;
-  border-radius: 4px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -620,7 +624,7 @@ onUnmounted(() => {
 .native-date-range-picker__btn {
   padding: 6px 16px;
   font-size: 13px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -638,10 +642,10 @@ onUnmounted(() => {
 .native-date-range-picker__btn--primary {
   background: var(--color-primary);
   border: none;
-  color: #fff;
+  color: var(--color-text-inverse);
 }
 
 .native-date-range-picker__btn--primary:hover {
-  background: #0043b5;
+  background: var(--color-primary-hover);
 }
 </style>
