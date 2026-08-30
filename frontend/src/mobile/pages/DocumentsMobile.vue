@@ -3,31 +3,20 @@
     <!-- 顶部导航栏（标题由Layout统一提供，此处不再重复） -->
 
     <div class="mobile-browse-toolbar">
-      <!-- 浏览模式切换 -->
-      <div class="view-mode-tabs" role="tablist" aria-label="文档浏览方式">
       <button
         type="button"
-        class="tab-item" 
-        :class="{ active: viewMode === 'category' }"
-        role="tab"
-        :aria-selected="viewMode === 'category'"
-        @click="switchViewMode('category')"
+        class="mobile-category-filter"
+        aria-haspopup="dialog"
+        :aria-expanded="categoryPickerVisible"
+        @click="openCategoryPicker"
       >
-        <NativeIcon name="folder" />
-        <span>分类</span>
+        <span class="mobile-category-filter__icon"><NativeIcon :name="currentCategoryId ? 'folder-open' : 'folder'" size="20" /></span>
+        <span class="mobile-category-filter__copy">
+          <strong>{{ currentCategoryName || '全部文档' }}</strong>
+          <small>{{ currentCategoryPathLabel || '按分类筛选' }}</small>
+        </span>
+        <NativeIcon name="chevron-down" size="16" />
       </button>
-      <button
-        type="button"
-        class="tab-item" 
-        :class="{ active: viewMode === 'list' }"
-        role="tab"
-        :aria-selected="viewMode === 'list'"
-        @click="switchViewMode('list')"
-      >
-        <NativeIcon name="view-list" />
-        <span>全部</span>
-      </button>
-      </div>
       <NativeButton
         class="mobile-trash-button"
         variant="outline"
@@ -156,59 +145,55 @@
       </div>
     </NativeDialog>
 
-    <!-- 分类浏览模式（主分类：小图标风格，与子分类统一） -->
-    <div v-if="viewMode === 'category' && !currentCategoryId" class="categories-section">
-      <div class="section-title-row">
-        <div><span class="section-title">按分类浏览</span><small>选择分类后查看其文档与子分类</small></div>
-      </div>
-      <NativeAlert v-if="categoriesError" theme="error" title="分类加载失败">
-        <NativeButton size="small" variant="outline" @click="loadCategories">重试</NativeButton>
-      </NativeAlert>
-      <div v-else-if="categories.length === 0" class="empty-categories">
-        <span class="empty-text">无</span>
-      </div>
-      <div class="category-list" v-else>
-        <button
-          v-for="cat in categories"
-          :key="cat.id"
-          type="button"
-          class="category-item"
-          @click="enterCategory(cat)"
-        >
-          <NativeIcon name="folder" size="20" />
-          <span>{{ cat.name }}</span>
-          <small v-if="Number.isFinite(Number(cat.count))">{{ cat.count }}</small>
-        </button>
-      </div>
-    </div>
-
-    <!-- 子分类 -->
-    <div v-if="viewMode === 'category' && currentCategoryId" class="subcategories-section">
-      <nav class="category-breadcrumb" aria-label="当前分类路径">
-        <button type="button" @click="backToCategoryRoot">全部文档</button>
-        <template v-for="(category, index) in categoryPath" :key="category.id">
-          <NativeIcon name="chevron-right" size="13" />
-          <button type="button" :aria-current="index === categoryPath.length - 1 ? 'page' : undefined" @click="navigateToCategory(index)">
-            {{ category.name }}
+    <!-- 分类选择器：分类树留在底部弹层中，不占用文档列表的纵向空间。 -->
+    <div v-if="categoryPickerVisible" class="native-action-overlay" @click.self="closeCategoryPicker">
+      <section class="native-action-sheet category-picker-sheet" role="dialog" aria-modal="true" aria-label="选择文档分类">
+        <div class="action-sheet-handle" aria-hidden="true"></div>
+        <header class="category-picker-header">
+          <span><strong>选择分类</strong><small>父分类与子分类按层级统一显示</small></span>
+          <button type="button" aria-label="关闭分类选择器" @click="closeCategoryPicker"><NativeIcon name="x" size="20" /></button>
+        </header>
+        <NativeAlert v-if="categoriesError" theme="error" title="分类加载失败" class="category-picker-error">
+          <NativeButton size="small" variant="outline" @click="loadCategories">重试</NativeButton>
+        </NativeAlert>
+        <div v-else class="category-picker-list">
+          <button
+            type="button"
+            class="category-picker-all"
+            :class="{ selected: !currentCategoryId }"
+            @click="clearCategoryFilter"
+          >
+            <span class="category-picker-row-icon"><NativeIcon name="files" size="19" /></span>
+            <span><strong>全部文档</strong><small>不限制分类</small></span>
+            <NativeIcon v-if="!currentCategoryId" name="check" size="18" />
           </button>
-        </template>
-      </nav>
-      <div v-if="currentSubcategories.length > 0" class="section-title-row section-title-row--subcategories">
-        <span class="section-title">子分类</span>
-      </div>
-      <div v-if="currentSubcategories.length > 0" class="subcategory-list">
-        <button
-          v-for="sub in currentSubcategories"
-          :key="sub.id"
-          type="button"
-          class="subcategory-item"
-          @click="enterCategory(sub)"
-        >
-          <NativeIcon name="folder" size="20" />
-          <span>{{ sub.name }}</span>
-          <small v-if="Number.isFinite(Number(sub.count))">{{ sub.count }}</small>
-        </button>
-      </div>
+          <div v-if="categories.length === 0" class="category-picker-empty">还没有分类</div>
+          <div
+            v-for="row in categoryPickerRows"
+            :key="row.category.id"
+            class="category-picker-row"
+            :class="{ selected: String(row.category.id) === String(currentCategoryId) }"
+            :style="{ '--category-depth': row.depth }"
+          >
+            <button
+              v-if="row.hasChildren"
+              type="button"
+              class="category-picker-disclosure"
+              :aria-label="`${row.expanded ? '收起' : '展开'} ${row.category.name}`"
+              :aria-expanded="row.expanded"
+              @click="toggleCategoryPickerRow(row.category.id)"
+            >
+              <NativeIcon :name="row.expanded ? 'chevron-down' : 'chevron-right'" size="15" />
+            </button>
+            <span v-else class="category-picker-disclosure-spacer" aria-hidden="true"></span>
+            <button type="button" class="category-picker-option" @click="selectCategoryFromPicker(row.category)">
+              <span class="category-picker-row-icon"><NativeIcon :name="row.expanded ? 'folder-open' : 'folder'" size="19" /></span>
+              <span><strong>{{ row.category.name }}</strong><small>{{ Number(row.category.count) || 0 }} 个文档</small></span>
+              <NativeIcon v-if="String(row.category.id) === String(currentCategoryId)" name="check" size="18" />
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <div class="documents-section" v-if="!loading || documents.length > 0">
@@ -244,7 +229,7 @@
              <div class="file-info">
                <div class="file-name">{{ getFileNameWithExt(doc) }}</div>
                <div class="file-meta">
-                 <span class="file-size">{{ formatFileSize(doc.size || 0) }}</span>
+                 <span class="file-size">{{ formatFileSize(doc.size) }}</span>
                  <span class="divider">|</span>
                  <span class="file-date">{{ formatDate(doc.updatedAt) }}</span>
                  <NativeTag :theme="ragStatusTheme(doc.indexStatus)" size="small" variant="light">
@@ -274,10 +259,17 @@
         </div>
       </div>
       
-      <!-- 加载更多 -->
-      <div v-if="hasMore" class="load-more">
-        <NativeButton variant="text" size="small" @click="loadMore" :loading="loading">
-          加载更多
+      <!-- 移动端使用连续列表分页，保留阅读位置且不产生数字分页跳转。 -->
+      <div v-if="documents.length > 0" class="mobile-list-pagination" aria-live="polite">
+        <div class="mobile-list-pagination__status">
+          <span>已显示 {{ documents.length }} / {{ total }}</span>
+          <span>{{ hasMore ? `每次加载 ${pageSize} 项` : '已加载全部' }}</span>
+        </div>
+        <div class="mobile-list-pagination__track" aria-hidden="true">
+          <span :style="{ width: `${total > 0 ? Math.min(100, documents.length / total * 100) : 100}%` }"></span>
+        </div>
+        <NativeButton v-if="hasMore" variant="outline" size="small" @click="loadMore" :loading="loading">
+          加载下一批
         </NativeButton>
       </div>
       
@@ -301,7 +293,7 @@
           <span class="action-sheet-file-icon" :class="`document-type-icon--${documentFileTone(currentDoc?.filePath)}`">
             <NativeIcon :name="documentFileIcon(currentDoc?.filePath)" size="20" />
           </span>
-          <span><strong>{{ currentDoc ? getFileNameWithExt(currentDoc) : '文档操作' }}</strong><small>{{ formatFileSize(currentDoc?.size || 0) }}</small></span>
+          <span><strong>{{ currentDoc ? getFileNameWithExt(currentDoc) : '文档操作' }}</strong><small>{{ formatFileSize(currentDoc?.size) }}</small></span>
         </div>
         <div class="action-sheet-list">
           <button type="button" class="action-sheet-item" @click="handleActionSelect({ value: 'download' })">
@@ -358,25 +350,38 @@
 
     <!-- 版本历史弹窗 -->
     <NativeDialog v-model="versionsDialogVisible" title="版本历史" :show-footer="false" class="centered-dialog mobile-version-dialog">
-        <div class="versions-list">
-          <div v-for="ver in versions" :key="ver.id" class="version-item">
-            <div class="version-info">
-              <div class="version-header">
-                <span class="version-num">v{{ ver.version }}</span>
-                <span v-if="ver.isCurrent" class="version-current-label">当前版本</span>
-                <span v-else class="version-history-label">历史版本</span>
-                <span class="version-date">{{ formatDate(ver.createdAt) }}</span>
-              </div>
-              <div class="version-note" v-if="ver.note">{{ ver.note }}</div>
+      <div class="mobile-version-summary">
+        <span class="mobile-version-summary__icon" :class="`document-type-icon--${documentFileTone(currentDoc?.filePath)}`">
+          <NativeIcon :name="documentFileIcon(currentDoc?.filePath)" size="22" />
+        </span>
+        <span><strong>{{ currentDoc ? getFileNameWithExt(currentDoc) : '文档' }}</strong><small>共 {{ versions.length }} 个可下载版本</small></span>
+      </div>
+      <div class="versions-list">
+        <article v-for="ver in versions" :key="ver.id" class="version-item" :class="{ 'version-item--current': ver.isCurrent }">
+          <span class="version-timeline-marker" aria-hidden="true"><NativeIcon :name="ver.isCurrent ? 'check' : 'history'" size="15" /></span>
+          <div class="version-info">
+            <div class="version-header">
+              <span class="version-num">v{{ ver.version }}</span>
+              <NativeTag :theme="ver.isCurrent ? 'success' : 'default'" size="small" variant="light">
+                {{ ver.isCurrent ? '当前版本' : '历史版本' }}
+              </NativeTag>
             </div>
-            <div class="version-actions">
-              <button class="version-preview-btn" @click.stop="handleDownloadVersion(ver)">下载</button>
+            <div class="version-meta">
+              <span>{{ formatDateTime(ver.createdAt) }}</span>
+              <span>{{ formatFileSize(ver.contentBytes) }}</span>
             </div>
+            <p class="version-note">{{ ver.note || '未填写版本说明' }}</p>
           </div>
-          <div v-if="versions.length === 0" class="version-empty-state">
-            <NativeIcon name="archive" size="32" /><span>暂无历史版本</span>
-          </div>
+          <NativeButton class="version-download-button" variant="outline" shape="circle" :aria-label="`下载版本 v${ver.version}`" @click.stop="handleDownloadVersion(ver)">
+            <template #icon><NativeIcon name="download" size="18" /></template>
+          </NativeButton>
+        </article>
+        <div v-if="versions.length === 0" class="version-empty-state">
+          <span><NativeIcon name="archive" size="28" /></span>
+          <strong>暂无历史版本</strong>
+          <small>上传新版本后，可在这里查看并下载旧版本。</small>
         </div>
+      </div>
     </NativeDialog>
 
     <!-- 删除确认弹窗 -->
@@ -507,7 +512,7 @@ import {
   pruneDocumentPreviewPositions,
   updateDocumentPreviewPosition
 } from '@/utils/documentWorkbench'
-import { openPdfDocument } from '@/utils/pdfPreview'
+import { openAuthenticatedPdfDocument } from '@/utils/pdfPreview'
 import { usePermission } from '@/composables/usePermission'
 import { acquireBodyScrollLock } from '@/composables/useModalFocus'
 import { NativeAlert, NativeButton, NativeDialog, NativeForm, NativeFormItem, NativeIcon, NativeInput, NativeLoading, NativeSelect, NativeTag } from '@/components/native'
@@ -540,16 +545,25 @@ const ragStatusById = ref(new Map())
 const ragCoverageComplete = ref(false)
 const currentCategoryId = ref(null)
 const categoryPath = ref([])
+const categoryPickerVisible = ref(false)
+const categoryPickerExpandedIds = ref(new Set())
 const currentCategoryName = computed(() => {
   if (categoryPath.value.length === 0) return ''
   return categoryPath.value[categoryPath.value.length - 1].name
 })
-
-// 子分类
-const currentSubcategories = computed(() => {
-  if (!currentCategoryId.value) return []
-  const currentCat = findCategoryById(categories.value, currentCategoryId.value)
-  return currentCat?.subcategories || []
+const currentCategoryPathLabel = computed(() => categoryPath.value.map(category => category.name).join(' / '))
+const categoryPickerRows = computed(() => {
+  const rows = []
+  const append = (items, depth = 0) => {
+    for (const category of items || []) {
+      const hasChildren = Array.isArray(category.subcategories) && category.subcategories.length > 0
+      const expanded = hasChildren && categoryPickerExpandedIds.value.has(String(category.id))
+      rows.push({ category, depth, hasChildren, expanded })
+      if (expanded) append(category.subcategories, depth + 1)
+    }
+  }
+  append(categories.value)
+  return rows
 })
 
 // 搜索
@@ -697,13 +711,45 @@ async function restorePreviewPosition(position = savedPreviewPosition()) {
 
 // 方法定义
 
-// 切换视图模式
-function switchViewMode(mode) {
-  viewMode.value = mode
+function openCategoryPicker() {
+  const expanded = new Set(categoryPickerExpandedIds.value)
+  for (const category of categoryPath.value.slice(0, -1)) expanded.add(String(category.id))
+  categoryPickerExpandedIds.value = expanded
+  categoryPickerVisible.value = true
+}
+
+function closeCategoryPicker() {
+  categoryPickerVisible.value = false
+}
+
+function toggleCategoryPickerRow(categoryId) {
+  const next = new Set(categoryPickerExpandedIds.value)
+  const key = String(categoryId)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  categoryPickerExpandedIds.value = next
+}
+
+function selectCategoryFromPicker(category) {
+  const trail = findCategoryTrail(categories.value, category.id)
+  if (!trail?.length) return
+  viewMode.value = 'category'
+  categoryPath.value = trail
+  currentCategoryId.value = category.id
+  page.value = 1
+  documents.value = []
+  categoryPickerVisible.value = false
+  syncMobileListRoute()
+  void loadDocuments()
+}
+
+function clearCategoryFilter() {
+  viewMode.value = 'list'
   currentCategoryId.value = null
   categoryPath.value = []
-  documents.value = []
   page.value = 1
+  documents.value = []
+  categoryPickerVisible.value = false
   syncMobileListRoute()
   void loadDocuments()
 }
@@ -775,36 +821,6 @@ async function loadDocumentCoverage() {
   } catch {
     ragCoverageComplete.value = false
   }
-}
-
-// 进入分类
-function enterCategory(cat) {
-  currentCategoryId.value = cat.id
-  categoryPath.value.push(cat)
-  page.value = 1
-  documents.value = []
-  syncMobileListRoute()
-  void loadDocuments()
-}
-
-function backToCategoryRoot() {
-  currentCategoryId.value = null
-  categoryPath.value = []
-  page.value = 1
-  documents.value = []
-  syncMobileListRoute()
-  void loadDocuments()
-}
-
-function navigateToCategory(index) {
-  const target = categoryPath.value[index]
-  if (!target || index === categoryPath.value.length - 1) return
-  categoryPath.value = categoryPath.value.slice(0, index + 1)
-  currentCategoryId.value = target.id
-  page.value = 1
-  documents.value = []
-  syncMobileListRoute()
-  void loadDocuments()
 }
 
 // 搜索
@@ -935,7 +951,7 @@ async function loadOfficeContent(base64Content, ext) {
 async function loadPDFDocument(pdfData) {
   try {
     if (pdfDoc.value) await pdfDoc.value.destroy()
-    pdfDoc.value = await openPdfDocument(pdfData)
+    pdfDoc.value = await openAuthenticatedPdfDocument(pdfData)
     totalPages.value = pdfDoc.value.numPages
   } catch (error) {
     console.error('PDF加载失败:', error)
@@ -1391,11 +1407,14 @@ function getFileNameWithExt(doc) {
 }
 
 function formatFileSize(bytes) {
-  if (!bytes || bytes === 0) return '0 B'
+  if (bytes === null || bytes === undefined || bytes === '') return '大小未知'
+  const numericBytes = Number(bytes)
+  if (!Number.isFinite(numericBytes) || numericBytes < 0) return '大小未知'
+  if (numericBytes === 0) return '0 B'
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+  const i = Math.floor(Math.log(numericBytes) / Math.log(k))
+  return Math.round(numericBytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
 
 function formatDate(dateStr) {
@@ -1477,7 +1496,9 @@ onMounted(async () => {
   }
 })
 
-const customOverlayVisible = computed(() => actionMenuVisible.value || previewDialogVisible.value)
+const customOverlayVisible = computed(() => (
+  actionMenuVisible.value || previewDialogVisible.value || categoryPickerVisible.value
+))
 let releaseOverlayScrollLock = null
 
 watch(customOverlayVisible, (visible) => {
@@ -1526,41 +1547,56 @@ onBeforeUnmount(() => {
   flex: 0 0 44px;
 }
 
-.view-mode-tabs {
+.mobile-category-filter {
   min-width: 0;
+  min-height: 44px;
   flex: 1;
-  display: flex;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  padding: 4px;
-  background: var(--color-surface-raised);
-}
-
-.tab-item {
-  min-height: 36px;
-  flex: 1;
+  padding: 5px 10px 5px 6px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  background: transparent;
-  transition: color var(--motion-duration-fast) var(--motion-easing-standard), background-color var(--motion-duration-fast) var(--motion-easing-standard), transform var(--motion-duration-fast) var(--motion-easing-standard);
+  gap: 9px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  text-align: left;
+  color: var(--color-text-primary);
+  background: var(--color-surface-raised);
+  transition: border-color var(--motion-duration-fast) var(--motion-easing-standard), background-color var(--motion-duration-fast) var(--motion-easing-standard), transform var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
-.tab-item.active {
+.mobile-category-filter:active {
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-surface);
+  transform: scale(.99);
+}
+
+.mobile-category-filter__icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
   color: var(--color-primary);
   background: var(--color-primary-surface);
-  font-weight: 650;
 }
 
-.tab-item:active {
-  transform: scale(.98);
+.mobile-category-filter__copy {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 1px;
 }
+
+.mobile-category-filter__copy strong,
+.mobile-category-filter__copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-category-filter__copy strong { font-size: 13px; }
+.mobile-category-filter__copy small { color: var(--color-text-muted); font-size: 11px; }
 
 .mobile-search-actions {
   margin-bottom: 12px;
@@ -1607,142 +1643,10 @@ onBeforeUnmount(() => {
   color: var(--color-text-primary);
 }
 
-.section-title-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.section-title-row > div {
-  display: grid;
-  gap: 2px;
-}
-
-.section-title-row small {
-  color: var(--color-text-muted);
-  font-size: 11px;
-}
-
-.section-title-row--subcategories {
-  margin: 12px 2px 8px;
-}
-
 .section-title .count {
   font-size: 12px;
   color: var(--color-text-muted);
   font-weight: normal;
-}
-
-.categories-section {
-  margin-bottom: 12px;
-  padding: 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-raised);
-}
-
-/* 主分类列表（小图标风格，与子分类统一） */
-.category-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.category-item {
-  min-height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-pill);
-  font-size: 13px;
-  color: var(--color-text-primary);
-  background: var(--color-surface-raised);
-  transition: color var(--motion-duration-fast) var(--motion-easing-standard), border-color var(--motion-duration-fast) var(--motion-easing-standard), background-color var(--motion-duration-fast) var(--motion-easing-standard), transform var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-.category-item small,
-.subcategory-item small { color: var(--color-text-muted); font-size: 11px; }
-
-.category-item:active,
-.subcategory-item:active { color: var(--color-primary); border-color: var(--color-primary-border); background: var(--color-primary-surface); transform: scale(.98); }
-
-.category-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #1976d2;
-}
-
-.empty-categories {
-  padding: 8px 0 16px 4px;
-}
-
-.empty-text {
-  color: var(--color-text-muted);
-  font-size: 12px;
-}
-
-.category-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-
-.file-count {
-  font-size: 11px;
-  color: var(--color-text-muted);
-}
-
-.subcategories-section {
-  margin-bottom: 12px;
-}
-
-.category-breadcrumb {
-  min-height: 40px;
-  padding: 6px 8px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow-x: auto;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-raised);
-  scrollbar-width: none;
-}
-
-.category-breadcrumb::-webkit-scrollbar { display: none; }
-.category-breadcrumb button { padding: 6px 4px; flex: 0 0 auto; border: 0; color: var(--color-text-secondary); background: transparent; font: inherit; font-size: 12px; white-space: nowrap; }
-.category-breadcrumb button[aria-current="page"] { color: var(--color-primary); font-weight: 650; }
-
-.subcategory-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.subcategory-item {
-  min-height: 40px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-pill);
-  font-size: 13px;
-  color: var(--color-text-primary);
-  background: var(--color-surface-raised);
 }
 
 .documents-section {
@@ -1914,10 +1818,39 @@ onBeforeUnmount(() => {
 .action-menu:active { color: var(--color-primary); background: var(--color-primary-surface); }
 .action-menu:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
 
-.load-more {
-  text-align: center;
-  padding: 16px 0;
+.mobile-list-pagination {
+  margin-top: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 9px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
 }
+
+.mobile-list-pagination__status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.mobile-list-pagination__track {
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-subtle);
+}
+
+.mobile-list-pagination__track span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--color-primary);
+  transition: width var(--motion-duration-standard) var(--motion-easing-standard);
+}
+
+.mobile-list-pagination :deep(.native-button) { width: 100%; }
 
 .empty-state {
   display: flex;
@@ -1981,80 +1914,6 @@ onBeforeUnmount(() => {
 .popup-footer-btns {
   padding-top: 12px;
   border-top: 1px solid #f0f0f0;
-}
-
-.versions-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 12px;
-}
-
-.version-item {
-  padding: 12px 16px;
-  border-bottom: 1px solid #f0f0f0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  min-height: 44px;
-  gap: 12px;
-}
-
-.version-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-  min-width: 0;
-}
-
-.version-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.version-num {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--color-text-primary);
-}
-
-.version-date {
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.version-note {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  line-height: 1.4;
-}
-
-.version-actions {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-/* 版本预览按钮 - 网站统一风格 */
-.version-preview-btn {
-  padding: 6px 16px;
-  font-size: 13px;
-  color: #fff;
-  background: var(--color-primary);
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-weight: 500;
-}
-
-.version-preview-btn:hover {
-  background: #003bb3;
-}
-
-.version-preview-btn:active {
-  background: #002d8a;
 }
 
 .preview-body {
@@ -2172,7 +2031,76 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
-.mobile-version-dialog :deep(.native-dialog__body) { padding: 8px 0 16px; }
+.mobile-version-dialog :deep(.native-dialog__body) { padding: 12px 14px 18px; }
+
+.mobile-version-summary {
+  min-width: 0;
+  margin-bottom: 12px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.mobile-version-summary__icon {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+
+.mobile-version-summary > span:last-child { min-width: 0; display: grid; gap: 3px; }
+.mobile-version-summary strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-version-summary small { color: var(--color-text-muted); font-size: 11px; }
+
+.versions-list {
+  max-height: min(62dvh, 520px);
+  display: grid;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.version-item {
+  position: relative;
+  min-width: 0;
+  padding: 13px 12px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 40px;
+  align-items: start;
+  gap: 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.version-item--current {
+  border-color: var(--color-primary-border);
+  background: color-mix(in srgb, var(--color-primary-surface) 48%, var(--color-surface-raised));
+}
+
+.version-timeline-marker {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+}
+
+.version-info { min-width: 0; display: grid; gap: 6px; }
+.version-header { display: flex; align-items: center; gap: 7px; }
+.version-num { color: var(--color-text-primary); font-size: 14px; font-weight: 700; }
+.version-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--color-text-muted); font-size: 11px; }
+.version-note { margin: 0; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.version-download-button { width: 40px; min-width: 40px; height: 40px; min-height: 40px; }
 
 .version-empty-state {
   min-height: 180px;
@@ -2185,14 +2113,19 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
-  .version-current-label {
-    color: var(--color-primary);
-    font-weight: 600;
-  }
+.version-empty-state > span {
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+}
 
-  .version-history-label {
-    color: #777;
-  }
+.version-empty-state strong { color: var(--color-text-primary); }
+.version-empty-state small { max-width: 240px; text-align: center; line-height: 1.55; }
 
   .version-trash-btn {
     padding: 6px 10px;
@@ -2500,6 +2433,114 @@ onBeforeUnmount(() => {
   border-radius: var(--radius-pill);
   background: var(--color-border-default);
 }
+.category-picker-sheet {
+  max-height: min(78dvh, 680px);
+  display: flex;
+  flex-direction: column;
+}
+.category-picker-header {
+  min-width: 0;
+  padding: 8px 16px 13px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.category-picker-header > span { min-width: 0; display: grid; gap: 3px; }
+.category-picker-header strong { font-size: 15px; }
+.category-picker-header small { color: var(--color-text-muted); font-size: 11px; }
+.category-picker-header button {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  color: var(--color-text-secondary);
+  background: transparent;
+}
+.category-picker-header button:active { background: var(--color-surface-subtle); }
+.category-picker-error { margin: 12px 14px; }
+.category-picker-list {
+  min-height: 0;
+  padding: 8px 10px calc(12px + env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+.category-picker-all,
+.category-picker-row {
+  min-height: 54px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+}
+.category-picker-all {
+  width: 100%;
+  padding: 7px 12px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  text-align: left;
+  background: transparent;
+}
+.category-picker-row {
+  padding-left: calc(var(--category-depth) * 18px);
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+}
+.category-picker-all.selected,
+.category-picker-row.selected { color: var(--color-primary); background: var(--color-primary-surface); }
+.category-picker-all:active,
+.category-picker-row:active { background: var(--color-surface-subtle); }
+.category-picker-all > span:nth-child(2),
+.category-picker-option > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
+.category-picker-all strong,
+.category-picker-option strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.category-picker-all small,
+.category-picker-option small { color: var(--color-text-muted); font-size: 11px; }
+.category-picker-disclosure,
+.category-picker-disclosure-spacer {
+  width: 34px;
+  height: 44px;
+}
+.category-picker-disclosure {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  background: transparent;
+}
+.category-picker-disclosure:active { color: var(--color-primary); background: var(--color-primary-surface); }
+.category-picker-option {
+  min-width: 0;
+  min-height: 54px;
+  padding: 6px 12px 6px 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+}
+.category-picker-row-icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+}
+.category-picker-empty { padding: 28px 12px; text-align: center; color: var(--color-text-muted); font-size: 13px; }
 @keyframes mobile-action-slide-up {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }

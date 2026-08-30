@@ -42,6 +42,22 @@ export function documentOriginalName(value) {
   return normalized || 'document'
 }
 
+export async function resolveDocumentContentBytes(contentService, document) {
+  const recordedBytes = [document?.content_bytes, document?.current_version_content_bytes]
+    .filter(value => value !== null && value !== undefined && value !== '')
+    .map(value => Number(value))
+    .find(value => Number.isSafeInteger(value) && value >= 0)
+  if (recordedBytes !== undefined) return recordedBytes
+
+  try {
+    const metadata = await contentService?.stat?.(document)
+    return Number.isSafeInteger(metadata?.bytes) && metadata.bytes >= 0 ? metadata.bytes : null
+  } catch {
+    // 旧记录的原件可能暂时不可达；调用方应显示“大小未知”，不能伪造为 0 B。
+    return null
+  }
+}
+
 function countHanCharacters(value) {
   return (String(value).match(/\p{Script=Han}/gu) || []).length
 }

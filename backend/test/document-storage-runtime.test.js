@@ -4,7 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { PassThrough, Readable } from 'node:stream'
 import { test } from 'node:test'
-import { createDocumentStorageRuntime, documentOriginalName } from '../src/services/documentStorageRuntime.js'
+import {
+  createDocumentStorageRuntime,
+  documentOriginalName,
+  resolveDocumentContentBytes
+} from '../src/services/documentStorageRuntime.js'
 import { DocumentUploadStorage } from '../src/services/documentUploadStorage.js'
 
 function root() { return fs.mkdtempSync(path.join(os.tmpdir(), 'pr-document-runtime-')) }
@@ -65,4 +69,20 @@ test('normalizes display-only original names without retaining client paths or c
   assert.equal(documentOriginalName(mojibake), '北辰灯塔-运维说明.docx')
   assert.equal(documentOriginalName('Ångström notes.txt'), 'Ångström notes.txt')
   assert.equal(documentOriginalName('  '), 'document')
+})
+
+test('resolves document bytes from metadata, current version, or legacy content without fabricating zero', async () => {
+  let statCalls = 0
+  const contentService = {
+    async stat() {
+      statCalls += 1
+      return { bytes: 37 }
+    }
+  }
+
+  assert.equal(await resolveDocumentContentBytes(contentService, { content_bytes: 12 }), 12)
+  assert.equal(await resolveDocumentContentBytes(contentService, { content_bytes: null, current_version_content_bytes: 24 }), 24)
+  assert.equal(await resolveDocumentContentBytes(contentService, { content_bytes: null }), 37)
+  assert.equal(statCalls, 1)
+  assert.equal(await resolveDocumentContentBytes({ stat: async () => { throw new Error('missing') } }, {}), null)
 })

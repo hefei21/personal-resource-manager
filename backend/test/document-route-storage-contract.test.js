@@ -37,6 +37,13 @@ test('document list uses stable category IDs and exposes them to the client', ()
   assert.match(source, /categoryId: row\.category_id/u)
 })
 
+test('document list resolves authoritative content size without coupling it to index status', () => {
+  const list = source.slice(source.indexOf("router.get('/',"), source.indexOf('// 上传文档'))
+  assert.match(list, /current_version_content_bytes/u)
+  assert.match(list, /size: await resolveDocumentContentBytes\(contentService, row\)/u)
+  assert.doesNotMatch(list, /indexStatus|index_status/u)
+})
+
 test('PDF preview is authenticated, range-aware and streamed without base64 buffering', () => {
   const preview = source.slice(source.indexOf("router.get('/preview/:id'"), source.indexOf('// 获取文档内容用于编辑或预览'))
   assert.match(preview, /authenticateToken/u)

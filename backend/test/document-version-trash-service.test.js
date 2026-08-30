@@ -118,6 +118,7 @@ test('rejects deleting the current version and does not create a trash marker', 
   let value
   try {
     value = await setup(directory)
+    assert.equal(listDocumentVersions(value.database, 7)[0].contentBytes, value.currentObject.bytes)
     await assert.rejects(restoreDocumentVersionFromTrash({
       database: value.database,
       runtime: value.runtime,

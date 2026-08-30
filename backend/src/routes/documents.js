@@ -12,7 +12,11 @@ import {
   resolveDocumentCategory,
   resolveDocumentCategoryInput
 } from '../services/documentDomainService.js'
-import { documentOriginalName, getDocumentStorageRuntime } from '../services/documentStorageRuntime.js'
+import {
+  documentOriginalName,
+  getDocumentStorageRuntime,
+  resolveDocumentContentBytes
+} from '../services/documentStorageRuntime.js'
 import { documentPreviewContentType, parseDocumentByteRange } from '../services/documentPreviewService.js'
 import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
 import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
@@ -583,7 +587,16 @@ router.get('/', authenticateToken, async (req, res) => {
     const { keyword, categoryId, category, subcategory, tags, startDate, endDate, sortBy, sortOrder, includeSubcategories, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
     const db = getDatabase()
 
-    let sql = `SELECT * FROM documents d WHERE NOT EXISTS (
+    let sql = `SELECT d.*,
+      (
+        SELECT current_version.content_bytes
+        FROM document_versions current_version
+        WHERE current_version.document_id = d.id
+          AND CAST(current_version.version AS REAL) = CAST(d.version AS REAL)
+        ORDER BY current_version.id DESC
+        LIMIT 1
+      ) AS current_version_content_bytes
+    FROM documents d WHERE NOT EXISTS (
       SELECT 1 FROM resource_trash_entries t WHERE t.resource_type = 'document' AND t.resource_id = d.id
     )`
     const params = []
@@ -696,8 +709,9 @@ router.get('/', authenticateToken, async (req, res) => {
       return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
     }
 
-    // 转换为驼峰命名
-    let result = rows.map(row => {
+    const contentService = getDocumentStorageRuntime().contentService
+    // 转换为驼峰命名；旧文档缺少 content_bytes 时从受约束的内容服务读取权威大小。
+    let result = await Promise.all(rows.map(async row => {
       const displayName = documentFileName(row)
       const fileExtension = getFileExtension(displayName)
 
@@ -711,11 +725,11 @@ router.get('/', authenticateToken, async (req, res) => {
         filePath: displayName,
         fileType: fileExtension,
         version: row.version,
-        size: Number.isSafeInteger(row.content_bytes) ? row.content_bytes : 0,
+        size: await resolveDocumentContentBytes(contentService, row),
         createdAt: convertToUTC8(row.created_at),
         updatedAt: convertToUTC8(row.updated_at)
       }
-    })
+    }))
 
 
     // 内存中排序

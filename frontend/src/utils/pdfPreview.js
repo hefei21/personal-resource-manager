@@ -36,3 +36,26 @@ export async function openPdfDocument(source) {
   })
   return loadingTask.promise
 }
+
+export async function openAuthenticatedPdfDocument(url, fetchImpl = globalThis.fetch) {
+  try {
+    return await openPdfDocument(url)
+  } catch (rangeError) {
+    if (typeof fetchImpl !== 'function') throw rangeError
+
+    try {
+      const response = await fetchImpl(url, {
+        credentials: 'include',
+        headers: { Accept: 'application/pdf' }
+      })
+      if (!response.ok) throw new Error(`PDF request failed with status ${response.status}.`)
+      const buffer = await response.arrayBuffer()
+      if (buffer.byteLength === 0) throw new Error('PDF response is empty.')
+      return await openPdfDocument(new Uint8Array(buffer))
+    } catch (fallbackError) {
+      const error = new Error('PDF preview failed with both range and buffered loading.', { cause: rangeError })
+      error.fallbackError = fallbackError
+      throw error
+    }
+  }
+}

@@ -258,7 +258,7 @@ async function open(row) {
   previewType.value = initial.type
   previewLanguage.value = initial.language
   fileName.value = documentDisplayFileName(row.title, row.filePath)
-  fileSize.value = row.size || 0
+  fileSize.value = row.size ?? null
   dialogHeight.value = initial.type === 'pdf' ? 'min(92vh, 980px)' : 'min(76vh, 820px)'
   visible.value = true
   await load(row)
@@ -304,7 +304,7 @@ async function load(row) {
     const sourceName = data.fileName || row.filePath
     const logicalTitle = data.title || row.title
     fileName.value = documentDisplayFileName(logicalTitle, sourceName)
-    fileSize.value = data.fileSize || row.size || 0
+    fileSize.value = data.fileSize ?? row.size ?? null
     if (data.title) currentDocument.value = { ...currentDocument.value, title: data.title }
     const info = previewInfo(extensionOf(sourceName))
     previewType.value = info.type
@@ -450,10 +450,13 @@ function retry() {
 }
 
 function formatFileSize(bytes) {
-  if (!bytes) return '0 B'
+  if (bytes === null || bytes === undefined || bytes === '') return '大小未知'
+  const numericBytes = Number(bytes)
+  if (!Number.isFinite(numericBytes) || numericBytes < 0) return '大小未知'
+  if (numericBytes === 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']
-  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
-  return `${Math.round(bytes / (1024 ** index) * 100) / 100} ${units[index]}`
+  const index = Math.min(units.length - 1, Math.floor(Math.log(numericBytes) / Math.log(1024)))
+  return `${Math.round(numericBytes / (1024 ** index) * 100) / 100} ${units[index]}`
 }
 
 defineExpose({ open })

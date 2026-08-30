@@ -225,6 +225,10 @@ export function listDocumentVersions(database, rawId) {
     documentId: row.document_id,
     version: row.version,
     filePath: documentOriginalName(row.original_name || row.file_path || `version-${row.version}`),
+    contentBytes: row.content_bytes !== null && row.content_bytes !== undefined && row.content_bytes !== '' &&
+      Number.isSafeInteger(Number(row.content_bytes)) && Number(row.content_bytes) >= 0
+      ? Number(row.content_bytes)
+      : null,
     note: row.note,
     createdAt: row.created_at,
     isCurrent: Number.isFinite(Number(row.current_version)) &&

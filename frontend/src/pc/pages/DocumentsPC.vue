@@ -1077,7 +1077,7 @@ async function loadDocuments() {
       filePath: doc.filePath,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
-      size: doc.size || 0,
+      size: doc.size ?? null,
       indexStatus: ragStatusById.value.get(Number(doc.id)) || (ragCoverageComplete.value ? 'missing' : 'unknown')
     }))
 
@@ -1921,11 +1921,14 @@ function handleDialogDragLeave(event) {
 }
 
 function formatFileSize(bytes) {
-  if (!bytes || bytes === 0) return '0 B'
+  if (bytes === null || bytes === undefined || bytes === '') return '大小未知'
+  const numericBytes = Number(bytes)
+  if (!Number.isFinite(numericBytes) || numericBytes < 0) return '大小未知'
+  if (numericBytes === 0) return '0 B'
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+  const i = Math.floor(Math.log(numericBytes) / Math.log(k))
+  return Math.round(numericBytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
 
 onMounted(async () => {
