@@ -977,7 +977,7 @@ const columns = computed(() => [
   { key: 'type', dataIndex: 'filePath', title: '类型', width: 80, sorter: true },
   { key: 'indexStatus', dataIndex: 'indexStatus', title: '资料索引', width: 110 },
   { key: 'updatedAt', dataIndex: 'updatedAt', title: '更新时间', width: 180, sorter: true },
-  { key: 'operation', title: '操作', width: 156, align: 'center', headerAlign: 'center' }
+  { key: 'operation', title: '操作', width: 156, align: 'left', headerAlign: 'left' }
 ])
 
 const versionColumns = [
@@ -2931,10 +2931,10 @@ onMounted(async () => {
   display: inline-block;
 }
 
-/* 操作列与表格右缘收齐，减少无意义留白。 */
+/* 操作列沿用其余列的左对齐轴，表头与按钮组保持一致。 */
 ::deep(.native-table th:last-child),
 ::deep(.native-table td:last-child) {
-  text-align: right;
+  text-align: left;
   white-space: nowrap;
 }
   .version-dialog-toolbar {
@@ -3220,7 +3220,7 @@ onMounted(async () => {
   width: 100%;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 5px;
 }
 

@@ -10,8 +10,8 @@
   >
     <div v-if="document" class="document-detail">
       <div class="document-detail-hero">
-        <span class="document-detail-icon" :class="`document-type-icon--${documentFileTone(document.filePath)}`">
-          <NativeIcon :name="documentFileIcon(document.filePath)" size="28" />
+        <span class="document-detail-icon" aria-hidden="true">
+          <NativeIcon name="file-text" size="22" />
         </span>
         <div><strong>{{ document.title }}</strong><span>{{ extensionLabel }} · {{ formatFileSize(document.size) }}</span></div>
       </div>
@@ -82,7 +82,6 @@
 <script setup>
 import { computed } from 'vue'
 import { NativeButton, NativeDrawer, NativeIcon, NativePopconfirm, NativeTag } from '@/components/native'
-import { documentFileIcon, documentFileTone } from '@/utils/documentWorkbench'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -138,18 +137,11 @@ function formatFileSize(bytes) {
 
 <style scoped>
 .document-detail { display: flex; flex-direction: column; gap: 16px; }
-.document-detail-hero { padding: 4px 48px 16px 0; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); }
+.document-detail-hero { padding: 16px 48px 16px 0; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); }
 .document-detail-hero > div { min-width: 0; display: grid; gap: 5px; }
 .document-detail-hero strong { overflow-wrap: anywhere; color: var(--color-text-primary); font-size: 16px; }
 .document-detail-hero span { color: var(--color-text-secondary); font-size: 13px; }
-.document-detail-icon { width: 48px; height: 48px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: var(--radius-md); color: var(--color-primary); background: color-mix(in srgb, var(--color-primary-surface) 76%, var(--color-surface-raised)); }
-.document-type-icon--pdf { color: var(--color-danger-text); background: var(--color-danger-surface); }
-.document-type-icon--word { color: #3564b8; background: #edf4ff; }
-.document-type-icon--sheet { color: var(--color-success-text); background: var(--color-success-surface); }
-.document-type-icon--slides { color: var(--color-warning-text); background: var(--color-warning-surface); }
-.document-type-icon--markdown { color: #6a4fb0; background: #f2efff; }
-.document-type-icon--image { color: #087c8f; background: #e9f7f8; }
-.document-type-icon--code { color: #4f6078; background: #edf0f5; }
+.document-detail-icon { width: 42px; height: 42px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--radius-md); color: var(--color-text-secondary); background: var(--color-surface-subtle); }
 .document-detail-section { padding: 15px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-surface-subtle); }
 .document-detail-section h4, .document-detail-section p { margin: 0; }
 .document-detail-section p { margin-bottom: 10px; color: var(--color-text-secondary); font-size: 13px; line-height: 1.65; }
