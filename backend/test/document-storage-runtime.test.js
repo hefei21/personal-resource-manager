@@ -61,5 +61,8 @@ test('propagates staging failures without fabricating file metadata', async () =
 test('normalizes display-only original names without retaining client paths or controls', () => {
   assert.equal(documentOriginalName('C:\\fakepath\\report.txt'), 'report.txt')
   assert.equal(documentOriginalName('../report\u0000.txt'), 'report.txt')
+  const mojibake = Buffer.from('北辰灯塔-运维说明.docx', 'utf8').toString('latin1')
+  assert.equal(documentOriginalName(mojibake), '北辰灯塔-运维说明.docx')
+  assert.equal(documentOriginalName('Ångström notes.txt'), 'Ångström notes.txt')
   assert.equal(documentOriginalName('  '), 'document')
 })

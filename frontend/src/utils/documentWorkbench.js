@@ -38,6 +38,15 @@ export function documentFileIcon(filePath) {
   return iconMap[extension] || 'file'
 }
 
+export function documentDisplayFileName(title, filePath) {
+  const cleanTitle = String(title || '').trim()
+  const sourceName = String(filePath || '').replace(/\\/gu, '/').split('/').pop() || ''
+  const extension = sourceName.includes('.') ? sourceName.split('.').pop()?.toLowerCase() || '' : ''
+  if (!cleanTitle) return sourceName || '未知文件'
+  if (!extension || cleanTitle.toLowerCase().endsWith(`.${extension}`)) return cleanTitle
+  return `${cleanTitle}.${extension}`
+}
+
 export const DOCUMENT_PREVIEW_POSITION_MAX_ENTRIES = 100
 export const DOCUMENT_PREVIEW_POSITION_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
 

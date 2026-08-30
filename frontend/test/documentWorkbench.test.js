@@ -6,12 +6,17 @@ import test from 'node:test'
 
 import {
   collectExpandableCategoryIds,
+  documentDisplayFileName,
   documentFileIcon,
   documentFileTone,
   flattenVisibleDocumentCategories,
   pruneDocumentPreviewPositions,
   updateDocumentPreviewPosition
 } from '../src/utils/documentWorkbench.js'
+import {
+  parseDocumentListRouteState,
+  serializeDocumentListRouteState
+} from '../src/utils/documentListRouteState.js'
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url))
 const frontendRoot = path.resolve(testDirectory, '..')
@@ -50,6 +55,30 @@ test('document workbench maps file names to stable semantic icons', () => {
   assert.equal(documentFileTone('cover.png'), 'image')
   assert.equal(documentFileTone('worker.py'), 'code')
   assert.equal(documentFileTone('plain.txt'), 'text')
+  assert.equal(documentDisplayFileName('北辰灯塔-v2.4', 'garbled.docx'), '北辰灯塔-v2.4.docx')
+  assert.equal(documentDisplayFileName('report.pdf', 'legacy.pdf'), 'report.pdf')
+})
+
+test('document list route state round-trips stable filters and drops defaults', () => {
+  const parsed = parseDocumentListRouteState({
+    categoryId: '23', q: ' 灯塔 ', tags: '运维,安全', from: '2026-08-01', to: '2026-08-31',
+    sort: 'title', order: 'asc', page: '3', pageSize: '50'
+  })
+  assert.deepEqual(parsed, {
+    categoryId: 23,
+    keyword: '灯塔',
+    tags: ['运维', '安全'],
+    dateRange: ['2026-08-01', '2026-08-31'],
+    sortBy: 'title',
+    sortOrder: 'asc',
+    page: 3,
+    pageSize: 50
+  })
+  assert.deepEqual(serializeDocumentListRouteState(parsed, { documentId: '8', page: '1' }), {
+    documentId: '8', categoryId: '23', q: '灯塔', tags: '运维,安全', from: '2026-08-01',
+    to: '2026-08-31', sort: 'title', order: 'asc', page: '3', pageSize: '50'
+  })
+  assert.deepEqual(serializeDocumentListRouteState({ page: 1, pageSize: 30 }, {}), {})
 })
 
 test('document preview position memory expires stale entries and keeps the newest 100', () => {
@@ -113,32 +142,38 @@ test('document UI keeps filters and portaled menus bounded and opaque', () => {
 
 test('document versions expose active and deleted records in one contextual dialog', () => {
   const documents = read('src/pc/pages/DocumentsPC.vue')
+  const detail = read('src/pc/components/documents/DocumentDetailDrawer.vue')
 
-  assert.match(documents, /版本与回收/u)
+  assert.match(detail, /版本与回收/u)
   assert.match(documents, /版本记录[\s\S]*已删除版本/u)
   assert.match(documents, /versionHistoryView === 'trash'/u)
   assert.doesNotMatch(documents, /versionTrashDialogVisible/u)
-  assert.match(documents, /class="preview-error-state"/u)
 })
 
 test('document PC refinement keeps categories collapsed and preview controls usable', () => {
   const documents = read('src/pc/pages/DocumentsPC.vue')
+  const preview = read('src/pc/components/documents/DocumentPreviewDialog.vue')
+  const metadata = read('src/pc/components/documents/DocumentMetadataDialog.vue')
   const treeSelect = read('src/components/native/NativeTreeSelect.vue')
   const dialog = read('src/components/native/NativeDialog.vue')
 
   assert.match(documents, /expandedCategoryIds\.value = new Set\(\)/u)
   assert.match(documents, /class="sort-direction-button"/u)
-  assert.match(documents, /class="pdf-canvas-stage"[\s\S]*class="pdf-controls"/u)
-  assert.match(documents, /window\.devicePixelRatio/u)
-  assert.match(documents, /transform: outputScale/u)
-  assert.match(documents, /resizable[\s\S]*@closed="handlePreviewClosed"/u)
-  assert.match(documents, /@close="handlePreviewClosing"/u)
-  assert.match(documents, /DOCUMENT_PREVIEW_POSITION_STORAGE_KEY/u)
-  assert.match(documents, /previewDialogHeight/u)
+  assert.match(preview, /class="pdf-canvas-stage"[\s\S]*class="pdf-controls"/u)
+  assert.match(preview, /window\.devicePixelRatio/u)
+  assert.match(preview, /transform: outputScale/u)
+  assert.match(preview, /resizable[\s\S]*@closed="handleClosed"/u)
+  assert.match(preview, /@close="savePreviewPosition"/u)
+  assert.match(preview, /document-preview-position:v1/u)
+  assert.match(preview, /md-editor-preview-wrapper/u)
+  assert.match(preview, /\/api\/documents\/preview\/\$\{row\.id\}/u)
+  assert.match(preview, /adjustDialogHeight/u)
   assert.match(documents, /\.batch-actions-bar[\s\S]*position: absolute/u)
-  assert.match(documents, /\.pdf-controls[\s\S]*position: absolute/u)
-  assert.equal((documents.match(/@click="handleDownloadPreviewFile"/gu) || []).length, 1)
+  assert.match(preview, /\.pdf-controls[\s\S]*position: absolute/u)
+  assert.equal((preview.match(/emit\('download'/gu) || []).length, 1)
   assert.match(documents, /documentFileTone/u)
+  assert.match(documents, /value: cat\.id/u)
+  assert.match(metadata, /update:categoryId/u)
   assert.match(treeSelect, /class="native-tree-select"[\s\S]*v-click-outside="close"/u)
   assert.doesNotMatch(treeSelect, /native-tree-select__dropdown" v-click-outside/u)
   assert.match(treeSelect, /<Teleport to="body">/u)
@@ -148,4 +183,5 @@ test('document PC refinement keeps categories collapsed and preview controls usa
   assert.match(read('src/components/native/NativeIcon.vue'), /'file-word': 'FileDoc'/u)
   assert.match(dialog, /native-dialog--resizable/u)
   assert.match(dialog, /resize: both/u)
+  assert.match(dialog, /native-tree-select__dropdown/u)
 })

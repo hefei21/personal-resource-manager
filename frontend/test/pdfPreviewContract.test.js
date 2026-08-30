@@ -14,20 +14,22 @@ function read(relativePath) {
 test('PDF preview uses one pinned local PDF.js runtime on PC and mobile', () => {
   const packageJson = JSON.parse(read('package.json'))
   const runtimeSource = read('src/utils/pdfPreview.js')
-  const desktopSource = read('src/pc/pages/DocumentsPC.vue')
+  const desktopPageSource = read('src/pc/pages/DocumentsPC.vue')
+  const desktopPreviewSource = read('src/pc/components/documents/DocumentPreviewDialog.vue')
   const mobileSource = read('src/mobile/pages/DocumentsMobile.vue')
 
   assert.equal(packageJson.dependencies['pdfjs-dist'], '6.2.108')
   assert.match(runtimeSource, /import\('pdfjs-dist'\)/u)
   assert.match(runtimeSource, /pdf\.worker\.min\.mjs\?url/u)
-  assert.match(desktopSource, /openPdfDocument/u)
+  assert.match(desktopPreviewSource, /openPdfDocument/u)
   assert.match(mobileSource, /openPdfDocument/u)
-  assert.match(desktopSource, /const pdfDoc = shallowRef\(null\)/u)
+  assert.match(desktopPreviewSource, /const pdfDocument = shallowRef\(null\)/u)
   assert.match(mobileSource, /const pdfDoc = shallowRef\(null\)/u)
-  assert.match(desktopSource, /\/api\/documents\/download\/\$\{row\.id\}/u)
+  assert.match(desktopPageSource, /\/api\/documents\/download\/\$\{row\.id\}/u)
+  assert.match(desktopPreviewSource, /\/api\/documents\/preview\/\$\{row\.id\}/u)
   assert.match(mobileSource, /\/api\/documents\/download\/\$\{doc\.id\}/u)
   assert.doesNotMatch(mobileSource, /content\?download=1/u)
-  for (const source of [runtimeSource, desktopSource, mobileSource]) {
+  for (const source of [runtimeSource, desktopPageSource, desktopPreviewSource, mobileSource]) {
     assert.doesNotMatch(source, /cdnjs|jsdelivr|window\.pdfjsLib/u)
   }
 })

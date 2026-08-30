@@ -33,9 +33,26 @@ export function resetDocumentStorageRuntimeForTests() {
 
 export function documentOriginalName(value) {
   if (typeof value !== 'string') return 'document'
-  const normalized = path.posix.basename(value.replace(/\\/gu, '/'))
+  const basename = path.posix.basename(value.replace(/\\/gu, '/'))
+  const repaired = repairLegacyUtf8FileName(basename)
+  const normalized = repaired
     .normalize('NFKC')
-    .replace(/[\u0000-\u001f\u007f]/gu, '')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, '')
     .trim()
   return normalized || 'document'
+}
+
+function countHanCharacters(value) {
+  return (String(value).match(/\p{Script=Han}/gu) || []).length
+}
+
+export function repairLegacyUtf8FileName(value) {
+  if (typeof value !== 'string' || value === '') return value
+  // Older uploads could persist a UTF-8 byte sequence after it had been decoded as Latin-1.
+  // Only repair strings that carry strong mojibake signals and whose UTF-8 round-trip is valid.
+  if (!/[\u0080-\u009fÃÂâåæäçèé]/u.test(value)) return value
+  const decoded = Buffer.from(value, 'latin1').toString('utf8')
+  if (!decoded || decoded.includes('\uFFFD')) return value
+  if (countHanCharacters(decoded) <= countHanCharacters(value)) return value
+  return decoded
 }

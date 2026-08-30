@@ -9,9 +9,11 @@ import { PAGINATION } from '../config/constants.js'
 import {
   categoryCompatibilityFields,
   normalizeDocumentTags,
+  resolveDocumentCategory,
   resolveDocumentCategoryInput
 } from '../services/documentDomainService.js'
 import { documentOriginalName, getDocumentStorageRuntime } from '../services/documentStorageRuntime.js'
+import { documentPreviewContentType, parseDocumentByteRange } from '../services/documentPreviewService.js'
 import { DocumentUploadStorage } from '../services/documentUploadStorage.js'
 import { coordinateStorageCommit } from '../services/storageCommitCoordinator.js'
 import {
@@ -95,6 +97,7 @@ const DOCUMENT_PUBLIC_MESSAGES = Object.freeze({
   DOCUMENT_FILE_TYPE_UNSUPPORTED: '不支持该文件格式',
   DOCUMENT_FILE_TOO_LARGE: '文件超过 50 MB 上传上限',
   DOCUMENT_PREVIEW_TOO_LARGE: '文件超过 50 MB 在线预览上限，请下载后查看',
+  DOCUMENT_PREVIEW_TYPE_UNSUPPORTED: '当前文件类型不支持流式在线预览',
   DOCUMENT_CONTENT_REFERENCE_MISSING: '文档内容引用缺失，请先执行存储一致性检查',
   DOCUMENT_CONTENT_MISSING: '文档原始内容不存在，请先执行存储一致性检查',
   DOCUMENT_CONTENT_INVALID: '文档内容无效或为空',
@@ -165,6 +168,7 @@ function sendDocumentError(res, error, fallbackMessage) {
     DOCUMENT_CONTENT_MISSING: 404,
     DOCUMENT_CONTENT_RANGE_INVALID: 416,
     DOCUMENT_PREVIEW_TOO_LARGE: 413,
+    DOCUMENT_PREVIEW_TYPE_UNSUPPORTED: 415,
     DOCUMENT_STORAGE_METADATA_INVALID: 409,
     DOCUMENT_STORAGE_METADATA_INCOMPLETE: 409,
     DOCUMENT_STORAGE_METADATA_MISMATCH: 409,
@@ -576,7 +580,7 @@ router.get('/tags', authenticateToken, async (req, res) => {
 // 获取文档列表
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { keyword, category, subcategory, tags, startDate, endDate, sortBy, sortOrder, includeSubcategories, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
+    const { keyword, categoryId, category, subcategory, tags, startDate, endDate, sortBy, sortOrder, includeSubcategories, page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
     const db = getDatabase()
 
     let sql = `SELECT * FROM documents d WHERE NOT EXISTS (
@@ -589,21 +593,42 @@ router.get('/', authenticateToken, async (req, res) => {
       params.push(`%${keyword}%`, `%${keyword}%`)
     }
 
-    if (category) {
-      sql += ' AND category = ?'
-      params.push(category)
-    }
-
-    if (subcategory) {
-      if (includeSubcategories === 'true') {
-        // 使用 LIKE 查询匹配子分类及其所有子分类
-        // 例如：subcategory = "前端" 会匹配 "前端"、"前端/Vue"、"前端/React" 等
-        sql += ' AND (subcategory = ? OR subcategory LIKE ?)'
-        params.push(subcategory, `${subcategory}/%`)
+    if (categoryId) {
+      const selectedCategory = resolveDocumentCategory(db, categoryId)
+      const compatibility = categoryCompatibilityFields(selectedCategory)
+      const includeDescendants = includeSubcategories === 'true'
+      if (includeDescendants) {
+        sql += ` AND (
+          d.category_id IN (SELECT id FROM categories WHERE id = ? OR path LIKE ?)
+          OR (d.category_id IS NULL AND d.category = ?${compatibility.subcategory
+            ? ' AND (d.subcategory = ? OR d.subcategory LIKE ?)'
+            : ''})
+        )`
+        params.push(selectedCategory.id, `${selectedCategory.path}/%`, compatibility.category)
+        if (compatibility.subcategory) {
+          params.push(compatibility.subcategory, `${compatibility.subcategory}/%`)
+        }
       } else {
-        // 精确匹配，只显示直接属于该分类的文件
-        sql += ' AND subcategory = ?'
-        params.push(subcategory)
+        sql += ` AND (
+          d.category_id = ?
+          OR (d.category_id IS NULL AND d.category = ? AND d.subcategory IS ?)
+        )`
+        params.push(selectedCategory.id, compatibility.category, compatibility.subcategory)
+      }
+    } else {
+      if (category) {
+        sql += ' AND category = ?'
+        params.push(category)
+      }
+
+      if (subcategory) {
+        if (includeSubcategories === 'true') {
+          sql += ' AND (subcategory = ? OR subcategory LIKE ?)'
+          params.push(subcategory, `${subcategory}/%`)
+        } else {
+          sql += ' AND subcategory = ?'
+          params.push(subcategory)
+        }
       }
     }
 
@@ -679,6 +704,7 @@ router.get('/', authenticateToken, async (req, res) => {
       return {
         id: row.id,
         title: row.title,
+        categoryId: row.category_id,
         category: row.category,
         subcategory: row.subcategory,
         tags: row.tags,
@@ -725,7 +751,7 @@ router.get('/', authenticateToken, async (req, res) => {
     res.json({ data: paginatedResult, total })
   } catch (error) {
     console.error('获取文档失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '服务器错误')
   }
 })
 
@@ -896,6 +922,64 @@ router.post('/:id/versions/upload', authenticateToken, requireWritePermission, d
   }
 })
 
+// PDF.js 使用同源流式端点读取原件，并可按 Range 增量加载大文件。
+router.get('/preview/:id', authenticateToken, async (req, res) => {
+  let totalBytes = null
+  try {
+    const database = getDatabase()
+    const document = database.prepare(`
+      SELECT d.*
+      FROM documents d
+      WHERE d.id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM resource_trash_entries t
+          WHERE t.resource_type = 'document' AND t.resource_id = d.id
+        )
+    `).get(req.params.id)
+    if (!document) {
+      const error = new Error('Document does not exist.')
+      error.code = 'DOCUMENT_NOT_FOUND'
+      throw error
+    }
+
+    const fileName = documentFileName(document)
+    const contentType = documentPreviewContentType(fileName)
+    if (!contentType) {
+      const error = new Error('Document preview type is unsupported.')
+      error.code = 'DOCUMENT_PREVIEW_TYPE_UNSUPPORTED'
+      throw error
+    }
+
+    const contentService = getDocumentStorageRuntime().contentService
+    totalBytes = Number.isSafeInteger(document.content_bytes)
+      ? document.content_bytes
+      : (await contentService.stat(document)).bytes
+    const range = parseDocumentByteRange(req.headers.range, totalBytes)
+    const { stream } = await contentService.createReadStream(document, range || {})
+
+    res.status(range ? 206 : 200)
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Content-Type', contentType)
+    res.setHeader('Content-Length', String(range?.length ?? totalBytes))
+    res.setHeader('Content-Disposition', `inline; filename="preview"; filename*=UTF-8''${contentDispositionFileName(fileName)}`)
+    if (document.content_sha256) res.setHeader('ETag', `"${document.content_sha256}"`)
+    if (range) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${totalBytes}`)
+
+    stream.on('error', (error) => {
+      console.error('文档预览流失败:', error?.code ?? error?.name)
+      if (!res.headersSent) sendDocumentError(res, error, '服务器错误')
+      else res.destroy(error)
+    })
+    stream.pipe(res)
+  } catch (error) {
+    if (error?.code === 'DOCUMENT_CONTENT_RANGE_INVALID' && Number.isSafeInteger(totalBytes)) {
+      res.setHeader('Content-Range', `bytes */${totalBytes}`)
+    }
+    console.error('流式预览文档失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '服务器错误')
+  }
+})
+
 // 获取文档内容用于编辑或预览
 router.get('/:id/content', authenticateToken, async (req, res) => {
   try {
@@ -929,6 +1013,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
       const base64 = content.toString('base64')
       res.json({
         content: base64,
+        title: document.title,
         fileName,
         fileSize: metadata.bytes,
         isBase64: true
@@ -938,6 +1023,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
       const base64 = content.toString('base64')
       res.json({
         content: base64,
+        title: document.title,
         fileName,
         fileSize: metadata.bytes,
         isBase64: true
@@ -946,6 +1032,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
       // 文本文件：直接返回内容
       res.json({
         content: content.toString('utf8'),
+        title: document.title,
         fileName,
         fileSize: metadata.bytes,
         isBase64: false
@@ -955,6 +1042,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
       const base64 = content.toString('base64')
       res.json({
         content: base64,
+        title: document.title,
         fileName,
         fileSize: metadata.bytes,
         isBase64: true

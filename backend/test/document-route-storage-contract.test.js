@@ -30,3 +30,20 @@ test('category mutations use transactional domain services and cannot delete doc
   assert.match(categoryRename, /renameDocumentCategory/u)
   assert.doesNotMatch(categoryRename, /UPDATE documents/u)
 })
+
+test('document list uses stable category IDs and exposes them to the client', () => {
+  assert.match(source, /const \{ keyword, categoryId,[\s\S]*includeSubcategories/u)
+  assert.match(source, /resolveDocumentCategory\(db, categoryId\)/u)
+  assert.match(source, /categoryId: row\.category_id/u)
+})
+
+test('PDF preview is authenticated, range-aware and streamed without base64 buffering', () => {
+  const preview = source.slice(source.indexOf("router.get('/preview/:id'"), source.indexOf('// 获取文档内容用于编辑或预览'))
+  assert.match(preview, /authenticateToken/u)
+  assert.match(preview, /parseDocumentByteRange\(req\.headers\.range/u)
+  assert.match(preview, /Accept-Ranges/u)
+  assert.match(preview, /Content-Range/u)
+  assert.match(preview, /createReadStream\(document, range \|\| \{\}\)/u)
+  assert.match(preview, /stream\.pipe\(res\)/u)
+  assert.doesNotMatch(preview, /toString\('base64'\)|readDocumentBuffer/u)
+})

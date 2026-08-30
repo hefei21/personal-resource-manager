@@ -21,11 +21,13 @@ async function loadPdfRuntime() {
   return pdfRuntimePromise
 }
 
-export async function openPdfDocument(data) {
+export async function openPdfDocument(source) {
   const pdfjs = await loadPdfRuntime()
   const base = `${runtimeBasePath()}pdfjs/`
   const loadingTask = pdfjs.getDocument({
-    data,
+    ...(typeof source === 'string'
+      ? { url: source, withCredentials: true, rangeChunkSize: 64 * 1024 }
+      : { data: source }),
     cMapUrl: `${base}cmaps/`,
     cMapPacked: true,
     standardFontDataUrl: `${base}standard_fonts/`,

@@ -161,10 +161,16 @@
           </NativeAlert>
 
           <div v-if="selectedRowKeys.length > 0" class="batch-actions-bar">
-            <span class="batch-selection-summary">
-              <NativeIcon name="check-square" size="17" />
+            <button
+              type="button"
+              class="batch-selection-summary"
+              :title="allCurrentPageSelected ? '清除当前页选择' : '选择当前页全部文档'"
+              :aria-label="allCurrentPageSelected ? '清除当前页选择' : '选择当前页全部文档'"
+              @click="toggleCurrentPageSelection"
+            >
+              <NativeIcon :name="allCurrentPageSelected ? 'check-square' : 'minus'" size="17" />
               已选择 <strong>{{ selectedRowKeys.length }}</strong> 项
-            </span>
+            </button>
             <NativeButton theme="primary" size="small" @click="handleBatchEdit" :disabled="!canWrite">
               <template #icon><NativeIcon name="pencil" /></template>
               编辑信息
@@ -238,108 +244,31 @@
       </div>
     </NativeCard>
 
-    <NativeDrawer
-      v-model="detailDrawerVisible"
-      :title="detailDocument?.title || '文档详情'"
-      placement="right"
-      size="430px"
-    >
-      <div v-if="detailDocument" class="document-detail">
-        <div class="document-detail-hero">
-          <span class="document-detail-icon" :class="`document-type-icon--${documentFileTone(detailDocument.filePath)}`">
-            <NativeIcon :name="documentFileIcon(detailDocument.filePath)" size="28" />
-          </span>
-          <div>
-            <strong>{{ detailDocument.title }}</strong>
-            <span>{{ getFileExtension(detailDocument.filePath) || '文件' }} · {{ formatFileSize(detailDocument.size) }}</span>
-          </div>
-        </div>
-
-        <section class="document-detail-section">
-          <div class="document-detail-heading">
-            <h4>资料索引</h4>
-            <NativeTag :theme="ragStatusTheme(detailDocument.indexStatus)" variant="light">
-              {{ ragStatusLabel(detailDocument.indexStatus) }}
-            </NativeTag>
-          </div>
-          <p>{{ ragStatusDescription(detailDocument.indexStatus) }}</p>
-          <NativeButton
-            v-if="canWrite && !['ready', 'pending'].includes(detailDocument.indexStatus)"
-            size="small"
-            variant="outline"
-            :loading="detailRagRefreshing"
-            @click="refreshDocumentIndex(detailDocument)"
-          >
-            重新建立索引
-          </NativeButton>
-        </section>
-
-        <section class="document-detail-section document-detail-grid">
-          <span>所在分类</span><strong>{{ documentCategoryLabel(detailDocument) }}</strong>
-          <span>当前版本</span><strong>v{{ detailDocument.version || 1 }}</strong>
-          <span>标签</span><strong>{{ detailDocument.tags || '无标签' }}</strong>
-          <span>更新时间</span><strong>{{ formatDateTime(detailDocument.updatedAt) }}</strong>
-          <span>创建时间</span><strong>{{ formatDateTime(detailDocument.createdAt) }}</strong>
-        </section>
-
-        <section class="document-detail-section document-detail-actions">
-          <h4>文档操作</h4>
-          <div class="document-detail-action-grid">
-            <NativeButton variant="outline" @click="handleView(detailDocument)">预览</NativeButton>
-            <NativeButton variant="outline" @click="handleDownload(detailDocument)">下载原件</NativeButton>
-            <NativeButton variant="outline" @click="openVersionUpload(detailDocument)" :disabled="!canWrite">上传新版本</NativeButton>
-            <NativeButton variant="outline" @click="handleViewVersions(detailDocument)">版本与回收</NativeButton>
-            <NativeButton variant="outline" @click="handleChangeSingle(detailDocument)" :disabled="!canWrite">编辑信息</NativeButton>
-            <NativeButton
-              v-if="canEditFile(detailDocument.filePath)"
-              variant="outline"
-              @click="handleEdit(detailDocument)"
-              :disabled="!canWrite"
-            >
-              编辑正文
-            </NativeButton>
-          </div>
-        </section>
-      </div>
-      <template #footer>
-        <NativePopconfirm
-          v-if="detailDocument"
-          content="文档将进入统一回收站，确定继续吗？"
-          @confirm="handleDeleteAndClose(detailDocument.id)"
-        >
-          <template #trigger>
-            <NativeButton theme="danger" variant="outline" :disabled="!canWrite">移入回收站</NativeButton>
-          </template>
-        </NativePopconfirm>
-        <NativeButton variant="outline" @click="detailDrawerVisible = false">关闭</NativeButton>
-      </template>
-    </NativeDrawer>
+    <DocumentDetailDrawer
+      v-model:visible="detailDrawerVisible"
+      :document="detailDocument"
+      :can-write="canWrite"
+      :can-edit-content="canEditFile(detailDocument?.filePath)"
+      :rag-refresh-loading="detailRagRefreshing"
+      @preview="handleView"
+      @download="handleDownload"
+      @upload-version="openVersionUpload"
+      @versions="handleViewVersions"
+      @edit-info="handleChangeSingle"
+      @edit-content="handleEdit"
+      @refresh-index="refreshDocumentIndex"
+      @delete="handleDeleteAndClose"
+    />
 
     <!-- 批量编辑对话框 -->
-    <NativeDialog
-      v-model="batchEditDialogVisible"
-      :title="isSingleEdit ? '更改文档信息' : '批量编辑文档'"
+    <DocumentMetadataDialog
+      v-model:visible="batchEditDialogVisible"
+      v-model:category-id="batchEditForm.categoryId"
+      v-model:tags="batchEditForm.tags"
+      :single="isSingleEdit"
+      :categories="categoryTreeData"
       @confirm="handleBatchEditConfirm"
-      width="600px"
-    >
-      <NativeForm :modelValue="batchEditForm">
-        <NativeFormItem label="分类">
-          <NativeTreeSelect
-            v-model="batchEditForm.categoryPath"
-            :data="categoryTreeData"
-            placeholder="选择分类（留空则不修改）"
-            clearable
-            @change="handleBatchCategoryChange"
-          />
-        </NativeFormItem>
-        <NativeFormItem label="标签">
-          <NativeInput v-model="batchEditForm.tags" placeholder="输入标签，用逗号分隔（留空则不修改）" />
-        </NativeFormItem>
-      </NativeForm>
-      <p style="color: var(--color-text-muted); font-size: 12px; margin-top: 10px;">
-        提示：只有填写了内容的字段才会被更新，留空的字段保持原值。
-      </p>
-    </NativeDialog>
+    />
 
     <!-- 创建分类对话框 -->
     <NativeDialog
@@ -442,6 +371,14 @@
         </NativeFormItem>
         <NativeFormItem label="标题" name="title" required>
           <NativeInput v-model="uploadForm.title" placeholder="文档标题" :disabled="uploading" />
+        </NativeFormItem>
+        <NativeFormItem label="分类">
+          <NativeTreeSelect
+            v-model="uploadForm.categoryId"
+            :data="categoryTreeData"
+            placeholder="选择文档分类"
+            :disabled="uploading"
+          />
         </NativeFormItem>
         <NativeFormItem label="标签" name="tags">
           <NativeInput v-model="uploadForm.tags" placeholder="用逗号分隔" :disabled="uploading" />
@@ -658,169 +595,44 @@
       </div>
     </NativeDialog>
 
-    <!-- 预览对话框 -->
-    <NativeDialog
-      v-model="previewDialogVisible"
-      :title="previewTitle"
-      width="min(1560px, calc(100vw - 48px))"
-      class="document-dialog document-preview-dialog"
-      :style="{ height: previewDialogHeight }"
-      :show-footer="false"
-      resizable
-      @close="handlePreviewClosing"
-      @closed="handlePreviewClosed"
-    >
-      <div v-if="previewLoading" class="loading-container">
-        <NativeLoading text="加载中..." />
-      </div>
-      <div v-else class="preview-container">
-        <div class="preview-toolbar">
-          <div class="preview-file-meta">
-            <span class="document-type-icon" :class="`document-type-icon--${documentFileTone(previewFileName)}`"><NativeIcon :name="documentFileIcon(previewFileName)" size="18" /></span>
-            <div><strong>{{ previewFileName }}</strong><span>{{ formatFileSize(previewFileSize) }}</span></div>
-          </div>
-          <NativeButton variant="outline" @click="handleDownloadPreviewFile">
-            <template #icon><NativeIcon name="download" /></template>
-            下载原件
-          </NativeButton>
-        </div>
-
-        <div v-if="previewError" class="preview-error-state">
-          <span><NativeIcon name="warning-circle" size="30" /></span>
-          <strong>暂时无法显示预览</strong>
-          <p>{{ previewError }}</p>
-          <div>
-            <NativeButton theme="primary" @click="retryPreview">重新加载</NativeButton>
-          </div>
-        </div>
-        <!-- PDF 预览 -->
-        <div v-else-if="previewType === 'pdf'" class="pdf-preview">
-          <div ref="pdfCanvasStage" class="pdf-canvas-stage"><canvas ref="pdfCanvas"></canvas></div>
-          <div class="pdf-controls" aria-label="PDF 页面导航">
-            <NativeButton size="small" @click="prevPage" :disabled="currentPage <= 1">
-              <NativeIcon name="chevron-left" /> 上一页
-            </NativeButton>
-            <NativeInput
-              v-model="jumpPageNum"
-              :min="1"
-              :max="totalPages"
-              placeholder="页码"
-              size="small"
-              style="width: 100px"
-              type="number"
-            />
-            <NativeButton size="small" theme="primary" @click="handleJumpPageConfirm">
-              确定
-            </NativeButton>
-            <span>共 {{ totalPages }} 页</span>
-            <NativeButton size="small" @click="nextPage" :disabled="currentPage >= totalPages">
-              下一页 <NativeIcon name="chevron-right" />
-            </NativeButton>
-          </div>
-        </div>
-
-        <!-- Markdown 预览 -->
-        <MdPreview
-          v-else-if="previewType === 'markdown'"
-          ref="previewScrollSurface"
-          :modelValue="previewContent"
-          :sanitize="sanitizeRichHtml"
-          :theme="editorTheme"
-          :previewTheme="previewTheme"
-          :codeTheme="codeTheme"
-          class="markdown-preview"
-        />
-
-        <!-- 代码预览 -->
-        <div v-else-if="previewType === 'code'" ref="previewScrollSurface" class="code-preview">
-          <pre><code v-html="highlightedCode" :class="`language-${previewLanguage}`"></code></pre>
-        </div>
-
-        <!-- 文本预览 -->
-        <div v-else-if="previewType === 'text'" ref="previewScrollSurface" class="text-preview">
-          <pre>{{ previewContent }}</pre>
-        </div>
-
-        <!-- 图片预览 -->
-        <div v-else-if="previewType === 'image'" ref="previewScrollSurface" class="image-preview">
-          <img :src="`data:image/${getImageMimeType(previewFileName)};base64,${previewContent}`" :alt="previewFileName" />
-        </div>
-
-        <!-- Word HTML 预览 -->
-        <div v-else-if="previewType === 'word-html'" ref="previewScrollSurface" class="word-html-preview">
-          <div class="word-content" v-html="sanitizedPreviewContent"></div>
-        </div>
-
-        <!-- Office 文档预览 -->
-        <div v-else-if="previewType === 'office'" ref="previewScrollSurface" class="office-preview">
-          <NativeIcon :name="getOfficeIconName(previewLanguage)" size="64" />
-          <h3>{{ getOfficeTypeLabel(previewLanguage) }}文档</h3>
-          <p>此文件格式暂不支持在线预览，可使用右上角“下载原件”后通过 Microsoft Office 或 WPS 打开。</p>
-        </div>
-
-        <!-- 其他格式 -->
-        <div v-else ref="previewScrollSurface" class="unsupported-preview">
-          <NativeIcon name="info" size="48" />
-          <p>此文件格式暂不支持在线预览，可使用右上角“下载原件”查看。</p>
-        </div>
-
-      </div>
-    </NativeDialog>
+    <DocumentPreviewDialog ref="previewDialog" @download="handleDownload" />
 
   </div>
 </template>
 
 <script setup>
-import { ref, shallowRef, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { documentTagsLabel } from '@/utils/documentTags'
 import {
+  parseDocumentListRouteState,
+  serializeDocumentListRouteState
+} from '@/utils/documentListRouteState'
+import {
   collectExpandableCategoryIds,
   documentFileIcon,
   documentFileTone,
-  flattenVisibleDocumentCategories,
-  pruneDocumentPreviewPositions,
-  updateDocumentPreviewPosition
+  flattenVisibleDocumentCategories
 } from '@/utils/documentWorkbench'
-import { openPdfDocument } from '@/utils/pdfPreview'
-import { marked } from 'marked'
-import hljs from 'highlight.js'
-import 'highlight.js/styles/atom-one-dark.css'
-import mammoth from 'mammoth'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
-import {
-  sanitizeHighlightHtml,
-  sanitizeRichHtml
-} from '@/utils/sanitizeHtml'
 import { 
   NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, 
   NativeCheckbox, NativeLoading, NativeIcon, NativeSpace,
   NativeSelect, NativeForm, NativeFormItem, NativeDateRangePicker, NativePopconfirm,
   NativeAlert, NativeTable, NativePagination, NativeUpload, NativeTextarea, NativeDivider,
-  NativeTreeSelect, NativeTag, NativeDrawer
+  NativeTreeSelect, NativeTag
 } from '@/components/native'
-import { MdPreview } from 'md-editor-v3'
-import 'md-editor-v3/lib/style.css'
+import DocumentDetailDrawer from '@/pc/components/documents/DocumentDetailDrawer.vue'
+import DocumentMetadataDialog from '@/pc/components/documents/DocumentMetadataDialog.vue'
+import DocumentPreviewDialog from '@/pc/components/documents/DocumentPreviewDialog.vue'
 
 const toast = useToast()
 const route = useRoute()
 const router = useRouter()
 const { isGuest, canWrite } = usePermission()
-
-// 配置 marked 选项
-marked.setOptions({
-  highlight: function (code, lang) {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value
-    }
-    return hljs.highlightAuto(code).value
-  },
-  breaks: true,
-  gfm: true
-})
 
 const loading = ref(false)
 const documents = ref([])
@@ -857,6 +669,7 @@ const detailDocument = ref(null)
 const detailRagRefreshing = ref(false)
 const ragStatusById = ref(new Map())
 const ragCoverageComplete = ref(false)
+const previewDialog = ref(null)
 
 // 浏览模式
 const viewMode = ref('category') // category, list
@@ -874,56 +687,9 @@ const flattenedCategories = computed(() => (
   flattenVisibleDocumentCategories(categories.value, expandedCategoryIds.value)
 ))
 
-// 预览相关状态
-const previewDialogVisible = ref(false)
-const previewLoading = ref(false)
-const previewContent = ref('')
-const previewType = ref('text')
-const previewLanguage = ref('plaintext')
-const previewFileName = ref('')
-const previewFileSize = ref(0)
-const previewTitle = ref('')
-const previewDocumentId = ref(null)
-const previewDocumentVersion = ref(1)
-const previewError = ref('')
-const previewScrollSurface = ref(null)
-const pdfCanvas = ref(null)
-const pdfCanvasStage = ref(null)
-const currentPage = ref(1)
-const totalPages = ref(0)
-const pdfDoc = shallowRef(null)
-const jumpPageNum = ref(1)
-let pdfRenderTask = null
-let pdfRenderSequence = 0
-let pdfResizeObserver = null
-let pdfResizeTimer = null
-let pdfLastStageWidth = 0
-const DOCUMENT_PREVIEW_POSITION_STORAGE_KEY = 'pr-manager:document-preview-position:v1'
-
-const previewDialogHeight = computed(() => {
-  if (previewType.value === 'pdf') return 'min(92vh, 980px)'
-  if (previewLoading.value) return 'min(520px, calc(100vh - 40px))'
-  if (previewType.value === 'image') return 'min(78vh, 820px)'
-  if (['office', 'unsupported'].includes(previewType.value)) return 'min(520px, calc(100vh - 40px))'
-
-  const plainContent = previewType.value === 'word-html'
-    ? String(previewContent.value || '').replace(/<[^>]*>/g, ' ')
-    : String(previewContent.value || '')
-  const explicitLines = Math.max(1, plainContent.split('\n').length)
-  const wrappedLines = Math.ceil(plainContent.length / 110)
-  const visualLines = Math.min(24, Math.max(explicitLines, wrappedLines))
-  const estimatedHeight = Math.min(820, Math.max(390, 270 + visualLines * 22))
-  return `min(${estimatedHeight}px, calc(100vh - 40px))`
-})
-
 // 分类悬停相关状态
 const hoveredCategoryId = ref(null)
 // fileCount 现在从后端分类数据中获取，不再需要额外的状态存储
-
-// Markdown预览主题配置
-const editorTheme = ref('light')
-const previewTheme = ref('default')
-const codeTheme = ref('atom')
 
 // 拖拽相关状态
 const draggedCategoryId = ref(null)
@@ -935,6 +701,7 @@ const uploading = ref(false) // 上传进度状态
 const uploadForm = ref({
   file: [],
   title: '',
+  categoryId: null,
   category: '',
   subcategory: '',
   tags: '',
@@ -981,35 +748,13 @@ const sortFieldMap = {
   'updatedAt': 'updated_at'
 }
 
-// 反向映射：后端字段名 -> 列 colKey
-const sortColKeyMap = {
-  'title': 'title',
-  'file_type': 'type',
-  'updated_at': 'updatedAt'
-}
-
-// 计算表格排序状态（双向同步）
-const tableSort = computed(() => {
-  const colKey = sortColKeyMap[sortBy.value]
-  if (!colKey) {
-    // 下拉栏选择的是表头没有的字段，清空表头高亮
-    return null
-  }
-  return {
-    sortBy: colKey,
-    descending: sortOrder.value === 'desc'
-  }
-})
-
 const selectedRowKeys = ref([])
 const allDocumentIds = ref([])  // 所有文档ID（用于跨页全选）
 const batchEditDialogVisible = ref(false)
 const isSingleEdit = ref(false)
 const singleEditId = ref(null)
 const batchEditForm = ref({
-  categoryPath: '',
-  category: '',
-  subcategory: '',
+  categoryId: '',
   tags: ''
 })
 
@@ -1023,7 +768,7 @@ const allTags = ref([])
 const categoryTreeData = computed(() => {
   const buildTree = (categories) => {
     return categories.map(cat => ({
-      value: cat.path,
+      value: cat.id,
       label: cat.name,
       children: cat.subcategories && cat.subcategories.length > 0 ? buildTree(cat.subcategories) : undefined
     }))
@@ -1036,6 +781,15 @@ function handleSelectChange(selectedKeys) {
   selectedRowKeys.value = selectedKeys
 }
 
+const allCurrentPageSelected = computed(() => (
+  allDocumentIds.value.length > 0
+  && allDocumentIds.value.every(id => selectedRowKeys.value.includes(id))
+))
+
+function toggleCurrentPageSelection() {
+  selectedRowKeys.value = allCurrentPageSelected.value ? [] : [...allDocumentIds.value]
+}
+
 const currentSubcategories = computed(() => {
   if (!currentCategoryId.value) return []
   const currentCat = findCategoryById(categories.value, currentCategoryId.value)
@@ -1044,7 +798,6 @@ const currentSubcategories = computed(() => {
 
 // 处理排序方式变化（下拉选择框）
 function handleDropdownSortChange() {
-  tableSort.value = { sortBy: sortBy.value, descending: sortOrder.value === 'desc' }
   pagination.value.current = 1
   loadDocuments()
 }
@@ -1087,9 +840,7 @@ function toggleSortOrder() {
 function handleBatchEdit() {
   isSingleEdit.value = false
   batchEditForm.value = {
-    categoryPath: '',
-    category: '',
-    subcategory: '',
+    categoryId: '',
     tags: ''
   }
   batchEditDialogVisible.value = true
@@ -1098,12 +849,8 @@ function handleBatchEdit() {
 function handleChangeSingle(row) {
   isSingleEdit.value = true
   singleEditId.value = row.id
-  // 预填充当前值
-  const currentPath = row.category ? (row.subcategory ? `${row.category}/${row.subcategory}` : row.category) : ''
   batchEditForm.value = {
-    categoryPath: currentPath,
-    category: row.category || '',
-    subcategory: row.subcategory || '',
+    categoryId: row.categoryId || '',
     tags: row.tags || ''
   }
   batchEditDialogVisible.value = true
@@ -1120,12 +867,7 @@ async function handleBatchEditConfirm() {
   try {
     const updateData = { ids }
     
-    // 解析分类路径
-    if (batchEditForm.value.categoryPath) {
-      const pathParts = batchEditForm.value.categoryPath.split('/')
-      updateData.category = pathParts[0]
-      updateData.subcategory = pathParts.length > 1 ? pathParts.slice(1).join('/') : ''
-    }
+    if (batchEditForm.value.categoryId) updateData.categoryId = Number(batchEditForm.value.categoryId)
     if (batchEditForm.value.tags) {
       updateData.tags = batchEditForm.value.tags
     }
@@ -1162,18 +904,6 @@ async function handleBatchDelete() {
   }
 }
 
-function handleBatchCategoryChange(value) {
-  // 解析分类路径
-  if (value) {
-    const pathParts = value.split('/')
-    batchEditForm.value.category = pathParts[0]
-    batchEditForm.value.subcategory = pathParts.length > 1 ? pathParts.slice(1).join('/') : ''
-  } else {
-    batchEditForm.value.category = ''
-    batchEditForm.value.subcategory = ''
-  }
-}
-
 // 高级搜索相关函数
 async function loadAllTags() {
   try {
@@ -1185,12 +915,14 @@ async function loadAllTags() {
 }
 
 function handleAdvancedSearch() {
+  pagination.value.current = 1
   loadDocuments()
 }
 
 function resetAdvancedSearch() {
   selectedTags.value = []
   dateRange.value = []
+  pagination.value.current = 1
   loadDocuments()
 }
 
@@ -1205,6 +937,16 @@ function findCategoryById(categories, id) {
     }
   }
   return null
+}
+
+function findCategoryTrail(categories, id, trail = []) {
+  for (const category of Array.isArray(categories) ? categories : []) {
+    const nextTrail = [...trail, category]
+    if (Number(category.id) === Number(id)) return nextTrail
+    const nested = findCategoryTrail(category.subcategories, id, nextTrail)
+    if (nested.length > 0) return nested
+  }
+  return []
 }
 
 const columns = computed(() => [
@@ -1230,22 +972,36 @@ const lineCount = computed(() => {
   return editForm.value.content.split('\n').length
 })
 
-const highlightedCode = computed(() => {
-  if (!previewContent.value || previewType.value !== 'code') return ''
-  return sanitizeHighlightHtml(
-    hljs.highlight(previewContent.value, {
-      language: previewLanguage.value
-    }).value
-  )
-})
+function hydrateDocumentListRouteState() {
+  const state = parseDocumentListRouteState(route.query)
+  currentCategoryId.value = state.categoryId
+  searchKeyword.value = state.keyword
+  selectedTags.value = state.tags
+  dateRange.value = state.dateRange
+  sortBy.value = state.sortBy
+  sortOrder.value = state.sortOrder
+  pagination.value = { current: state.page, pageSize: state.pageSize }
+}
 
-const sanitizedPreviewContent = computed(() =>
-  sanitizeRichHtml(previewContent.value)
-)
+function syncDocumentListRouteState() {
+  const query = serializeDocumentListRouteState({
+    categoryId: currentCategoryId.value,
+    keyword: searchKeyword.value,
+    tags: selectedTags.value,
+    dateRange: dateRange.value,
+    sortBy: sortBy.value,
+    sortOrder: sortOrder.value,
+    page: pagination.value.current,
+    pageSize: pagination.value.pageSize
+  }, route.query)
+  const current = JSON.stringify(route.query)
+  if (JSON.stringify(query) !== current) void router.replace({ query })
+}
 
 async function loadDocuments() {
   loading.value = true
   documentsError.value = ''
+  syncDocumentListRouteState()
   try {
     const params = { 
       keyword: searchKeyword.value,
@@ -1256,17 +1012,8 @@ async function loadDocuments() {
     }
 
     if (currentCategoryId.value) {
-      const currentCat = findCategoryById(categories.value, currentCategoryId.value)
-      if (currentCat) {
-        // 将分类路径拆分为 category 和 subcategory
-        const pathParts = currentCat.path.split('/')
-        params.category = pathParts[0]
-        if (pathParts.length > 1) {
-          params.subcategory = pathParts.slice(1).join('/')
-          // 包含所有子分类的文档
-          params.includeSubcategories = 'true'
-        }
-      }
+      params.categoryId = currentCategoryId.value
+      params.includeSubcategories = 'true'
     }
 
     // 高级搜索参数
@@ -1301,6 +1048,7 @@ async function loadDocuments() {
     documents.value = (Array.isArray(data) ? data : []).map(doc => ({
       id: doc.id,
       title: doc.title,
+      categoryId: doc.categoryId,
       category: doc.category,
       subcategory: doc.subcategory || '',
       tags: documentTagsLabel(doc.tags),
@@ -1314,6 +1062,7 @@ async function loadDocuments() {
 
     // 批量操作只针对当前页，避免每次列表刷新额外拉取全部资源。
     allDocumentIds.value = documents.value.map(doc => doc.id)
+    selectedRowKeys.value = selectedRowKeys.value.filter(id => allDocumentIds.value.includes(id))
     if (!currentCategoryId.value && !searchKeyword.value && selectedTags.value.length === 0 && (dateRange.value?.length || 0) === 0) {
       totalAllDocuments.value = total.value
     }
@@ -1346,6 +1095,14 @@ async function loadCategories() {
       )
     }
     categories.value = nextCategories
+    if (currentCategoryId.value) {
+      const trail = findCategoryTrail(nextCategories, currentCategoryId.value)
+      if (trail.length > 0) categoryPath.value = trail
+      else {
+        currentCategoryId.value = null
+        categoryPath.value = []
+      }
+    }
   } catch (error) {
     console.error('加载分类失败:', error)
     categoriesError.value = documentErrorMessage(error, '暂时无法加载分类。')
@@ -1562,6 +1319,7 @@ function handleUpload() {
   uploadForm.value = {
     file: [],
     title: '',
+    categoryId: null,
     category: '',
     subcategory: '',
     tags: '',
@@ -1572,6 +1330,7 @@ function handleUpload() {
   if (currentCategoryId.value) {
     const currentCat = findCategoryById(categories.value, currentCategoryId.value)
     if (currentCat) {
+      uploadForm.value.categoryId = currentCat.id
       // 将分类路径拆分为 category 和 subcategory
       const pathParts = currentCat.path.split('/')
       uploadForm.value.category = pathParts[0]
@@ -1693,6 +1452,7 @@ async function submitUpload({ resolution = null, title = uploadForm.value.title,
     const fileToUpload = file.raw || file.originFileObj || file
     formData.append('file', fileToUpload)
     formData.append('title', title)
+    if (uploadForm.value.categoryId) formData.append('categoryId', String(uploadForm.value.categoryId))
     formData.append('category', uploadForm.value.category)
     formData.append('subcategory', uploadForm.value.subcategory)
     formData.append('tags', uploadForm.value.tags)
@@ -1752,15 +1512,11 @@ function cancelUploadConflict() {
 }
 
 function handleView(row) {
-  console.log('预览文件，row数据:', row)
-  console.log('文件路径:', row.filePath)
-
   if (!row || !row.id) {
     toast.error('无法预览，文档ID不存在')
     return
   }
-
-  loadPreviewContent(row)
+  void previewDialog.value?.open(row)
 }
 
 function handleDownload(row) {
@@ -2026,369 +1782,6 @@ function formatDateTime(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
 }
 
-function previewPositionKey() {
-  if (!previewDocumentId.value) return ''
-  return `${previewDocumentId.value}:${previewDocumentVersion.value || 1}`
-}
-
-function readPreviewPositionStore() {
-  if (typeof window === 'undefined') return {}
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(DOCUMENT_PREVIEW_POSITION_STORAGE_KEY) || '{}')
-    return pruneDocumentPreviewPositions(parsed)
-  } catch {
-    return {}
-  }
-}
-
-function writePreviewPositionStore(store) {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(DOCUMENT_PREVIEW_POSITION_STORAGE_KEY, JSON.stringify(store))
-  } catch {
-    // Preview position memory is a progressive enhancement; storage failure must not block reading.
-  }
-}
-
-function currentPreviewScrollElement() {
-  const candidate = previewType.value === 'pdf' ? pdfCanvasStage.value : previewScrollSurface.value
-  return candidate?.$el || candidate || null
-}
-
-function readCurrentPreviewPosition() {
-  const key = previewPositionKey()
-  return key ? readPreviewPositionStore()[key] || null : null
-}
-
-function savePreviewPosition() {
-  const key = previewPositionKey()
-  if (!key || previewLoading.value) return
-  const surface = currentPreviewScrollElement()
-  const nextStore = updateDocumentPreviewPosition(readPreviewPositionStore(), key, {
-    type: previewType.value,
-    page: currentPage.value,
-    scrollTop: surface?.scrollTop || 0,
-    scrollLeft: surface?.scrollLeft || 0
-  })
-  writePreviewPositionStore(nextStore)
-}
-
-async function restorePreviewScrollPosition(position = readCurrentPreviewPosition()) {
-  if (!position) return
-  await nextTick()
-  const surface = currentPreviewScrollElement()
-  surface?.scrollTo?.({
-    top: Math.max(0, Number(position.scrollTop) || 0),
-    left: Math.max(0, Number(position.scrollLeft) || 0),
-    behavior: 'auto'
-  })
-}
-
-async function loadPreviewContent(row) {
-  try {
-    if (previewDialogVisible.value && previewDocumentId.value) savePreviewPosition()
-    const listedExt = row.filePath?.split('.').pop()?.toLowerCase() || ''
-    const listedPreviewInfo = getPreviewType(listedExt)
-    previewType.value = listedPreviewInfo.type
-    previewLanguage.value = listedPreviewInfo.language
-    previewDialogVisible.value = true
-    previewLoading.value = true
-    previewContent.value = ''
-    previewError.value = ''
-    previewFileName.value = row.title || row.filePath?.split('/').pop() || '未知文件'
-    previewTitle.value = `预览 - ${previewFileName.value}`
-    previewDocumentId.value = row.id
-    previewDocumentVersion.value = row.version || 1
-    currentPage.value = 1
-    jumpPageNum.value = 1
-    totalPages.value = 0
-    teardownPdfResizeObserver()
-    pdfRenderSequence++
-    if (pdfRenderTask) pdfRenderTask.cancel()
-    pdfRenderTask = null
-    const previousPdfDocument = pdfDoc.value
-    pdfDoc.value = null
-    if (previousPdfDocument) {
-      try {
-        await previousPdfDocument.destroy()
-      } catch {
-        // A previous preview may already be finishing its teardown.
-      }
-    }
-
-    if (listedExt === 'xls' || listedExt === 'xlsx') {
-      previewType.value = 'office'
-      previewLanguage.value = 'excel'
-      previewFileSize.value = row.size || 0
-      previewLoading.value = false
-      await restorePreviewScrollPosition()
-      return
-    }
-
-    const response = await api.documents.getContent(row.id)
-    const data = response.data || {}
-    const content = data.content || ''
-    const fileName = data.fileName || ''
-    const isBase64 = data.isBase64 || false
-    const fileSize = data.fileSize || 0
-
-    previewFileName.value = fileName || previewFileName.value
-    previewFileSize.value = fileSize
-
-    // 根据文件扩展名确定预览类型
-    const ext = fileName.split('.').pop().toLowerCase()
-    const previewInfo = getPreviewType(ext)
-
-    previewType.value = previewInfo.type
-    previewLanguage.value = previewInfo.language
-    const savedPosition = readCurrentPreviewPosition()
-
-    if (previewType.value === 'pdf') {
-      // 处理 PDF 预览：将 base64 转换为 Uint8Array
-      const pdfData = isBase64 ? base64ToUint8Array(content) : content
-
-      // 先加载 PDF 文档,但不渲染
-      await loadPDFDocument(pdfData)
-
-      // 先停止加载状态,让 canvas 渲染到 DOM
-      previewLoading.value = false
-
-      // 等待 DOM 更新完成
-      await nextTick()
-
-      currentPage.value = Math.min(totalPages.value, Math.max(1, Number(savedPosition?.page) || 1))
-      jumpPageNum.value = currentPage.value
-
-      // 现在渲染上次阅读页或第一页
-      await renderPage(currentPage.value)
-      setupPdfResizeObserver()
-      await restorePreviewScrollPosition(savedPosition)
-    } else if (isBase64) {
-      // 其他二进制和图片文件
-      if (previewType.value === 'image') {
-        // 图片: 直接使用 base64
-        previewContent.value = content
-        previewLoading.value = false
-      } else if (previewType.value === 'office') {
-        // Office 文件: 尝试解析并预览
-        await loadOfficeContent(content, ext)
-      } else {
-        // 其他二进制文件不支持预览
-        previewType.value = 'unsupported'
-        console.log('不支持预览的文件类型:', ext)
-        previewLoading.value = false
-      }
-    } else {
-      previewContent.value = content
-      previewLoading.value = false
-    }
-
-    if (previewType.value !== 'pdf') await restorePreviewScrollPosition(savedPosition)
-
-  } catch (error) {
-    console.error('加载预览内容失败:', error)
-    if (error.response?.status === 400) {
-      previewType.value = 'unsupported'
-      previewError.value = ''
-    } else {
-      previewError.value = previewType.value === 'pdf'
-        ? 'PDF 预览组件加载失败。你可以重新加载；若仍失败，原件仍可正常下载。'
-        : '预览内容加载失败。你可以重新加载或下载原件。'
-    }
-    previewLoading.value = false
-  }
-}
-
-// 将 base64 字符串转换为 Uint8Array
-function base64ToUint8Array(base64) {
-  const binaryString = atob(base64)
-  const len = binaryString.length
-  const bytes = new Uint8Array(len)
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i)
-  }
-  return bytes
-}
-
-// 加载Office文档内容
-async function loadOfficeContent(base64Content, ext) {
-  if (ext !== 'docx') {
-    previewType.value = 'office'
-    previewLoading.value = false
-    return
-  }
-
-  try {
-    // 将base64转换为ArrayBuffer
-    const binaryString = atob(base64Content)
-    const bytes = new Uint8Array(binaryString.length)
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i)
-    }
-    const arrayBuffer = bytes.buffer
-
-    // Word文档预览
-    const result = await mammoth.convertToHtml({ arrayBuffer })
-    previewContent.value = result.value
-    previewType.value = 'word-html'
-    previewLoading.value = false
-  } catch (error) {
-    console.error('加载Office文档内容失败:', error)
-    previewType.value = 'office'
-    previewLoading.value = false
-    toast.warning('文档预览失败，请下载后查看')
-  }
-}
-
-async function loadPDFDocument(pdfData) {
-  try {
-    // 确保数据是 Uint8Array
-    let uint8Array = pdfData
-    if (typeof pdfData === 'string') {
-      uint8Array = base64ToUint8Array(pdfData)
-    }
-
-    if (pdfDoc.value) await pdfDoc.value.destroy()
-    const doc = await openPdfDocument(uint8Array)
-
-    pdfDoc.value = doc
-    totalPages.value = doc.numPages
-  } catch (error) {
-    console.error('加载 PDF 文档失败:', error)
-    throw error
-  }
-}
-
-async function renderPage(pageNum) {
-  const sequence = ++pdfRenderSequence
-  try {
-    if (!pdfDoc.value || !pdfCanvas.value) {
-      return
-    }
-
-    const page = await pdfDoc.value.getPage(pageNum)
-    if (sequence !== pdfRenderSequence) return
-
-    const canvas = pdfCanvas.value
-    const stage = pdfCanvasStage.value
-    const context = canvas.getContext('2d', { alpha: false })
-    const baseViewport = page.getViewport({ scale: 1 })
-    const availableWidth = Math.max((stage?.clientWidth || baseViewport.width) - 48, 320)
-    const cssScale = Math.min(2, Math.max(0.72, availableWidth / baseViewport.width))
-    const viewport = page.getViewport({ scale: cssScale })
-    const outputScale = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2.25)
-
-    if (pdfRenderTask) {
-      pdfRenderTask.cancel()
-      pdfRenderTask = null
-    }
-
-    canvas.width = Math.max(1, Math.floor(viewport.width * outputScale))
-    canvas.height = Math.max(1, Math.floor(viewport.height * outputScale))
-    canvas.style.width = `${Math.floor(viewport.width)}px`
-    canvas.style.height = `${Math.floor(viewport.height)}px`
-
-    const renderContext = {
-      canvasContext: context,
-      viewport,
-      background: '#ffffff',
-      transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0]
-    }
-
-    pdfRenderTask = page.render(renderContext)
-    await pdfRenderTask.promise
-  } catch (error) {
-    if (error?.name === 'RenderingCancelledException') return
-    console.error(`渲染第 ${pageNum} 页失败:`, error)
-    toast.error('渲染 PDF 页面失败')
-  } finally {
-    if (sequence === pdfRenderSequence) pdfRenderTask = null
-  }
-}
-
-function teardownPdfResizeObserver() {
-  if (pdfResizeObserver) pdfResizeObserver.disconnect()
-  pdfResizeObserver = null
-  if (pdfResizeTimer) clearTimeout(pdfResizeTimer)
-  pdfResizeTimer = null
-  pdfLastStageWidth = 0
-}
-
-function setupPdfResizeObserver() {
-  teardownPdfResizeObserver()
-  if (!pdfCanvasStage.value || typeof ResizeObserver === 'undefined') return
-  pdfLastStageWidth = Math.round(pdfCanvasStage.value.clientWidth)
-  pdfResizeObserver = new ResizeObserver(entries => {
-    const width = Math.round(entries[0]?.contentRect?.width || 0)
-    if (!width || Math.abs(width - pdfLastStageWidth) < 8) return
-    pdfLastStageWidth = width
-    if (pdfResizeTimer) clearTimeout(pdfResizeTimer)
-    pdfResizeTimer = setTimeout(() => {
-      if (previewDialogVisible.value && previewType.value === 'pdf' && pdfDoc.value) {
-        void renderPage(currentPage.value)
-      }
-    }, 140)
-  })
-  pdfResizeObserver.observe(pdfCanvasStage.value)
-}
-
-async function handlePreviewClosed() {
-  teardownPdfResizeObserver()
-  pdfRenderSequence++
-  if (pdfRenderTask) pdfRenderTask.cancel()
-  pdfRenderTask = null
-  const documentToDestroy = pdfDoc.value
-  pdfDoc.value = null
-  if (documentToDestroy) {
-    try {
-      await documentToDestroy.destroy()
-    } catch {
-      // Closing the dialog can race with an already-cancelled render task.
-    }
-  }
-}
-
-function handlePreviewClosing() {
-  savePreviewPosition()
-}
-
-async function prevPage() {
-  if (currentPage.value > 1) {
-    currentPage.value--
-    jumpPageNum.value = currentPage.value
-    await renderPage(currentPage.value)
-    // 滚动到PDF预览区域顶部
-    scrollToPdfTop()
-  }
-}
-
-async function nextPage() {
-  if (currentPage.value < totalPages.value) {
-    currentPage.value++
-    jumpPageNum.value = currentPage.value
-    await renderPage(currentPage.value)
-    // 滚动到PDF预览区域顶部
-    scrollToPdfTop()
-  }
-}
-
-async function handleJumpPageConfirm() {
-  const pageNum = parseInt(jumpPageNum.value)
-  if (pageNum >= 1 && pageNum <= totalPages.value) {
-    currentPage.value = pageNum
-    await renderPage(currentPage.value)
-    // 滚动到PDF预览区域顶部
-    scrollToPdfTop()
-  } else {
-    toast.warning(`请输入有效的页码（1-${totalPages.value}）`)
-  }
-}
-
-// 滚动到PDF预览区域顶部
-function scrollToPdfTop() {
-  pdfCanvasStage.value?.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
-}
-
 async function handleCategoryHover(categoryId) {
   hoveredCategoryId.value = categoryId
   // 文件数量现在从后端分类数据中获取，不再需要额外请求
@@ -2506,70 +1899,6 @@ function handleDialogDragLeave(event) {
   isDraggingFile.value = false
 }
 
-function getPreviewType(ext) {
-  const markdownFiles = ['md', 'markdown', 'mdown', 'mkd']
-  const codeFiles = {
-    'js': 'javascript',
-    'ts': 'typescript',
-    'jsx': 'javascript',
-    'tsx': 'typescript',
-    'py': 'python',
-    'java': 'java',
-    'c': 'c',
-    'cpp': 'cpp',
-    'h': 'c',
-    'hpp': 'cpp',
-    'cs': 'csharp',
-    'go': 'go',
-    'rs': 'rust',
-    'rb': 'ruby',
-    'php': 'php',
-    'swift': 'swift',
-    'kt': 'kotlin',
-    'scala': 'scala',
-    'sql': 'sql',
-    'sh': 'bash',
-    'bash': 'bash',
-    'zsh': 'bash',
-    'fish': 'bash',
-    'xml': 'xml',
-    'html': 'html',
-    'htm': 'html',
-    'css': 'css',
-    'scss': 'scss',
-    'sass': 'sass',
-    'less': 'less',
-    'json': 'json',
-    'yaml': 'yaml',
-    'yml': 'yaml',
-    'toml': 'toml',
-    'ini': 'ini',
-    'conf': 'ini',
-    'cfg': 'ini',
-    'pdf': 'pdf'
-  }
-
-  if (ext === 'pdf') {
-    return { type: 'pdf', language: 'pdf', editable: false }
-  } else if (markdownFiles.includes(ext)) {
-    return { type: 'markdown', language: 'markdown', editable: true }
-  } else if (codeFiles[ext]) {
-    return { type: 'code', language: codeFiles[ext], editable: true }
-  } else if (['txt', 'log', 'csv', 'tsv'].includes(ext)) {
-    return { type: 'text', language: 'plaintext', editable: true }
-  } else if (['doc', 'docx'].includes(ext)) {
-    return { type: 'office', language: 'word', editable: false }
-  } else if (['ppt', 'pptx'].includes(ext)) {
-    return { type: 'office', language: 'ppt', editable: false }
-  } else if (['xls', 'xlsx'].includes(ext)) {
-    return { type: 'office', language: 'excel', editable: false }
-  } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
-    return { type: 'image', language: 'image', editable: false }
-  } else {
-    return { type: 'unsupported', language: 'plaintext', editable: false }
-  }
-}
-
 function formatFileSize(bytes) {
   if (!bytes || bytes === 0) return '0 B'
   const k = 1024
@@ -2578,69 +1907,17 @@ function formatFileSize(bytes) {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
 
-function getImageMimeType(fileName) {
-  if (!fileName) return 'png'
-  const ext = fileName.split('.').pop().toLowerCase()
-  const mimeTypes = {
-    'jpg': 'jpeg',
-    'jpeg': 'jpeg',
-    'png': 'png',
-    'gif': 'gif',
-    'bmp': 'bmp',
-    'webp': 'webp'
-  }
-  return mimeTypes[ext] || 'png'
-}
-
-function getOfficeIconName(type) {
-  const icons = {
-    'word': 'file-word',
-    'ppt': 'file-powerpoint',
-    'excel': 'file-excel'
-  }
-  return icons[type] || 'file'
-}
-
-function getOfficeTypeLabel(type) {
-  const labels = {
-    'word': 'Word',
-    'ppt': 'PowerPoint',
-    'excel': 'Excel'
-  }
-  return labels[type] || 'Office'
-}
-
-function handleDownloadPreviewFile() {
-  const row = documents.value.find(d => d.id === previewDocumentId.value)
-  if (row) {
-    handleDownload(row)
-  }
-}
-
-function retryPreview() {
-  const row = documents.value.find(document => Number(document.id) === Number(previewDocumentId.value))
-    || (Number(detailDocument.value?.id) === Number(previewDocumentId.value) ? detailDocument.value : null)
-    || { id: previewDocumentId.value, title: previewFileName.value, filePath: previewFileName.value, size: previewFileSize.value }
-  loadPreviewContent(row)
-}
-
 onMounted(async () => {
+  hydrateDocumentListRouteState()
   await Promise.all([loadCategories(), loadAllTags(), loadDocumentCoverage()])
   await loadDocuments()
   const documentId = Number(route.query.documentId)
   if (Number.isSafeInteger(documentId) && documentId > 0) {
     const row = documents.value.find((item) => Number(item.id) === documentId) || { id: documentId, title: `文档 ${documentId}` }
-    await loadPreviewContent(row)
+    await previewDialog.value?.open(row)
   }
 })
 
-onBeforeUnmount(() => {
-  savePreviewPosition()
-  teardownPdfResizeObserver()
-  if (pdfRenderTask) pdfRenderTask.cancel()
-  pdfRenderTask = null
-  if (pdfDoc.value) void pdfDoc.value.destroy()
-})
 </script>
 
 <style scoped>
@@ -4200,87 +3477,6 @@ onBeforeUnmount(() => {
   background: var(--color-primary-surface);
 }
 
-.document-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.document-detail-hero {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.document-detail-icon {
-  width: 52px;
-  height: 52px;
-}
-
-.document-detail-hero > div {
-  min-width: 0;
-  display: grid;
-  gap: 5px;
-}
-
-.document-detail-hero strong {
-  overflow-wrap: anywhere;
-  font-size: 16px;
-  color: var(--color-text-primary);
-}
-
-.document-detail-hero span,
-.document-detail-section p {
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.document-detail-section {
-  padding: 15px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-
-.document-detail-section h4,
-.document-detail-section p {
-  margin: 0;
-}
-
-.document-detail-heading {
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.document-detail-grid {
-  display: grid;
-  grid-template-columns: 82px minmax(0, 1fr);
-  gap: 12px;
-  font-size: 13px;
-}
-
-.document-detail-grid > span {
-  color: var(--color-text-muted);
-}
-
-.document-detail-grid > strong {
-  color: var(--color-text-primary);
-  overflow-wrap: anywhere;
-}
-
-.document-detail-actions h4 {
-  margin-bottom: 12px;
-}
-
-.document-detail-action-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
 .version-upload-form {
   margin-top: 16px;
 }
@@ -4478,136 +3674,25 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: var(--color-primary);
-  font-size: 13px;
-}
-
-.preview-container {
-  width: 100%;
-  min-height: 0;
-  height: 100%;
-  flex: 1 1 auto;
-  max-height: none;
-  gap: 0;
-  overflow: hidden;
-  background: var(--color-surface-page);
-}
-
-.preview-toolbar {
-  min-height: 62px;
-  padding: 10px 16px;
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  border-bottom: 1px solid var(--color-border-subtle);
-  background: var(--color-surface-raised);
-}
-
-.preview-file-meta {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.preview-file-meta strong {
-  max-width: min(760px, 60vw);
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pdf-preview {
-  position: relative;
-  height: 100%;
-  padding-bottom: 54px;
-  box-sizing: border-box;
-  min-height: 0;
-  flex: 1 1 auto;
-  gap: 0;
-  align-items: stretch;
-  overflow: hidden;
-}
-
-.pdf-controls {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  min-height: 52px;
-  padding: 8px 14px;
-  justify-content: center;
-  flex-wrap: wrap;
-  border-top: 1px solid var(--color-border-subtle);
-  border-bottom: 0;
-  border-radius: 0;
-  background: var(--color-surface-raised);
-  box-shadow: 0 -5px 18px rgba(23, 32, 51, 0.05);
-  z-index: 1;
-}
-
-.pdf-canvas-stage {
-  height: 100%;
-  min-height: 0;
-  padding: 24px;
-  display: flex;
-  flex: 1 1 auto;
-  justify-content: center;
-  overflow: auto;
-  background: var(--color-surface-subtle);
-}
-
-.pdf-preview canvas {
-  align-self: flex-start;
-  max-width: none;
-  border: 1px solid var(--color-border-default);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-md);
+  color: var(--color-primary);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
 }
 
-.markdown-preview,
-.text-preview,
-.code-preview,
-.image-preview,
-.word-html-preview,
-.office-preview,
-.unsupported-preview,
-.preview-error-state {
-  margin: 20px;
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow: auto;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-raised);
+.batch-selection-summary:hover,
+.batch-selection-summary:focus-visible {
+  background: color-mix(in srgb, var(--color-primary) 9%, transparent);
 }
 
-.text-preview pre,
-.word-content {
-  background: var(--color-surface-raised);
+.batch-selection-summary:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
 }
 
 :deep(.document-dialog.native-dialog) {
-  overflow: hidden;
-}
-
-:deep(.document-preview-dialog.native-dialog) {
-  max-height: 92vh;
-}
-
-:deep(.document-preview-dialog.native-dialog--resizable) {
-  min-width: min(720px, calc(100vw - 40px));
-  min-height: min(360px, calc(100vh - 40px));
-}
-
-:deep(.document-preview-dialog .native-dialog__body) {
-  padding: 0;
-  display: flex;
   overflow: hidden;
 }
 

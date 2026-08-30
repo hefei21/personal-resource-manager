@@ -82,6 +82,9 @@ const props = defineProps({
   header: { type: String, default: '' },
   body: { type: String, default: '' },
   width: { type: [String, Number], default: '520px' },
+  minWidth: { type: [String, Number], default: undefined },
+  minHeight: { type: [String, Number], default: undefined },
+  maxHeight: { type: [String, Number], default: undefined },
   closeBtn: { type: Boolean, default: true },
   showClose: { type: [Boolean, String], default: undefined },
   closeOnOverlayClick: { type: Boolean, default: true },
@@ -117,8 +120,12 @@ const closeOnEscape = computed(() => normalizeBooleanAlias(props.closeOnEscKeydo
 const confirmButtonText = computed(() => props.confirmBtn?.content || props.confirmText)
 const confirmButtonTheme = computed(() => props.confirmBtn?.theme || 'primary')
 const overlayStyle = computed(() => ({ zIndex: props.zIndex }))
+const cssSize = value => typeof value === 'number' ? `${value}px` : value
 const dialogStyle = computed(() => ({
-  width: typeof props.width === 'number' ? `${props.width}px` : props.width,
+  width: cssSize(props.width),
+  ...(props.minWidth !== undefined ? { minWidth: cssSize(props.minWidth) } : {}),
+  ...(props.minHeight !== undefined ? { minHeight: cssSize(props.minHeight) } : {}),
+  ...(props.maxHeight !== undefined ? { maxHeight: cssSize(props.maxHeight) } : {}),
   zIndex: props.zIndex + 1
 }))
 
@@ -151,6 +158,16 @@ function handleEscapeKeyDown(event) {
 }
 
 function handlePointerDownOutside(event) {
+  const target = event?.detail?.originalEvent?.target || event?.target
+  if (target?.closest?.([
+    '.native-tree-select__dropdown',
+    '.native-select__dropdown',
+    '.native-date-range-picker__dropdown',
+    '.native-dropdown__menu'
+  ].join(', '))) {
+    event.preventDefault()
+    return
+  }
   if (!props.closeOnOverlayClick) event.preventDefault()
 }
 
