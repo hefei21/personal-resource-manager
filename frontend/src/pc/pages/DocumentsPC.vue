@@ -119,22 +119,29 @@
               :class="{ active: currentCategoryId === item.id }"
               :style="{ '--folder-depth': item.depth }"
             >
+              <button
+                v-if="item.subcategories?.length"
+                type="button"
+                class="folder-tree-toggle"
+                :title="expandedCategoryIds.has(item.id) ? '收起子分类' : '展开子分类'"
+                :aria-label="expandedCategoryIds.has(item.id) ? `收起${item.name}` : `展开${item.name}`"
+                :aria-expanded="expandedCategoryIds.has(item.id)"
+                @click.stop="toggleCategoryExpansion(item.id)"
+              >
+                <NativeIcon :name="expandedCategoryIds.has(item.id) ? 'caret-down' : 'caret-right'" size="13" />
+              </button>
+              <span v-else class="folder-tree-toggle-spacer" aria-hidden="true"></span>
               <button type="button" class="folder-tree-item" @click="selectCategoryFromRail(item)">
                 <NativeIcon :name="currentCategoryId === item.id ? 'folder-open' : 'folder'" size="17" />
                 <span>{{ item.name }}</span>
                 <small>{{ item.fileCount || 0 }}</small>
               </button>
               <div v-if="canWrite" class="folder-tree-actions">
+                <button type="button" title="新建子分类" @click.stop="handleCreateSubcategory(item)"><NativeIcon name="plus" size="13" /></button>
                 <button type="button" title="重命名" @click="handleRenameCategory(item)"><NativeIcon name="pencil" size="13" /></button>
                 <button type="button" title="删除" @click="handleDeleteCategory(item)"><NativeIcon name="trash" size="13" /></button>
               </div>
             </div>
-          </div>
-          <div v-if="canWrite" class="folder-rail-footer">
-            <NativeButton variant="outline" size="small" @click="currentCategoryId ? handleCreateSubcategory() : handleCreateCategory()">
-              <template #icon><NativeIcon name="folder-plus" /></template>
-              {{ currentCategoryId ? '新建子分类' : '新建分类' }}
-            </NativeButton>
           </div>
         </aside>
 
@@ -176,7 +183,7 @@
           >
             <template #cell-title="{ row }">
               <button type="button" class="document-title-cell" @click="handleView(row)">
-                <span class="document-type-icon"><NativeIcon :name="getFileIcon(row.filePath)" size="18" /></span>
+                <span class="document-type-icon"><NativeIcon :name="documentFileIcon(row.filePath)" size="18" /></span>
                 <span>{{ row.title }}</span>
               </button>
             </template>
@@ -223,7 +230,7 @@
       <div v-if="detailDocument" class="document-detail">
         <div class="document-detail-hero">
           <span class="document-detail-icon">
-            <NativeIcon :name="getFileIcon(detailDocument.filePath)" size="28" />
+            <NativeIcon :name="documentFileIcon(detailDocument.filePath)" size="28" />
           </span>
           <div>
             <strong>{{ detailDocument.title }}</strong>
@@ -320,7 +327,7 @@
     <!-- 创建分类对话框 -->
     <NativeDialog
       v-model="createCategoryDialogVisible"
-      title="创建分类"
+      :title="createCategoryParent ? '创建子分类' : '创建分类'"
       :confirm-btn="{ content: '确认', theme: 'primary' }"
       width="500px"
       @confirm="handleCreateCategoryConfirm"
@@ -329,8 +336,8 @@
         <NativeFormItem label="分类名称" name="name" required>
           <NativeInput v-model="categoryForm.name" placeholder="请输入分类名称" />
         </NativeFormItem>
-        <NativeFormItem v-if="currentCategoryId" label="父分类">
-          <NativeInput :modelValue="currentCategoryName" disabled />
+        <NativeFormItem v-if="createCategoryParent" label="父分类">
+          <NativeInput :modelValue="createCategoryParent.name" disabled />
         </NativeFormItem>
       </NativeForm>
     </NativeDialog>
@@ -727,6 +734,11 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { documentTagsLabel } from '@/utils/documentTags'
+import {
+  collectExpandableCategoryIds,
+  documentFileIcon,
+  flattenVisibleDocumentCategories
+} from '@/utils/documentWorkbench'
 import { openPdfDocument } from '@/utils/pdfPreview'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
@@ -786,6 +798,7 @@ const uploadConflict = ref(null)
 const selectedUploadConflictCandidateId = ref(null)
 const versionsDialogVisible = ref(false)
 const createCategoryDialogVisible = ref(false)
+const createCategoryParent = ref(null)
 const deleteCategoryDialogVisible = ref(false)
 const deleteCategoryData = ref(null)
 const renameCategoryDialogVisible = ref(false)
@@ -803,29 +816,18 @@ const ragCoverageComplete = ref(false)
 // 浏览模式
 const viewMode = ref('category') // category, list
 const categories = ref([])
+const expandedCategoryIds = ref(new Set())
+let categoryExpansionInitialized = false
 const currentCategoryId = ref(null) // 当前选中的分类ID
 const categoryPath = ref([]) // 当前分类路径
 const categoryFileCount = ref({}) // 分类文件数量缓存
-const currentCategoryName = computed(() => {
-  if (categoryPath.value.length === 0) return ''
-  return categoryPath.value[categoryPath.value.length - 1].name
-})
 const currentCategoryPath = computed(() => {
   return categoryPath.value.map(c => c.name).join(' / ')
 })
 
-const flattenedCategories = computed(() => {
-  const result = []
-  const walk = (nodes, trail = []) => {
-    for (const category of Array.isArray(nodes) ? nodes : []) {
-      const nextTrail = [...trail, category]
-      result.push({ ...category, depth: trail.length, trail: nextTrail })
-      walk(category.subcategories, nextTrail)
-    }
-  }
-  walk(categories.value)
-  return result
-})
+const flattenedCategories = computed(() => (
+  flattenVisibleDocumentCategories(categories.value, expandedCategoryIds.value)
+))
 
 // 预览相关状态
 const previewDialogVisible = ref(false)
@@ -1262,7 +1264,17 @@ async function loadCategories() {
   try {
     const response = await api.documents.categories()
     console.log('分类响应:', response)
-    categories.value = response.data?.data || []
+    const nextCategories = response.data?.data || []
+    const expandableIds = collectExpandableCategoryIds(nextCategories)
+    if (!categoryExpansionInitialized) {
+      expandedCategoryIds.value = expandableIds
+      categoryExpansionInitialized = true
+    } else {
+      expandedCategoryIds.value = new Set(
+        [...expandedCategoryIds.value].filter(id => expandableIds.has(id))
+      )
+    }
+    categories.value = nextCategories
   } catch (error) {
     console.error('加载分类失败:', error)
     categoriesError.value = documentErrorMessage(error, '暂时无法加载分类。')
@@ -1343,6 +1355,13 @@ function selectCategoryFromRail(item) {
   loadDocuments()
 }
 
+function toggleCategoryExpansion(categoryId) {
+  const next = new Set(expandedCategoryIds.value)
+  if (next.has(categoryId)) next.delete(categoryId)
+  else next.add(categoryId)
+  expandedCategoryIds.value = next
+}
+
 function resetCategory() {
   if (categoryPath.value.length > 1) {
     // 返回上一级
@@ -1365,11 +1384,16 @@ function backToRoot() {
 }
 
 function handleCreateCategory() {
+  createCategoryParent.value = null
   categoryForm.value = { name: '' }
   createCategoryDialogVisible.value = true
 }
 
-function handleCreateSubcategory() {
+function handleCreateSubcategory(category) {
+  createCategoryParent.value = {
+    id: category.id,
+    name: category.name
+  }
   categoryForm.value = { name: '' }
   createCategoryDialogVisible.value = true
 }
@@ -1381,15 +1405,19 @@ async function handleCreateCategoryConfirm() {
       return
     }
 
-    const parentId = currentCategoryId.value
+    const parentId = createCategoryParent.value?.id || null
     await api.documents.createCategory({
       name: categoryForm.value.name.trim(),
-      parentId: parentId || null
+      parentId
     })
 
+    if (parentId) {
+      expandedCategoryIds.value = new Set([...expandedCategoryIds.value, parentId])
+    }
     toast.success('创建成功')
     createCategoryDialogVisible.value = false
-    loadCategories()
+    createCategoryParent.value = null
+    await loadCategories()
   } catch (error) {
     console.error('创建分类失败:', error)
     toast.error(error.response?.data?.message || '创建失败')
@@ -3540,8 +3568,7 @@ onMounted(async () => {
   background: color-mix(in srgb, var(--color-surface-subtle) 82%, white);
 }
 
-.folder-rail-header,
-.folder-rail-footer {
+.folder-rail-header {
   min-height: 52px;
   padding: 10px 14px;
   display: flex;
@@ -3555,11 +3582,6 @@ onMounted(async () => {
   color: var(--color-text-primary);
 }
 
-.folder-rail-footer {
-  margin-top: auto;
-  border-top: 1px solid var(--color-border-subtle);
-}
-
 .folder-tree {
   padding: 8px;
   overflow-y: auto;
@@ -3567,16 +3589,42 @@ onMounted(async () => {
 
 .folder-tree-row {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
+  padding-left: calc(5px + var(--folder-depth, 0) * 15px);
   border-radius: var(--radius-sm);
+}
+
+.folder-tree-toggle,
+.folder-tree-toggle-spacer {
+  width: 20px;
+  height: 30px;
+}
+
+.folder-tree-toggle {
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.folder-tree-toggle:hover,
+.folder-tree-toggle:focus-visible {
+  color: var(--color-primary);
+  background: var(--color-surface-raised);
 }
 
 .folder-tree-item {
   width: 100%;
   min-width: 0;
   min-height: 38px;
-  padding: 7px 8px 7px calc(9px + var(--folder-depth, 0) * 15px);
+  padding: 7px 8px 7px 2px;
   display: grid;
   grid-template-columns: 19px minmax(0, 1fr) auto;
   align-items: center;
@@ -3600,30 +3648,39 @@ onMounted(async () => {
   font-size: 11px;
 }
 
+.folder-tree-row:hover,
+.folder-tree-row.active {
+  background: var(--color-primary-surface);
+}
+
 .folder-tree-item:hover,
 .folder-tree-row.active .folder-tree-item {
-  background: var(--color-primary-surface);
   color: var(--color-primary);
 }
 
 .folder-tree-all {
   margin-bottom: 4px;
+  padding-left: 9px;
   --folder-depth: 0;
 }
 
 .folder-tree-actions {
   position: absolute;
   right: 5px;
-  display: none;
+  display: flex;
   align-items: center;
   gap: 2px;
   padding-left: 12px;
   background: linear-gradient(90deg, transparent, var(--color-primary-surface) 25%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
 }
 
 .folder-tree-row:hover .folder-tree-actions,
 .folder-tree-row:focus-within .folder-tree-actions {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .folder-tree-actions button {
