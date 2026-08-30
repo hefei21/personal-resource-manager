@@ -2,33 +2,6 @@
   <div id="mobile-documents-host" class="mobile-documents">
     <!-- 顶部导航栏（标题由Layout统一提供，此处不再重复） -->
 
-    <div class="mobile-browse-toolbar">
-      <button
-        type="button"
-        class="mobile-category-filter"
-        aria-haspopup="dialog"
-        :aria-expanded="categoryPickerVisible"
-        @click="openCategoryPicker"
-      >
-        <span class="mobile-category-filter__icon"><NativeIcon :name="currentCategoryId ? 'folder-open' : 'folder'" size="20" /></span>
-        <span class="mobile-category-filter__copy">
-          <strong>{{ currentCategoryName || '全部文档' }}</strong>
-          <small>{{ currentCategoryPathLabel || '按分类筛选' }}</small>
-        </span>
-        <NativeIcon name="chevron-down" size="16" />
-      </button>
-      <NativeButton
-        class="mobile-trash-button"
-        variant="outline"
-        shape="circle"
-        title="文档回收站"
-        aria-label="打开文档回收站"
-        @click="openTrashPage"
-      >
-        <template #icon><NativeIcon name="trash" /></template>
-      </NativeButton>
-    </div>
-
     <div class="mobile-search-actions">
       <NativeInput
         v-model="searchKeyword"
@@ -53,6 +26,33 @@
         accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.gif,.bmp"
         @change="handleMobileFileChange"
       />
+    </div>
+
+    <div class="mobile-browse-toolbar">
+      <button
+        type="button"
+        class="mobile-category-filter"
+        aria-haspopup="dialog"
+        :aria-expanded="categoryPickerVisible"
+        @click="openCategoryPicker"
+      >
+        <span class="mobile-category-filter__icon"><NativeIcon :name="currentCategoryId ? 'folder-open' : 'folder'" size="20" /></span>
+        <span class="mobile-category-filter__copy">
+          <strong>{{ currentCategoryName || '全部文档' }}</strong>
+          <small>{{ currentCategoryPathLabel || '选择分类筛选文档' }}</small>
+        </span>
+        <NativeIcon name="chevron-down" size="16" />
+      </button>
+      <NativeButton
+        class="mobile-trash-button"
+        variant="outline"
+        shape="circle"
+        title="文档回收站"
+        aria-label="打开文档回收站"
+        @click="openTrashPage"
+      >
+        <template #icon><NativeIcon name="trash" /></template>
+      </NativeButton>
     </div>
 
     <!-- 移动端最小上传对话框 -->
@@ -188,7 +188,7 @@
             <span v-else class="category-picker-disclosure-spacer" aria-hidden="true"></span>
             <button type="button" class="category-picker-option" @click="selectCategoryFromPicker(row.category)">
               <span class="category-picker-row-icon"><NativeIcon :name="row.expanded ? 'folder-open' : 'folder'" size="19" /></span>
-              <span><strong>{{ row.category.name }}</strong><small>{{ Number(row.category.count) || 0 }} 个文档</small></span>
+              <span><strong>{{ row.category.name }}</strong><small>{{ Number(row.category.fileCount) || 0 }} 个文档</small></span>
               <NativeIcon v-if="String(row.category.id) === String(currentCategoryId)" name="check" size="18" />
             </button>
           </div>
@@ -260,13 +260,14 @@
       </div>
       
       <!-- 移动端使用连续列表分页，保留阅读位置且不产生数字分页跳转。 -->
-      <div v-if="documents.length > 0" class="mobile-list-pagination" aria-live="polite">
-        <div class="mobile-list-pagination__status">
+      <div v-if="documents.length > 0" class="mobile-list-pagination" :class="{ 'mobile-list-pagination--complete': !hasMore }" aria-live="polite">
+        <span v-if="!hasMore" class="mobile-list-pagination__complete">
+          <NativeIcon name="check" size="14" />
+          已显示全部 {{ total }} 项
+        </span>
+        <div v-else class="mobile-list-pagination__status">
           <span>已显示 {{ documents.length }} / {{ total }}</span>
-          <span>{{ hasMore ? `每次加载 ${pageSize} 项` : '已加载全部' }}</span>
-        </div>
-        <div class="mobile-list-pagination__track" aria-hidden="true">
-          <span :style="{ width: `${total > 0 ? Math.min(100, documents.length / total * 100) : 100}%` }"></span>
+          <span>还剩 {{ Math.max(0, total - documents.length) }} 项</span>
         </div>
         <NativeButton v-if="hasMore" variant="outline" size="small" @click="loadMore" :loading="loading">
           加载下一批
@@ -512,7 +513,7 @@ import {
   pruneDocumentPreviewPositions,
   updateDocumentPreviewPosition
 } from '@/utils/documentWorkbench'
-import { openAuthenticatedPdfDocument } from '@/utils/pdfPreview'
+import { disposePdfDocument, openAuthenticatedPdfDocument } from '@/utils/pdfPreview'
 import { usePermission } from '@/composables/usePermission'
 import { acquireBodyScrollLock } from '@/composables/useModalFocus'
 import { NativeAlert, NativeButton, NativeDialog, NativeForm, NativeFormItem, NativeIcon, NativeInput, NativeLoading, NativeSelect, NativeTag } from '@/components/native'
@@ -948,9 +949,20 @@ async function loadOfficeContent(base64Content, ext) {
 }
 
 // PDF渲染相关函数
+async function teardownPDFDocument() {
+  pdfRenderSequence += 1
+  pdfRenderTask?.cancel?.()
+  pdfRenderTask = null
+  const document = pdfDoc.value
+  pdfDoc.value = null
+  if (document) {
+    try { await disposePdfDocument(document) } catch { /* Closing can race with a cancelled render. */ }
+  }
+}
+
 async function loadPDFDocument(pdfData) {
   try {
-    if (pdfDoc.value) await pdfDoc.value.destroy()
+    await teardownPDFDocument()
     pdfDoc.value = await openAuthenticatedPdfDocument(pdfData)
     totalPages.value = pdfDoc.value.numPages
   } catch (error) {
@@ -1150,13 +1162,7 @@ function closePreview() {
   previewImageUrl.value = ''
   previewType.value = ''
   previewError.value = ''
-  pdfRenderSequence += 1
-  pdfRenderTask?.cancel?.()
-  pdfRenderTask = null
-  if (pdfDoc.value) {
-    pdfDoc.value.destroy()
-    pdfDoc.value = null
-  }
+  void teardownPDFDocument()
   const nextQuery = { ...route.query }
   delete nextQuery.documentId
   void router.replace({ query: nextQuery })
@@ -1513,9 +1519,7 @@ onBeforeUnmount(() => {
   savePreviewPosition()
   window.removeEventListener('resize', handlePreviewResize)
   clearTimeout(resizeTimer)
-  pdfRenderSequence += 1
-  pdfRenderTask?.cancel?.()
-  if (pdfDoc.value) void pdfDoc.value.destroy()
+  void teardownPDFDocument()
   releaseOverlayScrollLock?.()
   releaseOverlayScrollLock = null
 })
@@ -1536,7 +1540,7 @@ onBeforeUnmount(() => {
 }
 
 .mobile-browse-toolbar {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .mobile-trash-button {
@@ -1599,7 +1603,7 @@ onBeforeUnmount(() => {
 .mobile-category-filter__copy small { color: var(--color-text-muted); font-size: 11px; }
 
 .mobile-search-actions {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .search-bar {
@@ -1819,12 +1823,27 @@ onBeforeUnmount(() => {
 .action-menu:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 1px; }
 
 .mobile-list-pagination {
-  margin-top: 12px;
-  padding: 12px;
+  margin-top: 14px;
+  padding-top: 2px;
   display: grid;
-  gap: 9px;
-  border-radius: var(--radius-md);
+  gap: 8px;
+}
+
+.mobile-list-pagination--complete {
+  display: flex;
+  justify-content: center;
+}
+
+.mobile-list-pagination__complete {
+  min-height: 28px;
+  padding: 5px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--radius-pill);
+  color: var(--color-text-muted);
   background: var(--color-surface-subtle);
+  font-size: 11px;
 }
 
 .mobile-list-pagination__status {
@@ -1833,21 +1852,6 @@ onBeforeUnmount(() => {
   gap: 12px;
   color: var(--color-text-muted);
   font-size: 11px;
-}
-
-.mobile-list-pagination__track {
-  height: 3px;
-  overflow: hidden;
-  border-radius: var(--radius-pill);
-  background: var(--color-border-subtle);
-}
-
-.mobile-list-pagination__track span {
-  height: 100%;
-  display: block;
-  border-radius: inherit;
-  background: var(--color-primary);
-  transition: width var(--motion-duration-standard) var(--motion-easing-standard);
 }
 
 .mobile-list-pagination :deep(.native-button) { width: 100%; }

@@ -235,7 +235,7 @@
                   <span>预览</span>
                 </button>
                 <button type="button" class="document-row-action" @click="openDocumentDetails(row)">
-                  <NativeIcon name="info" size="15" />
+                  <NativeIcon name="list-dashes" size="15" />
                   <span>详情</span>
                 </button>
               </div>

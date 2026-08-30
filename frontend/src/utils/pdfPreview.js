@@ -1,4 +1,5 @@
 let pdfRuntimePromise = null
+const pdfLoadingTasks = new WeakMap()
 
 function runtimeBasePath() {
   const base = import.meta.env.BASE_URL || '/'
@@ -34,7 +35,25 @@ export async function openPdfDocument(source) {
     wasmUrl: `${base}wasm/`,
     iccUrl: `${base}iccs/`
   })
-  return loadingTask.promise
+  try {
+    const document = await loadingTask.promise
+    pdfLoadingTasks.set(document, loadingTask)
+    return document
+  } catch (error) {
+    try { await loadingTask.destroy() } catch { /* Preserve the original loading failure. */ }
+    throw error
+  }
+}
+
+export async function disposePdfDocument(document) {
+  if (!document) return
+  const loadingTask = pdfLoadingTasks.get(document)
+  pdfLoadingTasks.delete(document)
+  if (loadingTask && typeof loadingTask.destroy === 'function') {
+    await loadingTask.destroy()
+    return
+  }
+  if (typeof document.cleanup === 'function') await document.cleanup()
 }
 
 export async function openAuthenticatedPdfDocument(url, fetchImpl = globalThis.fetch) {

@@ -22,10 +22,18 @@ test('PDF preview uses one pinned local PDF.js runtime on PC and mobile', () => 
   assert.match(runtimeSource, /import\('pdfjs-dist'\)/u)
   assert.match(runtimeSource, /pdf\.worker\.min\.mjs\?url/u)
   assert.match(runtimeSource, /openAuthenticatedPdfDocument/u)
+  assert.match(runtimeSource, /const pdfLoadingTasks = new WeakMap/u)
+  assert.match(runtimeSource, /export async function disposePdfDocument/u)
+  assert.match(runtimeSource, /loadingTask\.destroy\(\)/u)
   assert.match(runtimeSource, /credentials: 'include'/u)
   assert.match(runtimeSource, /new Uint8Array\(buffer\)/u)
   assert.match(desktopPreviewSource, /openPdfDocument/u)
+  assert.match(desktopPreviewSource, /disposePdfDocument/u)
   assert.match(mobileSource, /openAuthenticatedPdfDocument/u)
+  assert.match(mobileSource, /teardownPDFDocument/u)
+  assert.match(mobileSource, /disposePdfDocument/u)
+  assert.doesNotMatch(mobileSource, /pdfDoc\.value\.destroy/u)
+  assert.doesNotMatch(desktopPreviewSource, /document\.destroy\(\)/u)
   assert.match(desktopPreviewSource, /const pdfDocument = shallowRef\(null\)/u)
   assert.match(mobileSource, /const pdfDoc = shallowRef\(null\)/u)
   assert.match(desktopPageSource, /\/api\/documents\/download\/\$\{row\.id\}/u)
@@ -53,4 +61,17 @@ test('PDF.js CMaps, standard fonts, WASM and ICC assets are served locally', () 
   assert.match(nginxSource, /location ~\* \\.mjs\$/u)
   assert.match(nginxSource, /default_type application\/javascript/u)
   assert.match(nginxSource, /wasm\|bcmap\|icc\|pfb/u)
+})
+
+test('PDF disposal tolerates a document proxy without destroy()', async () => {
+  const { disposePdfDocument } = await import('../src/utils/pdfPreview.js')
+  let cleanupCalls = 0
+
+  await disposePdfDocument({
+    async cleanup() {
+      cleanupCalls += 1
+    }
+  })
+
+  assert.equal(cleanupCalls, 1)
 })

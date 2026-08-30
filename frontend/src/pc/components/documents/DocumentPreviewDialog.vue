@@ -106,7 +106,7 @@ import {
   pruneDocumentPreviewPositions,
   updateDocumentPreviewPosition
 } from '@/utils/documentWorkbench'
-import { openPdfDocument } from '@/utils/pdfPreview'
+import { disposePdfDocument, openPdfDocument } from '@/utils/pdfPreview'
 import { sanitizeHighlightHtml, sanitizeRichHtml } from '@/utils/sanitizeHtml'
 
 const emit = defineEmits(['download'])
@@ -412,7 +412,7 @@ async function destroyPdfDocument() {
   const document = pdfDocument.value
   pdfDocument.value = null
   if (document) {
-    try { await document.destroy() } catch { /* Closing can race with a cancelled render. */ }
+    try { await disposePdfDocument(document) } catch { /* Closing can race with a cancelled render. */ }
   }
 }
 
