@@ -13,7 +13,7 @@
       />
       <DialogContent
         v-bind="contentAttrs"
-        :class="['native-dialog', attrs.class]"
+        :class="['native-dialog', { 'native-dialog--resizable': resizable }, attrs.class]"
         :style="[dialogStyle, attrs.style]"
         @escape-key-down="handleEscapeKeyDown"
         @pointer-down-outside="handlePointerDownOutside"
@@ -95,6 +95,7 @@ const props = defineProps({
   cancelText: { type: String, default: '取消' },
   confirmLoading: { type: Boolean, default: false },
   confirmDisabled: { type: Boolean, default: false },
+  resizable: { type: Boolean, default: false },
   zIndex: { type: Number, default: 10000 }
 })
 
@@ -206,6 +207,25 @@ watch(() => props.modelValue, (open, wasOpen) => {
 .native-dialog:focus-visible {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
+}
+
+.native-dialog--resizable {
+  min-width: min(680px, calc(100vw - 40px));
+  min-height: min(520px, calc(100vh - 40px));
+  resize: both;
+}
+
+.native-dialog--resizable::after {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--color-border-strong);
+  border-bottom: 2px solid var(--color-border-strong);
+  content: '';
+  opacity: 0.8;
+  pointer-events: none;
 }
 
 .native-dialog__header {
@@ -321,6 +341,14 @@ watch(() => props.modelValue, (open, wasOpen) => {
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     transform: none;
   }
+
+  .native-dialog--resizable {
+    min-width: 0;
+    min-height: 0;
+    resize: none;
+  }
+
+  .native-dialog--resizable::after { display: none; }
 
   .native-dialog[data-state='open'] { animation-name: native-dialog-sheet-in; }
   .native-dialog[data-state='closed'] { animation-name: native-dialog-sheet-out; }

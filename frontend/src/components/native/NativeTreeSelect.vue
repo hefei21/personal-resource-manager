@@ -1,5 +1,5 @@
 <template>
-  <div class="native-tree-select" :class="{ 'native-tree-select--disabled': disabled }">
+  <div class="native-tree-select" :class="{ 'native-tree-select--disabled': disabled }" v-click-outside="close">
     <!-- 触发器 -->
     <div 
       ref="triggerRef"
@@ -28,7 +28,7 @@
     </div>
     
     <!-- 下拉面板 -->
-    <div v-if="isOpen" ref="dropdownRef" class="native-tree-select__dropdown" v-click-outside="close" :style="dropdownStyle">
+    <div v-if="isOpen" ref="dropdownRef" class="native-tree-select__dropdown" :style="dropdownStyle">
       <!-- 搜索框 -->
       <div v-if="filterable" class="native-tree-select__search">
         <NativeIcon name="search" size="14" />
@@ -289,9 +289,9 @@ const vClickOutside = {
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
-  border: 1px solid #dcdcdc;
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
   cursor: pointer;
   transition: all 0.2s;
   min-height: 36px;
@@ -304,6 +304,7 @@ const vClickOutside = {
 
 .native-tree-select__trigger--active {
   border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-alpha-10);
 }
 
 .native-tree-select__tags {
@@ -367,10 +368,10 @@ const vClickOutside = {
 }
 
 .native-tree-select__dropdown {
-  background: #fff;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
   max-height: 300px;
   overflow-y: auto;
 }

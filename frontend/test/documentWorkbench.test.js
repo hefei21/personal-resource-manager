@@ -7,6 +7,7 @@ import test from 'node:test'
 import {
   collectExpandableCategoryIds,
   documentFileIcon,
+  documentFileTone,
   flattenVisibleDocumentCategories
 } from '../src/utils/documentWorkbench.js'
 
@@ -33,10 +34,18 @@ const categories = [
 
 test('document workbench maps file names to stable semantic icons', () => {
   assert.equal(documentFileIcon('guide.PDF'), 'file-pdf')
-  assert.equal(documentFileIcon('notes.md'), 'file-text')
-  assert.equal(documentFileIcon('cover.png'), 'image')
+  assert.equal(documentFileIcon('notes.md'), 'file-markdown')
+  assert.equal(documentFileIcon('cover.png'), 'file-image')
   assert.equal(documentFileIcon('archive.unknown'), 'file')
   assert.equal(documentFileIcon(''), 'file')
+  assert.equal(documentFileTone('guide.pdf'), 'pdf')
+  assert.equal(documentFileTone('report.docx'), 'word')
+  assert.equal(documentFileTone('sheet.xlsx'), 'sheet')
+  assert.equal(documentFileTone('deck.pptx'), 'slides')
+  assert.equal(documentFileTone('notes.md'), 'markdown')
+  assert.equal(documentFileTone('cover.png'), 'image')
+  assert.equal(documentFileTone('worker.py'), 'code')
+  assert.equal(documentFileTone('plain.txt'), 'text')
 })
 
 test('document category tree only flattens descendants of expanded folders', () => {
@@ -73,4 +82,22 @@ test('document versions expose active and deleted records in one contextual dial
   assert.match(documents, /versionHistoryView === 'trash'/u)
   assert.doesNotMatch(documents, /versionTrashDialogVisible/u)
   assert.match(documents, /class="preview-error-state"/u)
+})
+
+test('document PC refinement keeps categories collapsed and preview controls usable', () => {
+  const documents = read('src/pc/pages/DocumentsPC.vue')
+  const treeSelect = read('src/components/native/NativeTreeSelect.vue')
+  const dialog = read('src/components/native/NativeDialog.vue')
+
+  assert.match(documents, /expandedCategoryIds\.value = new Set\(\)/u)
+  assert.match(documents, /class="sort-direction-button"/u)
+  assert.match(documents, /class="pdf-canvas-stage"[\s\S]*class="pdf-controls"/u)
+  assert.match(documents, /window\.devicePixelRatio/u)
+  assert.match(documents, /transform: outputScale/u)
+  assert.match(documents, /resizable[\s\S]*@closed="handlePreviewClosed"/u)
+  assert.match(documents, /documentFileTone/u)
+  assert.match(treeSelect, /class="native-tree-select"[\s\S]*v-click-outside="close"/u)
+  assert.doesNotMatch(treeSelect, /native-tree-select__dropdown" v-click-outside/u)
+  assert.match(dialog, /native-dialog--resizable/u)
+  assert.match(dialog, /resize: both/u)
 })

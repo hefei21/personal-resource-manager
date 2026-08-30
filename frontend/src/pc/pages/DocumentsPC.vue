@@ -65,8 +65,8 @@
             ]"
             @change="handleDropdownSortChange"
           />
-          <NativeButton variant="outline" shape="circle" :title="sortOrder === 'desc' ? '降序' : '升序'" @click="toggleSortOrder">
-            <template #icon><NativeIcon :name="sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'" /></template>
+          <NativeButton class="sort-direction-button" variant="text" shape="circle" :title="sortOrder === 'desc' ? '降序' : '升序'" @click="toggleSortOrder">
+            <template #icon><NativeIcon :name="sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'" size="18" /></template>
           </NativeButton>
         </div>
       </div>
@@ -196,9 +196,13 @@
           >
             <template #cell-title="{ row }">
               <button type="button" class="document-title-cell" @click="handleView(row)">
-                <span class="document-type-icon"><NativeIcon :name="documentFileIcon(row.filePath)" size="18" /></span>
+                <span class="document-type-icon" :class="`document-type-icon--${documentFileTone(row.filePath)}`"><NativeIcon :name="documentFileIcon(row.filePath)" size="18" /></span>
                 <span>{{ row.title }}</span>
               </button>
+            </template>
+            <template #cell-tags="{ row }">
+              <span v-if="row.tags" class="document-tags-cell" :title="row.tags">{{ row.tags }}</span>
+              <span v-else class="document-tags-empty">—</span>
             </template>
             <template #cell-version="{ row }"><span>v{{ row.version }}</span></template>
             <template #cell-type="{ row }"><span>{{ getFileExtension(row.filePath || '') }}</span></template>
@@ -242,7 +246,7 @@
     >
       <div v-if="detailDocument" class="document-detail">
         <div class="document-detail-hero">
-          <span class="document-detail-icon">
+          <span class="document-detail-icon" :class="`document-type-icon--${documentFileTone(detailDocument.filePath)}`">
             <NativeIcon :name="documentFileIcon(detailDocument.filePath)" size="28" />
           </span>
           <div>
@@ -594,7 +598,7 @@
         <span class="dialog-intro-icon"><NativeIcon name="info" size="20" /></span>
         <div><strong>文档身份保持不变</strong><span>文件类型需一致；新文件成为当前版本，标题、分类和标签不变，旧版本仍可下载或恢复。</span></div>
       </div>
-      <NativeForm class="version-upload-form">
+      <NativeForm class="version-upload-form" label-width="112px">
         <NativeFormItem label="新版本文件" required>
           <NativeUpload
             v-model="versionUploadFiles"
@@ -661,6 +665,8 @@
       width="min(1560px, calc(100vw - 48px))"
       class="document-dialog document-preview-dialog"
       :show-footer="false"
+      resizable
+      @closed="handlePreviewClosed"
     >
       <div v-if="previewLoading" class="loading-container">
         <NativeLoading text="加载中..." />
@@ -668,7 +674,7 @@
       <div v-else class="preview-container">
         <div class="preview-toolbar">
           <div class="preview-file-meta">
-            <span class="document-type-icon"><NativeIcon :name="documentFileIcon(previewFileName)" size="18" /></span>
+            <span class="document-type-icon" :class="`document-type-icon--${documentFileTone(previewFileName)}`"><NativeIcon :name="documentFileIcon(previewFileName)" size="18" /></span>
             <div><strong>{{ previewFileName }}</strong><span>{{ formatFileSize(previewFileSize) }}</span></div>
           </div>
           <NativeButton variant="outline" @click="handleDownloadPreviewFile">
@@ -688,7 +694,8 @@
         </div>
         <!-- PDF 预览 -->
         <div v-else-if="previewType === 'pdf'" class="pdf-preview">
-          <div class="pdf-controls">
+          <div ref="pdfCanvasStage" class="pdf-canvas-stage"><canvas ref="pdfCanvas"></canvas></div>
+          <div class="pdf-controls" aria-label="PDF 页面导航">
             <NativeButton size="small" @click="prevPage" :disabled="currentPage <= 1">
               <NativeIcon name="chevron-left" /> 上一页
             </NativeButton>
@@ -709,7 +716,6 @@
               下一页 <NativeIcon name="chevron-right" />
             </NativeButton>
           </div>
-          <div class="pdf-canvas-stage"><canvas ref="pdfCanvas"></canvas></div>
         </div>
 
         <!-- Markdown 预览 -->
@@ -768,7 +774,7 @@
 </template>
 
 <script setup>
-import { ref, shallowRef, onMounted, computed, nextTick } from 'vue'
+import { ref, shallowRef, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { authenticatedAssetUrl } from '@/utils/authentication'
@@ -776,6 +782,7 @@ import { documentTagsLabel } from '@/utils/documentTags'
 import {
   collectExpandableCategoryIds,
   documentFileIcon,
+  documentFileTone,
   flattenVisibleDocumentCategories
 } from '@/utils/documentWorkbench'
 import { openPdfDocument } from '@/utils/pdfPreview'
@@ -880,10 +887,16 @@ const previewTitle = ref('')
 const previewDocumentId = ref(null)
 const previewError = ref('')
 const pdfCanvas = ref(null)
+const pdfCanvasStage = ref(null)
 const currentPage = ref(1)
 const totalPages = ref(0)
 const pdfDoc = shallowRef(null)
 const jumpPageNum = ref(1)
+let pdfRenderTask = null
+let pdfRenderSequence = 0
+let pdfResizeObserver = null
+let pdfResizeTimer = null
+let pdfLastStageWidth = 0
 
 // 分类悬停相关状态
 const hoveredCategoryId = ref(null)
@@ -1177,13 +1190,13 @@ function findCategoryById(categories, id) {
 }
 
 const columns = computed(() => [
-  { key: 'title', dataIndex: 'title', title: '标题', minWidth: 200, sorter: true },
-  { key: 'tags', dataIndex: 'tags', title: '标签', width: 150 },
+  { key: 'title', dataIndex: 'title', title: '标题', width: 340, minWidth: 280, maxWidth: 380, sorter: true },
+  { key: 'tags', dataIndex: 'tags', title: '标签', width: 180, minWidth: 140 },
   { key: 'version', dataIndex: 'version', title: '版本', width: 80 },
   { key: 'type', dataIndex: 'filePath', title: '类型', width: 80, sorter: true },
   { key: 'indexStatus', dataIndex: 'indexStatus', title: '资料索引', width: 110 },
   { key: 'updatedAt', dataIndex: 'updatedAt', title: '更新时间', width: 180, sorter: true },
-  { key: 'operation', title: '操作', width: 180, align: 'left', headerAlign: 'left' }
+  { key: 'operation', title: '操作', width: 150, align: 'left', headerAlign: 'left' }
 ])
 
 const versionColumns = [
@@ -1307,7 +1320,7 @@ async function loadCategories() {
     const nextCategories = response.data?.data || []
     const expandableIds = collectExpandableCategoryIds(nextCategories)
     if (!categoryExpansionInitialized) {
-      expandedCategoryIds.value = expandableIds
+      expandedCategoryIds.value = new Set()
       categoryExpansionInitialized = true
     } else {
       expandedCategoryIds.value = new Set(
@@ -2005,8 +2018,21 @@ async function loadPreviewContent(row) {
     previewTitle.value = `预览 - ${previewFileName.value}`
     previewDocumentId.value = row.id
     currentPage.value = 1
+    jumpPageNum.value = 1
     totalPages.value = 0
+    teardownPdfResizeObserver()
+    pdfRenderSequence++
+    if (pdfRenderTask) pdfRenderTask.cancel()
+    pdfRenderTask = null
+    const previousPdfDocument = pdfDoc.value
     pdfDoc.value = null
+    if (previousPdfDocument) {
+      try {
+        await previousPdfDocument.destroy()
+      } catch {
+        // A previous preview may already be finishing its teardown.
+      }
+    }
 
     const listedExt = row.filePath?.split('.').pop()?.toLowerCase()
     if (listedExt === 'xls' || listedExt === 'xlsx') {
@@ -2048,6 +2074,7 @@ async function loadPreviewContent(row) {
 
       // 现在渲染第一页
       await renderPage(currentPage.value)
+      setupPdfResizeObserver()
     } else if (isBase64) {
       // 其他二进制和图片文件
       if (previewType.value === 'image') {
@@ -2143,47 +2170,98 @@ async function loadPDFDocument(pdfData) {
 }
 
 async function renderPage(pageNum) {
+  const sequence = ++pdfRenderSequence
   try {
     if (!pdfDoc.value || !pdfCanvas.value) {
-      console.error('pdfDoc 或 pdfCanvas 未初始化')
       return
     }
 
-    console.log(`开始渲染第 ${pageNum} 页`)
     const page = await pdfDoc.value.getPage(pageNum)
-    console.log(`第 ${pageNum} 页获取成功`)
+    if (sequence !== pdfRenderSequence) return
 
     const canvas = pdfCanvas.value
-    const context = canvas.getContext('2d')
+    const stage = pdfCanvasStage.value
+    const context = canvas.getContext('2d', { alpha: false })
+    const baseViewport = page.getViewport({ scale: 1 })
+    const availableWidth = Math.max((stage?.clientWidth || baseViewport.width) - 48, 320)
+    const cssScale = Math.min(2, Math.max(0.72, availableWidth / baseViewport.width))
+    const viewport = page.getViewport({ scale: cssScale })
+    const outputScale = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2.25)
 
-    const scale = 1.5
-    const viewport = page.getViewport({ scale })
+    if (pdfRenderTask) {
+      pdfRenderTask.cancel()
+      pdfRenderTask = null
+    }
 
-    console.log(`页面尺寸: ${viewport.width} x ${viewport.height}`)
-
-    // 清空 canvas 并设置新尺寸
-    context.clearRect(0, 0, canvas.width, canvas.height)
-    canvas.height = viewport.height
-    canvas.width = viewport.width
+    canvas.width = Math.max(1, Math.floor(viewport.width * outputScale))
+    canvas.height = Math.max(1, Math.floor(viewport.height * outputScale))
+    canvas.style.width = `${Math.floor(viewport.width)}px`
+    canvas.style.height = `${Math.floor(viewport.height)}px`
 
     const renderContext = {
       canvasContext: context,
-      viewport: viewport
+      viewport,
+      background: '#ffffff',
+      transform: outputScale === 1 ? undefined : [outputScale, 0, 0, outputScale, 0, 0]
     }
 
-    await page.render(renderContext).promise
-    console.log(`第 ${pageNum} 页渲染成功`)
+    pdfRenderTask = page.render(renderContext)
+    await pdfRenderTask.promise
   } catch (error) {
+    if (error?.name === 'RenderingCancelledException') return
     console.error(`渲染第 ${pageNum} 页失败:`, error)
-    console.error('错误名称:', error.name)
-    console.error('错误消息:', error.message)
     toast.error('渲染 PDF 页面失败')
+  } finally {
+    if (sequence === pdfRenderSequence) pdfRenderTask = null
+  }
+}
+
+function teardownPdfResizeObserver() {
+  if (pdfResizeObserver) pdfResizeObserver.disconnect()
+  pdfResizeObserver = null
+  if (pdfResizeTimer) clearTimeout(pdfResizeTimer)
+  pdfResizeTimer = null
+  pdfLastStageWidth = 0
+}
+
+function setupPdfResizeObserver() {
+  teardownPdfResizeObserver()
+  if (!pdfCanvasStage.value || typeof ResizeObserver === 'undefined') return
+  pdfLastStageWidth = Math.round(pdfCanvasStage.value.clientWidth)
+  pdfResizeObserver = new ResizeObserver(entries => {
+    const width = Math.round(entries[0]?.contentRect?.width || 0)
+    if (!width || Math.abs(width - pdfLastStageWidth) < 8) return
+    pdfLastStageWidth = width
+    if (pdfResizeTimer) clearTimeout(pdfResizeTimer)
+    pdfResizeTimer = setTimeout(() => {
+      if (previewDialogVisible.value && previewType.value === 'pdf' && pdfDoc.value) {
+        void renderPage(currentPage.value)
+      }
+    }, 140)
+  })
+  pdfResizeObserver.observe(pdfCanvasStage.value)
+}
+
+async function handlePreviewClosed() {
+  teardownPdfResizeObserver()
+  pdfRenderSequence++
+  if (pdfRenderTask) pdfRenderTask.cancel()
+  pdfRenderTask = null
+  const documentToDestroy = pdfDoc.value
+  pdfDoc.value = null
+  if (documentToDestroy) {
+    try {
+      await documentToDestroy.destroy()
+    } catch {
+      // Closing the dialog can race with an already-cancelled render task.
+    }
   }
 }
 
 async function prevPage() {
   if (currentPage.value > 1) {
     currentPage.value--
+    jumpPageNum.value = currentPage.value
     await renderPage(currentPage.value)
     // 滚动到PDF预览区域顶部
     scrollToPdfTop()
@@ -2214,10 +2292,7 @@ async function handleJumpPageConfirm() {
 
 // 滚动到PDF预览区域顶部
 function scrollToPdfTop() {
-  const pdfPreview = document.querySelector('.pdf-preview')
-  if (pdfPreview) {
-    pdfPreview.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
+  pdfCanvasStage.value?.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
 }
 
 async function handleCategoryHover(categoryId) {
@@ -2464,6 +2539,13 @@ onMounted(async () => {
     const row = documents.value.find((item) => Number(item.id) === documentId) || { id: documentId, title: `文档 ${documentId}` }
     await loadPreviewContent(row)
   }
+})
+
+onBeforeUnmount(() => {
+  teardownPdfResizeObserver()
+  if (pdfRenderTask) pdfRenderTask.cancel()
+  pdfRenderTask = null
+  if (pdfDoc.value) void pdfDoc.value.destroy()
 })
 </script>
 
@@ -3348,24 +3430,89 @@ onMounted(async () => {
   gap: 16px;
 }
 
-/* 滚动条美化 */
-:deep(*)::-webkit-scrollbar {
+/* 预览内部滚动条：静止、悬停和拖动状态均使用当前视觉语言。 */
+.preview-container,
+.pdf-canvas-stage,
+.code-preview,
+.code-preview pre,
+.text-preview,
+.text-preview pre,
+.word-html-preview,
+.word-content,
+.markdown-preview :deep(.md-editor-preview-wrapper),
+.markdown-preview :deep(pre) {
+  scrollbar-color: var(--color-border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.preview-container::-webkit-scrollbar,
+.pdf-canvas-stage::-webkit-scrollbar,
+.code-preview::-webkit-scrollbar,
+.code-preview pre::-webkit-scrollbar,
+.text-preview::-webkit-scrollbar,
+.text-preview pre::-webkit-scrollbar,
+.word-html-preview::-webkit-scrollbar,
+.word-content::-webkit-scrollbar,
+.markdown-preview :deep(.md-editor-preview-wrapper)::-webkit-scrollbar,
+.markdown-preview :deep(pre)::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
-:deep(*)::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 4px;
+.preview-container::-webkit-scrollbar-track,
+.pdf-canvas-stage::-webkit-scrollbar-track,
+.code-preview::-webkit-scrollbar-track,
+.code-preview pre::-webkit-scrollbar-track,
+.text-preview::-webkit-scrollbar-track,
+.text-preview pre::-webkit-scrollbar-track,
+.word-html-preview::-webkit-scrollbar-track,
+.word-content::-webkit-scrollbar-track,
+.markdown-preview :deep(.md-editor-preview-wrapper)::-webkit-scrollbar-track,
+.markdown-preview :deep(pre)::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--color-surface-subtle) 72%, transparent);
+  border-radius: var(--radius-pill);
 }
 
-:deep(*)::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
-  border-radius: 4px;
+.preview-container::-webkit-scrollbar-thumb,
+.pdf-canvas-stage::-webkit-scrollbar-thumb,
+.code-preview::-webkit-scrollbar-thumb,
+.code-preview pre::-webkit-scrollbar-thumb,
+.text-preview::-webkit-scrollbar-thumb,
+.text-preview pre::-webkit-scrollbar-thumb,
+.word-html-preview::-webkit-scrollbar-thumb,
+.word-content::-webkit-scrollbar-thumb,
+.markdown-preview :deep(.md-editor-preview-wrapper)::-webkit-scrollbar-thumb,
+.markdown-preview :deep(pre)::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border: 2px solid transparent;
+  border-radius: var(--radius-pill);
+  background-clip: padding-box;
 }
 
-:deep(*)::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, #5568d3 0%, #653a8f 100%);
+.preview-container::-webkit-scrollbar-thumb:hover,
+.pdf-canvas-stage::-webkit-scrollbar-thumb:hover,
+.code-preview::-webkit-scrollbar-thumb:hover,
+.code-preview pre::-webkit-scrollbar-thumb:hover,
+.text-preview::-webkit-scrollbar-thumb:hover,
+.text-preview pre::-webkit-scrollbar-thumb:hover,
+.word-html-preview::-webkit-scrollbar-thumb:hover,
+.word-content::-webkit-scrollbar-thumb:hover,
+.markdown-preview :deep(.md-editor-preview-wrapper)::-webkit-scrollbar-thumb:hover,
+.markdown-preview :deep(pre)::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-primary);
+}
+
+.preview-container::-webkit-scrollbar-thumb:active,
+.pdf-canvas-stage::-webkit-scrollbar-thumb:active,
+.code-preview::-webkit-scrollbar-thumb:active,
+.code-preview pre::-webkit-scrollbar-thumb:active,
+.text-preview::-webkit-scrollbar-thumb:active,
+.text-preview pre::-webkit-scrollbar-thumb:active,
+.word-html-preview::-webkit-scrollbar-thumb:active,
+.word-content::-webkit-scrollbar-thumb:active,
+.markdown-preview :deep(.md-editor-preview-wrapper)::-webkit-scrollbar-thumb:active,
+.markdown-preview :deep(pre)::-webkit-scrollbar-thumb:active {
+  background-color: var(--color-primary-active);
 }
 
 /* 预览对话框样式调整 */
@@ -3568,6 +3715,24 @@ onMounted(async () => {
 
 .workbench-sort {
   width: 132px;
+  flex: 0 0 132px;
+}
+
+.workbench-search :deep(.sort-direction-button.native-btn) {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  color: var(--color-text-secondary);
+  border-color: transparent;
+  background: transparent;
+}
+
+.workbench-search :deep(.sort-direction-button.native-btn:hover:not(:disabled)),
+.workbench-search :deep(.sort-direction-button.native-btn:focus-visible) {
+  color: var(--color-primary);
+  border-color: var(--color-primary-border);
+  background: var(--color-primary-surface);
 }
 
 .workbench-filters {
@@ -3796,6 +3961,12 @@ onMounted(async () => {
   overflow: hidden;
 }
 
+.document-file-pane :deep(.native-table th),
+.document-file-pane :deep(.native-table td) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .document-state-alert {
   margin-bottom: 12px;
 }
@@ -3831,6 +4002,25 @@ onMounted(async () => {
   color: var(--color-primary);
 }
 
+.document-tags-cell {
+  max-width: 100%;
+  padding: 3px 8px;
+  display: inline-block;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-subtle);
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.document-tags-empty {
+  color: var(--color-text-disabled);
+}
+
 .document-type-icon,
 .document-detail-icon {
   flex: 0 0 auto;
@@ -3845,6 +4035,46 @@ onMounted(async () => {
 .document-type-icon {
   width: 32px;
   height: 32px;
+}
+
+.document-type-icon--pdf {
+  color: var(--color-danger-text);
+  background: var(--color-danger-surface);
+}
+
+.document-type-icon--word {
+  color: #3564b8;
+  background: #edf4ff;
+}
+
+.document-type-icon--sheet {
+  color: var(--color-success-text);
+  background: var(--color-success-surface);
+}
+
+.document-type-icon--slides {
+  color: var(--color-warning-text);
+  background: var(--color-warning-surface);
+}
+
+.document-type-icon--markdown {
+  color: #6a4fb0;
+  background: #f2efff;
+}
+
+.document-type-icon--image {
+  color: #087c8f;
+  background: #e9f7f8;
+}
+
+.document-type-icon--code {
+  color: #4f6078;
+  background: #edf0f5;
+}
+
+.document-type-icon--text {
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
 }
 
 .document-empty-state {
@@ -3967,6 +4197,10 @@ onMounted(async () => {
 
 .version-upload-form {
   margin-top: 16px;
+}
+
+.version-upload-form :deep(.native-form-item__label) {
+  white-space: nowrap;
 }
 
 .version-dialog-toolbar {
@@ -4157,7 +4391,10 @@ onMounted(async () => {
 }
 
 .preview-container {
-  min-height: 560px;
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  flex: 1 1 auto;
   max-height: none;
   gap: 0;
   overflow: hidden;
@@ -4205,9 +4442,12 @@ onMounted(async () => {
   padding: 8px 14px;
   justify-content: center;
   flex-wrap: wrap;
-  border-bottom: 1px solid var(--color-border-subtle);
+  border-top: 1px solid var(--color-border-subtle);
+  border-bottom: 0;
   border-radius: 0;
   background: var(--color-surface-raised);
+  box-shadow: 0 -5px 18px rgba(23, 32, 51, 0.05);
+  z-index: 1;
 }
 
 .pdf-canvas-stage {
@@ -4222,6 +4462,7 @@ onMounted(async () => {
 
 .pdf-preview canvas {
   align-self: flex-start;
+  max-width: none;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-sm);
   background: var(--color-surface-raised);
@@ -4237,6 +4478,9 @@ onMounted(async () => {
 .unsupported-preview,
 .preview-error-state {
   margin: 20px;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   background: var(--color-surface-raised);
@@ -4258,6 +4502,7 @@ onMounted(async () => {
 
 :deep(.document-preview-dialog .native-dialog__body) {
   padding: 0;
+  display: flex;
   overflow: hidden;
 }
 

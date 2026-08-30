@@ -2,23 +2,52 @@ export function documentFileIcon(filePath) {
   const extension = String(filePath || '').split('.').pop()?.toLowerCase() || ''
   const iconMap = {
     pdf: 'file-pdf',
-    doc: 'file-text',
-    docx: 'file-text',
-    xls: 'file-text',
-    xlsx: 'file-text',
-    ppt: 'file-text',
-    pptx: 'file-text',
+    doc: 'file-word',
+    docx: 'file-word',
+    xls: 'file-excel',
+    xlsx: 'file-excel',
+    ppt: 'file-powerpoint',
+    pptx: 'file-powerpoint',
     txt: 'file-text',
-    md: 'file-text',
+    md: 'file-markdown',
     log: 'file-text',
-    csv: 'file-text',
-    jpg: 'image',
-    jpeg: 'image',
-    png: 'image',
-    gif: 'image'
+    csv: 'file-excel',
+    jpg: 'file-image',
+    jpeg: 'file-image',
+    png: 'file-image',
+    gif: 'file-image',
+    bmp: 'file-image',
+    webp: 'file-image',
+    json: 'code',
+    js: 'code',
+    ts: 'code',
+    py: 'code',
+    java: 'code',
+    c: 'code',
+    cpp: 'code',
+    h: 'code',
+    hpp: 'code',
+    go: 'code',
+    rs: 'code',
+    sql: 'code',
+    sh: 'code',
+    yml: 'code',
+    yaml: 'code'
   }
 
   return iconMap[extension] || 'file'
+}
+
+export function documentFileTone(filePath) {
+  const extension = String(filePath || '').split('.').pop()?.toLowerCase() || ''
+  if (extension === 'pdf') return 'pdf'
+  if (['doc', 'docx'].includes(extension)) return 'word'
+  if (['xls', 'xlsx', 'csv'].includes(extension)) return 'sheet'
+  if (['ppt', 'pptx'].includes(extension)) return 'slides'
+  if (extension === 'md') return 'markdown'
+  if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(extension)) return 'image'
+  if (['json', 'js', 'ts', 'py', 'java', 'c', 'cpp', 'h', 'hpp', 'go', 'rs', 'sql', 'sh', 'yml', 'yaml'].includes(extension)) return 'code'
+  return 'text'
 }
 
 export function collectExpandableCategoryIds(categories) {

@@ -153,7 +153,10 @@ function getCellStyle(col) {
   }
   if (col.minWidth) {
     style.minWidth = typeof col.minWidth === 'number' ? `${col.minWidth}px` : col.minWidth
-    style.width = 'auto'
+    if (!col.width) style.width = 'auto'
+  }
+  if (col.maxWidth) {
+    style.maxWidth = typeof col.maxWidth === 'number' ? `${col.maxWidth}px` : col.maxWidth
   }
   if (col.fixed === 'left') {
     style.position = 'sticky'
