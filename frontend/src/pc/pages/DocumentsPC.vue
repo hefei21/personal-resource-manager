@@ -1,319 +1,295 @@
 <template>
   <div class="documents">
-    <div class="page-header">
-      <p>管理 PDF、Word、PPT、文本等文档</p>
+    <div class="page-header document-page-intro">
+      <div>
+        <p>以分类组织原件、版本和索引状态；上传失败不会影响已有资源。</p>
+        <span>单击预览内容，在详情中管理元数据与版本。</span>
+      </div>
+      <div class="page-header-actions">
+        <NativeButton variant="outline" @click="openTrashPage">
+          <template #icon><NativeIcon name="trash" /></template>
+          回收站
+        </NativeButton>
+        <NativeButton theme="primary" @click="handleUpload" :disabled="!canWrite">
+          <template #icon><NativeIcon name="plus" /></template>
+          上传文档
+        </NativeButton>
+      </div>
     </div>
 
-    <!-- 工具栏 -->
-    <NativeCard class="toolbar">
-      <div class="toolbar-row">
-        <!-- 视图切换独占一行 -->
-        <NativeRadioGroup v-model="viewMode" variant="default-filled" @change="handleViewModeChange" class="toolbar-view-group">
-          <NativeRadio value="category">
-            <NativeIcon name="folder" size="14" /> 分类浏览
-          </NativeRadio>
-          <NativeRadio value="list">
-            <NativeIcon name="list-dashes" size="14" /> 列表视图
-          </NativeRadio>
-          <NativeRadio value="trash">
-            <NativeIcon name="trash" size="14" /> 回收站
-          </NativeRadio>
-        </NativeRadioGroup>
-      </div>
-      
-      <!-- 搜索和排序另起一行 -->
-      <div class="toolbar-row toolbar-row-second">
-        <!-- 左侧：搜索和高级搜索 -->
-        <div class="toolbar-left">
+    <NativeCard class="document-workbench">
+      <div class="workbench-toolbar">
+        <div class="workbench-location">
+          <NativeButton
+            variant="text"
+            shape="circle"
+            :title="folderRailCollapsed ? '展开分类' : '收起分类'"
+            @click="folderRailCollapsed = !folderRailCollapsed"
+          >
+            <template #icon><NativeIcon name="list-dashes" /></template>
+          </NativeButton>
+          <button type="button" class="breadcrumb-root" @click="backToRoot">全部文档</button>
+          <template v-for="category in categoryPath" :key="category.id">
+            <NativeIcon name="chevron-right" size="13" />
+            <button type="button" class="breadcrumb-segment" @click="selectCategoryFromRail({ trail: categoryPath.slice(0, categoryPath.indexOf(category) + 1) })">
+              {{ category.name }}
+            </button>
+          </template>
+        </div>
+        <div class="workbench-search">
           <NativeInput
             v-model="searchKeyword"
-            placeholder="搜索文档..."
+            placeholder="搜索标题或标签"
             clearable
             @clear="handleSearch"
             @enter="handleSearch"
-            style="width: 300px"
-            class="toolbar-search"
           >
-            <template #suffix-icon>
-              <NativeIcon name="magnifying-glass" />
-            </template>
+            <template #suffix-icon><NativeIcon name="magnifying-glass" /></template>
           </NativeInput>
-
           <NativeButton
             :variant="advancedSearchVisible ? 'base' : 'outline'"
             :theme="advancedSearchVisible ? 'primary' : 'default'"
             @click="advancedSearchVisible = !advancedSearchVisible"
-            class="toolbar-btn"
           >
-            <NativeIcon name="filter" /> 高级搜索
+            <template #icon><NativeIcon name="filter" /></template>
+            筛选
           </NativeButton>
-        </div>
-
-        <!-- 右侧：排序相关 -->
-        <div class="toolbar-right">
           <NativeSelect
             v-model="sortBy"
-            placeholder="排序方式"
-            style="width: 140px"
+            class="workbench-sort"
             :options="[
-              { value: 'updated_at', label: '更新时间' },
+              { value: 'updated_at', label: '最近更新' },
               { value: 'title', label: '文件名' },
               { value: 'file_type', label: '文件类型' },
               { value: 'size', label: '文件大小' }
             ]"
             @change="handleDropdownSortChange"
-            class="toolbar-select"
           />
-
-          <NativeButton
-            variant="outline"
-            @click="toggleSortOrder"
-            shape="circle"
-            :title="sortOrder === 'desc' ? '降序' : '升序'"
-            class="toolbar-btn"
-          >
-            <template #icon>
-              <NativeIcon :name="sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'" />
-            </template>
+          <NativeButton variant="outline" shape="circle" :title="sortOrder === 'desc' ? '降序' : '升序'" @click="toggleSortOrder">
+            <template #icon><NativeIcon :name="sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'" /></template>
           </NativeButton>
         </div>
       </div>
 
-      <!-- 高级搜索面板 -->
-      <div v-if="advancedSearchVisible" class="advanced-search-panel">
-        <NativeSpace>
-          <NativeFormItem label="标签" style="margin: 0;">
-            <NativeSelect
-              v-model="selectedTags"
-              placeholder="选择标签"
-              multiple
-              clearable
-              style="width: 200px"
-              :options="allTags.map(tag => ({ value: tag, label: tag }))"
-            />
-          </NativeFormItem>
-          <NativeFormItem label="日期范围" style="margin: 0;">
-            <NativeDateRangePicker v-model="dateRange" style="width: 300px" />
-          </NativeFormItem>
-          <NativeButton theme="primary" @click="handleAdvancedSearch">搜索</NativeButton>
-          <NativeButton @click="resetAdvancedSearch">重置</NativeButton>
-        </NativeSpace>
+      <div v-if="advancedSearchVisible" class="advanced-search-panel workbench-filters">
+        <NativeFormItem label="标签">
+          <NativeSelect
+            v-model="selectedTags"
+            placeholder="选择标签"
+            multiple
+            clearable
+            :options="allTags.map(tag => ({ value: tag, label: tag }))"
+          />
+        </NativeFormItem>
+        <NativeFormItem label="更新时间">
+          <NativeDateRangePicker v-model="dateRange" />
+        </NativeFormItem>
+        <div class="workbench-filter-actions">
+          <NativeButton theme="primary" @click="handleAdvancedSearch">应用筛选</NativeButton>
+          <NativeButton variant="outline" @click="resetAdvancedSearch">重置</NativeButton>
+        </div>
       </div>
-    </NativeCard>
 
-    <!-- 分类浏览模式 -->
-    <NativeCard v-if="viewMode === 'category'" class="category-view">
-      <!-- 加载状态 -->
-      <div v-if="loading" class="content-loading">
-        <NativeLoading size="small" />
-      </div>
-      <!-- 空状态：没有分类 -->
-      <div v-else-if="categories.length === 0" class="empty-categories">
-        <NativeIcon name="folder-open" size="64" />
-        <h3>还没有分类</h3>
-        <p>创建第一个分类来开始管理文档</p>
-        <NativeButton theme="primary" size="large" iconSize="1.15em" @click="handleCreateCategory" :disabled="isGuest">
-          <template #icon><NativeIcon name="folder-plus" /></template>
-          创建第一个分类
-        </NativeButton>
-      </div>
-      <!-- 显示当前分类的子分类 -->
-      <div v-else-if="currentCategoryId" class="category-children">
-        <h3 class="category-path">{{ currentCategoryPath }}</h3>
-        <div v-if="currentSubcategories.length > 0" class="categories-grid">
-          <div
-            v-for="(cat, index) in currentSubcategories"
-            :key="cat.id"
-            class="category-card"
-            :class="{ 'drag-over': draggedCategoryId === cat.id }"
-            :draggable="!isGuest"
-            @click="enterCategory(cat)"
-            @mouseenter="handleCategoryHover(cat.id)"
-            @mouseleave="handleCategoryLeave"
-            @dragstart="!isGuest && handleDragStart($event, cat, index)"
-            @dragover.prevent="!isGuest && handleDragOver($event, cat)"
-            @dragleave="handleDragLeave"
-            @drop="!isGuest && handleDrop($event, cat, index)"
-            @dragend="handleDragEnd"
-          >
-            <div class="category-actions" v-if="!isGuest">
-              <div class="action-btn rename-btn" @click.stop="handleRenameCategory(cat)" title="重命名">
-                <NativeIcon name="pencil" size="14" />
-              </div>
-              <div class="action-btn delete-btn" @click.stop="handleDeleteCategory(cat)" title="删除">
-                <NativeIcon name="x" size="14" />
-              </div>
-            </div>
-<NativeIcon name="folder-open" size="24" class="category-icon" />
-          <h3>{{ cat.name }}</h3>
-          <div v-if="hoveredCategoryId === cat.id && cat.fileCount !== undefined" class="file-count-tooltip">
-              {{ cat.fileCount }} 个文件
-            </div>
+      <div class="workbench-body" :class="{ 'folder-rail-collapsed': folderRailCollapsed }">
+        <aside v-if="!folderRailCollapsed" class="folder-rail" aria-label="文档分类">
+          <div class="folder-rail-header">
+            <strong>分类</strong>
+            <NativeButton v-if="canWrite" variant="text" shape="circle" size="small" title="新建分类" @click="handleCreateCategory">
+              <template #icon><NativeIcon name="folder-plus" /></template>
+            </NativeButton>
           </div>
-        </div>
-        <NativeAlert
-          v-else
-          theme="info"
-          title="暂无子分类"
-          style="margin-top: 20px"
-        >
-          点击下方按钮创建子分类
-        </NativeAlert>
-        <!-- 创建子分类按钮和返回按钮 -->
-        <div class="category-actions-bar" v-if="!isGuest">
-          <NativeButton theme="primary" @click="handleUpload" :disabled="!canWrite">
-            <template #icon><NativeIcon name="plus" size="14" /></template>
-            上传文档
-          </NativeButton>
-          <NativeButton theme="default" @click="handleCreateSubcategory">
-            <template #icon><NativeIcon name="folder-plus" size="14" /></template>
-            创建子分类
-          </NativeButton>
-          <NativeButton @click="resetCategory">
-            <template #icon><NativeIcon name="arrow-left" size="14" /></template>
-            返回上级
-          </NativeButton>
-          <NativeButton @click="backToRoot" theme="default">
-            <template #icon><NativeIcon name="home" size="14" /></template>
-            返回主界面
-          </NativeButton>
-        </div>
-      </div>
-      <!-- 显示根分类 -->
-      <div v-else>
-        <div class="categories-grid">
-          <div
-            v-for="(cat, index) in categories"
-            :key="cat.id"
-            class="category-card"
-            :class="{ 'drag-over': draggedCategoryId === cat.id }"
-            :draggable="!isGuest"
-            @click="enterCategory(cat)"
-            @mouseenter="handleCategoryHover(cat.id)"
-            @mouseleave="handleCategoryLeave"
-            @dragstart="!isGuest && handleDragStart($event, cat, index)"
-            @dragover.prevent="!isGuest && handleDragOver($event, cat)"
-            @dragleave="handleDragLeave"
-            @drop="!isGuest && handleDrop($event, cat, index)"
-            @dragend="handleDragEnd"
-          >
-            <div class="category-actions" v-if="!isGuest">
-              <div class="action-btn rename-btn" @click.stop="handleRenameCategory(cat)" title="重命名">
-                <NativeIcon name="pencil" size="14" />
-              </div>
-              <div class="action-btn delete-btn" @click.stop="handleDeleteCategory(cat)" title="删除">
-                <NativeIcon name="x" size="14" />
-              </div>
-            </div>
-            <NativeIcon name="folder-open" size="24" class="category-icon" />
-            <h3>{{ cat.name }}</h3>
-            <div v-if="hoveredCategoryId === cat.id && cat.fileCount !== undefined" class="file-count-tooltip">
-              {{ cat.fileCount }} 个文件
-            </div>
-          </div>
-        </div>
-        <!-- 创建分类按钮 -->
-        <div class="category-actions-bar" v-if="!isGuest">
-          <NativeButton theme="default" @click="handleCreateCategory">
-            <template #icon><NativeIcon name="folder-plus" size="14" /></template>
-            创建分类
-          </NativeButton>
-        </div>
-      </div>
-    </NativeCard>
-
-    <NativeCard v-if="documents.length > 0" class="documents-list">
-      <h3 v-if="viewMode === 'category' && currentCategoryId" class="section-title">
-        {{ currentCategoryPath }} - 文档列表
-      </h3>
-      <h3 v-else class="section-title">
-        所有文档
-      </h3>
-
-      <!-- 批量操作栏 -->
-      <div v-if="selectedRowKeys.length > 0" class="batch-actions-bar">
-        <NativeButton theme="primary" size="small" @click="handleBatchEdit" :disabled="isGuest">
-          <template #icon><NativeIcon name="pencil" /></template>
-          批量更改 ({{ selectedRowKeys.length }})
-        </NativeButton>
-        <NativePopconfirm content="确定删除选中的文档吗？" @confirm="handleBatchDelete">
-          <template #trigger>
-            <NativeButton theme="danger" variant="outline" size="small" :disabled="isGuest">
-              <template #icon><NativeIcon name="trash" /></template>
-              批量删除 ({{ selectedRowKeys.length }})
-            </NativeButton>
-          </template>
-        </NativePopconfirm>
-        <span class="batch-actions-hint">已选择 {{ selectedRowKeys.length }} 项</span>
-      </div>
-
-      <NativeTable
-        :dataSource="documents"
-        :columns="columns"
-        :loading="loading"
-        rowKey="id"
-        hover
-        selectable
-        :selectedKeys="selectedRowKeys"
-        :allRowKeys="allDocumentIds"
-        @selectionChange="handleSelectChange"
-        @sortChange="handleSortChange"
-      >
-        <template #cell-version="{ row }">
-          <span>v{{ row.version }}</span>
-        </template>
-        <template #cell-type="{ row }">
-          <span>{{ getFileExtension(row.filePath || '') }}</span>
-        </template>
-        <template #cell-operation="{ row }">
-          <NativeSpace>
-            <NativeButton theme="primary" variant="outline" size="small" iconSize="1.2em" @click="handleView(row)">
-              <template #icon><NativeIcon name="eye" /></template>预览
-            </NativeButton>
-            <NativeButton theme="primary" size="small" iconSize="1.2em" @click="handleChangeSingle(row)" :disabled="!canWrite">
-              <template #icon><NativeIcon name="pencil" /></template>更改
-            </NativeButton>
-            <NativeButton theme="primary" size="small" iconSize="1.2em" @click="handleViewVersions(row)">
-              <template #icon><NativeIcon name="clock-counter-clockwise" /></template>版本
-            </NativeButton>
-            <NativeButton theme="default" variant="outline" size="small" iconSize="1.2em" @click="handleEdit(row)" :disabled="!canWrite || !canEditFile(row.filePath)">
-              <template #icon><NativeIcon name="pencil" /></template>编辑
-            </NativeButton>
-            <NativePopconfirm
-              content="确定删除吗？"
-              @confirm="handleDelete(row.id)"
+          <NativeAlert v-if="categoriesError" theme="error" title="分类加载失败">
+            <NativeButton size="small" variant="outline" @click="loadCategories">重试</NativeButton>
+          </NativeAlert>
+          <div v-else class="folder-tree">
+            <button
+              type="button"
+              class="folder-tree-item folder-tree-all"
+              :class="{ active: !currentCategoryId }"
+              @click="backToRoot"
             >
+              <NativeIcon name="files" size="17" />
+              <span>全部文档</span>
+              <small>{{ totalAllDocuments }}</small>
+            </button>
+            <div
+              v-for="item in flattenedCategories"
+              :key="item.id"
+              class="folder-tree-row"
+              :class="{ active: currentCategoryId === item.id }"
+              :style="{ '--folder-depth': item.depth }"
+            >
+              <button type="button" class="folder-tree-item" @click="selectCategoryFromRail(item)">
+                <NativeIcon :name="currentCategoryId === item.id ? 'folder-open' : 'folder'" size="17" />
+                <span>{{ item.name }}</span>
+                <small>{{ item.fileCount || 0 }}</small>
+              </button>
+              <div v-if="canWrite" class="folder-tree-actions">
+                <button type="button" title="重命名" @click="handleRenameCategory(item)"><NativeIcon name="pencil" size="13" /></button>
+                <button type="button" title="删除" @click="handleDeleteCategory(item)"><NativeIcon name="trash" size="13" /></button>
+              </div>
+            </div>
+          </div>
+          <div v-if="canWrite" class="folder-rail-footer">
+            <NativeButton variant="outline" size="small" @click="currentCategoryId ? handleCreateSubcategory() : handleCreateCategory()">
+              <template #icon><NativeIcon name="folder-plus" /></template>
+              {{ currentCategoryId ? '新建子分类' : '新建分类' }}
+            </NativeButton>
+          </div>
+        </aside>
+
+        <section class="document-file-pane">
+          <NativeAlert v-if="documentsError" theme="error" title="文档加载失败" class="document-state-alert">
+            <span>{{ documentsError }}</span>
+            <NativeButton size="small" variant="outline" @click="loadDocuments">重新加载</NativeButton>
+          </NativeAlert>
+
+          <div v-if="selectedRowKeys.length > 0" class="batch-actions-bar">
+            <NativeButton theme="primary" size="small" @click="handleBatchEdit" :disabled="!canWrite">
+              <template #icon><NativeIcon name="pencil" /></template>
+              更改所选 ({{ selectedRowKeys.length }})
+            </NativeButton>
+            <NativePopconfirm content="所选文档将进入回收站，确定继续吗？" @confirm="handleBatchDelete">
               <template #trigger>
-                <NativeButton theme="danger" variant="outline" size="small" iconSize="1.2em" :disabled="!canWrite">
-                  <template #icon><NativeIcon name="trash" /></template>删除
+                <NativeButton theme="danger" variant="outline" size="small" :disabled="!canWrite">
+                  <template #icon><NativeIcon name="trash" /></template>
+                  移入回收站
                 </NativeButton>
               </template>
             </NativePopconfirm>
-          </NativeSpace>
-        </template>
-      </NativeTable>
+            <span class="batch-actions-hint">已选择 {{ selectedRowKeys.length }} 项</span>
+          </div>
 
-      <!-- 分页（列表视图和分类浏览） -->
-      <div class="pagination-wrapper" v-if="(viewMode === 'list' || viewMode === 'category') && total > 0">
-        <NativePagination
-          v-model:current="pagination.current"
-          v-model:pageSize="pagination.pageSize"
-          :total="total"
-          @change="handlePageChange"
-        />
+          <NativeLoading v-if="loading && documents.length === 0" center text="加载文档中..." />
+          <NativeTable
+            v-else-if="documents.length > 0"
+            :dataSource="documents"
+            :columns="columns"
+            :loading="loading"
+            rowKey="id"
+            hover
+            selectable
+            :selectedKeys="selectedRowKeys"
+            :allRowKeys="allDocumentIds"
+            @selectionChange="handleSelectChange"
+            @sortChange="handleSortChange"
+          >
+            <template #cell-title="{ row }">
+              <button type="button" class="document-title-cell" @click="handleView(row)">
+                <span class="document-type-icon"><NativeIcon :name="getFileIcon(row.filePath)" size="18" /></span>
+                <span>{{ row.title }}</span>
+              </button>
+            </template>
+            <template #cell-version="{ row }"><span>v{{ row.version }}</span></template>
+            <template #cell-type="{ row }"><span>{{ getFileExtension(row.filePath || '') }}</span></template>
+            <template #cell-indexStatus="{ row }">
+              <NativeTag :theme="ragStatusTheme(row.indexStatus)" variant="light" size="small">
+                {{ ragStatusLabel(row.indexStatus) }}
+              </NativeTag>
+            </template>
+            <template #cell-operation="{ row }">
+              <NativeSpace>
+                <NativeButton theme="primary" variant="outline" size="small" @click="handleView(row)">预览</NativeButton>
+                <NativeButton variant="outline" size="small" @click="openDocumentDetails(row)">详情</NativeButton>
+              </NativeSpace>
+            </template>
+          </NativeTable>
+
+          <div v-else-if="!documentsError" class="empty-state document-empty-state">
+            <NativeIcon name="file" size="48" />
+            <strong>{{ currentCategoryId ? '当前分类还没有文档' : '还没有文档' }}</strong>
+            <span>上传后可在这里预览、管理版本并查看索引状态。</span>
+            <NativeButton v-if="canWrite" theme="primary" @click="handleUpload">上传第一个文档</NativeButton>
+          </div>
+
+          <div class="pagination-wrapper" v-if="total > 0">
+            <NativePagination
+              v-model:current="pagination.current"
+              v-model:pageSize="pagination.pageSize"
+              :total="total"
+              @change="handlePageChange"
+            />
+          </div>
+        </section>
       </div>
     </NativeCard>
 
-    <!-- 空状态 - 仅在加载完成且无数据时显示 -->
-    <NativeCard v-if="documents.length === 0 && !loading && !currentCategoryId && viewMode !== 'category'" class="empty-state">
-      <NativeIcon name="file" size="64" />
-      <p>暂无文档</p>
-    </NativeCard>
-    <NativeCard v-else-if="documents.length === 0 && !loading && currentCategoryId" class="empty-state">
-      <NativeIcon name="file" size="64" />
-      <p>当前分类下暂无文档</p>
-      <NativeButton theme="primary" @click="handleUpload">上传第一个文档</NativeButton>
-    </NativeCard>
+    <NativeDrawer
+      v-model="detailDrawerVisible"
+      :title="detailDocument?.title || '文档详情'"
+      placement="right"
+      size="430px"
+    >
+      <div v-if="detailDocument" class="document-detail">
+        <div class="document-detail-hero">
+          <span class="document-detail-icon">
+            <NativeIcon :name="getFileIcon(detailDocument.filePath)" size="28" />
+          </span>
+          <div>
+            <strong>{{ detailDocument.title }}</strong>
+            <span>{{ getFileExtension(detailDocument.filePath) || '文件' }} · {{ formatFileSize(detailDocument.size) }}</span>
+          </div>
+        </div>
+
+        <section class="document-detail-section">
+          <div class="document-detail-heading">
+            <h4>资料索引</h4>
+            <NativeTag :theme="ragStatusTheme(detailDocument.indexStatus)" variant="light">
+              {{ ragStatusLabel(detailDocument.indexStatus) }}
+            </NativeTag>
+          </div>
+          <p>{{ ragStatusDescription(detailDocument.indexStatus) }}</p>
+          <NativeButton
+            v-if="canWrite && !['ready', 'pending'].includes(detailDocument.indexStatus)"
+            size="small"
+            variant="outline"
+            :loading="detailRagRefreshing"
+            @click="refreshDocumentIndex(detailDocument)"
+          >
+            重新建立索引
+          </NativeButton>
+        </section>
+
+        <section class="document-detail-section document-detail-grid">
+          <span>所在分类</span><strong>{{ documentCategoryLabel(detailDocument) }}</strong>
+          <span>当前版本</span><strong>v{{ detailDocument.version || 1 }}</strong>
+          <span>标签</span><strong>{{ detailDocument.tags || '无标签' }}</strong>
+          <span>更新时间</span><strong>{{ formatDateTime(detailDocument.updatedAt) }}</strong>
+          <span>创建时间</span><strong>{{ formatDateTime(detailDocument.createdAt) }}</strong>
+        </section>
+
+        <section class="document-detail-section document-detail-actions">
+          <h4>文档操作</h4>
+          <div class="document-detail-action-grid">
+            <NativeButton variant="outline" @click="handleView(detailDocument)">预览</NativeButton>
+            <NativeButton variant="outline" @click="handleDownload(detailDocument)">下载原件</NativeButton>
+            <NativeButton variant="outline" @click="openVersionUpload(detailDocument)" :disabled="!canWrite">上传新版本</NativeButton>
+            <NativeButton variant="outline" @click="handleViewVersions(detailDocument)">版本历史</NativeButton>
+            <NativeButton variant="outline" @click="handleChangeSingle(detailDocument)" :disabled="!canWrite">编辑信息</NativeButton>
+            <NativeButton
+              v-if="canEditFile(detailDocument.filePath)"
+              variant="outline"
+              @click="handleEdit(detailDocument)"
+              :disabled="!canWrite"
+            >
+              编辑正文
+            </NativeButton>
+          </div>
+        </section>
+      </div>
+      <template #footer>
+        <NativePopconfirm
+          v-if="detailDocument"
+          content="文档将进入统一回收站，确定继续吗？"
+          @confirm="handleDeleteAndClose(detailDocument.id)"
+        >
+          <template #trigger>
+            <NativeButton theme="danger" variant="outline" :disabled="!canWrite">移入回收站</NativeButton>
+          </template>
+        </NativePopconfirm>
+        <NativeButton variant="outline" @click="detailDrawerVisible = false">关闭</NativeButton>
+      </template>
+    </NativeDrawer>
 
     <!-- 批量编辑对话框 -->
     <NativeDialog
@@ -516,6 +492,9 @@
       :show-footer="false"
     >
       <div class="version-dialog-toolbar">
+        <NativeButton theme="primary" size="small" :disabled="!canWrite" @click="openVersionUpload">
+          上传新版本
+        </NativeButton>
         <NativeButton variant="outline" size="small" @click="openVersionTrash">
           版本回收站
         </NativeButton>
@@ -548,6 +527,39 @@
           </NativeSpace>
         </template>
       </NativeTable>
+    </NativeDialog>
+
+    <NativeDialog
+      v-model="versionUploadDialogVisible"
+      title="上传新版本"
+      width="560px"
+      :confirm-loading="versionUploading"
+      :confirm-disabled="versionUploading || !canWrite"
+      @confirm="submitVersionUpload"
+    >
+      <NativeAlert theme="info" title="保留文档身份">
+        新文件需与当前文档类型一致，并会成为当前版本；标题、分类和标签保持不变，旧版本仍可在版本历史中下载或恢复。
+      </NativeAlert>
+      <NativeForm class="version-upload-form">
+        <NativeFormItem label="新版本文件" required>
+          <NativeUpload
+            v-model="versionUploadFiles"
+            drag
+            accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.gif,.bmp"
+            :multiple="false"
+            :autoUpload="false"
+            :disabled="versionUploading"
+          />
+        </NativeFormItem>
+        <NativeFormItem label="版本说明">
+          <NativeTextarea
+            v-model="versionUploadNote"
+            placeholder="说明本次变更内容"
+            :maxlength="500"
+            :disabled="versionUploading"
+          />
+        </NativeFormItem>
+      </NativeForm>
     </NativeDialog>
 
     <!-- 版本回收列表 -->
@@ -728,10 +740,10 @@ import {
 } from '@/utils/sanitizeHtml'
 import { 
   NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, 
-  NativeCheckbox, NativeLoading, NativeIcon, NativeSpace, NativeRadioGroup, NativeRadio,
+  NativeCheckbox, NativeLoading, NativeIcon, NativeSpace,
   NativeSelect, NativeForm, NativeFormItem, NativeDateRangePicker, NativePopconfirm,
   NativeAlert, NativeTable, NativePagination, NativeUpload, NativeTextarea, NativeDivider,
-  NativeTreeSelect
+  NativeTreeSelect, NativeTag, NativeDrawer
 } from '@/components/native'
 import { MdPreview } from 'md-editor-v3'
 import 'md-editor-v3/lib/style.css'
@@ -755,10 +767,16 @@ marked.setOptions({
 
 const loading = ref(false)
 const documents = ref([])
+const documentsError = ref('')
 const total = ref(0)
+const totalAllDocuments = ref(0)
 const pagination = ref({ current: 1, pageSize: 30 })
 const versions = ref([])
 const versionDocumentId = ref(null)
+const versionUploadDialogVisible = ref(false)
+const versionUploadFiles = ref([])
+const versionUploadNote = ref('')
+const versionUploading = ref(false)
 const versionTrash = ref([])
 const versionTrashLoading = ref(false)
 const versionTrashDialogVisible = ref(false)
@@ -774,6 +792,13 @@ const renameCategoryDialogVisible = ref(false)
 const renameCategoryData = ref(null)
 const renameCategoryName = ref('')
 const searchKeyword = ref('')
+const folderRailCollapsed = ref(false)
+const categoriesError = ref('')
+const detailDrawerVisible = ref(false)
+const detailDocument = ref(null)
+const detailRagRefreshing = ref(false)
+const ragStatusById = ref(new Map())
+const ragCoverageComplete = ref(false)
 
 // 浏览模式
 const viewMode = ref('category') // category, list
@@ -787,6 +812,19 @@ const currentCategoryName = computed(() => {
 })
 const currentCategoryPath = computed(() => {
   return categoryPath.value.map(c => c.name).join(' / ')
+})
+
+const flattenedCategories = computed(() => {
+  const result = []
+  const walk = (nodes, trail = []) => {
+    for (const category of Array.isArray(nodes) ? nodes : []) {
+      const nextTrail = [...trail, category]
+      result.push({ ...category, depth: trail.length, trail: nextTrail })
+      walk(category.subcategories, nextTrail)
+    }
+  }
+  walk(categories.value)
+  return result
 })
 
 // 预览相关状态
@@ -1019,18 +1057,17 @@ async function handleBatchEditConfirm() {
       updateData.tags = batchEditForm.value.tags
     }
 
-    await api.documents.batchUpdate(updateData)
-    toast.success(isSingleEdit.value ? '更改成功' : '批量更新成功')
+    const response = await api.documents.batchUpdate(updateData)
+    toast.success(response.data?.message || (isSingleEdit.value ? '更改成功' : '批量更新成功'))
     batchEditDialogVisible.value = false
     selectedRowKeys.value = []
     // 清除文件数量缓存，以便悬停时重新加载
     categoryFileCount.value = {}
-    loadDocuments()
-    // 重新加载标签列表
-    loadAllTags()
+    await loadDocumentCoverage()
+    await Promise.all([loadDocuments(), loadAllTags(), loadCategories()])
   } catch (error) {
     console.error('更新失败:', error)
-    toast.error('更新失败')
+    toast.error(documentErrorMessage(error, '更新失败'))
   }
 }
 
@@ -1044,7 +1081,8 @@ async function handleBatchDelete() {
     await Promise.all(selectedRowKeys.value.map(id => api.documents.delete(id)))
     toast.success('批量删除成功')
     selectedRowKeys.value = []
-    loadDocuments()
+    await loadDocumentCoverage()
+    await Promise.all([loadDocuments(), loadCategories(), loadAllTags()])
   } catch (error) {
     console.error('批量删除失败:', error)
     toast.error('批量删除失败')
@@ -1101,8 +1139,9 @@ const columns = computed(() => [
   { key: 'tags', dataIndex: 'tags', title: '标签', width: 150 },
   { key: 'version', dataIndex: 'version', title: '版本', width: 80 },
   { key: 'type', dataIndex: 'filePath', title: '类型', width: 80, sorter: true },
+  { key: 'indexStatus', dataIndex: 'indexStatus', title: '资料索引', width: 110 },
   { key: 'updatedAt', dataIndex: 'updatedAt', title: '更新时间', width: 180, sorter: true },
-  { key: 'operation', title: '操作', width: 200, align: 'left', headerAlign: 'left' }
+  { key: 'operation', title: '操作', width: 180, align: 'left', headerAlign: 'left' }
 ])
 
 const versionColumns = [
@@ -1133,6 +1172,7 @@ const sanitizedPreviewContent = computed(() =>
 
 async function loadDocuments() {
   loading.value = true
+  documentsError.value = ''
   try {
     const params = { 
       keyword: searchKeyword.value,
@@ -1180,11 +1220,7 @@ async function loadDocuments() {
       console.log('日期范围搜索（UTC）:', params.startDate, '至', params.endDate)
     }
 
-    // 同时获取分页数据和所有文档ID（用于跨页全选）
-    const [response, allIdsResponse] = await Promise.all([
-      api.documents.list(params),
-      api.documents.list({ ...params, page: 1, pageSize: 10000 })  // 获取所有ID
-    ])
+    const response = await api.documents.list(params)
     console.log('加载文档响应:', response)
     const data = response.data?.data || response.data || []
     total.value = response.data?.total || 0
@@ -1199,32 +1235,60 @@ async function loadDocuments() {
       filePath: doc.filePath,
       createdAt: doc.createdAt,
       updatedAt: doc.updatedAt,
-      size: doc.size || 0
+      size: doc.size || 0,
+      indexStatus: ragStatusById.value.get(Number(doc.id)) || (ragCoverageComplete.value ? 'missing' : 'unknown')
     }))
 
-    // 存储所有文档ID用于跨页全选
-    const allData = allIdsResponse.data?.data || allIdsResponse.data || []
-    allDocumentIds.value = (Array.isArray(allData) ? allData : []).map(doc => doc.id)
+    // 批量操作只针对当前页，避免每次列表刷新额外拉取全部资源。
+    allDocumentIds.value = documents.value.map(doc => doc.id)
+    if (!currentCategoryId.value && !searchKeyword.value && selectedTags.value.length === 0 && (dateRange.value?.length || 0) === 0) {
+      totalAllDocuments.value = total.value
+    }
 
     // 排序已在后端完成，无需前端再排序
   } catch (error) {
     console.error('加载文档失败:', error)
-    toast.error('加载文档失败')
+    documentsError.value = documentErrorMessage(error, '暂时无法加载文档，请稍后重试。')
     documents.value = []
     total.value = 0
+    allDocumentIds.value = []
   } finally {
     loading.value = false
   }
 }
 
 async function loadCategories() {
+  categoriesError.value = ''
   try {
     const response = await api.documents.categories()
     console.log('分类响应:', response)
     categories.value = response.data?.data || []
   } catch (error) {
     console.error('加载分类失败:', error)
+    categoriesError.value = documentErrorMessage(error, '暂时无法加载分类。')
     categories.value = []
+  }
+}
+
+async function loadDocumentCoverage() {
+  try {
+    const response = await api.rag.coverage({ type: 'document', limit: 200 })
+    const items = response.data?.data?.data || []
+    ragStatusById.value = new Map(
+      (Array.isArray(items) ? items : []).map(item => [Number(item.source?.id), item.status || 'missing'])
+    )
+    ragCoverageComplete.value = Number(response.data?.data?.total || items.length) <= items.length
+  } catch (error) {
+    console.error('加载文档索引覆盖状态失败:', error)
+    ragCoverageComplete.value = false
+  }
+  documents.value = documents.value.map(document => ({
+    ...document,
+    indexStatus: ragStatusById.value.get(Number(document.id)) || (ragCoverageComplete.value ? 'missing' : 'unknown')
+  }))
+  if (detailDocument.value) {
+    detailDocument.value = documents.value.find(document => document.id === detailDocument.value.id)
+      || { ...detailDocument.value, indexStatus: ragStatusById.value.get(Number(detailDocument.value.id)) || 'unknown' }
   }
 }
 
@@ -1270,6 +1334,15 @@ function enterCategory(category) {
   loadDocuments()
 }
 
+function selectCategoryFromRail(item) {
+  const trail = Array.isArray(item?.trail) ? item.trail : []
+  categoryPath.value = trail
+  currentCategoryId.value = trail.at(-1)?.id || null
+  pagination.value.current = 1
+  selectedRowKeys.value = []
+  loadDocuments()
+}
+
 function resetCategory() {
   if (categoryPath.value.length > 1) {
     // 返回上一级
@@ -1284,9 +1357,10 @@ function resetCategory() {
 }
 
 function backToRoot() {
-  // 直接返回主界面(根分类)
   categoryPath.value = []
   currentCategoryId.value = null
+  pagination.value.current = 1
+  selectedRowKeys.value = []
   loadDocuments()
 }
 
@@ -1331,15 +1405,15 @@ async function handleDeleteCategoryConfirm() {
   try {
     if (!deleteCategoryData.value) return
 
-    await api.documents.deleteCategory(deleteCategoryData.value.id)
+    const response = await api.documents.deleteCategory(deleteCategoryData.value.id)
 
-    toast.success('分类已删除，文档已移到父分类或未分类')
+    toast.success(response.data?.message || '分类已删除，文档已移到父分类或未分类')
     deleteCategoryDialogVisible.value = false
     deleteCategoryData.value = null
 
     // 刷新分类和文档列表
-    loadCategories()
-    loadDocuments()
+    await loadDocumentCoverage()
+    await Promise.all([loadCategories(), loadDocuments()])
     // 清除文件数量缓存
     categoryFileCount.value = {}
   } catch (error) {
@@ -1362,17 +1436,17 @@ async function handleRenameCategoryConfirm() {
       return
     }
 
-    await api.documents.updateCategory(renameCategoryData.value.id, {
+    const response = await api.documents.updateCategory(renameCategoryData.value.id, {
       name: renameCategoryName.value.trim()
     })
 
-    toast.success('重命名成功')
+    toast.success(response.data?.message || '重命名成功')
     renameCategoryDialogVisible.value = false
     renameCategoryData.value = null
 
     // 刷新分类和文档列表
-    loadCategories()
-    loadDocuments()
+    await loadDocumentCoverage()
+    await Promise.all([loadCategories(), loadDocuments()])
     // 清除文件数量缓存
     categoryFileCount.value = {}
   } catch (error) {
@@ -1421,6 +1495,78 @@ function documentErrorMessage(error, fallback) {
   return typeof message === 'string' && message.trim() ? message : fallback
 }
 
+function ragStatusLabel(status) {
+  return ({
+    ready: '可问',
+    partial: '部分可问',
+    pending: '索引中',
+    stale: '待刷新',
+    failed: '索引失败',
+    missing: '未索引',
+    unknown: '状态未知'
+  })[status] || '状态未知'
+}
+
+function ragStatusTheme(status) {
+  if (status === 'ready') return 'success'
+  if (status === 'partial' || status === 'pending') return 'primary'
+  if (status === 'stale' || status === 'missing') return 'warning'
+  if (status === 'failed') return 'danger'
+  return 'default'
+}
+
+function ragStatusDescription(status) {
+  return ({
+    ready: '正文和向量索引均已就绪，可在统一搜索中绑定此文档问答。',
+    partial: '部分索引已可用，回答范围可能不完整。',
+    pending: '索引任务已进入任务中心，完成后可绑定此文档问答。',
+    stale: '文档已更新，当前索引等待刷新。',
+    failed: '最近一次索引任务失败，可重新建立索引并在任务中心查看原因。',
+    missing: '尚未为此文档建立资料索引。',
+    unknown: '暂时无法读取索引状态，不影响文档预览和下载。'
+  })[status] || '暂时无法读取索引状态。'
+}
+
+function documentCategoryLabel(document) {
+  if (!document?.category) return '未分类'
+  return document.subcategory ? `${document.category} / ${document.subcategory}` : document.category
+}
+
+function openDocumentDetails(row) {
+  detailDocument.value = row
+  detailDrawerVisible.value = true
+}
+
+function openTrashPage() {
+  void router.push({ name: 'Trash', query: { type: 'document' } })
+}
+
+async function refreshDocumentIndex(row) {
+  if (!row?.id || detailRagRefreshing.value || !canWrite.value) return
+  detailRagRefreshing.value = true
+  try {
+    const response = await api.rag.refreshIndex({
+      source: { type: 'document', id: row.id },
+      filter: { sourceIds: [row.id] },
+      rebuild: true
+    })
+    if (!response.data?.data?.id) throw new Error('missing task id')
+    ragStatusById.value.set(Number(row.id), 'pending')
+    documents.value = documents.value.map(document => (
+      document.id === row.id ? { ...document, indexStatus: 'pending' } : document
+    ))
+    detailDocument.value = { ...row, indexStatus: 'pending' }
+    toast.success('索引刷新已加入任务中心')
+  } catch (error) {
+    const message = error?.response?.status === 409
+      ? '此文档已有索引任务正在运行'
+      : documentErrorMessage(error, '无法启动索引刷新任务')
+    toast.error(message)
+  } finally {
+    detailRagRefreshing.value = false
+  }
+}
+
 function openUploadConflict(error) {
   const data = error?.response?.data || {}
   const candidates = Array.isArray(data.candidates) ? data.candidates : []
@@ -1465,6 +1611,7 @@ async function submitUpload({ resolution = null, title = uploadForm.value.title,
     uploadConflict.value = null
     selectedUploadConflictCandidateId.value = null
     categoryFileCount.value = {}
+    await loadDocumentCoverage()
     await Promise.all([loadCategories(), loadAllTags(), loadDocuments()])
     return true
   } catch (error) {
@@ -1581,14 +1728,15 @@ async function handleSaveContent() {
       return
     }
 
-    await api.documents.updateContent(editForm.value.id, {
+    const response = await api.documents.updateContent(editForm.value.id, {
       content: editForm.value.content,
       versionNote: editForm.value.versionNote
     })
 
-    toast.success('保存成功')
+    toast.success(response.data?.message || '保存成功')
     editDialogVisible.value = false
-    loadDocuments()
+    await loadDocumentCoverage()
+    await loadDocuments()
   } catch (error) {
     console.error('保存失败:', error)
     toast.error(error.response?.data?.message || '保存失败')
@@ -1634,12 +1782,21 @@ function getFileFont(fileName) {
 
 async function handleDelete(id) {
   try {
-    await api.documents.delete(id)
-    toast.success('删除成功')
-    loadCategories()
-    loadDocuments()
+    const response = await api.documents.delete(id)
+    toast.success(response.data?.message || '文档已移入回收站')
+    await Promise.all([loadCategories(), loadAllTags(), loadDocumentCoverage()])
+    await loadDocuments()
+    return true
   } catch (error) {
-    toast.error('删除失败')
+    toast.error(documentErrorMessage(error, '移入回收站失败'))
+    return false
+  }
+}
+
+async function handleDeleteAndClose(id) {
+  if (await handleDelete(id)) {
+    detailDrawerVisible.value = false
+    detailDocument.value = null
   }
 }
 
@@ -1657,12 +1814,52 @@ async function handleViewVersions(row) {
   }
 }
 
+function openVersionUpload(row = null) {
+  const id = Number(row?.id || versionDocumentId.value)
+  if (!Number.isSafeInteger(id) || id <= 0 || !canWrite.value) return
+  versionDocumentId.value = id
+  versionUploadFiles.value = []
+  versionUploadNote.value = ''
+  versionUploadDialogVisible.value = true
+}
+
+async function submitVersionUpload() {
+  if (versionUploading.value || !canWrite.value) return false
+  const uploadEntry = versionUploadFiles.value?.[0]
+  if (!uploadEntry) {
+    toast.error('请选择新版本文件')
+    return false
+  }
+  versionUploading.value = true
+  try {
+    const file = uploadEntry.raw || uploadEntry.originFileObj || uploadEntry
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('versionNote', versionUploadNote.value)
+    const response = await api.documents.uploadVersion(versionDocumentId.value, formData)
+    toast.success(response.data?.message || '新版本上传成功')
+    versionUploadDialogVisible.value = false
+    await loadDocuments()
+    await loadDocumentCoverage()
+    if (versionsDialogVisible.value) {
+      await handleViewVersions({ id: versionDocumentId.value })
+    }
+    return true
+  } catch (error) {
+    toast.error(documentErrorMessage(error, '新版本上传失败'))
+    return false
+  } finally {
+    versionUploading.value = false
+  }
+}
+
 async function handleRestoreVersion(row) {
   if (!versionDocumentId.value || row?.isCurrent || !canWrite.value) return
   try {
-    await api.documents.restoreVersion(versionDocumentId.value, row.id)
-    toast.success('版本恢复成功，已创建新的当前版本')
+    const response = await api.documents.restoreVersion(versionDocumentId.value, row.id)
+    toast.success(response.data?.message || '版本恢复成功，已创建新的当前版本')
     versionsDialogVisible.value = false
+    await loadDocumentCoverage()
     await loadDocuments()
   } catch (error) {
     console.error('恢复版本失败:', error)
@@ -1706,8 +1903,9 @@ function openVersionTrash() {
 async function handleRestoreVersionTrash(row) {
   if (!versionDocumentId.value || !row?.id || !canWrite.value) return
   try {
-    await api.documents.restoreVersionTrash(versionDocumentId.value, row.id)
-    toast.success('版本已恢复，已创建新的当前版本')
+    const response = await api.documents.restoreVersionTrash(versionDocumentId.value, row.id)
+    toast.success(response.data?.message || '版本已恢复，已创建新的当前版本')
+    await loadDocumentCoverage()
     await Promise.all([
       loadVersionTrash(false),
       handleViewVersions({ id: versionDocumentId.value }),
@@ -2199,7 +2397,8 @@ function handleDownloadPreviewFile() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadCategories(), loadAllTags(), loadDocuments()])
+  await Promise.all([loadCategories(), loadAllTags(), loadDocumentCoverage()])
+  await loadDocuments()
   const documentId = Number(route.query.documentId)
   if (Number.isSafeInteger(documentId) && documentId > 0) {
     const row = documents.value.find((item) => Number(item.id) === documentId) || { id: documentId, title: `文档 ${documentId}` }
@@ -3216,4 +3415,422 @@ onMounted(async () => {
     gap: 8px;
     margin-top: 16px;
   }
+
+.documents {
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.document-page-intro {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.document-page-intro p {
+  margin: 0 0 5px;
+  font-size: 15px;
+  color: var(--color-text-primary);
+}
+
+.document-page-intro span {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.page-header-actions,
+.workbench-search,
+.workbench-location,
+.workbench-filter-actions,
+.document-detail-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.document-workbench {
+  overflow: hidden;
+  border-color: var(--color-border-default);
+  box-shadow: var(--shadow-md);
+}
+
+.document-workbench :deep(.native-card__body) {
+  padding: 0;
+}
+
+.workbench-toolbar {
+  min-height: 64px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-raised);
+}
+
+.workbench-location {
+  min-width: 0;
+  color: var(--color-text-secondary);
+}
+
+.breadcrumb-root,
+.breadcrumb-segment {
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.breadcrumb-root {
+  color: var(--color-text-primary);
+  font-weight: 650;
+}
+
+.breadcrumb-root:hover,
+.breadcrumb-segment:hover {
+  color: var(--color-primary);
+}
+
+.workbench-search {
+  flex: 0 1 620px;
+  justify-content: flex-end;
+}
+
+.workbench-search :deep(.native-input) {
+  min-width: 220px;
+}
+
+.workbench-sort {
+  width: 132px;
+}
+
+.workbench-filters {
+  margin: 0;
+  padding: 14px 18px;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.3fr) auto;
+  align-items: end;
+  gap: 14px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-radius: 0;
+  background: var(--color-surface-subtle);
+}
+
+.workbench-body {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  min-height: 540px;
+  background: var(--color-surface-raised);
+}
+
+.workbench-body.folder-rail-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.folder-rail {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border-subtle);
+  background: color-mix(in srgb, var(--color-surface-subtle) 82%, white);
+}
+
+.folder-rail-header,
+.folder-rail-footer {
+  min-height: 52px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.folder-rail-header {
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-primary);
+}
+
+.folder-rail-footer {
+  margin-top: auto;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.folder-tree {
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.folder-tree-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.folder-tree-item {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 7px 8px 7px calc(9px + var(--folder-depth, 0) * 15px);
+  display: grid;
+  grid-template-columns: 19px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-tree-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-tree-item small {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.folder-tree-item:hover,
+.folder-tree-row.active .folder-tree-item {
+  background: var(--color-primary-surface);
+  color: var(--color-primary);
+}
+
+.folder-tree-all {
+  margin-bottom: 4px;
+  --folder-depth: 0;
+}
+
+.folder-tree-actions {
+  position: absolute;
+  right: 5px;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  padding-left: 12px;
+  background: linear-gradient(90deg, transparent, var(--color-primary-surface) 25%);
+}
+
+.folder-tree-row:hover .folder-tree-actions,
+.folder-tree-row:focus-within .folder-tree-actions {
+  display: flex;
+}
+
+.folder-tree-actions button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.folder-tree-actions button:hover {
+  color: var(--color-primary);
+  background: var(--color-surface-raised);
+}
+
+.document-file-pane {
+  min-width: 0;
+  padding: 14px 16px 18px;
+  overflow: hidden;
+}
+
+.document-state-alert {
+  margin-bottom: 12px;
+}
+
+.document-state-alert :deep(.native-alert__message) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.document-title-cell {
+  max-width: 100%;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.document-title-cell > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-title-cell:hover {
+  color: var(--color-primary);
+}
+
+.document-type-icon,
+.document-detail-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+}
+
+.document-type-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.document-empty-state {
+  min-height: 390px;
+  gap: 10px;
+  color: var(--color-text-secondary);
+}
+
+.document-empty-state strong {
+  color: var(--color-text-primary);
+  font-size: 16px;
+}
+
+.document-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.document-detail-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.document-detail-icon {
+  width: 52px;
+  height: 52px;
+}
+
+.document-detail-hero > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.document-detail-hero strong {
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  color: var(--color-text-primary);
+}
+
+.document-detail-hero span,
+.document-detail-section p {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.document-detail-section {
+  padding: 15px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.document-detail-section h4,
+.document-detail-section p {
+  margin: 0;
+}
+
+.document-detail-heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.document-detail-grid {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 12px;
+  font-size: 13px;
+}
+
+.document-detail-grid > span {
+  color: var(--color-text-muted);
+}
+
+.document-detail-grid > strong {
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.document-detail-actions h4 {
+  margin-bottom: 12px;
+}
+
+.document-detail-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.version-upload-form {
+  margin-top: 16px;
+}
+
+.version-dialog-toolbar {
+  gap: 8px;
+}
+
+@media (max-width: 1180px) {
+  .workbench-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workbench-search {
+    width: 100%;
+    flex: 1 1 auto;
+    justify-content: flex-start;
+  }
+
+  .workbench-search :deep(.native-input) {
+    flex: 1;
+  }
+
+  .workbench-body {
+    grid-template-columns: 204px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .document-page-intro {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workbench-filters {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

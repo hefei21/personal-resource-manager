@@ -29,6 +29,7 @@ function functionSource(source, name) {
 }
 
 test('document API exposes the version trash lifecycle routes', () => {
+  assert.match(apiSource, /uploadVersion: \(id, formData\) => api\.post\(`\/documents\/\$\{id\}\/versions\/upload`/u)
   assert.match(apiSource, /versionsTrash: \(id\) => api\.get\(`\/documents\/\$\{id\}\/versions\/trash`\)/u)
   assert.match(apiSource, /deleteVersion: \(id, versionId\) => api\.delete\(`\/documents\/\$\{id\}\/versions\/\$\{versionId\}`\)/u)
   assert.match(apiSource, /restoreVersionTrash: \(id, versionId\) => api\.post\(`\/documents\/\$\{id\}\/versions\/\$\{versionId\}\/trash\/restore`\)/u)
@@ -72,25 +73,34 @@ test('PC content editing delegates version numbers and keeps only a read-only cu
   assert.match(pcSource, /versionNote: editForm\.value\.versionNote/u)
 })
 
-test('both document UIs protect current versions and expose version trash recovery', () => {
+test('PC protects current versions and keeps version recovery in document context', () => {
   assert.match(pcSource, /<template v-if="!row\.isCurrent">/u)
-  assert.match(mobileSource, /<template v-if="!ver\.isCurrent">/u)
   assert.match(pcSource, /row\?\.isCurrent/u)
-  assert.match(mobileSource, /ver\?\.isCurrent/u)
-
-  for (const source of [pcSource, mobileSource]) {
-    assert.match(source, /api\.documents\.versionsTrash\(/u)
-    assert.match(source, /api\.documents\.deleteVersion\(/u)
-    assert.match(source, /api\.documents\.restoreVersionTrash\(/u)
-    assert.match(source, /移入版本回收站/u)
-    assert.match(source, /版本回收站/u)
-  }
+  assert.match(pcSource, /api\.documents\.versionsTrash\(/u)
+  assert.match(pcSource, /api\.documents\.deleteVersion\(/u)
+  assert.match(pcSource, /api\.documents\.restoreVersionTrash\(/u)
+  assert.match(pcSource, /api\.documents\.uploadVersion\(/u)
+  assert.match(pcSource, /上传新版本/u)
 })
 
-test('mobile restore confirmation has no post-success error-path reference and upload errors keep backend messages', () => {
-  const confirmRestore = functionSource(mobileSource, 'confirmRestoreVersion')
-  assert.match(confirmRestore, /if \(!restored\) return/u)
-  assert.doesNotMatch(confirmRestore, /\berror\b/u)
+test('mobile keeps single reversible writes and read-only version history', () => {
+  assert.doesNotMatch(mobileSource, /onDocTouchStart|batchMode|selectedDocuments/u)
+  assert.doesNotMatch(mobileSource, /api\.documents\.(?:batchUpdate|restoreVersion|deleteVersion|restoreVersionTrash|versionsTrash)\(/u)
+  assert.match(mobileSource, /api\.documents\.update\(documentId, updateData\)/u)
+  assert.match(mobileSource, /handleDownloadVersion/u)
+})
+
+test('upload and mobile single-write errors keep backend messages', () => {
   assert.match(pcSource, /documentErrorMessage\(error, '上传失败'\)/u)
   assert.match(mobileSource, /documentErrorMessage\(error, '上传失败'\)/u)
+  assert.match(mobileSource, /documentErrorMessage\(error, '更改失败'\)/u)
+})
+
+test('document workbenches expose per-resource RAG state without full-library selection fetches', () => {
+  for (const source of [pcSource, mobileSource]) {
+    assert.match(source, /api\.rag\.coverage\(\{ type: 'document', limit: 200 \}\)/u)
+    assert.match(source, /ragStatusLabel/u)
+  }
+  assert.doesNotMatch(pcSource, /pageSize:\s*10000/u)
+  assert.match(pcSource, /openDocumentDetails/u)
 })

@@ -49,7 +49,9 @@ import {
 } from '../services/documentTrashService.js'
 import {
   batchUpdateDocumentMetadata,
+  createDocumentCategory,
   deleteDocumentCategoryTree,
+  reorderDocumentCategories,
   renameDocumentCategory,
   updateDocumentMetadata
 } from '../services/documentCategoryService.js'
@@ -58,7 +60,7 @@ const router = express.Router()
 const DOCUMENT_EXTENSIONS = new Set([
   '.txt', '.md', '.markdown', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv',
   '.json', '.xml', '.html', '.htm', '.rtf', '.odt', '.ods', '.jpg', '.jpeg',
-  '.png', '.gif', '.webp'
+  '.png', '.gif', '.bmp', '.webp'
 ])
 
 const upload = multer({
@@ -66,11 +68,49 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024, files: 1 }, // 50MB
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase()
-    cb(DOCUMENT_EXTENSIONS.has(ext) ? null : new Error('不支持的文件格式'), DOCUMENT_EXTENSIONS.has(ext))
+    if (DOCUMENT_EXTENSIONS.has(ext)) return cb(null, true)
+    const error = new Error('Document file type is unsupported.')
+    error.code = 'DOCUMENT_FILE_TYPE_UNSUPPORTED'
+    return cb(error, false)
   }
 })
 
 const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+
+const DOCUMENT_PUBLIC_MESSAGES = Object.freeze({
+  DOCUMENT_UPLOAD_CONFLICT: '当前分类中已有同名文档，请选择新建文档或作为指定文档的新版本',
+  DOCUMENT_CONFLICT_RESOLUTION_INVALID: '文档冲突处理方式无效',
+  DOCUMENT_CONFLICT_TARGET_INVALID: '选择的新版本目标已失效，请重新选择',
+  DOCUMENT_CONTENT_IDENTICAL: '文件内容与当前版本完全相同，无需创建新版本',
+  DOCUMENT_CATEGORY_ID_INVALID: '分类标识无效',
+  DOCUMENT_CATEGORY_INVALID: '分类信息无效',
+  DOCUMENT_CATEGORY_PATH_INVALID: '分类路径无效',
+  DOCUMENT_CATEGORY_NOT_FOUND: '分类不存在或已被删除',
+  DOCUMENT_CATEGORY_NAME_INVALID: '分类名称无效，不能包含斜杠或控制字符',
+  DOCUMENT_CATEGORY_DUPLICATE: '同级分类中已经存在同名分类',
+  DOCUMENT_CATEGORY_PARENT_MISSING: '父分类不存在或已被删除',
+  DOCUMENT_CATEGORY_ORDER_INVALID: '只能对同一层级的有效分类重新排序',
+  DOCUMENT_TAGS_INVALID: '标签格式无效',
+  DOCUMENT_FILE_TYPE_UNSUPPORTED: '不支持该文件格式',
+  DOCUMENT_FILE_TOO_LARGE: '文件超过 50 MB 上传上限',
+  DOCUMENT_PREVIEW_TOO_LARGE: '文件超过 50 MB 在线预览上限，请下载后查看',
+  DOCUMENT_CONTENT_REFERENCE_MISSING: '文档内容引用缺失，请先执行存储一致性检查',
+  DOCUMENT_CONTENT_MISSING: '文档原始内容不存在，请先执行存储一致性检查',
+  DOCUMENT_CONTENT_INVALID: '文档内容无效或为空',
+  DOCUMENT_TITLE_INVALID: '文档标题不能为空',
+  DOCUMENT_IDS_INVALID: '请选择有效的文档',
+  DOCUMENT_VERSION_MANAGED: '版本号由系统自动管理',
+  DOCUMENT_VERSION_NOTE_INVALID: '版本说明必须为 500 字以内的有效文本',
+  DOCUMENT_VERSION_FILE_TYPE_MISMATCH: '新版本必须与当前文档保持相同文件类型；不同格式请另建文档',
+  DOCUMENT_VERSION_NOT_FOUND: '历史版本不存在或已被删除',
+  DOCUMENT_VERSION_IS_CURRENT: '当前版本不能恢复',
+  DOCUMENT_VERSION_TRASHED: '该版本已进入版本回收站，需先从回收站恢复',
+  DOCUMENT_NOT_FOUND: '文档不存在或已被删除',
+  DOCUMENT_ALREADY_TRASHED: '文档已在回收站中',
+  DOCUMENT_TRASH_NOT_FOUND: '文档已不在回收站中',
+  DOCUMENT_TRASH_PURGE_IN_PROGRESS: '文档正在执行永久清理，暂时无法恢复',
+  DOCUMENT_TRASH_LEGACY_MIGRATION_REQUIRED: '旧存储内容迁移完成后才能永久删除'
+})
 
 function documentFileName(document) {
   return documentOriginalName(document.original_name || document.file_path || document.title)
@@ -135,6 +175,7 @@ function sendDocumentError(res, error, fallbackMessage) {
     DOCUMENT_VERSION_INVALID: 400,
     DOCUMENT_VERSION_NOT_GREATER: 409,
     DOCUMENT_VERSION_NOTE_INVALID: 400,
+    DOCUMENT_VERSION_FILE_TYPE_MISMATCH: 409,
     DOCUMENT_VERSION_NOT_FOUND: 404,
     DOCUMENT_VERSION_IS_CURRENT: 409,
     DOCUMENT_VERSION_NOT_CURRENT: 409,
@@ -151,10 +192,13 @@ function sendDocumentError(res, error, fallbackMessage) {
     , DOCUMENT_CATEGORY_PARENT_MISSING: 409
     , DOCUMENT_TITLE_INVALID: 400
     , DOCUMENT_IDS_INVALID: 400
+    , DOCUMENT_CATEGORY_ORDER_INVALID: 400
+    , DOCUMENT_FILE_TYPE_UNSUPPORTED: 415
+    , DOCUMENT_FILE_TOO_LARGE: 413
   }
   const status = statusByCode[error?.code] ?? 500
   const body = {
-    message: status === 500 ? fallbackMessage : error.message,
+    message: status === 500 ? fallbackMessage : (DOCUMENT_PUBLIC_MESSAGES[error?.code] || fallbackMessage),
     code: error?.code
   }
   if (error?.code === 'DOCUMENT_UPLOAD_CONFLICT') {
@@ -164,41 +208,73 @@ function sendDocumentError(res, error, fallbackMessage) {
   return res.status(status).json(body)
 }
 
+function documentUpload(req, res, next) {
+  upload.single('file')(req, res, (error) => {
+    if (!error) return next()
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      error.code = 'DOCUMENT_FILE_TOO_LARGE'
+    }
+    return sendDocumentError(res, error, '上传失败')
+  })
+}
+
+async function scheduleDocumentIndex(database, sourceId, reasonCode) {
+  try {
+    await scheduleRagSourceRefresh({ database, sourceType: 'document', sourceId, reasonCode })
+    return null
+  } catch (error) {
+    console.error('[Documents] index refresh scheduling failed:', error?.code || error?.name || 'UNKNOWN')
+    return 'DOCUMENT_SAVED_INDEX_REFRESH_FAILED'
+  }
+}
+
+async function scheduleDocumentIndexes(database, sourceIds, reasonCode) {
+  const ids = Array.isArray(sourceIds) ? [...new Set(sourceIds)] : []
+  if (ids.length === 0) return null
+  try {
+    await scheduleRagSourcesRefresh({ database, sourceType: 'document', sourceIds: ids, reasonCode })
+    return null
+  } catch (error) {
+    console.error('[Documents] batch index refresh scheduling failed:', error?.code || error?.name || 'UNKNOWN')
+    return 'DOCUMENT_SAVED_INDEX_REFRESH_FAILED'
+  }
+}
+
+function documentSuccessMessage(message, warningCode) {
+  return warningCode ? `${message}，索引刷新将在稍后重试` : message
+}
+
+function normalizedDocumentExtension(fileName) {
+  const extension = path.extname(fileName || '').toLowerCase()
+  return ({ '.markdown': '.md', '.jpeg': '.jpg', '.htm': '.html' })[extension] || extension
+}
+
+function assertDocumentVersionFileType(database, documentId, originalName) {
+  const document = database.prepare(`
+    SELECT title, original_name, file_path
+    FROM documents
+    WHERE id = ?
+  `).get(documentId)
+  if (!document) return
+  const currentExtension = normalizedDocumentExtension(documentFileName(document))
+  const nextExtension = normalizedDocumentExtension(originalName)
+  if (currentExtension && nextExtension && currentExtension !== nextExtension) {
+    throw new DocumentVersionError(
+      'DOCUMENT_VERSION_FILE_TYPE_MISMATCH',
+      'Document version file type does not match the current document.'
+    )
+  }
+}
+
 // 创建分类
 router.post('/categories', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { name, parentId } = req.body
-    if (!name || !name.trim()) {
-      return res.status(400).json({ message: '分类名称不能为空' })
-    }
-
-    const db = getDatabase()
-
-    // 检查同层级下是否已存在同名分类
-    const level = parentId ? await getCategoryLevel(db, parentId) + 1 : 0
-    const path = parentId ? await buildCategoryPath(db, parentId) + '/' + name : name
-
-    const checkStmt = db.prepare(
-      'SELECT * FROM categories WHERE name = ? AND parent_id IS ? AND level = ?'
-    )
-    const existing = checkStmt.get(name, parentId || null, level)
-
-    if (existing) {
-      return res.status(400).json({ message: '同级分类下已存在同名分类' })
-    }
-
-    const stmt = db.prepare(
-      'INSERT INTO categories (name, parent_id, path, level) VALUES (?, ?, ?, ?)'
-    )
-    const result = stmt.run(name, parentId || null, path, level)
-
-    // 清除分类缓存
-    await cache.del(CacheKeys.DOC_CATEGORIES)
-
-    res.json({ id: result.lastInsertRowid, message: '创建成功' })
+    const result = createDocumentCategory(getDatabase(), req.body)
+    try { await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    res.json({ id: result.categoryId, path: result.path, message: '创建成功' })
   } catch (error) {
     console.error('创建分类失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '创建分类失败')
   }
 })
 
@@ -250,11 +326,15 @@ router.get('/categories', authenticateToken, async (req, res) => {
     // 按 category 和 subcategory 分组统计
     const docStatsStmt = db.prepare(`
       SELECT 
-        category,
-        subcategory,
+        d.category,
+        d.subcategory,
         COUNT(*) as count
-      FROM documents
-      GROUP BY category, subcategory
+      FROM documents d
+      WHERE NOT EXISTS (
+        SELECT 1 FROM resource_trash_entries t
+        WHERE t.resource_type = 'document' AND t.resource_id = d.id
+      )
+      GROUP BY d.category, d.subcategory
     `)
     const docStats = docStatsStmt.all()
     
@@ -328,55 +408,58 @@ router.get('/categories', authenticateToken, async (req, res) => {
 // 删除分类
 router.delete('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const result = deleteDocumentCategoryTree(getDatabase(), req.params.id)
+    const database = getDatabase()
+    const result = deleteDocumentCategoryTree(database, req.params.id)
     try { await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
-    return res.json({ message: '分类已删除，文档已移到父分类或未分类', ...result })
+    const warningCode = await scheduleDocumentIndexes(
+      database,
+      result.activeDocumentIds,
+      'RAG_SOURCE_METADATA_CHANGED'
+    )
+    return res.json({
+      message: documentSuccessMessage('分类已删除，文档已移到父分类或未分类', warningCode),
+      deletedCategories: result.deletedCategories,
+      movedDocuments: result.movedDocuments,
+      categoryId: result.categoryId,
+      warningCode
+    })
   } catch (error) {
     console.error('删除分类失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '删除分类失败')
   }
 })
 
 // 更新分类排序 - 注意：必须放在 /categories/:id 之前，否则会被 :id 匹配
 router.put('/categories/reorder', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { orders } = req.body // orders 是一个数组，格式：[{ id: 1, sortOrder: 0 }, { id: 2, sortOrder: 1 }, ...]
-
-    if (!orders || !Array.isArray(orders)) {
-      return res.status(400).json({ message: '参数错误' })
-    }
-
-    const db = getDatabase()
-
-    // 使用事务批量更新
-    const updateStmt = db.prepare('UPDATE categories SET sort_order = ? WHERE id = ?')
-    const transaction = db.transaction((items) => {
-      items.forEach(item => {
-        updateStmt.run(item.sortOrder, item.id)
-      })
-    })
-
-    transaction(orders)
-
-    // 清除分类缓存
-    await cache.del(CacheKeys.DOC_CATEGORIES)
-
-    res.json({ message: '排序更新成功' })
+    const result = reorderDocumentCategories(getDatabase(), req.body?.orders)
+    try { await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
+    res.json({ message: '排序更新成功', count: result.count })
   } catch (error) {
     console.error('更新排序失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '更新排序失败')
   }
 })
 
 // 更新分类名称
 router.put('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const renamed = renameDocumentCategory(getDatabase(), req.params.id, req.body.name)
+    const database = getDatabase()
+    const renamed = renameDocumentCategory(database, req.params.id, req.body.name)
     try { await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
-    return res.json({ message: '更新成功', newPath: renamed.newPath })
+    const warningCode = await scheduleDocumentIndexes(
+      database,
+      renamed.activeDocumentIds,
+      'RAG_SOURCE_METADATA_CHANGED'
+    )
+    return res.json({
+      message: documentSuccessMessage('重命名成功', warningCode),
+      newPath: renamed.newPath,
+      warningCode
+    })
   } catch (error) {
     console.error('更新分类名称失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '重命名分类失败')
   }
 })
 
@@ -455,20 +538,6 @@ function buildCategoryTree(categories, parentId = null) {
   return tree
 }
 
-// 辅助函数：获取分类层级
-function getCategoryLevel(db, categoryId) {
-  const stmt = db.prepare('SELECT level FROM categories WHERE id = ?')
-  const row = stmt.get(categoryId)
-  return row ? row.level : 0
-}
-
-// 辅助函数：构建分类路径
-function buildCategoryPath(db, categoryId) {
-  const stmt = db.prepare('SELECT path FROM categories WHERE id = ?')
-  const row = stmt.get(categoryId)
-  return row ? row.path : ''
-}
-
 // 获取标签列表
 router.get('/tags', authenticateToken, async (req, res) => {
   try {
@@ -480,7 +549,15 @@ router.get('/tags', authenticateToken, async (req, res) => {
     }
 
     const db = getDatabase()
-    const stmt = db.prepare('SELECT DISTINCT tags FROM documents WHERE tags IS NOT NULL AND tags != \'\'')
+    const stmt = db.prepare(`
+      SELECT DISTINCT d.tags
+      FROM documents d
+      WHERE d.tags IS NOT NULL AND d.tags != ''
+        AND NOT EXISTS (
+          SELECT 1 FROM resource_trash_entries t
+          WHERE t.resource_type = 'document' AND t.resource_id = d.id
+        )
+    `)
     const rows = stmt.all()
 
     const tags = new Set()
@@ -660,7 +737,7 @@ router.get('/', authenticateToken, async (req, res) => {
 })
 
 // 上传文档
-router.post('/upload', authenticateToken, requireWritePermission, upload.single('file'), async (req, res) => {
+router.post('/upload', authenticateToken, requireWritePermission, documentUpload, async (req, res) => {
   let stagedToken = req.file?.stagingToken
   try {
     if (!req.file?.stagingToken) return res.status(400).json({ message: '请选择文件' })
@@ -695,6 +772,7 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
           'Document content is identical to the current version.'
         )
       }
+      assertDocumentVersionFileType(db, target.id, req.file.originalName)
       const runtime = getDocumentStorageRuntime()
       const result = await appendDocumentVersion({
         database: db,
@@ -708,18 +786,14 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
         versionNote: initialVersionNote
       })
       stagedToken = null
-      await scheduleRagSourceRefresh({
-        database: db,
-        sourceType: 'document',
-        sourceId: target.id,
-        reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
-      })
+      const warningCode = await scheduleDocumentIndex(db, target.id, 'RAG_SOURCE_VERSION_CHANGED')
       return res.json({
         id: target.id,
         title: target.title,
         version: result.version,
         resolution: 'new_version',
-        message: '上传成功'
+        warningCode,
+        message: documentSuccessMessage('新版本上传成功', warningCode)
       })
     }
 
@@ -765,25 +839,67 @@ router.post('/upload', authenticateToken, requireWritePermission, upload.single(
     })
     stagedToken = null
 
-    // 清除标签缓存（可能添加了新标签）
-    try { await cache.del(CacheKeys.DOC_TAGS) } catch (error) {
-      console.warn('文档标签缓存清理失败:', error?.code ?? error?.name)
+    // 新文档会同时改变标签建议和分类计数。
+    try {
+      await Promise.all([cache.del(CacheKeys.DOC_TAGS), cache.del(CacheKeys.DOC_CATEGORIES)])
+    } catch (error) {
+      console.warn('文档缓存清理失败:', error?.code ?? error?.name)
     }
 
-    await scheduleRagSourceRefresh({
-      database: db,
-      sourceType: 'document',
-      sourceId: documentId,
-      reasonCode: 'RAG_SOURCE_CREATED'
-    })
+    const warningCode = await scheduleDocumentIndex(db, documentId, 'RAG_SOURCE_CREATED')
 
-    res.json({ id: documentId, title, resolution: 'create', message: '上传成功' })
+    res.json({
+      id: documentId,
+      title,
+      resolution: 'create',
+      warningCode,
+      message: documentSuccessMessage('上传成功', warningCode)
+    })
   } catch (error) {
     if (stagedToken) {
       try { getDocumentStorageRuntime().storageService.discardStaged(stagedToken) } catch {}
     }
     console.error('文档上传错误:', error?.code ?? error?.name)
     return sendDocumentError(res, error, '上传失败')
+  }
+})
+
+// 在明确文档上下文中上传新版本，不依赖同名冲突来选择目标。
+router.post('/:id/versions/upload', authenticateToken, requireWritePermission, documentUpload, async (req, res) => {
+  let stagedToken = req.file?.stagingToken
+  try {
+    if (!req.file?.stagingToken) return res.status(400).json({ message: '请选择文件' })
+    if (Object.prototype.hasOwnProperty.call(req.body, 'newVersion') ||
+      Object.prototype.hasOwnProperty.call(req.body, 'version')) {
+      throw new DocumentVersionError('DOCUMENT_VERSION_MANAGED', 'Document version numbers are managed by the system.')
+    }
+    const database = getDatabase()
+    assertDocumentVersionFileType(database, req.params.id, req.file.originalName)
+    const result = await appendDocumentVersion({
+      database,
+      runtime: getDocumentStorageRuntime(),
+      id: req.params.id,
+      staged: {
+        token: req.file.stagingToken,
+        sha256: req.file.contentSha256,
+        bytes: req.file.contentBytes
+      },
+      versionNote: normalizeDocumentVersionNote(req.body.versionNote)
+    })
+    stagedToken = null
+    const warningCode = await scheduleDocumentIndex(database, req.params.id, 'RAG_SOURCE_VERSION_CHANGED')
+    return res.json({
+      id: Number(req.params.id),
+      version: result.version,
+      warningCode,
+      message: documentSuccessMessage('新版本上传成功', warningCode)
+    })
+  } catch (error) {
+    if (stagedToken) {
+      try { getDocumentStorageRuntime().storageService.discardStaged(stagedToken) } catch {}
+    }
+    console.error('上传文档新版本失败:', error?.code ?? error?.name)
+    return sendDocumentError(res, error, '上传新版本失败')
   }
 })
 
@@ -881,13 +997,12 @@ router.put('/:id/content', authenticateToken, requireWritePermission, async (req
     if (Object.prototype.hasOwnProperty.call(body, 'newVersion')) update.newVersion = body.newVersion
     if (Object.prototype.hasOwnProperty.call(body, 'version')) update.version = body.version
     const result = await updateDocumentContent(update)
-    await scheduleRagSourceRefresh({
-      database,
-      sourceType: 'document',
-      sourceId: req.params.id,
-      reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
+    const warningCode = await scheduleDocumentIndex(database, req.params.id, 'RAG_SOURCE_VERSION_CHANGED')
+    res.json({
+      message: documentSuccessMessage('保存成功', warningCode),
+      version: result.version,
+      warningCode
     })
-    res.json({ message: '保存成功', version: result.version })
   } catch (error) {
     console.error('更新文档内容失败:', error?.code ?? error?.name)
     return sendDocumentError(res, error?.cause ?? error, '服务器错误')
@@ -919,16 +1034,16 @@ router.put('/:id', authenticateToken, requireWritePermission, async (req, res) =
     const database = getDatabase()
     const result = updateDocumentMetadata(database, req.params.id, req.body)
     try { await cache.del(CacheKeys.DOC_TAGS); await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
-    await scheduleRagSourceRefresh({
-      database,
-      sourceType: 'document',
-      sourceId: req.params.id,
-      reasonCode: 'RAG_SOURCE_METADATA_CHANGED'
+    const warningCode = await scheduleDocumentIndex(database, req.params.id, 'RAG_SOURCE_METADATA_CHANGED')
+    return res.json({
+      message: documentSuccessMessage('更新成功', warningCode),
+      categoryId: result.categoryId,
+      tags: result.tags,
+      warningCode
     })
-    return res.json({ message: '更新成功', categoryId: result.categoryId, tags: result.tags })
   } catch (error) {
     console.error('更新失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '更新文档失败')
   }
 })
 
@@ -938,16 +1053,20 @@ router.put('/batch/update', authenticateToken, requireWritePermission, async (re
     const database = getDatabase()
     const result = batchUpdateDocumentMetadata(database, req.body.ids, req.body)
     try { await cache.del(CacheKeys.DOC_TAGS); await cache.del(CacheKeys.DOC_CATEGORIES) } catch {}
-    await scheduleRagSourcesRefresh({
+    const warningCode = await scheduleDocumentIndexes(
       database,
-      sourceType: 'document',
-      sourceIds: req.body.ids || [],
-      reasonCode: 'RAG_SOURCE_METADATA_CHANGED'
+      req.body.ids || [],
+      'RAG_SOURCE_METADATA_CHANGED'
+    )
+    return res.json({
+      message: documentSuccessMessage('批量更新成功', warningCode),
+      count: result.count,
+      categoryId: result.categoryId,
+      warningCode
     })
-    return res.json({ message: '批量更新成功', count: result.count, categoryId: result.categoryId })
   } catch (error) {
     console.error('批量更新失败:', error)
-    res.status(500).json({ message: '服务器错误' })
+    return sendDocumentError(res, error, '批量更新失败')
   }
 })
 
@@ -1026,13 +1145,13 @@ router.post('/trash/:id/restore', authenticateToken, requireWritePermission, asy
   try {
     const database = getDatabase()
     const result = restoreDocumentFromTrash({ database, id: req.params.id })
-    await scheduleRagSourceRefresh({
-      database,
-      sourceType: 'document',
-      sourceId: req.params.id,
-      reasonCode: 'RAG_SOURCE_RESTORED'
+    try { await Promise.all([cache.del(CacheKeys.DOC_TAGS), cache.del(CacheKeys.DOC_CATEGORIES)]) } catch {}
+    const warningCode = await scheduleDocumentIndex(database, req.params.id, 'RAG_SOURCE_RESTORED')
+    res.json({
+      message: documentSuccessMessage('恢复成功', warningCode),
+      categoryId: result.categoryId,
+      warningCode
     })
-    res.json({ message: '恢复成功', categoryId: result.categoryId })
   } catch (error) {
     console.error('恢复文档失败:', error?.code ?? error?.name)
     return sendDocumentError(res, error, '服务器错误')
@@ -1075,13 +1194,12 @@ router.post('/:id/versions/:versionId/trash/restore', authenticateToken, require
       versionId: req.params.versionId,
       versionNote: req.body?.versionNote
     })
-    await scheduleRagSourceRefresh({
-      database,
-      sourceType: 'document',
-      sourceId: req.params.id,
-      reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
+    const warningCode = await scheduleDocumentIndex(database, req.params.id, 'RAG_SOURCE_VERSION_CHANGED')
+    res.json({
+      message: documentSuccessMessage('历史版本恢复成功', warningCode),
+      version: result.version,
+      warningCode
     })
-    res.json({ message: '历史版本恢复成功', version: result.version })
   } catch (error) {
     console.error('恢复回收文档版本失败:', error?.code ?? error?.name)
     return sendDocumentError(res, error?.cause ?? error, '恢复回收文档版本失败')
@@ -1098,13 +1216,12 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, requireWriteP
       versionId: req.params.versionId,
       versionNote: req.body?.versionNote
     })
-    await scheduleRagSourceRefresh({
-      database,
-      sourceType: 'document',
-      sourceId: req.params.id,
-      reasonCode: 'RAG_SOURCE_VERSION_CHANGED'
+    const warningCode = await scheduleDocumentIndex(database, req.params.id, 'RAG_SOURCE_VERSION_CHANGED')
+    res.json({
+      message: documentSuccessMessage('恢复成功', warningCode),
+      version: result.version,
+      warningCode
     })
-    res.json({ message: '恢复成功', version: result.version })
   } catch (error) {
     console.error('恢复文档版本失败:', error?.code ?? error?.name)
     return sendDocumentError(res, error?.cause ?? error, '服务器错误')
@@ -1121,7 +1238,7 @@ router.delete('/:id', authenticateToken, requireWritePermission, async (req, res
       sourceId: req.params.id,
       reasonCode: 'RAG_SOURCE_TRASHED'
     })
-    try { await cache.del(CacheKeys.DOC_TAGS) } catch {}
+    try { await Promise.all([cache.del(CacheKeys.DOC_TAGS), cache.del(CacheKeys.DOC_CATEGORIES)]) } catch {}
     res.json({ message: '已移入回收站', purgeAfter: result.purgeAfter })
   } catch (error) {
     console.error('删除失败:', error?.code ?? error?.name)

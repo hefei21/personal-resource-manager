@@ -57,6 +57,12 @@ function sendTrashError(res, error, fallback) {
 }
 
 async function invalidateResourceCaches(resourceType) {
+  if (resourceType === 'document') {
+    await Promise.all([
+      cache.del(CacheKeys.DOC_CATEGORIES),
+      cache.del(CacheKeys.DOC_TAGS)
+    ])
+  }
   if (resourceType === 'ebook') await cache.del(CacheKeys.BOOK_CATEGORIES)
   if (resourceType === 'music') {
     await Promise.all([

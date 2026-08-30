@@ -131,6 +131,9 @@ export default {
     upload: (formData) => api.post('/documents/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     }),
+    uploadVersion: (id, formData) => api.post(`/documents/${id}/versions/upload`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    }),
     versions: (id) => api.get(`/documents/${id}/versions`),
     versionsTrash: (id) => api.get(`/documents/${id}/versions/trash`),
     deleteVersion: (id, versionId) => api.delete(`/documents/${id}/versions/${versionId}`),

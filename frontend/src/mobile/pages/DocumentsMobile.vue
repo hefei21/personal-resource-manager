@@ -48,20 +48,14 @@
       <NativeButton theme="primary" size="small" @click="openUploadDialog" :disabled="!canWrite">
         上传文档
       </NativeButton>
-      <input ref="uploadInput" type="file" class="mobile-upload-input" @change="handleMobileFileChange" />
+      <input
+        ref="uploadInput"
+        type="file"
+        class="mobile-upload-input"
+        accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,.xls,.xlsx,.csv,.jpg,.jpeg,.png,.gif,.bmp"
+        @change="handleMobileFileChange"
+      />
     </div>
-
-    <!-- 批量操作栏（放在文档列表上方） -->
-    
-    <!-- 删除确认对话框 -->
-    <NativeDialog
-      v-model="confirmBatchDeleteDialogVisible"
-      title="确认删除"
-      body="确定要删除选中的文档吗？此操作不可撤销。"
-      :close-on-overlay-click="true"
-      @confirm="handleBatchDelete"
-      class="centered-dialog"
-    />
 
     <!-- 移动端最小上传对话框 -->
     <NativeDialog
@@ -144,7 +138,10 @@
       <div class="section-title-row">
         <span class="section-title">分类</span>
       </div>
-      <div v-if="categories.length === 0" class="empty-categories">
+      <NativeAlert v-if="categoriesError" theme="error" title="分类加载失败">
+        <NativeButton size="small" variant="outline" @click="loadCategories">重试</NativeButton>
+      </NativeAlert>
+      <div v-else-if="categories.length === 0" class="empty-categories">
         <span class="empty-text">无</span>
       </div>
       <div class="category-list" v-else>
@@ -185,17 +182,12 @@
     </div>
 
     <div class="documents-section" v-if="!loading || documents.length > 0">
-      <!-- 批量操作栏（放在文档列表上方，多选模式下显示） -->
-      <div v-if="batchMode" class="batch-bar">
-        <span class="batch-info">已选 {{ selectedDocuments.length }} 项</span>
-        <div class="batch-actions-space">
-          <NativeButton theme="primary" size="small" @click="batchEditDialogVisible = true" :disabled="selectedDocuments.length === 0">更改</NativeButton>
-          <NativeButton theme="danger" size="small" @click="confirmBatchDeleteDialogVisible = true" :disabled="selectedDocuments.length === 0">删除</NativeButton>
-          <NativeButton variant="text" size="small" @click="exitBatchMode">取消</NativeButton>
-        </div>
-      </div>
+      <NativeAlert v-if="documentsError" theme="error" title="文档加载失败" class="mobile-document-error">
+        <span>{{ documentsError }}</span>
+        <NativeButton size="small" variant="outline" @click="loadDocuments">重试</NativeButton>
+      </NativeAlert>
 
-      <div class="section-title" v-if="documents.length > 0 && !batchMode">
+      <div class="section-title" v-if="documents.length > 0">
         {{ viewMode === 'category' && currentCategoryName ? currentCategoryName : '所有文件' }}
         <span class="count">({{ documents.length }})</span>
       </div>
@@ -205,11 +197,8 @@
           v-for="doc in documents"
           :key="doc.id"
           class="document-item"
-          :class="{ selected: isSelected(doc.id), 'guest-mode': isGuest, 'previewing': isPreviewing(doc.id) }"
+          :class="{ 'guest-mode': isGuest, 'previewing': isPreviewing(doc.id) }"
           @click="(e) => onDocItemClick(doc, e)"
-          @touchstart.passive="!isGuest && onDocTouchStart($event, doc)"
-          @touchend.passive="!isGuest && onDocTouchEnd"
-          @touchcancel="onDocTouchEnd"
         >
           <!-- 文件图标 -->
           <div class="file-icon" :class="getFileIconClass(doc.filePath)">
@@ -223,6 +212,9 @@
               <span class="file-size">{{ formatFileSize(doc.size || 0) }}</span>
               <span class="divider">|</span>
               <span class="file-date">{{ formatDate(doc.updatedAt) }}</span>
+              <NativeTag :theme="ragStatusTheme(doc.indexStatus)" size="small" variant="light">
+                {{ ragStatusLabel(doc.indexStatus) }}
+              </NativeTag>
             </div>
             <div class="file-tags-row" v-if="doc.tags">
               <NativeTag v-for="(tag, idx) in parseTags(doc.tags)" :key="idx" size="small" variant="light" theme="primary">
@@ -236,15 +228,10 @@
             <NativeLoading size="small" />
           </div>
           
-          <!-- 操作菜单（非多选模式、非游客） -->
-          <div v-if="!batchMode && !isGuest && !isPreviewing(doc.id)" class="action-menu"
+          <div v-if="!isGuest && !isPreviewing(doc.id)" class="action-menu"
             @click.stop.prevent="showActionMenu(doc)"
           >
             <NativeIcon name="ellipsis" size="22" />
-          </div>
-          <!-- 多选框（多选模式，放在右侧） -->
-          <div v-else-if="batchMode" class="checkbox checkbox-right" @click.stop="toggleSelect(doc.id)">
-            <NativeCheckbox :checked="isSelected(doc.id)" @change="toggleSelect(doc.id)" />
           </div>
         </div>
       </div>
@@ -292,10 +279,10 @@
       </div>
     </div>
 
-    <!-- 批量编辑弹窗 -->
+    <!-- 单项信息编辑弹窗 -->
     <NativeDialog
       v-model="batchEditDialogVisible"
-      title="更改"
+      title="更改文档信息"
       :show-close="true"
       :close-on-overlay-click="true"
       class="centered-dialog"
@@ -312,7 +299,7 @@
       <template #footer>
         <div class="dialog-footer-btns">
           <NativeButton variant="outline" @click="batchEditDialogVisible = false">取消</NativeButton>
-          <NativeButton theme="primary" @click="handleBatchEditConfirm">确认</NativeButton>
+          <NativeButton theme="primary" @click="handleSingleEditConfirm">确认</NativeButton>
         </div>
       </template>
     </NativeDialog>
@@ -322,7 +309,6 @@
       <div class="native-dialog-container">
         <div class="native-dialog-header">
           <span>版本历史</span>
-          <NativeButton variant="outline" size="small" @click.stop="openVersionTrash">版本回收站</NativeButton>
           <span class="dialog-close" @click="versionsDialogVisible = false">×</span>
         </div>
         <div class="versions-list">
@@ -338,57 +324,11 @@
             </div>
             <div class="version-actions">
               <button class="version-preview-btn" @click.stop="handleDownloadVersion(ver)">下载</button>
-              <template v-if="!ver.isCurrent">
-                <button class="version-preview-btn" @click.stop="requestRestoreVersion(ver)" :disabled="!canWrite">恢复</button>
-                <button class="version-trash-btn" @click.stop="requestDeleteVersion(ver)" :disabled="!canWrite">移入版本回收站</button>
-              </template>
             </div>
           </div>
         </div>
       </div>
     </div>
-
-    <NativeDialog
-      v-model="versionTrashDialogVisible"
-      title="版本回收站"
-      :show-footer="false"
-      class="centered-dialog"
-    >
-      <div v-if="versionTrashLoading" class="loading-state"><NativeLoading size="small" /></div>
-      <div v-else-if="versionTrash.length === 0" class="empty-categories">
-        <span class="empty-text">版本回收站为空</span>
-      </div>
-      <div v-else class="version-trash-list">
-        <div v-for="row in versionTrash" :key="row.id" class="version-trash-item">
-          <div>
-            <strong>v{{ row.version }}</strong>
-            <span class="version-date">{{ formatDate(row.deletedAt || row.trashedAt) }}</span>
-            <div v-if="row.note" class="version-note">{{ row.note }}</div>
-          </div>
-          <NativeButton v-if="!row.isCurrent" theme="primary" size="small" @click="handleRestoreVersionTrash(row)" :disabled="!canWrite">
-            恢复
-          </NativeButton>
-        </div>
-      </div>
-    </NativeDialog>
-
-    <NativeDialog
-      v-model="restoreVersionConfirmVisible"
-      title="恢复历史版本"
-      @confirm="confirmRestoreVersion"
-      class="centered-dialog"
-    >
-      <p>恢复会创建一个新的当前版本，不会覆盖已有历史。确定继续吗？</p>
-    </NativeDialog>
-
-    <NativeDialog
-      v-model="deleteVersionConfirmVisible"
-      title="移入版本回收站"
-      @confirm="confirmDeleteVersion"
-      class="centered-dialog"
-    >
-      <p>移入版本回收站后可在保护期内恢复，确定继续吗？</p>
-    </NativeDialog>
 
     <!-- 删除确认弹窗 -->
     <div v-if="deleteConfirmVisible" class="native-dialog-overlay" @click.self="deleteConfirmVisible = false">
@@ -503,7 +443,7 @@ import { authenticatedAssetUrl } from '@/utils/authentication'
 import { normalizeDocumentTags } from '@/utils/documentTags'
 import { openPdfDocument } from '@/utils/pdfPreview'
 import { usePermission } from '@/composables/usePermission'
-import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeTag, NativeSelect, NativeAlert, NativeLoading } from '@/components/native'
+import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeIcon, NativeTag, NativeSelect, NativeAlert, NativeLoading } from '@/components/native'
 import { useToast } from '@/composables/useToast'
 import {
   escapeHtml,
@@ -531,6 +471,7 @@ marked.setOptions({
 // 状态定义
 const loading = ref(false)
 const documents = ref([])
+const documentsError = ref('')
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
@@ -539,6 +480,9 @@ const hasMore = computed(() => documents.value.length < total.value)
 // 视图模式
 const viewMode = ref('category') // category, list
 const categories = ref([])
+const categoriesError = ref('')
+const ragStatusById = ref(new Map())
+const ragCoverageComplete = ref(false)
 const currentCategoryId = ref(null)
 const categoryPath = ref([])
 const currentCategoryName = computed(() => {
@@ -556,23 +500,11 @@ const currentSubcategories = computed(() => {
 // 搜索
 const searchKeyword = ref('')
 
-// 批量模式
-const batchMode = ref(false)
-const selectedDocuments = ref([])
-
 // 当前操作文档
 const currentDoc = ref(null)
 
 // 操作菜单
 const actionMenuVisible = ref(false)
-const actionItems = computed(() => {
-  const items = [
-    { label: '更改', value: 'edit' },
-    { label: '版本历史', value: 'versions' },
-    { label: '删除', value: 'delete' }
-  ]
-  return items
-})
 
 // 上传
 const uploadDialogVisible = ref(false)
@@ -588,9 +520,8 @@ const uploadForm = ref({
   categoryPath: '',
   versionNote: ''
 })
-// 批量编辑
+// 单项信息编辑
 const batchEditDialogVisible = ref(false)
-const confirmBatchDeleteDialogVisible = ref(false)
 const batchEditForm = ref({
   categoryPath: '',
   tags: ''
@@ -599,13 +530,6 @@ const batchEditForm = ref({
 // 版本
 const versions = ref([])
 const versionsDialogVisible = ref(false)
-const versionTrash = ref([])
-const versionTrashLoading = ref(false)
-const versionTrashDialogVisible = ref(false)
-const restoreVersionConfirmVisible = ref(false)
-const pendingVersion = ref(null)
-const deleteVersionConfirmVisible = ref(false)
-const pendingVersionDelete = ref(null)
 
 // 预览
 const previewDialogVisible = ref(false)
@@ -675,15 +599,13 @@ function switchViewMode(mode) {
   categoryPath.value = []
   documents.value = []
   page.value = 1
-  selectedDocuments.value = []
-  batchMode.value = false
-  
   loadDocuments()
 }
 
 // 加载文档
 async function loadDocuments() {
   loading.value = true
+  documentsError.value = ''
   try {
     const params = {
       keyword: searchKeyword.value,
@@ -704,7 +626,10 @@ async function loadDocuments() {
     }
     
     const response = await api.documents.list(params)
-    const data = response.data?.data || []
+    const data = (response.data?.data || []).map(document => ({
+      ...document,
+      indexStatus: ragStatusById.value.get(Number(document.id)) || (ragCoverageComplete.value ? 'missing' : 'unknown')
+    }))
     total.value = response.data?.total || 0
     
     if (page.value === 1) {
@@ -714,7 +639,8 @@ async function loadDocuments() {
     }
   } catch (error) {
     console.error('加载文档失败:', error)
-    toast.error('加载失败')
+    documentsError.value = documentErrorMessage(error, '暂时无法加载文档，请稍后重试。')
+    if (page.value === 1) documents.value = []
   } finally {
     loading.value = false
   }
@@ -722,11 +648,27 @@ async function loadDocuments() {
 
 // 加载分类
 async function loadCategories() {
+  categoriesError.value = ''
   try {
     const response = await api.documents.categories()
     categories.value = response.data?.data || []
   } catch (error) {
     console.error('加载分类失败:', error)
+    categoriesError.value = documentErrorMessage(error, '暂时无法加载分类。')
+    categories.value = []
+  }
+}
+
+async function loadDocumentCoverage() {
+  try {
+    const response = await api.rag.coverage({ type: 'document', limit: 200 })
+    const items = response.data?.data?.data || []
+    ragStatusById.value = new Map(
+      (Array.isArray(items) ? items : []).map(item => [Number(item.source?.id), item.status || 'missing'])
+    )
+    ragCoverageComplete.value = Number(response.data?.data?.total || items.length) <= items.length
+  } catch {
+    ragCoverageComplete.value = false
   }
 }
 
@@ -1020,61 +962,9 @@ function closePreview() {
   }
 }
 
-// 点击/长按手势检测
-// @click → 直接打开预览
-// touchstart/touchend → 检测长按, 长按触发后设标志位阻止click合成
-
-let _longPressState = { timer: null, triggered: false }
-
-function onDocTouchStart(event, doc) {
-  const t = event.touches[0]
-  let moved = false
-
-  function onMove(e) {
-    const touch = e.touches[0]
-    if (Math.abs(touch.clientX - t.clientX) > 10 || Math.abs(touch.clientY - t.clientY) > 10) {
-      moved = true
-      cleanup()
-    }
-  }
-  function onEnd() { cleanup() }
-  function cleanup() {
-    clearTimeout(_longPressState.timer)
-    document.removeEventListener('touchmove', onMove)
-    document.removeEventListener('touchend', onEnd)
-  }
-
-  document.addEventListener('touchmove', onMove, { passive: true })
-  document.addEventListener('touchend', onEnd, { passive: true })
-
-  _longPressState.triggered = false
-  _longPressState.timer = setTimeout(() => {
-    if (!moved) {
-      _longPressState.triggered = true
-      if (isGuest.value) return
-      if (navigator.vibrate) navigator.vibrate(30)
-      if (!batchMode.value) enterBatchMode(doc.id)
-      cleanup()
-    }
-  }, 500)
-}
-
-function onDocTouchEnd() {
-  clearTimeout(_longPressState.timer)
-}
-
-// 文档条目点击（由@click触发）
+// 文档条目点击直接预览；移动端不通过长按暴露批量写操作。
 function onDocItemClick(doc, event) {
-  // 如果点击了三点菜单（或菜单内的图标），忽略这次点击
   if (event && event.target && event.target.closest('.action-menu')) {
-    return
-  }
-  if (_longPressState.triggered) {
-    _longPressState.triggered = false
-    return
-  }
-  if (batchMode.value) {
-    toggleSelect(doc.id)
     return
   }
   previewDocument(doc)
@@ -1116,33 +1006,6 @@ async function confirmDelete() {
   await handleDelete(doc.id)
 }
 
-// 进入批量模式
-function enterBatchMode(firstId) {
-  batchMode.value = true
-  selectedDocuments.value = [firstId]
-}
-
-// 退出批量模式
-function exitBatchMode() {
-  batchMode.value = false
-  selectedDocuments.value = []
-}
-
-// 选择切换
-function toggleSelect(id) {
-  const index = selectedDocuments.value.indexOf(id)
-  if (index > -1) {
-    selectedDocuments.value.splice(index, 1)
-  } else {
-    selectedDocuments.value.push(id)
-  }
-}
-
-// 是否选中
-function isSelected(id) {
-  return selectedDocuments.value.includes(id)
-}
-
 // 查看版本
 async function handleViewVersions(doc) {
   try {
@@ -1165,68 +1028,44 @@ function handleChangeSingle(doc) {
   batchEditDialogVisible.value = true
 }
 
-// 批量编辑确认
-async function handleBatchEditConfirm() {
-  const ids = batchMode.value ? selectedDocuments.value : [currentDoc.value?.id]
-  
-  if (!ids || ids.length === 0) {
-    toast.warning('请选择文档')
+async function handleSingleEditConfirm() {
+  const documentId = currentDoc.value?.id
+  if (!documentId) {
+    toast.warning('当前文档不可用')
     return
   }
-  
   try {
-    const updateData = { ids }
-    
+    const updateData = {
+      title: currentDoc.value.title,
+      tags: batchEditForm.value.tags || ''
+    }
     if (batchEditForm.value.categoryPath) {
       const pathParts = batchEditForm.value.categoryPath.split('/')
       updateData.category = pathParts[0]
       updateData.subcategory = pathParts.length > 1 ? pathParts.slice(1).join('/') : ''
+    } else {
+      updateData.category = ''
+      updateData.subcategory = ''
     }
-    
-    if (batchEditForm.value.tags) {
-      updateData.tags = batchEditForm.value.tags
-    }
-    
-    await api.documents.batchUpdate(updateData)
-    toast.success('更改成功')
+    const response = await api.documents.update(documentId, updateData)
+    toast.success(response.data?.message || '更改成功')
     batchEditDialogVisible.value = false
-    selectedDocuments.value = []
-    batchMode.value = false
-    loadDocuments()
-    loadCategories()
+    await loadDocumentCoverage()
+    await Promise.all([loadDocuments(), loadCategories()])
   } catch (error) {
-    toast.error('更改失败')
-  }
-}
-
-// 批量删除
-async function handleBatchDelete() {
-  if (selectedDocuments.value.length === 0) {
-    toast.warning('请选择要删除的文档')
-    return
-  }
-  
-  try {
-    await Promise.all(selectedDocuments.value.map(id => api.documents.delete(id)))
-    toast.success('删除成功')
-    selectedDocuments.value = []
-    batchMode.value = false
-    loadDocuments()
-    loadCategories()
-  } catch (error) {
-    toast.error('删除失败')
+    toast.error(documentErrorMessage(error, '更改失败'))
   }
 }
 
 // 单条删除
 async function handleDelete(id) {
   try {
-    await api.documents.delete(id)
-    toast.success('删除成功')
-    loadDocuments()
-    loadCategories()
+    const response = await api.documents.delete(id)
+    toast.success(response.data?.message || '文档已移入回收站')
+    await loadDocumentCoverage()
+    await Promise.all([loadDocuments(), loadCategories()])
   } catch (error) {
-    toast.error('删除失败')
+    toast.error(documentErrorMessage(error, '移入回收站失败'))
   }
 }
 
@@ -1249,6 +1088,21 @@ async function handleRename(doc) {
 function documentErrorMessage(error, fallback) {
   const message = error?.response?.data?.message
   return typeof message === 'string' && message.trim() ? message : fallback
+}
+
+function ragStatusLabel(status) {
+  return ({
+    ready: '可问', partial: '部分可问', pending: '索引中', stale: '待刷新',
+    failed: '索引失败', missing: '未索引', unknown: '状态未知'
+  })[status] || '状态未知'
+}
+
+function ragStatusTheme(status) {
+  if (status === 'ready') return 'success'
+  if (status === 'partial' || status === 'pending') return 'primary'
+  if (status === 'failed') return 'danger'
+  if (status === 'stale' || status === 'missing') return 'warning'
+  return 'default'
 }
 
 function openUploadDialog() {
@@ -1327,6 +1181,7 @@ async function submitUpload({ resolution = null, title = uploadForm.value.title,
     selectedUploadConflictCandidateId.value = null
     uploadFiles.value = []
     uploadForm.value = { title: '', tags: '', categoryPath: '', versionNote: '' }
+    await loadDocumentCoverage()
     await Promise.all([loadDocuments(), loadCategories()])
     return true
   } catch (error) {
@@ -1364,91 +1219,6 @@ function cancelUploadConflict() {
   uploadConflictDialogVisible.value = false
   uploadConflict.value = null
   selectedUploadConflictCandidateId.value = null
-}
-
-// 恢复版本
-async function restoreVersion(ver) {
-  if (!currentDoc.value?.id || ver?.isCurrent || !canWrite.value) return false
-  try {
-    await api.documents.restoreVersion(currentDoc.value.id, ver.id)
-    toast.success('版本恢复成功，已创建新的当前版本')
-    versionsDialogVisible.value = false
-    await loadDocuments()
-    return true
-  } catch (error) {
-    toast.error(documentErrorMessage(error, '恢复版本失败'))
-    return false
-  }
-}
-
-function requestRestoreVersion(ver) {
-  if (ver?.isCurrent || !canWrite.value) return
-  pendingVersion.value = ver
-  restoreVersionConfirmVisible.value = true
-}
-
-async function confirmRestoreVersion() {
-  const version = pendingVersion.value
-  if (!version) return
-  const restored = await restoreVersion(version)
-  if (!restored) return
-  restoreVersionConfirmVisible.value = false
-  pendingVersion.value = null
-}
-
-function requestDeleteVersion(ver) {
-  if (ver?.isCurrent || !canWrite.value) return
-  pendingVersionDelete.value = ver
-  deleteVersionConfirmVisible.value = true
-}
-
-async function confirmDeleteVersion() {
-  const version = pendingVersionDelete.value
-  if (!version || version.isCurrent || !currentDoc.value?.id || !canWrite.value) return
-  try {
-    await api.documents.deleteVersion(currentDoc.value.id, version.id)
-    toast.success('版本已移入回收站')
-    deleteVersionConfirmVisible.value = false
-    pendingVersionDelete.value = null
-    await Promise.all([handleViewVersions(currentDoc.value), loadVersionTrash(false)])
-  } catch (error) {
-    toast.error(documentErrorMessage(error, '移入版本回收站失败'))
-  }
-}
-
-async function loadVersionTrash(showDialog = true) {
-  if (!currentDoc.value?.id) return
-  versionTrashLoading.value = true
-  try {
-    const response = await api.documents.versionsTrash(currentDoc.value.id)
-    const data = response.data?.data || response.data || []
-    versionTrash.value = Array.isArray(data) ? data : []
-    if (showDialog) versionTrashDialogVisible.value = true
-  } catch (error) {
-    toast.error(documentErrorMessage(error, '加载版本回收站失败'))
-    versionTrash.value = []
-  } finally {
-    versionTrashLoading.value = false
-  }
-}
-
-function openVersionTrash() {
-  loadVersionTrash(true)
-}
-
-async function handleRestoreVersionTrash(row) {
-  if (!currentDoc.value?.id || !row?.id || !canWrite.value) return
-  try {
-    await api.documents.restoreVersionTrash(currentDoc.value.id, row.id)
-    toast.success('版本已恢复，已创建新的当前版本')
-    await Promise.all([
-      loadVersionTrash(false),
-      handleViewVersions(currentDoc.value),
-      loadDocuments()
-    ])
-  } catch (error) {
-    toast.error(documentErrorMessage(error, '恢复版本失败'))
-  }
 }
 
 function handleDownloadVersion(ver) {
@@ -1550,7 +1320,8 @@ const categoryOptions = computed(() => {
 // 生命周期
 
 onMounted(async () => {
-  await Promise.all([loadCategories(), loadDocuments()])
+  await Promise.all([loadCategories(), loadDocumentCoverage()])
+  await loadDocuments()
   const documentId = Number(route.query.documentId)
   if (Number.isSafeInteger(documentId) && documentId > 0) {
     const document = documents.value.find((item) => Number(item.id) === documentId) || {
@@ -1754,6 +1525,17 @@ watch(viewMode, (newMode) => {
   padding: 12px;
 }
 
+.mobile-document-error {
+  margin-bottom: 12px;
+}
+
+.mobile-document-error :deep(.native-alert__message) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .document-list {
   display: flex;
   flex-direction: column;
@@ -1773,10 +1555,6 @@ watch(viewMode, (newMode) => {
   border-bottom: none;
 }
 
-.document-item.selected {
-  background: #e6f2ff;
-}
-
 /* 预览中状态：条目显示loading效果 */
 .document-item.previewing {
   opacity: 0.6;
@@ -1792,17 +1570,6 @@ watch(viewMode, (newMode) => {
 /* 游客模式：不显示操作区域 */
 .document-item.guest-mode {
   cursor: default;
-}
-
-.checkbox {
-  flex-shrink: 0;
-}
-
-/* 去掉多选框点击阴影 */
-.checkbox :deep(.t-checkbox),
-.checkbox-right :deep(.t-checkbox) {
-  box-shadow: none !important;
-  -webkit-tap-highlight-color: transparent;
 }
 
 /* 图片预览弹窗 */
@@ -1888,10 +1655,10 @@ watch(viewMode, (newMode) => {
 .file-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-size: 12px;
   color: var(--color-text-muted);
-  overflow: hidden;
 }
 
 .file-meta .divider {
