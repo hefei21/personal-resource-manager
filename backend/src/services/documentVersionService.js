@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import { Readable } from 'node:stream'
 
 import { coordinateStorageCommit } from './storageCommitCoordinator.js'
@@ -31,6 +32,23 @@ function versionNote(value) {
 }
 
 export const normalizeDocumentVersionNote = versionNote
+
+function normalizedDocumentExtension(fileName) {
+  const extension = path.extname(fileName || '').toLowerCase()
+  return ({ '.markdown': '.md', '.jpeg': '.jpg', '.htm': '.html' })[extension] || extension
+}
+
+export function assertMatchingDocumentVersionFileType(currentFileName, nextFileName) {
+  const currentExtension = normalizedDocumentExtension(currentFileName)
+  const nextExtension = normalizedDocumentExtension(nextFileName)
+  if (!currentExtension || !nextExtension || currentExtension !== nextExtension) {
+    fail(
+      'DOCUMENT_VERSION_FILE_TYPE_MISMATCH',
+      'Document version file type does not match the current document.'
+    )
+  }
+  return currentExtension
+}
 
 function assertDependencies(database, runtime) {
   if (!database || typeof database.prepare !== 'function' || typeof database.transaction !== 'function') {

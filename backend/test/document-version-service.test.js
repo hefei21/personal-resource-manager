@@ -10,9 +10,23 @@ import { CREATE_STORAGE_COMMIT_OPERATIONS_SQL } from '../src/services/storageCom
 import { createDocumentStorageRuntime } from '../src/services/documentStorageRuntime.js'
 import {
   appendDocumentVersion,
+  assertMatchingDocumentVersionFileType,
   restoreDocumentVersion,
   updateDocumentContent
 } from '../src/services/documentVersionService.js'
+
+test('new versions keep the current file type while accepting equivalent extensions', () => {
+  assert.equal(assertMatchingDocumentVersionFileType('note.markdown', 'replacement.md'), '.md')
+  assert.equal(assertMatchingDocumentVersionFileType('photo.jpeg', 'replacement.jpg'), '.jpg')
+  assert.throws(
+    () => assertMatchingDocumentVersionFileType('manual.docx', 'manual.pdf'),
+    { code: 'DOCUMENT_VERSION_FILE_TYPE_MISMATCH' }
+  )
+  assert.throws(
+    () => assertMatchingDocumentVersionFileType('manual', 'manual.pdf'),
+    { code: 'DOCUMENT_VERSION_FILE_TYPE_MISMATCH' }
+  )
+})
 
 const require = createRequire(import.meta.url)
 function bindingMissing(error) { return /^Could not locate the bindings file\. Tried:/u.test(String(error?.message ?? '')) }

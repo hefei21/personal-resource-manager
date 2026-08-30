@@ -21,6 +21,7 @@ import {
 } from '../services/ragLifecycleService.js'
 import {
   appendDocumentVersion,
+  assertMatchingDocumentVersionFileType,
   assertDocumentVersionNotTrashed,
   DocumentVersionError,
   listDocumentVersions,
@@ -220,8 +221,10 @@ function documentUpload(req, res, next) {
 
 async function scheduleDocumentIndex(database, sourceId, reasonCode) {
   try {
-    await scheduleRagSourceRefresh({ database, sourceType: 'document', sourceId, reasonCode })
-    return null
+    const outcome = await scheduleRagSourceRefresh({ database, sourceType: 'document', sourceId, reasonCode })
+    return ['enqueued', 'existing'].includes(outcome?.status)
+      ? null
+      : 'DOCUMENT_SAVED_INDEX_REFRESH_FAILED'
   } catch (error) {
     console.error('[Documents] index refresh scheduling failed:', error?.code || error?.name || 'UNKNOWN')
     return 'DOCUMENT_SAVED_INDEX_REFRESH_FAILED'
@@ -232,8 +235,10 @@ async function scheduleDocumentIndexes(database, sourceIds, reasonCode) {
   const ids = Array.isArray(sourceIds) ? [...new Set(sourceIds)] : []
   if (ids.length === 0) return null
   try {
-    await scheduleRagSourcesRefresh({ database, sourceType: 'document', sourceIds: ids, reasonCode })
-    return null
+    const outcome = await scheduleRagSourcesRefresh({ database, sourceType: 'document', sourceIds: ids, reasonCode })
+    return ['enqueued', 'existing'].includes(outcome?.status)
+      ? null
+      : 'DOCUMENT_SAVED_INDEX_REFRESH_FAILED'
   } catch (error) {
     console.error('[Documents] batch index refresh scheduling failed:', error?.code || error?.name || 'UNKNOWN')
     return 'DOCUMENT_SAVED_INDEX_REFRESH_FAILED'
@@ -244,11 +249,6 @@ function documentSuccessMessage(message, warningCode) {
   return warningCode ? `${message}，索引刷新将在稍后重试` : message
 }
 
-function normalizedDocumentExtension(fileName) {
-  const extension = path.extname(fileName || '').toLowerCase()
-  return ({ '.markdown': '.md', '.jpeg': '.jpg', '.htm': '.html' })[extension] || extension
-}
-
 function assertDocumentVersionFileType(database, documentId, originalName) {
   const document = database.prepare(`
     SELECT title, original_name, file_path
@@ -256,14 +256,7 @@ function assertDocumentVersionFileType(database, documentId, originalName) {
     WHERE id = ?
   `).get(documentId)
   if (!document) return
-  const currentExtension = normalizedDocumentExtension(documentFileName(document))
-  const nextExtension = normalizedDocumentExtension(originalName)
-  if (currentExtension && nextExtension && currentExtension !== nextExtension) {
-    throw new DocumentVersionError(
-      'DOCUMENT_VERSION_FILE_TYPE_MISMATCH',
-      'Document version file type does not match the current document.'
-    )
-  }
+  assertMatchingDocumentVersionFileType(documentFileName(document), originalName)
 }
 
 // 创建分类
