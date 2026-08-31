@@ -16,7 +16,6 @@ import {
   RESOURCE_VERSION_TABLE,
   RESOURCE_MODEL_MIGRATIONS
 } from '../src/config/resourceModelSchema.js'
-import { applicationMigrationRegistry } from '../src/config/databaseMigrations.js'
 import { ensureMigrationControlTables } from '../src/config/migrationControlStore.js'
 import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
@@ -46,9 +45,7 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   ? undefined
   : { skip: 'better-sqlite3 native binding is unavailable locally; Linux CI must run SQLite cases' }
 
-const resourceRegistry = createMigrationRegistry(
-  applicationMigrationRegistry.migrations.filter(({ id }) => id >= '0063_')
-)
+const resourceRegistry = createMigrationRegistry(RESOURCE_MODEL_MIGRATIONS)
 
 function makeRoot(prefix = 'pr-nas-resource-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix))

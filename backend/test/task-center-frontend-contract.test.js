@@ -20,7 +20,10 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
   const navigationSource = readFrontend('router/navigation.js')
   const pcLayoutSource = readFrontend('pc/layout/Layout.vue')
   const mobileLayoutSource = readFrontend('mobile/layout/Layout.vue')
-  const booksPcSource = readFrontend('pc/pages/BooksPC.vue')
+  const booksPcSource = [
+    readFrontend('pc/pages/BooksPC.vue'),
+    readFrontend('pc/components/books/EbookDetailDrawer.vue')
+  ].join('\n')
   const booksMobileSource = readFrontend('mobile/pages/BooksMobile.vue')
   const musicPcSource = readFrontend('pc/pages/MusicPC.vue')
   const musicMobileSource = readFrontend('mobile/pages/MusicMobile.vue')

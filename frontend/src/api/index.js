@@ -226,6 +226,8 @@ export default {
     restoreTrash: (id) => api.post(`/ebooks/trash/${id}/restore`),
     permanentlyDeleteTrash: (id) => api.delete(`/ebooks/trash/${id}/permanent`),
     getContent: (id) => api.get(`/ebooks/${id}/content`),
+    getManifest: (id) => api.get(`/ebooks/${id}/chapters`, { params: { manifest: 1 } }),
+    getDetail: (id) => api.get(`/ebooks/${id}/detail`),
     // 虚拟滚动：分页获取章节内容
     getChapters: (id, start, count) => api.get(`/ebooks/${id}/chapters`, { params: { start, count } }),
     getProgress: (id) => api.get(`/ebooks/${id}/progress`),

@@ -44,6 +44,12 @@ import {
 import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
 import { projectTask } from '../services/taskTypeCatalog.js'
 import { invalidateRagSource, scheduleRagSourceRefresh } from '../services/ragLifecycleService.js'
+import { parseDocumentByteRange } from '../services/documentPreviewService.js'
+import {
+  EbookReadingProgressError,
+  getEbookReadingProgress,
+  saveEbookReadingProgress
+} from '../services/ebookReadingProgressService.js'
 import {
   listDeletedEbooks,
   permanentlyDeleteEbook,
@@ -60,6 +66,21 @@ const BOOK_UPLOAD_POLICY = {
   maxChunks: 1000,
   maxChunkBytes: 11 * 1024 * 1024,
   maxTotalBytes: 500 * 1024 * 1024
+}
+
+function ebookContentDispositionFileName(fileName) {
+  return encodeURIComponent(fileName).replace(/['()*]/gu, (character) => (
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  ))
+}
+
+function ebookChapterManifest(chapters = []) {
+  return chapters.map((chapter, chapterIndex) => ({
+    id: chapter.id || `chapter-${chapterIndex}`,
+    href: chapter.href || '',
+    title: chapter.title || `章节 ${chapterIndex + 1}`,
+    chapterIndex
+  }))
 }
 
 const EBOOK_METADATA_PUBLIC_ERROR_CODES = new Set([
@@ -375,27 +396,23 @@ router.get('/categories', authenticateToken, async (req, res) => {
     }
 
     const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM book_categories ORDER BY sort_order, name')
-    const rows = stmt.all()
+    const rows = db.prepare(`
+      SELECT c.id, c.name, c.sort_order, COUNT(b.id) AS book_count
+      FROM book_categories c
+      LEFT JOIN books b ON b.category_id = c.id AND NOT EXISTS (
+        SELECT 1 FROM resource_trash_entries t
+        WHERE t.resource_type = 'ebook' AND t.resource_id = b.id
+      )
+      GROUP BY c.id, c.name, c.sort_order
+      ORDER BY c.sort_order, c.name
+    `).all()
 
     const categories = rows.map(row => ({
       id: row.id,
       name: row.name,
       sortOrder: row.sort_order || 0,
-      bookCount: 0 // 稍后统计
+      bookCount: Number(row.book_count) || 0
     }))
-
-    // 统计每个分类的书籍数量
-    for (const cat of categories) {
-      const countStmt = db.prepare(`
-        SELECT COUNT(*) AS count FROM books b WHERE b.category_id = ? AND NOT EXISTS (
-          SELECT 1 FROM resource_trash_entries t
-          WHERE t.resource_type = 'ebook' AND t.resource_id = b.id
-        )
-      `)
-      const result = countStmt.get(cat.id)
-      cat.bookCount = result.count
-    }
 
     // 缓存结果（10分钟）
     await cache.set(cacheKey, categories, CacheTTL.LONG)
@@ -438,7 +455,7 @@ router.post('/categories', authenticateToken, requireWritePermission, async (req
 })
 
 // 重命名分类
-router.put('/categories/:id', authenticateToken, async (req, res) => {
+router.put('/categories/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { name } = req.body
     const categoryId = req.params.id
@@ -712,9 +729,10 @@ router.post('/parse-metadata', authenticateToken, requireWritePermission, upload
 // 获取书籍列表
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { keyword, category, sortBy, sortOrder } = req.query
-    console.log('[Books API] 接收到的参数:', { keyword, category, sortBy, sortOrder })
+    const { keyword, category, sortBy, sortOrder, readingStatus, fileType, metadataStatus } = req.query
     const db = getDatabase()
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1)
+    const pageSize = Math.min(100, Math.max(1, Number.parseInt(req.query.pageSize, 10) || 24))
 
     const userId = req.user?.id || null // 游客为 null，管理员为用户ID
     
@@ -728,25 +746,43 @@ router.get('/', authenticateToken, async (req, res) => {
       progressJoin = 'LEFT JOIN reading_progress rp ON b.id = rp.book_id AND rp.user_id IS NULL'
     }
     
-    let sql = `SELECT b.*, c.name as category_name,
-               rp.current_page, rp.progress, rp.font_size
+    const joins = `
                FROM books b
                LEFT JOIN book_categories c ON b.category_id = c.id
                ${progressJoin}
-               WHERE NOT EXISTS (
+               LEFT JOIN rag_source_state rag ON rag.source_type = 'ebook' AND rag.source_id = b.id`
+    const where = [`NOT EXISTS (
                  SELECT 1 FROM resource_trash_entries t
                  WHERE t.resource_type = 'ebook' AND t.resource_id = b.id
-               )`
+               )`]
     const params = userId ? [userId] : []
 
     if (keyword) {
-      sql += ' AND (b.title LIKE ? OR b.author LIKE ?)'
+      where.push('(b.title LIKE ? OR b.author LIKE ? OR b.isbn LIKE ?)')
       params.push(`%${keyword}%`, `%${keyword}%`)
+      params.push(`%${keyword}%`)
     }
 
-    if (category) {
-      sql += ' AND b.category_id = ?'
+    if (category === 'uncategorized') {
+      where.push('b.category_id IS NULL')
+    } else if (category) {
+      where.push('b.category_id = ?')
       params.push(category)
+    }
+
+    if (readingStatus === 'unread') where.push('COALESCE(rp.progress, 0) <= 0')
+    else if (readingStatus === 'reading') where.push('COALESCE(rp.progress, 0) > 0 AND COALESCE(rp.progress, 0) < 99.5')
+    else if (readingStatus === 'finished') where.push('COALESCE(rp.progress, 0) >= 99.5')
+
+    const normalizedFileType = String(fileType || '').toLowerCase()
+    if (BOOK_UPLOAD_POLICY.extensions.map(value => value.slice(1)).includes(normalizedFileType)) {
+      where.push('LOWER(b.file_type) = ?')
+      params.push(normalizedFileType)
+    }
+
+    if (EBOOK_METADATA_STATUS_SET.has(metadataStatus)) {
+      where.push('COALESCE(b.metadata_status, \'ready\') = ?')
+      params.push(metadataStatus)
     }
 
     // 排序
@@ -757,14 +793,21 @@ router.get('/', authenticateToken, async (req, res) => {
     let sortDirection = validSortOrders.includes(sortOrder?.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC'
     
     // 特殊处理 last_read_at 排序（最近阅读）
-    if (sortField === 'last_read_at') {
-      sql += ` ORDER BY COALESCE(b.last_read_at, '1970-01-01') ${sortDirection}`
-    } else {
-      sql += ` ORDER BY b.${sortField} ${sortDirection}`
-    }
+    const orderBy = sortField === 'last_read_at'
+      ? `COALESCE(b.last_read_at, '1970-01-01') ${sortDirection}, b.id DESC`
+      : `b.${sortField} ${sortDirection}, b.id DESC`
 
-    const stmt = db.prepare(sql)
-    const rows = stmt.all(...params)
+    const whereSql = `WHERE ${where.join(' AND ')}`
+    const total = Number(db.prepare(`SELECT COUNT(*) AS count ${joins} ${whereSql}`).get(...params).count) || 0
+    const rows = db.prepare(`
+      SELECT b.*, c.name AS category_name,
+             rp.current_page, rp.progress, rp.font_size, rp.revision AS progress_revision,
+             rag.status AS rag_status, rag.last_error_code AS rag_error_code
+      ${joins}
+      ${whereSql}
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `).all(...params, pageSize, (page - 1) * pageSize)
 
     const result = rows.map(row => ({
       id: row.id,
@@ -778,19 +821,25 @@ router.get('/', authenticateToken, async (req, res) => {
       categoryId: row.category_id,
       categoryName: row.category_name,
       fileType: row.file_type,
-      fileSize: row.file_size,
+      fileSize: Number(row.content_bytes) > 0 ? Number(row.content_bytes) : (Number(row.file_size) || 0),
       totalPages: row.total_pages,
       metadataStatus: publicEbookMetadataStatus(row.metadata_status),
       metadataErrorCode: publicEbookMetadataErrorCode(row.metadata_error_code),
+      indexStatus: row.rag_status || 'empty',
+      indexErrorCode: row.rag_error_code || null,
       currentPage: row.current_page || 0,
       progress: row.progress || 0,
+      progressRevision: row.progress_revision || 0,
       fontSize: row.font_size || 16,
       createdAt: convertToUTC8(row.created_at),
       updatedAt: convertToUTC8(row.updated_at),
       lastReadAt: row.last_read_at ? convertToUTC8(row.last_read_at) : null
     }))
 
-    res.json({ data: result })
+    res.json({
+      data: result,
+      pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }
+    })
   } catch (error) {
     console.error('获取书籍列表失败:', error)
     res.status(500).json({ message: '服务器错误' })
@@ -1636,8 +1685,62 @@ router.delete('/trash/:id/permanent', authenticateToken, requireWritePermission,
   }
 })
 
+// 获取书籍详情；列表保持紧凑，低频元数据、文件和索引状态按需读取。
+router.get('/:id/detail', authenticateToken, async (req, res) => {
+  try {
+    const database = getDatabase()
+    const userId = req.user?.id || null
+    const row = database.prepare(`
+      SELECT b.*, c.name AS category_name,
+             rp.current_page, rp.progress, rp.revision AS progress_revision, rp.updated_at AS progress_updated_at,
+             rag.status AS rag_status, rag.last_error_code AS rag_error_code, rag.updated_at AS rag_updated_at
+      FROM books b
+      LEFT JOIN book_categories c ON c.id = b.category_id
+      LEFT JOIN reading_progress rp ON rp.book_id = b.id AND rp.user_id IS ?
+      LEFT JOIN rag_source_state rag ON rag.source_type = 'ebook' AND rag.source_id = b.id
+      WHERE b.id = ? AND NOT EXISTS (
+        SELECT 1 FROM resource_trash_entries t
+        WHERE t.resource_type = 'ebook' AND t.resource_id = b.id
+      )
+    `).get(userId, req.params.id)
+    if (!row) return res.status(404).json({ message: '书籍不存在' })
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: {
+      id: row.id,
+      title: row.title,
+      author: row.author,
+      year: row.year,
+      publisher: row.publisher,
+      isbn: row.isbn,
+      description: row.description,
+      coverImage: Boolean(row.cover_image),
+      categoryId: row.category_id,
+      categoryName: row.category_name,
+      originalName: row.original_name,
+      fileType: row.file_type,
+      fileSize: Number(row.content_bytes) > 0 ? Number(row.content_bytes) : (Number(row.file_size) || 0),
+      totalPages: Number(row.total_pages) || 0,
+      metadataStatus: publicEbookMetadataStatus(row.metadata_status),
+      metadataErrorCode: publicEbookMetadataErrorCode(row.metadata_error_code),
+      indexStatus: row.rag_status || 'empty',
+      indexErrorCode: row.rag_error_code || null,
+      indexUpdatedAt: row.rag_updated_at || null,
+      currentPage: Number(row.current_page) || 0,
+      progress: Number(row.progress) || 0,
+      progressRevision: Number(row.progress_revision) || 0,
+      progressUpdatedAt: row.progress_updated_at || null,
+      createdAt: convertToUTC8(row.created_at),
+      updatedAt: convertToUTC8(row.updated_at),
+      lastReadAt: row.last_read_at ? convertToUTC8(row.last_read_at) : null
+    } })
+  } catch (error) {
+    console.error('获取书籍详情失败:', error?.code || error?.name || 'UNKNOWN')
+    res.status(500).json({ message: '服务器错误' })
+  }
+})
+
 // 更新书籍信息
-router.put('/:id', authenticateToken, async (req, res) => {
+router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const { title, author, year, publisher, isbn, description, categoryId } = req.body
     const db = getDatabase()
@@ -1686,6 +1789,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
 
     const bookFilePath = await verifiedBookPath(book)
     const ext = `.${String(book.file_type || '').toLowerCase()}`
+    const manifestOnly = req.query.manifest === '1'
 
     if (ext === '.txt') {
       const content = fs.readFileSync(bookFilePath, 'utf-8')
@@ -1719,10 +1823,11 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
           }
           
           return res.json({
-            chapters: cachedData.chapters,
+            chapters: manifestOnly ? ebookChapterManifest(cachedData.chapters) : cachedData.chapters,
             toc: cachedData.toc,
             fileType: 'epub',
-            title: book.title
+            title: book.title,
+            totalChapters: cachedData.chapters?.length || 0
           })
         } catch (e) {
           console.log('⚠️ 缓存解析失败，重新解析文件')
@@ -2079,10 +2184,11 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
         }
 
         res.json({
-          chapters: chapterContents,
+          chapters: manifestOnly ? ebookChapterManifest(chapterContents) : chapterContents,
           toc: tocWithIndex,
           fileType: 'epub',
-          title: book.title
+          title: book.title,
+          totalChapters: chapterContents.length
         })
       } catch (zipError) {
         console.error('❌ EPUB解析错误:', zipError?.code || zipError?.name || 'UNKNOWN')
@@ -2091,6 +2197,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
     } else if (ext === '.pdf') {
       // PDF 通过受控下载接口读取，不暴露服务器路径。
       res.json({
+        previewUrl: `/api/ebooks/${book.id}/preview`,
         downloadUrl: `/api/ebooks/download/${book.id}`,
         totalPages: book.total_pages,
         fileType: 'pdf',
@@ -2113,8 +2220,9 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
 router.get('/:id/chapters', authenticateToken, async (req, res) => {
   try {
     const bookId = req.params.id
-    const startIndex = parseInt(req.query.start) || 0
-    const count = parseInt(req.query.count) || 5
+    const manifestOnly = req.query.manifest === '1'
+    const startIndex = Math.max(0, Number.parseInt(req.query.start, 10) || 0)
+    const count = manifestOnly ? 0 : Math.min(20, Math.max(1, Number.parseInt(req.query.count, 10) || 5))
     
     const db = getDatabase()
     const book = activeBook(db, bookId)
@@ -2227,7 +2335,7 @@ router.get('/:id/chapters', authenticateToken, async (req, res) => {
     
     // 加载指定范围的章节内容
     const endIndex = Math.min(startIndex + count, allChapters.length)
-    const chaptersToLoad = allChapters.slice(startIndex, endIndex)
+    const chaptersToLoad = manifestOnly ? [] : allChapters.slice(startIndex, endIndex)
     
     if (ext === '.epub') {
       const zip = new AdmZip(bookFilePath)
@@ -2267,7 +2375,7 @@ router.get('/:id/chapters', authenticateToken, async (req, res) => {
     }
     
     res.json({
-      chapters: chaptersToLoad,
+      chapters: manifestOnly ? ebookChapterManifest(allChapters) : chaptersToLoad,
       toc: toc,
       total: allChapters.length,
       startIndex,
@@ -2284,87 +2392,97 @@ router.get('/:id/chapters', authenticateToken, async (req, res) => {
 // 获取阅读进度
 router.get('/:id/progress', authenticateToken, async (req, res) => {
   try {
-    const db = getDatabase()
-    const userId = req.user?.id || null // 游客为 null，管理员为用户ID
-    
-    const progress = db.prepare(`
-      SELECT * FROM reading_progress 
-      WHERE book_id = ? AND user_id IS ?
-    `).get(req.params.id, userId)
-
-    if (!progress) {
-      console.log('📖 未找到阅读进度，返回默认值', { 书籍ID: req.params.id, 用户ID: userId })
-      return res.json({ 
-        currentPage: 0, 
-        progress: 0, 
-        fontSize: 16, 
-        cfi: null // EPUB CFI 定位锚点
-      })
-    }
-
-    const result = {
-      currentPage: progress.current_page,
-      cfi: progress.cfi || null, // EPUB CFI 定位锚点
-      progress: progress.progress,
-      fontSize: progress.font_size
-    }
-    
-    console.log('📖 返回阅读进度:', {
-      书籍ID: req.params.id,
-      用户ID: userId,
-      章节: result.currentPage,
-      CFI: result.cfi,
-      进度: result.progress
+    const progress = getEbookReadingProgress({
+      database: getDatabase(),
+      bookId: req.params.id,
+      userId: req.user?.id
     })
-    
-    res.json(result)
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(progress)
   } catch (error) {
-    console.error('获取阅读进度失败:', error)
+    if (error instanceof EbookReadingProgressError) {
+      if (error.code === 'EBOOK_PROGRESS_BOOK_NOT_FOUND') {
+        return res.status(404).json({ code: error.code, message: '书籍不存在' })
+      }
+      if (error.code === 'EBOOK_PROGRESS_INPUT_INVALID') {
+        return res.status(400).json({ code: error.code, message: '阅读进度参数无效' })
+      }
+    }
+    console.error('获取阅读进度失败:', error?.code || error?.name || 'UNKNOWN')
     res.status(500).json({ message: '服务器错误' })
+  }
+})
+
+// PDF.js 使用同源 Range 流式端点读取书籍原件，避免整本缓冲后才开始渲染。
+router.get('/:id/preview', authenticateToken, async (req, res) => {
+  let totalBytes = null
+  try {
+    const db = getDatabase()
+    const book = activeBook(db, req.params.id)
+    if (!book) return res.status(404).json({ code: 'EBOOK_NOT_FOUND', message: '书籍不存在' })
+    if (String(book.file_type || '').toLowerCase() !== 'pdf') {
+      return res.status(400).json({ code: 'EBOOK_PREVIEW_TYPE_INVALID', message: '当前书籍格式不支持 PDF 预览' })
+    }
+
+    const contentService = getResourceStorageRuntime().contentService
+    const metadata = await contentService.stat(book)
+    totalBytes = metadata.bytes
+    const range = parseDocumentByteRange(req.headers.range, totalBytes)
+    const { stream } = await contentService.createReadStream(book, range || {})
+    const fileName = book.original_name || `${book.title}.pdf`
+
+    res.status(range ? 206 : 200)
+    res.setHeader('Accept-Ranges', 'bytes')
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Length', String(range?.length ?? totalBytes))
+    res.setHeader('Content-Disposition', `inline; filename="preview"; filename*=UTF-8''${ebookContentDispositionFileName(fileName)}`)
+    res.setHeader('Cache-Control', 'private, no-store')
+    if (book.content_sha256) res.setHeader('ETag', `"${book.content_sha256}"`)
+    if (range) res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${totalBytes}`)
+
+    stream.on('error', (error) => {
+      console.error('电子书预览流失败:', error?.code || error?.name || 'UNKNOWN')
+      if (!res.headersSent) sendEbookRouteError(res, error)
+      else res.destroy(error)
+    })
+    stream.pipe(res)
+  } catch (error) {
+    if (error?.code === 'DOCUMENT_CONTENT_RANGE_INVALID' && Number.isSafeInteger(totalBytes)) {
+      res.setHeader('Content-Range', `bytes */${totalBytes}`)
+    }
+    console.error('流式预览电子书失败:', error?.code || error?.name || 'UNKNOWN')
+    sendEbookRouteError(res, error)
   }
 })
 
 // 保存阅读进度
 router.post('/:id/progress', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { currentPage, progress, fontSize, cfi } = req.body
-    const db = getDatabase()
-    const userId = req.user?.id || null // 游客为 null，管理员为用户ID
-    
-    console.log('💾 保存阅读进度:', {
-      书籍ID: req.params.id,
-      用户ID: userId,
-      章节: currentPage,
-      CFI: cfi,
-      进度: progress
+    const result = saveEbookReadingProgress({
+      database: getDatabase(),
+      bookId: req.params.id,
+      userId: req.user?.id,
+      input: req.body
     })
-
-    // 更新或插入阅读进度
-    const stmt = db.prepare(
-      `INSERT INTO reading_progress (book_id, user_id, current_page, cfi, progress, font_size, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-       ON CONFLICT(book_id, user_id) DO UPDATE SET
-       current_page = excluded.current_page,
-       cfi = excluded.cfi,
-       progress = excluded.progress,
-       font_size = excluded.font_size,
-       updated_at = CURRENT_TIMESTAMP`
-    )
-    stmt.run(
-      req.params.id, 
-      userId, 
-      currentPage || 0, 
-      cfi || null, // EPUB CFI 定位锚点
-      progress || 0, 
-      fontSize || 16
-    )
-
-    // 更新书籍的最后阅读时间
-    db.prepare('UPDATE books SET last_read_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id)
-
-    res.json({ message: '进度已保存' })
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ data: result.progress, idempotent: result.idempotent, forced: result.forced })
   } catch (error) {
-    console.error('保存阅读进度失败:', error)
+    if (error instanceof EbookReadingProgressError) {
+      if (error.code === 'EBOOK_PROGRESS_CONFLICT') {
+        return res.status(409).json({
+          code: error.code,
+          message: '其他设备已更新阅读位置',
+          latest: error.details?.latest || null
+        })
+      }
+      if (error.code === 'EBOOK_PROGRESS_BOOK_NOT_FOUND') {
+        return res.status(404).json({ code: error.code, message: '书籍不存在' })
+      }
+      if (error.code === 'EBOOK_PROGRESS_INPUT_INVALID') {
+        return res.status(400).json({ code: error.code, message: '阅读进度参数无效' })
+      }
+    }
+    console.error('保存阅读进度失败:', error?.code || error?.name || 'UNKNOWN')
     res.status(500).json({ message: '服务器错误' })
   }
 })
@@ -2397,8 +2515,8 @@ router.get('/download/:id', authenticateToken, async (req, res) => {
   }
 })
 
-// 清除书籍缓存（游客可访问，这是重新解析功能）
-router.delete('/:id/cache', authenticateToken, async (req, res) => {
+// 清除派生缓存会触发后续重新解析，只允许 Owner 修改。
+router.delete('/:id/cache', authenticateToken, requireWritePermission, async (req, res) => {
   try {
     const db = getDatabase()
     db.prepare('UPDATE books SET content_cache = NULL WHERE id = ?').run(req.params.id)

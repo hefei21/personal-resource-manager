@@ -48,7 +48,7 @@ database/
 uploads/
 # docs/
 music/
-books/
+/books/
 code/
 private/
 

@@ -598,11 +598,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 51 column migrations and thirty-five registered table transitions', () => {
+test('application registry freezes 53 column migrations and thirty-five registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 86)
+  assert.equal(applicationMigrationRegistry.migrations.length, 88)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -665,7 +665,9 @@ test('application registry freezes 51 column migrations and thirty-five register
       '0083_rag_embedding_models',
       '0084_rag_chunk_embeddings',
       '0085_rag_snapshot_embedding_state',
-      '0086_rag_query_runs'
+      '0086_rag_query_runs',
+      '0087_reading_progress_revision',
+      '0088_reading_progress_last_mutation_id'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -907,7 +909,7 @@ test('application registry freezes 51 column migrations and thirty-five register
     documentStorageProofKeys
   )
   assert.deepEqual(
-    applicationMigrationRegistry.migrations.slice(62).map(({ id, compatibility }) => ({
+    applicationMigrationRegistry.migrations.slice(62, 86).map(({ id, compatibility }) => ({
       id,
       table: compatibility.table,
       kind: compatibility.kind,
@@ -946,6 +948,18 @@ test('application registry freezes 51 column migrations and thirty-five register
       missingTable: 'create',
       hasStrictTargetProof: false
     }))
+  )
+  assert.deepEqual(
+    applicationMigrationRegistry.migrations.slice(86).map(({ id, compatibility }) => ({
+      id,
+      kind: compatibility.kind,
+      table: compatibility.table,
+      column: compatibility.column.name
+    })),
+    [
+      { id: '0087_reading_progress_revision', kind: 'column', table: 'reading_progress', column: 'revision' },
+      { id: '0088_reading_progress_last_mutation_id', kind: 'column', table: 'reading_progress', column: 'last_mutation_id' }
+    ]
   )
 })
 
@@ -1476,7 +1490,7 @@ test('code_repositories rows that violate the proven legacy NOT NULL contract fa
   }
 })
 
-test('adopts the historical inline reading_progress target proof without rewriting schema or rows', nativeTestOptions, () => {
+test('adopts the historical inline reading_progress target and adds sync columns without rewriting rows', nativeTestOptions, () => {
   const directory = temporaryDirectory()
   const databasePath = path.join(directory, 'app.db')
   const database = new Database(databasePath)
@@ -1514,7 +1528,7 @@ test('adopts the historical inline reading_progress target proof without rewriti
     assert.equal(result.status, 0, output)
     const verification = new Database(databasePath)
     try {
-      assert.deepEqual({
+      const after = {
         progress: readingProgressSnapshot(verification),
         schema: verification.prepare(`
           SELECT type, name, sql FROM sqlite_schema
@@ -1525,7 +1539,18 @@ test('adopts the historical inline reading_progress target proof without rewriti
           )
           ORDER BY type DESC, name
         `).all()
-      }, before)
+      }
+      assert.deepEqual(
+        after.progress.rows.map(({ revision, last_mutation_id: lastMutationId, ...row }) => row),
+        before.progress.rows
+      )
+      assert.deepEqual(after.progress.sequence, before.progress.sequence)
+      assert.deepEqual(after.progress.columns.slice(0, before.progress.columns.length), before.progress.columns)
+      assert.deepEqual(after.progress.columns.slice(-2).map(({ name, type, notnull, dflt_value: defaultValue }) => ({ name, type, notnull, defaultValue })), [
+        { name: 'revision', type: 'INTEGER', notnull: 1, defaultValue: '0' },
+        { name: 'last_mutation_id', type: 'TEXT', notnull: 0, defaultValue: null }
+      ])
+      assert.deepEqual(after.schema.filter(({ type }) => type === 'index'), before.schema.filter(({ type }) => type === 'index'))
       assert.equal(verification.prepare(`
         SELECT COUNT(*) AS count FROM prm_schema_migrations
         WHERE migration_id = '0038_reading_progress_shape'
@@ -1574,8 +1599,8 @@ test('migrates the exact legacy reading_progress shape with user 41, row values,
       assert.deepEqual(
         verification.prepare('SELECT * FROM reading_progress ORDER BY id').all(),
         [
-          { id: 3, book_id: 7, user_id: 41, current_page: 123, cfi: null, progress: 0.375, font_size: 18, created_at: '2024-01-02 03:04:05', updated_at: '2024-01-03 04:05:06' },
-          { id: 8, book_id: 11, user_id: 41, current_page: 456, cfi: null, progress: 0.875, font_size: 22, created_at: null, updated_at: '2024-02-03 04:05:06' }
+          { id: 3, book_id: 7, user_id: 41, current_page: 123, cfi: null, progress: 0.375, font_size: 18, created_at: '2024-01-02 03:04:05', updated_at: '2024-01-03 04:05:06', revision: 0, last_mutation_id: null },
+          { id: 8, book_id: 11, user_id: 41, current_page: 456, cfi: null, progress: 0.875, font_size: 22, created_at: null, updated_at: '2024-02-03 04:05:06', revision: 0, last_mutation_id: null }
         ]
       )
       assert.equal(verification.prepare(

@@ -18,6 +18,15 @@
         <div class="placeholder"></div>
       </div>
 
+      <div v-if="progressConflict" class="progress-conflict-panel">
+        <strong>其他设备更新了阅读位置</strong>
+        <span>请选择继续使用哪一个位置。</span>
+        <div>
+          <button @click="resolveProgressConflict('remote')">前往其他设备位置</button>
+          <button class="primary" @click="resolveProgressConflict('local')">保留本机位置</button>
+        </div>
+      </div>
+
       <!-- 正文内容区 -->
       <div ref="contentRef" class="reader-content" 
            @scroll="handleScroll" 
@@ -142,6 +151,7 @@ import api from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { scrollToCFI, getCurrentCFI, CharacterOffsetProgress } from '@/utils/epub-cfi'
 import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
+import { createEbookReadingProgressSync, EbookProgressConflictError } from '@/domain/ebookReadingProgress'
 
 const props = defineProps({
   visible: Boolean,
@@ -191,7 +201,26 @@ const BUFFER_CHAPTERS = 1
 const visibleRange = ref({ start: 0, end: 1 })
 
 // 阅读设置
-const fontSize = ref(18)
+const DEVICE_PREF_KEY = 'pr-manager:ebook-reader-preferences:v1'
+
+function readDeviceFontSize() {
+  try {
+    const stored = JSON.parse(globalThis.localStorage?.getItem(DEVICE_PREF_KEY) || '{}')
+    const value = Number(stored.fontSize)
+    return Number.isFinite(value) ? Math.min(32, Math.max(12, value)) : 18
+  } catch {
+    return 18
+  }
+}
+
+function persistDeviceFontSize() {
+  try {
+    const stored = JSON.parse(globalThis.localStorage?.getItem(DEVICE_PREF_KEY) || '{}')
+    globalThis.localStorage?.setItem(DEVICE_PREF_KEY, JSON.stringify({ ...stored, fontSize: fontSize.value }))
+  } catch { /* Device preferences are best-effort and never block reading. */ }
+}
+
+const fontSize = ref(readDeviceFontSize())
 const showTocDrawer = ref(false)
 const showFontPanel = ref(false)
 
@@ -202,7 +231,10 @@ let toastTimer = null
 
 // 进度
 const displayProgress = ref(0)
+const progressConflict = ref(null)
+const progressSyncStatus = ref('synced')
 let currentCFI = null
+let progressSync = null
 
 // 滚动控制
 let isRestoringPosition = false
@@ -288,6 +320,9 @@ watch(() => props.visible, (newVal) => {
     // 清理缓存
     loadedChapters.value.clear()
     loadedImages.value.clear()
+    progressSync?.dispose()
+    progressSync = null
+    progressConflict.value = null
   }
 })
 
@@ -349,10 +384,22 @@ async function openBook() {
     let startIndex = 0
     let savedCFI = null
     if (!isGuest.value) {
-      const progressResponse = await api.books.getProgress(props.book.id)
-      if (progressResponse.data?.currentPage !== undefined) {
-        startIndex = Math.min(progressResponse.data.currentPage, totalChapterCount.value - 1)
-        savedCFI = progressResponse.data.cfi
+      progressSync?.dispose()
+      progressSync = createEbookReadingProgressSync({
+        bookId: props.book.id,
+        api: api.books,
+        onStatus: (status) => {
+          progressSyncStatus.value = status.name
+          progressConflict.value = status.name === 'conflict'
+            ? { local: status.local, remote: status.remote }
+            : null
+          if (status.name === 'offline') showToast('当前离线，阅读位置将在恢复连接后同步', 'warning')
+        }
+      })
+      const progress = await progressSync.load()
+      if (progress.currentPage !== undefined) {
+        startIndex = Math.min(progress.currentPage, Math.max(0, totalChapterCount.value - 1))
+        savedCFI = progress.cfi
         console.log('📖 阅读进度已加载:', { 章节: startIndex + 1, CFI: savedCFI || '无' })
       }
     } else {
@@ -1354,9 +1401,33 @@ async function saveProgress() {
       内存: getMemoryStatus()
     })
 
-    await api.books.saveProgress(props.book.id, progressData)
+    if (!progressSync) return
+    await progressSync.queue(progressData)
   } catch (error) {
-    console.error('❌ 保存进度失败:', error)
+    if (!(error instanceof EbookProgressConflictError)) console.error('❌ 保存进度失败:', error)
+  }
+}
+
+async function resolveProgressConflict(choice) {
+  if (!progressSync || !progressConflict.value) return
+  try {
+    const progress = await progressSync.resolveConflict(choice)
+    progressConflict.value = null
+    if (choice === 'remote') {
+      const targetIndex = Math.min(progress.currentPage, Math.max(0, totalChapterCount.value - 1))
+      currentChapterIndex.value = targetIndex
+      currentCFI = progress.cfi
+      await loadChaptersUnified(targetIndex, { loadImages: true, loadAdjacent: true, showLoading: true })
+      await nextTick()
+      if (currentCFI && contentRef.value) scrollToCFI(contentRef.value, currentCFI, null, false)
+      else await scrollToChapterContent(targetIndex, { preserveTitle: true })
+      displayProgress.value = progress.progress
+      showToast('已切换到其他设备位置')
+    } else {
+      showToast('已保留本机位置')
+    }
+  } catch (error) {
+    showToast(error.message || '同步失败', 'error')
   }
 }
 
@@ -1656,7 +1727,7 @@ function handleClose() {
       章节: currentChapterIndex.value + 1,
       进度: displayProgress.value.toFixed(2) + '%'
     })
-    saveProgress()
+    void saveProgress().finally(() => progressSync?.flush().catch(() => {}))
   } else {
     console.log('⏸️ 关闭阅读器时跳过保存（正在恢复位置或未加载完成）')
   }
@@ -1686,6 +1757,7 @@ function handleClose() {
 
 // 监听字体变化
 watch(fontSize, async () => {
+  persistDeviceFontSize()
   const cfi = getCurrentCFI(contentRef.value)
   if (cfi) currentCFI = cfi
 
@@ -1817,6 +1889,35 @@ watch(fontSize, async () => {
 .reader-header.header-visible {
   transform: translateY(0);
 }
+
+.progress-conflict-panel {
+  position: absolute;
+  z-index: 102;
+  top: calc(56px + env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  background: var(--color-warning-surface);
+  box-shadow: var(--shadow-md);
+  font-size: 13px;
+}
+
+.progress-conflict-panel strong { color: var(--color-text-primary); font-size: 14px; }
+.progress-conflict-panel > div { display: flex; justify-content: flex-end; gap: 8px; }
+.progress-conflict-panel button {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  background: var(--color-surface-raised);
+}
+.progress-conflict-panel button.primary { color: white; border-color: var(--color-primary); background: var(--color-primary); }
 
 .back-btn {
   width: 40px;
