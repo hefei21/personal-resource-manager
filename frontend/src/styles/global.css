@@ -138,3 +138,20 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+/* 触屏设备使用组件自身的状态反馈，避免浏览器点击高亮和蓝色焦点阴影残留。 */
+@media (hover: none) and (pointer: coarse) {
+  :where(button, a, input, textarea, select, summary, [role='button'], [tabindex]) {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :where(button, a, summary, [role='button'], [tabindex]):focus-visible {
+    outline: 1px solid var(--color-border-strong) !important;
+    outline-offset: 1px !important;
+    box-shadow: none !important;
+  }
+
+  :where(input, textarea, select):focus {
+    box-shadow: none !important;
+  }
+}

@@ -436,8 +436,8 @@ async function handleMobilePasswordChange() {
 }
 
 .group-back-button:focus-visible {
-  outline: 2px solid var(--color-focus-ring);
-  outline-offset: 2px;
+  outline: 1px solid var(--color-border-strong);
+  outline-offset: 1px;
 }
 
 .mobile-title-copy {
@@ -448,14 +448,14 @@ async function handleMobilePasswordChange() {
 
 .mobile-title-copy > span {
   color: var(--color-text-muted);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.1em;
 }
 
 .header-content h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 18px;
   color: var(--color-text-primary);
   font-weight: 600;
 }
@@ -468,7 +468,7 @@ async function handleMobilePasswordChange() {
 
 .username-link,
 .username-text {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--color-primary);
   padding: 4px 8px;
@@ -545,7 +545,7 @@ async function handleMobilePasswordChange() {
   border-radius: 9px;
   background: transparent;
   color: #64748b;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -558,8 +558,13 @@ async function handleMobilePasswordChange() {
 }
 
 .bottom-navigation-item:focus-visible {
-  outline: 2px solid #818cf8;
-  outline-offset: -2px;
+  outline: 1px solid var(--color-border-strong);
+  outline-offset: -1px;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .username-link:hover { color: var(--color-primary); background: transparent; }
+  .logout-btn:hover { border-color: #e0e0e0; color: var(--color-text-secondary); box-shadow: none; }
 }
 
 /* 全局loading覆盖层 */

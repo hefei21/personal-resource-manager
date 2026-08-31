@@ -33,6 +33,8 @@ test('frequent native controls use tokens, mobile touch density and keyboard sem
   const listItem = read('components/native/NativeListItem.vue')
   const space = read('components/native/NativeSpace.vue')
   const tag = read('components/native/NativeTag.vue')
+  const global = read('styles/global.css')
+  const mobileLayout = read('mobile/layout/Layout.vue')
 
   assert.match(input, /:autocomplete="autocomplete"/)
   assert.match(input, /height:\s*var\(--control-height-touch\)/)
@@ -41,6 +43,10 @@ test('frequent native controls use tokens, mobile touch density and keyboard sem
   assert.match(space, /start:\s*'flex-start'/)
   assert.match(space, /width:\s*auto/)
   assert.match(tag, /<button v-if="closable"/)
+  assert.match(global, /@media \(hover: none\) and \(pointer: coarse\)[\s\S]*-webkit-tap-highlight-color:\s*transparent/)
+  assert.match(global, /:where\(input, textarea, select\):focus[\s\S]*box-shadow:\s*none !important/)
+  assert.match(mobileLayout, /\.header-content h2[\s\S]*font-size:\s*18px/)
+  assert.match(mobileLayout, /\.bottom-navigation-item[\s\S]*font-size:\s*12px/)
 })
 
 test('complex status selection uses the headless-backed NativeSelect and icons are route-loaded', () => {
