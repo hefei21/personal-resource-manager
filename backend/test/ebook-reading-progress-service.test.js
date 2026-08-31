@@ -44,6 +44,7 @@ function setup() {
       cfi TEXT,
       progress REAL DEFAULT 0,
       font_size INTEGER DEFAULT 16,
+      chapter_fraction REAL,
       revision INTEGER NOT NULL DEFAULT 0,
       last_mutation_id TEXT,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -62,6 +63,7 @@ test('reading progress starts at revision zero and advances atomically', nativeT
       cfi: null,
       progress: 0,
       fontSize: 16,
+      chapterFraction: null,
       revision: 0,
       updatedAt: null
     })
@@ -73,6 +75,7 @@ test('reading progress starts at revision zero and advances atomically', nativeT
         currentPage: 4,
         cfi: 'epubcfi(/6/10!/4/2:8)',
         progress: 27.345,
+        chapterFraction: 0.625,
         fontSize: 18,
         revision: 0,
         mutationId: 'pc-session:mutation-0001'
@@ -81,6 +84,7 @@ test('reading progress starts at revision zero and advances atomically', nativeT
     assert.equal(saved.progress.revision, 1)
     assert.equal(saved.progress.currentPage, 4)
     assert.equal(saved.progress.progress, 27.35)
+    assert.equal(saved.progress.chapterFraction, 0.625)
     assert.equal(saved.progress.fontSize, 18)
     assert.ok(database.prepare('SELECT last_read_at FROM books WHERE id = 7').get().last_read_at)
   } finally {
@@ -164,6 +168,12 @@ test('invalid and trashed progress writes fail closed', nativeTestOptions, () =>
       bookId: 7,
       userId: 3,
       input: { currentPage: -1, progress: 101, revision: 0, mutationId: 'bad-input' }
+    }), { code: 'EBOOK_PROGRESS_INPUT_INVALID' })
+    assert.throws(() => saveEbookReadingProgress({
+      database,
+      bookId: 7,
+      userId: 3,
+      input: { currentPage: 1, progress: 20, chapterFraction: 1.2, revision: 0, mutationId: 'bad-fraction' }
     }), { code: 'EBOOK_PROGRESS_INPUT_INVALID' })
     database.prepare("INSERT INTO resource_trash_entries (resource_type, resource_id) VALUES ('ebook', 7)").run()
     assert.throws(() => getEbookReadingProgress({ database, bookId: 7, userId: 3 }), {

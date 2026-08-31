@@ -151,7 +151,7 @@ import api from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import { scrollToCFI, getCurrentCFI, CharacterOffsetProgress } from '@/utils/epub-cfi'
 import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
-import { createEbookReadingProgressSync, EbookProgressConflictError } from '@/domain/ebookReadingProgress'
+import { createEbookReadingProgressSync, deriveEbookChapterFraction, deriveWeightedEbookChapterFraction, EbookProgressConflictError, isEbookCfiForChapter } from '@/domain/ebookReadingProgress'
 
 const props = defineProps({
   visible: Boolean,
@@ -383,6 +383,7 @@ async function openBook() {
     // 确定起始章节
     let startIndex = 0
     let savedCFI = null
+    let savedChapterFraction = 0
     if (!isGuest.value) {
       progressSync?.dispose()
       progressSync = createEbookReadingProgressSync({
@@ -400,6 +401,10 @@ async function openBook() {
       if (progress.currentPage !== undefined) {
         startIndex = Math.min(progress.currentPage, Math.max(0, totalChapterCount.value - 1))
         savedCFI = progress.cfi
+        const chapterWeights = charOffsetProgress.value.chapterOffsets.map(chapter => chapter.textLength)
+        savedChapterFraction = progress.chapterFraction
+          ?? deriveWeightedEbookChapterFraction(progress.progress, startIndex, chapterWeights)
+          ?? deriveEbookChapterFraction(progress.progress, startIndex, totalChapterCount.value)
         console.log('📖 阅读进度已加载:', { 章节: startIndex + 1, CFI: savedCFI || '无' })
       }
     } else {
@@ -410,6 +415,7 @@ async function openBook() {
         props.book.searchChapterIndex >= 0 && props.book.searchChapterIndex < totalChapterCount.value) {
       startIndex = props.book.searchChapterIndex
       savedCFI = null
+      savedChapterFraction = 0
     }
 
     currentChapterIndex.value = startIndex
@@ -429,16 +435,20 @@ async function openBook() {
     await nextTick()
     await new Promise(resolve => setTimeout(resolve, 200))
 
-    if (savedCFI && contentRef.value) {
-      console.log('📐 开始恢复阅读位置，CFI:', savedCFI.substring(0, 50) + '...')
+    if (contentRef.value) {
+      console.log('📐 开始恢复阅读位置，CFI:', savedCFI ? `${savedCFI.substring(0, 50)}...` : '无')
       isRestoringPosition = true
       // 关键：.chapter-content 元素现在直接有 data-chapter-id
-      const success = scrollToCFI(contentRef.value, savedCFI, null, false)
+      const chapterId = bookChapters.value[startIndex]?.id
+      const success = isEbookCfiForChapter(savedCFI, chapterId)
+        ? scrollToCFI(contentRef.value, savedCFI, null, false, { strict: true })
+        : false
       if (success) {
         currentCFI = savedCFI
         console.log('✅ CFI定位成功')
       } else {
-        console.warn('⚠️ CFI定位失败，使用章节起始位置')
+        await scrollToChapterFraction(startIndex, savedChapterFraction)
+        console.warn('⚠️ CFI定位失败，使用章节内比例恢复')
       }
       // 延迟恢复isRestoringPosition，确保定位稳定（给足够长时间）
       setTimeout(() => {
@@ -448,9 +458,7 @@ async function openBook() {
     }
 
     // 5. 计算初始进度
-    const initialProgress = charOffsetProgress.value.initialized
-      ? charOffsetProgress.value.calculateProgress(startIndex, contentRef.value, null)
-      : (startIndex / totalChapterCount.value) * 100
+    const initialProgress = calculateProgress()
     displayProgress.value = initialProgress
 
     // 关闭loading，显示内容
@@ -1289,77 +1297,36 @@ async function scrollToChapterContent(chapterIndex, options = {}) {
 // 计算阅读进度
 function calculateProgress() {
   if (bookChapters.value.length === 0) return 0
+  return Math.min(100, Math.max(0,
+    ((currentChapterIndex.value + calculateCurrentChapterFraction()) / bookChapters.value.length) * 100
+  ))
+}
 
-  if (!charOffsetProgress.value.initialized) {
-    return (currentChapterIndex.value / bookChapters.value.length) * 100
-  }
-
-  // 基于已加载章节的实际 DOM 计算进度
+function calculateCurrentChapterFraction() {
   const container = contentRef.value
-  if (!container) return (currentChapterIndex.value / bookChapters.value.length) * 100
-
-  // 获取所有已加载的章节元素
-  const loadedChapterEls = Array.from(container.querySelectorAll('[data-chapter-index]'))
-  if (loadedChapterEls.length === 0) {
-    return (currentChapterIndex.value / bookChapters.value.length) * 100
-  }
-
-  // 找到当前章节在DOM中的索引
-  const currentEl = container.querySelector(`[data-chapter-index="${currentChapterIndex.value}"]`)
-  if (!currentEl) {
-    // 当前章节未加载，基于章节索引粗略计算
-    return (currentChapterIndex.value / bookChapters.value.length) * 100
-  }
-
-  // 获取章节内容元素
-  const chapterContent = currentEl.querySelector('.chapter-content')
-  if (!chapterContent) {
-    return (currentChapterIndex.value / bookChapters.value.length) * 100
-  }
-
-  // 计算章节内进度：基于视口顶部相对于章节顶部的偏移
+  const chapterContent = container?.querySelector(`[data-chapter-index="${currentChapterIndex.value}"] .chapter-content`)
+  if (!container || !chapterContent || chapterContent.scrollHeight <= 0) return 0
   const containerRect = container.getBoundingClientRect()
   const contentRect = chapterContent.getBoundingClientRect()
-  const chapterHeight = chapterContent.scrollHeight
+  return Math.min(1, Math.max(0, (containerRect.top - contentRect.top) / chapterContent.scrollHeight))
+}
 
-  // 如果章节高度为0，回退到基于章节的计算
-  if (chapterHeight <= 0) {
-    return (currentChapterIndex.value / bookChapters.value.length) * 100
-  }
-
-  // 计算视口顶部相对于章节内容的滚动偏移
-  // contentRect.top - containerRect.top = 章节顶部相对于容器视口顶部的偏移（可为负）
-  // 当章节向上滚动时，这个值变负，表示章节在视口上方露出多少
-  const chapterTopToViewport = contentRect.top - containerRect.top
-  
-  // 已滚动距离 = 章节在视口上方露出的高度（负值取反）
-  const scrolledInChapter = -chapterTopToViewport
-  
-  // 章节内已读比例（0-1）
-  const innerRatio = Math.max(0, Math.min(1, scrolledInChapter / chapterHeight))
-
-  // 使用 charOffsetProgress 的章节偏移数据
-  const chapterInfo = charOffsetProgress.value.chapterOffsets[currentChapterIndex.value]
-  if (!chapterInfo) {
-    return (currentChapterIndex.value / bookChapters.value.length) * 100
-  }
-
-  // 当前总偏移 = 本章起始偏移 + 章节内偏移
-  const innerChars = Math.floor(chapterInfo.textLength * innerRatio)
-  const currentOffset = chapterInfo.startOffset + innerChars
-
-  // 进度百分比
-  const progress = (currentOffset / charOffsetProgress.value.totalChars) * 100
-  return Math.min(100, Math.max(0, progress))
+async function scrollToChapterFraction(index, fraction) {
+  const container = contentRef.value
+  const chapterContent = container?.querySelector(`[data-chapter-index="${index}"] .chapter-content`)
+  if (!container || !chapterContent) return false
+  const ratio = Math.min(1, Math.max(0, Number(fraction) || 0))
+  const containerRect = container.getBoundingClientRect()
+  const contentRect = chapterContent.getBoundingClientRect()
+  container.scrollTop += contentRect.top - containerRect.top + chapterContent.scrollHeight * ratio
+  return true
 }
 
 function updateCurrentCFI() {
   if (!contentRef.value || isRestoringPosition || !isProgressLoaded.value) return
   // 关键：.chapter-content 元素现在直接有 data-chapter-id，不需要额外选择器
   const cfi = getCurrentCFI(contentRef.value)
-  if (cfi) {
-    currentCFI = cfi
-  }
+  currentCFI = isEbookCfiForChapter(cfi, bookChapters.value[currentChapterIndex.value]?.id) ? cfi : null
 }
 
 function debouncedSaveProgress(delay = 500) {
@@ -1382,13 +1349,14 @@ async function saveProgress() {
     if (contentRef.value) {
       // 关键：.chapter-content 元素现在直接有 data-chapter-id
       const cfi = getCurrentCFI(contentRef.value)
-      if (cfi) currentCFI = cfi
+      currentCFI = isEbookCfiForChapter(cfi, bookChapters.value[currentChapterIndex.value]?.id) ? cfi : null
     }
 
     const progressData = {
       currentPage: currentChapterIndex.value,
       scrollPosition: contentRef.value?.scrollTop || 0,
       progress: progressPercent,
+      chapterFraction: calculateCurrentChapterFraction(),
       fontSize: fontSize.value,
       cfi: currentCFI
     }
@@ -1419,8 +1387,11 @@ async function resolveProgressConflict(choice) {
       currentCFI = progress.cfi
       await loadChaptersUnified(targetIndex, { loadImages: true, loadAdjacent: true, showLoading: true })
       await nextTick()
-      if (currentCFI && contentRef.value) scrollToCFI(contentRef.value, currentCFI, null, false)
-      else await scrollToChapterContent(targetIndex, { preserveTitle: true })
+      const chapterId = bookChapters.value[targetIndex]?.id
+      const restored = isEbookCfiForChapter(currentCFI, chapterId) && contentRef.value
+        ? scrollToCFI(contentRef.value, currentCFI, null, false, { strict: true })
+        : false
+      if (!restored) await scrollToChapterFraction(targetIndex, progress.chapterFraction || 0)
       displayProgress.value = progress.progress
       showToast('已切换到其他设备位置')
     } else {
@@ -1759,14 +1730,16 @@ function handleClose() {
 watch(fontSize, async () => {
   persistDeviceFontSize()
   const cfi = getCurrentCFI(contentRef.value)
-  if (cfi) currentCFI = cfi
+  const chapterId = bookChapters.value[currentChapterIndex.value]?.id
+  currentCFI = isEbookCfiForChapter(cfi, chapterId) ? cfi : null
+  const chapterFraction = calculateCurrentChapterFraction()
 
   await nextTick()
   setTimeout(() => {
     if (currentCFI && contentRef.value) {
       // 关键：.chapter-content 元素现在直接有 data-chapter-id
-      scrollToCFI(contentRef.value, currentCFI, null, false)
-    }
+      if (!scrollToCFI(contentRef.value, currentCFI, null, false, { strict: true })) void scrollToChapterFraction(currentChapterIndex.value, chapterFraction)
+    } else void scrollToChapterFraction(currentChapterIndex.value, chapterFraction)
     debouncedSaveProgress(500)
   }, 100)
 })

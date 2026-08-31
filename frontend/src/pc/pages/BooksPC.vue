@@ -2,11 +2,12 @@
   <div class="books-page">
     <EbookWorkbench
       :books="books" :categories="categories" :loading="loading" :pagination="pagination"
-      :filters="filters" :selected-keys="selectedBookIds" :view-mode="viewMode" :is-guest="isGuest"
+      :filters="filters" :selected-keys="selectedBookIds" :selection-mode="selectionMode" :view-mode="viewMode" :is-guest="isGuest"
       @update:filters="filters = $event" @update:view-mode="setViewMode" @apply="applyFilters"
       @upload="uploadVisible = true" @create-category="openCreateCategory" @rename-category="openRenameCategory"
       @delete-category="openDeleteCategory" @trash="openTrash" @detail="openDetail" @read="openReader"
-      @toggle-select="toggleSelection" @clear-selection="selectedBookIds = []"
+      @toggle-select="toggleSelection" @toggle-select-all="toggleCurrentPageSelection"
+      @enter-selection="enterSelectionMode" @exit-selection="exitSelectionMode"
       @batch-delete="batchConfirmVisible = true" @page="changePage"
     />
 
@@ -75,6 +76,7 @@ const filters = ref({
 })
 const viewMode = ref(localStorage.getItem('pr-manager:ebook-pc-view:v1') === 'list' ? 'list' : 'cover')
 const selectedBookIds = ref([])
+const selectionMode = ref(false)
 const detailVisible = ref(false)
 const detailBook = ref(null)
 const readerVisible = ref(false)
@@ -123,20 +125,28 @@ async function syncUrl() {
   await router.replace({ query })
 }
 
-async function applyFilters() { pagination.value.page = 1; selectedBookIds.value = []; await syncUrl(); await loadBooks() }
-async function changePage(page) { pagination.value.page = page; selectedBookIds.value = []; await syncUrl(); await loadBooks(); document.querySelector('.ebook-workbench__content')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+async function applyFilters() { pagination.value.page = 1; exitSelectionMode(); await syncUrl(); await loadBooks() }
+async function changePage(page) { pagination.value.page = page; exitSelectionMode(); await syncUrl(); await loadBooks(); document.querySelector('.ebook-workbench__content')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 function setViewMode(mode) { viewMode.value = mode; localStorage.setItem('pr-manager:ebook-pc-view:v1', mode) }
 function toggleSelection(id) { selectedBookIds.value = selectedBookIds.value.includes(id) ? selectedBookIds.value.filter(value => value !== id) : [...selectedBookIds.value, id] }
+function enterSelectionMode() { selectionMode.value = true; selectedBookIds.value = [] }
+function exitSelectionMode() { selectionMode.value = false; selectedBookIds.value = [] }
+function toggleCurrentPageSelection() {
+  const pageIds = books.value.map(book => book.id)
+  const allSelected = pageIds.length > 0 && pageIds.every(id => selectedBookIds.value.includes(id))
+  selectedBookIds.value = allSelected ? selectedBookIds.value.filter(id => !pageIds.includes(id)) : [...new Set([...selectedBookIds.value, ...pageIds])]
+}
 function openTrash() { void router.push({ name: 'Trash', query: { type: 'ebook' } }) }
 function downloadBook(book) { window.open(authenticatedAssetUrl(`/api/ebooks/download/${book.id}`), '_blank') }
 
 async function openDetail(book) {
+  exitSelectionMode()
   detailBook.value = { ...book }
   detailVisible.value = true
   try { detailBook.value = (await api.books.getDetail(book.id)).data?.data || detailBook.value }
   catch (error) { toast.error(error.response?.data?.message || '加载书籍详情失败') }
 }
-function openReader(book) { detailVisible.value = false; readerBook.value = { ...book }; readerVisible.value = true }
+function openReader(book) { exitSelectionMode(); detailVisible.value = false; readerBook.value = { ...book }; readerVisible.value = true }
 function openCreateCategory() { categoryDialogMode.value = 'create'; pendingCategory.value = null; categoryName.value = ''; categoryDialogVisible.value = true }
 function openRenameCategory(category) { categoryDialogMode.value = 'rename'; pendingCategory.value = category; categoryName.value = category.name; categoryDialogVisible.value = true }
 function openDeleteCategory(category) { pendingCategory.value = category; deleteCategoryVisible.value = true }
@@ -205,7 +215,7 @@ async function deleteSelectedBooks() {
   if (selectedBookIds.value.length === 0) return
   try {
     await api.books.batchDelete({ ids: selectedBookIds.value })
-    selectedBookIds.value = []; batchConfirmVisible.value = false
+    exitSelectionMode(); batchConfirmVisible.value = false
     toast.success('已批量移入统一回收站')
     await Promise.all([loadCategories(), loadBooks()])
   } catch (error) { toast.error(error.response?.data?.message || '批量操作失败') }

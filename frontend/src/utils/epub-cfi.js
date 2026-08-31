@@ -302,7 +302,7 @@ function getRelativeElementPath(element, parent) {
  * @param {HTMLElement} container - 内容容器
  * @returns {Object|null} - { node, offset, element }
  */
-export function parseCFI(doc, cfi, container) {
+export function parseCFI(doc, cfi, container, options = {}) {
   if (!doc || !cfi || !cfi.startsWith('epubcfi(')) return null
   
   try {
@@ -371,7 +371,7 @@ export function parseCFI(doc, cfi, container) {
     }
     
     // 根据路径查找节点
-    const result = findNodeByPath(rootElement, path, charOffset >= 0)
+    const result = findNodeByPath(rootElement, path, charOffset >= 0, options.strict === true)
     
     if (!result) return null
     
@@ -400,7 +400,7 @@ export function parseCFI(doc, cfi, container) {
  * @param {boolean} needTextNode - 是否需要返回文本节点
  * @returns {Object|null} - { node, element }
  */
-function findNodeByPath(root, path, needTextNode = false) {
+function findNodeByPath(root, path, needTextNode = false, strict = false) {
   if (!path || path.length === 0) return null
   
   let current = root
@@ -444,6 +444,7 @@ function findNodeByPath(root, path, needTextNode = false) {
     }
     
     if (!found) {
+      if (strict) return null
       // 容错：使用最后一个可用元素
       const lastElement = getLastElement(current)
       if (lastElement) {
@@ -511,16 +512,16 @@ function getFirstTextNode(element) {
  * @param {boolean} smooth - 是否平滑滚动
  * @returns {boolean}
  */
-export function scrollToCFI(container, cfi, doc = null, smooth = false) {
+export function scrollToCFI(container, cfi, doc = null, smooth = false, options = {}) {
   if (!container || !cfi) return false
   
   const document = doc || container.ownerDocument
   if (!document) return false
   
   try {
-    const result = parseCFI(document, cfi, container)
+    const result = parseCFI(document, cfi, container, options)
     if (!result) {
-      console.error('解析CFI失败:', cfi)
+      if (options.strict !== true) console.error('解析CFI失败:', cfi)
       return false
     }
     

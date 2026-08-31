@@ -27,6 +27,7 @@ function progressInput(input) {
   const progress = Number(input.progress)
   const revision = Number(input.revision)
   const fontSize = input.fontSize === undefined || input.fontSize === null ? null : Number(input.fontSize)
+  const chapterFraction = input.chapterFraction === undefined || input.chapterFraction === null ? null : Number(input.chapterFraction)
   const cfi = input.cfi === undefined || input.cfi === null || input.cfi === '' ? null : String(input.cfi)
   const mutationId = String(input.mutationId || '')
 
@@ -42,6 +43,9 @@ function progressInput(input) {
   if (fontSize !== null && (!Number.isSafeInteger(fontSize) || fontSize < 12 || fontSize > 40)) {
     fail('EBOOK_PROGRESS_INPUT_INVALID', 'fontSize is invalid.')
   }
+  if (chapterFraction !== null && (!Number.isFinite(chapterFraction) || chapterFraction < 0 || chapterFraction > 1)) {
+    fail('EBOOK_PROGRESS_INPUT_INVALID', 'chapterFraction is invalid.')
+  }
   if (cfi !== null && (cfi.length > MAX_CFI_LENGTH || cfi.includes('\0'))) {
     fail('EBOOK_PROGRESS_INPUT_INVALID', 'cfi is invalid.')
   }
@@ -54,6 +58,7 @@ function progressInput(input) {
     progress: Math.round(progress * 100) / 100,
     revision,
     fontSize,
+    chapterFraction: chapterFraction === null ? null : Math.round(chapterFraction * 10000) / 10000,
     cfi,
     mutationId,
     force: input.force === true
@@ -72,7 +77,7 @@ function activeBook(database, bookId) {
 
 function progressRow(database, bookId, userId) {
   return database.prepare(`
-    SELECT current_page, cfi, progress, font_size, revision, last_mutation_id, updated_at
+    SELECT current_page, cfi, progress, font_size, chapter_fraction, revision, last_mutation_id, updated_at
     FROM reading_progress WHERE book_id = ? AND user_id = ?
   `).get(bookId, userId)
 }
@@ -84,6 +89,7 @@ function publicProgress(row) {
       cfi: null,
       progress: 0,
       fontSize: 16,
+      chapterFraction: null,
       revision: 0,
       updatedAt: null
     })
@@ -93,6 +99,7 @@ function publicProgress(row) {
     cfi: row.cfi || null,
     progress: Number(row.progress) || 0,
     fontSize: Number(row.font_size) || 16,
+    chapterFraction: row.chapter_fraction === null || row.chapter_fraction === undefined ? null : Number(row.chapter_fraction),
     revision: Number(row.revision) || 0,
     updatedAt: row.updated_at || null
   })
@@ -136,7 +143,7 @@ export function saveEbookReadingProgress({ database, bookId, userId, input } = {
     if (current) {
       const result = database.prepare(`
         UPDATE reading_progress
-        SET current_page = ?, cfi = ?, progress = ?, font_size = ?, revision = ?,
+        SET current_page = ?, cfi = ?, progress = ?, font_size = ?, chapter_fraction = ?, revision = ?,
             last_mutation_id = ?, updated_at = CURRENT_TIMESTAMP
         WHERE book_id = ? AND user_id = ? AND revision = ?
       `).run(
@@ -144,6 +151,7 @@ export function saveEbookReadingProgress({ database, bookId, userId, input } = {
         next.cfi,
         next.progress,
         nextFontSize,
+        next.chapterFraction,
         nextRevision,
         next.mutationId,
         normalized.bookId,
@@ -157,8 +165,8 @@ export function saveEbookReadingProgress({ database, bookId, userId, input } = {
     } else {
       database.prepare(`
         INSERT INTO reading_progress
-          (book_id, user_id, current_page, cfi, progress, font_size, revision, last_mutation_id, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+          (book_id, user_id, current_page, cfi, progress, font_size, chapter_fraction, revision, last_mutation_id, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `).run(
         normalized.bookId,
         normalized.userId,
@@ -166,6 +174,7 @@ export function saveEbookReadingProgress({ database, bookId, userId, input } = {
         next.cfi,
         next.progress,
         nextFontSize,
+        next.chapterFraction,
         nextRevision,
         next.mutationId
       )

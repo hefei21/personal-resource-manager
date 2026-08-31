@@ -3,7 +3,10 @@ import test from 'node:test'
 
 import {
   createEbookReadingProgressSync,
-  EbookProgressConflictError
+  deriveEbookChapterFraction,
+  deriveWeightedEbookChapterFraction,
+  EbookProgressConflictError,
+  isEbookCfiForChapter
 } from '../src/domain/ebookReadingProgress.js'
 
 function storage() {
@@ -30,12 +33,13 @@ test('ebook progress writes are serialized and advance the shared revision', asy
   }
   const sync = createEbookReadingProgressSync({ bookId: 7, api, storage: storage() })
   await sync.load()
-  const first = sync.queue({ currentPage: 2, progress: 10, cfi: 'cfi-2', fontSize: 18 })
-  const second = sync.queue({ currentPage: 3, progress: 14, cfi: 'cfi-3', fontSize: 18 })
+  const first = sync.queue({ currentPage: 2, progress: 10, chapterFraction: 0.25, cfi: 'cfi-2', fontSize: 18 })
+  const second = sync.queue({ currentPage: 3, progress: 14, chapterFraction: 0.6, cfi: 'cfi-3', fontSize: 18 })
   await Promise.all([first, second])
   assert.equal(writes.length, 2)
   assert.equal(writes[0].revision, 0)
   assert.equal(writes[1].revision, 1)
+  assert.equal(writes[1].chapterFraction, 0.6)
   assert.equal(sync.remote.currentPage, 3)
   assert.equal(sync.remote.revision, 2)
 })
@@ -88,7 +92,7 @@ test('an offline write stays pending and resumes after a reload', async () => {
   }
   const first = createEbookReadingProgressSync({ bookId: 9, api: offlineApi, storage: local })
   await first.load()
-  await assert.rejects(first.queue({ currentPage: 4, progress: 22, cfi: 'pending-cfi' }), /offline/u)
+  await assert.rejects(first.queue({ currentPage: 4, progress: 22, chapterFraction: 0.45, cfi: 'pending-cfi' }), /offline/u)
   assert.ok([...local.values.keys()].some((key) => key.includes('ebook-progress-pending')))
 
   const resumedWrites = []
@@ -104,5 +108,17 @@ test('an offline write stays pending and resumes after a reload', async () => {
   await resumed.flush()
   assert.equal(resumedWrites.length, 1)
   assert.equal(resumed.remote.currentPage, 4)
+  assert.equal(resumed.remote.chapterFraction, 0.45)
   assert.equal(resumed.remote.revision, 3)
+})
+
+test('overall progress provides a stable chapter-relative fallback locator', () => {
+  assert.ok(Math.abs(deriveEbookChapterFraction(38, 14, 37) - 0.06) < 1e-9)
+  assert.equal(deriveEbookChapterFraction(100, 36, 37), 1)
+  assert.equal(deriveEbookChapterFraction(0, 0, 37), 0)
+  assert.equal(deriveWeightedEbookChapterFraction(50, 1, [10, 30, 60]), null)
+  assert.ok(Math.abs(deriveWeightedEbookChapterFraction(25, 1, [10, 30, 60]) - 0.5) < 1e-9)
+  assert.equal(isEbookCfiForChapter('epubcfi([chapter-15]!/1/2/1:8)', 'chapter-15'), true)
+  assert.equal(isEbookCfiForChapter('epubcfi(/29/1:8)', 'chapter-15'), false)
+  assert.equal(isEbookCfiForChapter('epubcfi([chapter-14]!/1)', 'chapter-15'), false)
 })

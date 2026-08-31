@@ -27,14 +27,47 @@ function clientIdentifier(storage) {
 }
 
 function normalizeProgress(value = {}) {
+  const chapterFraction = value.chapterFraction === null || value.chapterFraction === undefined
+    ? null
+    : Math.min(1, Math.max(0, Number(value.chapterFraction) || 0))
   return Object.freeze({
     currentPage: Math.max(0, Math.trunc(Number(value.currentPage) || 0)),
     cfi: value.cfi ? String(value.cfi) : null,
     progress: Math.min(100, Math.max(0, Math.round((Number(value.progress) || 0) * 100) / 100)),
     fontSize: Number.isSafeInteger(Number(value.fontSize)) ? Number(value.fontSize) : 16,
+    chapterFraction,
     revision: Math.max(0, Math.trunc(Number(value.revision) || 0)),
     updatedAt: value.updatedAt || null
   })
+}
+
+// Overall percentage and chapter index are the durable, cross-client locator.
+// CFI remains a best-effort fine anchor because sanitizers, fonts and EPUB
+// markup can legitimately change the rendered DOM between sessions.
+export function deriveEbookChapterFraction(progress, currentPage, totalChapters) {
+  const total = Math.max(1, Math.trunc(Number(totalChapters) || 1))
+  const page = Math.min(total - 1, Math.max(0, Math.trunc(Number(currentPage) || 0)))
+  return deriveWeightedEbookChapterFraction(progress, page, Array.from({ length: total }, () => 1)) ?? 0
+}
+
+export function deriveWeightedEbookChapterFraction(progress, currentPage, chapterWeights) {
+  const weights = Array.isArray(chapterWeights)
+    ? chapterWeights.map(value => Math.max(0, Number(value) || 0))
+    : []
+  const page = Math.trunc(Number(currentPage))
+  if (page < 0 || page >= weights.length || weights[page] <= 0) return null
+  const totalWeight = weights.reduce((sum, value) => sum + value, 0)
+  if (totalWeight <= 0) return null
+  const absolute = Math.min(100, Math.max(0, Number(progress) || 0)) / 100 * totalWeight
+  const chapterStart = weights.slice(0, page).reduce((sum, value) => sum + value, 0)
+  const fraction = (absolute - chapterStart) / weights[page]
+  if (fraction < -0.001 || fraction > 1.001) return null
+  return Math.min(1, Math.max(0, fraction))
+}
+
+export function isEbookCfiForChapter(cfi, chapterId) {
+  if (!cfi || !chapterId) return false
+  return String(cfi).startsWith(`epubcfi([${String(chapterId)}]!`)
 }
 
 function pendingKey(bookId) {
@@ -153,6 +186,7 @@ export class EbookReadingProgressSync {
           currentPage: job.position.currentPage,
           cfi: job.position.cfi,
           progress: job.position.progress,
+          chapterFraction: job.position.chapterFraction,
           fontSize: job.position.fontSize,
           revision: this.remote.revision,
           mutationId: job.mutationId,

@@ -26,5 +26,19 @@ export const EBOOK_READING_PROGRESS_MIGRATIONS = Object.freeze([
         defaultValue: null
       }
     }
+  },
+  {
+    id: '0089_reading_progress_chapter_fraction',
+    source: 'ALTER TABLE reading_progress ADD COLUMN chapter_fraction REAL;',
+    compatibility: {
+      kind: 'column',
+      table: 'reading_progress',
+      column: {
+        name: 'chapter_fraction',
+        type: 'REAL',
+        notNull: false,
+        defaultValue: null
+      }
+    }
   }
 ])

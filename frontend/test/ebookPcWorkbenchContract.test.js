@@ -23,6 +23,11 @@ test('ebook workbench keeps server paging, smart reading views, stable category 
   assert.match(workbench, /readingStatus/u)
   assert.match(workbench, /uncategorized/u)
   assert.match(workbench, /String\(category\.id\)/u)
+  assert.match(workbench, /v-if="selectionMode" class="ebook-card__select"/u)
+  assert.match(workbench, /toggle-select-all/u)
+  assert.match(workbench, /v-if="canUploadInView"/u)
+  assert.match(workbench, /ebook-list-row__action[^\n]+list-dashes/u)
+  assert.match(page, /openDetail\(book\)[\s\S]+exitSelectionMode/u)
 })
 
 test('reader streams PDFs, loads EPUB chapters lazily, and uses the shared progress protocol', () => {
@@ -36,6 +41,11 @@ test('reader streams PDFs, loads EPUB chapters lazily, and uses the shared progr
   assert.match(reader, /resolveConflict\('local'\)/u)
   assert.match(reader, /canMarkFinished/u)
   assert.match(reader, /v-if="tocOpen"/u)
+  assert.match(reader, /chapterFraction/u)
+  assert.match(reader, /strict:\s*true/u)
+  assert.match(reader, /handleContentClick/u)
+  assert.match(reader, /scrollCurrentTocItemIntoView/u)
+  assert.match(reader, /background:#fffdfb;box-shadow/u)
 })
 
 test('reading position is shared across PC and mobile while appearance remains device-local', () => {
@@ -43,4 +53,6 @@ test('reading position is shared across PC and mobile while appearance remains d
   assert.match(mobileReader, /pr-manager:ebook-reader-preferences:v1/u)
   assert.match(mobileReader, /persistDeviceFontSize/u)
   assert.doesNotMatch(mobileReader, /fontSize\.value\s*=\s*progress\.fontSize/u)
+  assert.match(mobileReader, /chapterFraction/u)
+  assert.match(mobileReader, /strict:\s*true/u)
 })

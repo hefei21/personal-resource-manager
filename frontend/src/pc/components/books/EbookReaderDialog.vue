@@ -41,12 +41,12 @@
               <NativeIcon name="x" />
             </NativeButton>
           </div>
-          <nav class="ebook-reader__toc-list" aria-label="书籍目录">
+          <nav ref="tocList" class="ebook-reader__toc-list" aria-label="书籍目录">
             <button
               v-for="(chapter, index) in effectiveToc"
               :key="`${chapter.href || chapter.id || index}-${index}`"
               type="button"
-              :class="{ active: chapterIndex === chapter.chapterIndex }"
+              :class="{ active: currentPageIndex === chapter.chapterIndex }"
               @click="goToChapter(chapter.chapterIndex)"
             >
               <span>{{ chapter.title || `章节 ${index + 1}` }}</span>
@@ -96,7 +96,7 @@
           </div>
         </aside>
 
-        <main ref="readingSurface" class="ebook-reader__surface" :class="`ebook-reader__surface--${readerTheme}`" @scroll.passive="handleScroll">
+        <main ref="readingSurface" class="ebook-reader__surface" :class="`ebook-reader__surface--${readerTheme}`" @click="handleContentClick" @scroll.passive="handleScroll">
           <div v-if="loading" class="ebook-reader__state" role="status">
             <NativeIcon name="book-open" size="38" />
             <strong>正在准备阅读内容</strong>
@@ -150,7 +150,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import api from '@/api'
 import { NativeButton, NativeIcon } from '@/components/native'
-import { createEbookReadingProgressSync, EbookProgressConflictError } from '@/domain/ebookReadingProgress'
+import { findEbookChapterIndex, resolveEbookLink } from '@/domain/ebookReaderNavigation'
+import { createEbookReadingProgressSync, deriveEbookChapterFraction, EbookProgressConflictError, isEbookCfiForChapter } from '@/domain/ebookReadingProgress'
 import { getCurrentCFI, scrollToCFI } from '@/utils/epub-cfi'
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { disposePdfDocument, openAuthenticatedPdfDocument } from '@/utils/pdfPreview'
@@ -177,6 +178,7 @@ const themeOptions = [
 
 const readingSurface = ref(null)
 const flowArticle = ref(null)
+const tocList = ref(null)
 const pdfStage = ref(null)
 const pdfCanvas = ref(null)
 const loading = ref(false)
@@ -203,6 +205,8 @@ let pdfRenderTask = null
 let saveTimer = null
 let openSequence = 0
 let pendingRestoreCFI = null
+let pendingRestoreFraction = 0
+let restoringPosition = false
 
 const fileType = computed(() => String(props.book?.fileType || props.book?.file_type || '').toLowerCase())
 const isPdf = computed(() => fileType.value === 'pdf')
@@ -276,6 +280,7 @@ async function openBook() {
   totalPdfPages.value = 0
   readingPercent.value = 0
   pendingRestoreCFI = null
+  pendingRestoreFraction = 0
   readDevicePreferences()
   await disposePdf()
 
@@ -293,6 +298,7 @@ async function openBook() {
       totalPdfPages.value = document.numPages
       const requestedPage = Number.isSafeInteger(props.book?.searchChapterIndex) ? props.book.searchChapterIndex : progress.currentPage
       pdfPageIndex.value = Math.min(Math.max(0, requestedPage || 0), Math.max(0, document.numPages - 1))
+      loading.value = false
       await nextTick()
       await renderPdfPage()
       readingPercent.value = document.numPages > 0 ? ((pdfPageIndex.value + 1) / document.numPages) * 100 : 0
@@ -305,9 +311,12 @@ async function openBook() {
       if (chapters.value.length === 0) throw new Error('这本 EPUB 没有可阅读章节')
       const requestedChapter = Number.isSafeInteger(props.book?.searchChapterIndex) ? props.book.searchChapterIndex : progress.currentPage
       chapterIndex.value = Math.min(Math.max(0, requestedChapter || 0), chapters.value.length - 1)
-      pendingRestoreCFI = Number.isSafeInteger(props.book?.searchChapterIndex) ? null : (progress.cfi || null)
+      const explicitSearchPosition = Number.isSafeInteger(props.book?.searchChapterIndex)
+      readingPercent.value = explicitSearchPosition ? (chapterIndex.value / chapters.value.length) * 100 : Number(progress.progress || 0)
+      pendingRestoreCFI = explicitSearchPosition ? null : (progress.cfi || null)
+      pendingRestoreFraction = explicitSearchPosition ? 0 : (progress.chapterFraction ?? deriveEbookChapterFraction(progress.progress, chapterIndex.value, chapters.value.length))
+      loading.value = false
       await loadEpubChapter(chapterIndex.value)
-      readingPercent.value = Number(progress.progress || 0)
     } else if (fileType.value === 'txt' || fileType.value === 'html' || fileType.value === 'htm') {
       loadingMessage.value = '正在载入正文并恢复阅读位置…'
       const [progress, response] = await Promise.all([progressPromise, api.books.getContent(props.book.id)])
@@ -317,6 +326,8 @@ async function openBook() {
       chapterIndex.value = 0
       pendingRestoreCFI = progress.cfi || null
       readingPercent.value = Number(progress.progress || 0)
+      pendingRestoreFraction = progress.chapterFraction ?? deriveEbookChapterFraction(progress.progress, 0, 1)
+      loading.value = false
       await restoreFlowPosition()
     } else {
       throw new Error('当前格式暂不支持在线阅读，请下载原件后查看')
@@ -341,15 +352,40 @@ async function loadEpubChapter(index) {
 }
 
 async function restoreFlowPosition() {
-  await nextTick()
+  restoringPosition = true
+  await waitForFlowLayout()
   const surface = readingSurface.value
-  if (!surface) return
-  surface.scrollTop = 0
-  if (pendingRestoreCFI) {
-    scrollToCFI(surface, pendingRestoreCFI, null, false)
-    pendingRestoreCFI = null
+  if (!surface) {
+    restoringPosition = false
+    return
   }
+  surface.scrollTop = 0
+  let restored = false
+  if (isEbookCfiForChapter(pendingRestoreCFI, currentChapter.value?.id)) {
+    restored = scrollToCFI(surface, pendingRestoreCFI, null, false, { strict: true })
+  }
+  if (!restored && pendingRestoreFraction > 0) {
+    const scrollable = Math.max(0, surface.scrollHeight - surface.clientHeight)
+    surface.scrollTop = Math.round(scrollable * Math.min(1, Math.max(0, pendingRestoreFraction)))
+  }
+  pendingRestoreCFI = null
+  pendingRestoreFraction = 0
   updateFlowProgress()
+  await nextAnimationFrame()
+  restoringPosition = false
+}
+
+async function waitForFlowLayout() {
+  await nextTick()
+  await nextAnimationFrame()
+  if (document.fonts?.ready) {
+    await Promise.race([document.fonts.ready, new Promise(resolve => setTimeout(resolve, 250))])
+  }
+  await nextAnimationFrame()
+}
+
+function nextAnimationFrame() {
+  return new Promise(resolve => requestAnimationFrame(() => resolve()))
 }
 
 async function renderPdfPage() {
@@ -388,7 +424,7 @@ function updateFlowProgress() {
 }
 
 function handleScroll() {
-  if (!isFlowDocument.value || loading.value) return
+  if (!isFlowDocument.value || loading.value || restoringPosition) return
   updateFlowProgress()
   scheduleProgressSave()
 }
@@ -401,11 +437,15 @@ function scheduleProgressSave() {
 async function saveProgress() {
   if (!progressSync || loading.value || loadError.value) return
   let cfi = null
-  if (isFlowDocument.value && readingSurface.value) cfi = getCurrentCFI(readingSurface.value)
+  if (isFlowDocument.value && readingSurface.value) {
+    const candidate = getCurrentCFI(readingSurface.value)
+    cfi = isEbookCfiForChapter(candidate, currentChapter.value?.id) ? candidate : null
+  }
   try {
     await progressSync.queue({
       currentPage: currentPageIndex.value,
       progress: Math.min(100, Math.max(0, readingPercent.value)),
+      chapterFraction: currentChapterFraction(),
       cfi
     })
   } catch (error) {
@@ -436,6 +476,8 @@ async function moveToProgress(progress) {
   } else {
     pendingRestoreCFI = progress.cfi || null
     const target = Math.min(Math.max(0, progress.currentPage || 0), Math.max(0, chapters.value.length - 1))
+    readingPercent.value = Number(progress.progress || 0)
+    pendingRestoreFraction = progress.chapterFraction ?? deriveEbookChapterFraction(progress.progress, target, chapters.value.length)
     if (fileType.value === 'epub') await loadEpubChapter(target)
     else await restoreFlowPosition()
   }
@@ -449,6 +491,8 @@ async function goToChapter(index) {
     readingPercent.value = ((index + 1) / totalPdfPages.value) * 100
   } else if (fileType.value === 'epub') {
     pendingRestoreCFI = null
+    pendingRestoreFraction = 0
+    readingPercent.value = (index / Math.max(1, chapters.value.length)) * 100
     await loadEpubChapter(index)
     updateFlowProgress()
   }
@@ -456,6 +500,56 @@ async function goToChapter(index) {
 }
 
 function goPrevious() { if (canGoPrevious.value) void goToChapter(currentPageIndex.value - 1) }
+
+function currentChapterFraction() {
+  if (isPdf.value) return null
+  const surface = readingSurface.value
+  if (!surface) return 0
+  const scrollable = Math.max(0, surface.scrollHeight - surface.clientHeight)
+  if (scrollable <= 0) return readingPercent.value >= 99.5 && !canGoNext.value ? 1 : 0
+  return Math.min(1, Math.max(0, surface.scrollTop / scrollable))
+}
+
+async function handleContentClick(event) {
+  if (!isFlowDocument.value) return
+  const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null
+  if (!anchor || !flowArticle.value?.contains(anchor)) return
+  const target = resolveEbookLink(anchor.getAttribute('href'), currentChapter.value?.href)
+  if (!target) return
+  event.preventDefault()
+
+  if (target.external) {
+    window.open(target.url, '_blank', 'noopener,noreferrer')
+    return
+  }
+
+  const targetChapterIndex = findEbookChapterIndex(chapters.value, target.path)
+  if (targetChapterIndex >= 0 && targetChapterIndex !== chapterIndex.value) {
+    pendingRestoreCFI = null
+    pendingRestoreFraction = 0
+    await loadEpubChapter(targetChapterIndex)
+  }
+  if (targetChapterIndex < 0 && target.path !== String(currentChapter.value?.href || '').replace(/^\/+/, '')) return
+  await nextTick()
+  if (target.fragment) scrollToFlowFragment(target.fragment)
+  else readingSurface.value?.scrollTo({ top: 0, behavior: 'auto' })
+  updateFlowProgress()
+  await saveProgress()
+}
+
+function scrollToFlowFragment(fragment) {
+  const article = flowArticle.value
+  const surface = readingSurface.value
+  if (!article || !surface) return false
+  const decoded = String(fragment || '')
+  const target = [...article.querySelectorAll('[id], a[name]')]
+    .find(element => element.id === decoded || element.getAttribute('name') === decoded)
+  if (!target) return false
+  const surfaceRect = surface.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  surface.scrollTo({ top: Math.max(0, surface.scrollTop + targetRect.top - surfaceRect.top - 24), behavior: 'smooth' })
+  return true
+}
 async function goNextOrFinish() {
   if (canGoNext.value) {
     await goToChapter(currentPageIndex.value + 1)
@@ -507,15 +601,29 @@ watch(() => props.book?.id, (id, previous) => {
 watch([fontSize, fontFamily, readerTheme], async () => {
   persistDevicePreferences()
   if (props.modelValue && isFlowDocument.value && !loading.value) {
-    const cfi = readingSurface.value ? getCurrentCFI(readingSurface.value) : null
-    await nextTick()
-    if (cfi && readingSurface.value) scrollToCFI(readingSurface.value, cfi, null, false)
+    const surface = readingSurface.value
+    const scrollable = surface ? Math.max(0, surface.scrollHeight - surface.clientHeight) : 0
+    const candidate = surface ? getCurrentCFI(surface) : null
+    pendingRestoreCFI = isEbookCfiForChapter(candidate, currentChapter.value?.id) ? candidate : null
+    pendingRestoreFraction = scrollable > 0 ? surface.scrollTop / scrollable : 0
+    await restoreFlowPosition()
   }
+})
+watch(tocOpen, async (open) => {
+  if (open) await scrollCurrentTocItemIntoView()
+})
+watch(currentPageIndex, async () => {
+  if (tocOpen.value) await scrollCurrentTocItemIntoView()
 })
 watch(pdfScale, async () => {
   persistDevicePreferences()
   if (props.modelValue && isPdf.value && !loading.value) await renderPdfPage()
 })
+
+async function scrollCurrentTocItemIntoView() {
+  await nextTick()
+  tocList.value?.querySelector('button.active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
 
 onBeforeUnmount(() => {
   clearTimeout(saveTimer)
@@ -525,5 +633,5 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.ebook-reader{position:fixed;inset:0;z-index:12000;display:grid;grid-template-rows:64px auto minmax(0,1fr) 72px;background:#edf0f4;color:#1f2937}.ebook-reader__header{display:flex;align-items:center;gap:14px;padding:0 22px;border-bottom:1px solid #dce2ea;background:#fffdfb}.ebook-reader__identity{min-width:0;display:flex;flex:1;flex-direction:column}.ebook-reader__identity strong{overflow:hidden;font-size:16px;text-overflow:ellipsis;white-space:nowrap}.ebook-reader__identity span,.ebook-reader__panel-heading span{font-size:12px;color:#8390a3}.ebook-reader__header-actions{display:flex;gap:4px}.ebook-reader__icon-button{width:40px;height:40px;padding:0}.ebook-reader__notice{display:flex;align-items:center;justify-content:center;gap:10px;min-height:44px;padding:6px 20px;background:#eef2ff;color:#4655a6}.ebook-reader__notice--warning{background:#fff7e8;color:#8a5b19}.ebook-reader__surface{min-height:0;overflow:auto;padding:36px 56px 90px;scrollbar-gutter:stable}.ebook-reader__surface--paper{background:#edf0f4}.ebook-reader__surface--warm{background:#e8dfd0}.ebook-reader__surface--dark{background:#171a21}.ebook-reader__paper{width:min(780px,100%);min-height:calc(100vh - 250px);box-sizing:border-box;margin:0 auto;padding:68px 78px;border:1px solid rgba(76,90,116,.12);border-radius:8px;background:#fffdf9;box-shadow:0 12px 36px rgba(40,48,65,.08);line-height:1.85;color:#273244}.ebook-reader__surface--warm .ebook-reader__paper{background:#fbf3e4;color:#3c3328}.ebook-reader__surface--dark .ebook-reader__paper{border-color:#333a47;background:#232832;color:#e4e8ef}.ebook-reader__pdf-stage{display:flex;justify-content:center;min-height:100%;padding:0 0 40px}.ebook-reader__pdf-canvas{align-self:flex-start;max-width:none;border:1px solid #d6dce5;background:#fff;box-shadow:0 12px 38px rgba(32,42,60,.16)}.ebook-reader__state{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#68758a}.ebook-reader__state strong{font-size:16px;color:#2b3445}.ebook-reader__state--error>div{display:flex;gap:10px;margin-top:8px}.ebook-reader__toc,.ebook-reader__settings{position:fixed;top:64px;bottom:0;z-index:12002;width:min(360px,90vw);display:flex;flex-direction:column;background:#fffdfb;box-shadow:0 16px 48px rgba(30,37,50,.18);transition:transform .22s ease}.ebook-reader__toc{left:0;transform:translateX(-105%)}.ebook-reader__settings{right:0;transform:translateX(105%)}.ebook-reader__toc--open,.ebook-reader__settings--open{transform:translateX(0)}.ebook-reader__panel-heading{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid #e5e9ef}.ebook-reader__panel-heading>div{display:flex;flex-direction:column;gap:2px}.ebook-reader__toc-list{overflow:auto;padding:10px}.ebook-reader__toc-list button{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:0;border-radius:8px;background:transparent;color:#445066;text-align:left;cursor:pointer}.ebook-reader__toc-list button:hover{background:#f2f4f8}.ebook-reader__toc-list button.active{background:#eef0ff;color:#4f5ed6}.ebook-reader__toc-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ebook-reader__toc-list small{color:#98a3b5}.ebook-reader__setting-group{display:flex;flex-direction:column;gap:10px;padding:18px 20px;border-bottom:1px solid #edf0f4}.ebook-reader__setting-group label{font-size:13px;color:#6b778a}.ebook-reader__stepper{display:grid;grid-template-columns:1fr 80px 1fr;align-items:center;gap:8px;text-align:center}.ebook-reader__segmented{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.ebook-reader__segmented button{min-height:38px;border:1px solid #dce2ea;border-radius:8px;background:#fff;color:#526076;cursor:pointer}.ebook-reader__segmented button.active{border-color:#6674e8;background:#eef0ff;color:#4c5bd1}.ebook-reader__footer{position:relative;z-index:12001;display:grid;grid-template-columns:132px minmax(220px,460px) 132px;align-items:center;justify-content:center;gap:22px;padding:12px 24px;border-top:1px solid #dce2ea;background:rgba(255,253,251,.97);backdrop-filter:blur(12px)}.ebook-reader__nav-button{height:44px}.ebook-reader__progress{display:grid;grid-template-columns:minmax(120px,1fr) auto auto;align-items:center;gap:12px;padding:8px 12px;border:0;background:transparent;color:#526076;cursor:pointer}.ebook-reader__progress>span{height:4px;overflow:hidden;border-radius:99px;background:#dfe4ec}.ebook-reader__progress i{display:block;height:100%;border-radius:inherit;background:#5967dd}.ebook-reader__progress strong{font-size:13px}.ebook-reader__progress small{font-size:12px;color:#8995a8}.ebook-reader-fade-enter-active,.ebook-reader-fade-leave-active{transition:opacity .18s ease}.ebook-reader-fade-enter-from,.ebook-reader-fade-leave-to{opacity:0}@media(max-width:900px){.ebook-reader__surface{padding:24px 20px 90px}.ebook-reader__paper{padding:44px 38px}.ebook-reader__footer{grid-template-columns:48px minmax(160px,1fr) 48px;gap:10px}.ebook-reader__nav-button{font-size:0}.ebook-reader__nav-button :deep(svg){font-size:16px}.ebook-reader__progress{grid-template-columns:1fr auto}.ebook-reader__progress small{display:none}}
+.ebook-reader{position:fixed;inset:0;z-index:12000;display:grid;grid-template-rows:64px auto minmax(0,1fr) 72px;background:#edf0f4;color:#1f2937}.ebook-reader__header{display:flex;align-items:center;gap:14px;padding:0 22px;border-bottom:1px solid #dce2ea;background:#fffdfb}.ebook-reader__identity{min-width:0;display:flex;flex:1;flex-direction:column}.ebook-reader__identity strong{overflow:hidden;font-size:16px;text-overflow:ellipsis;white-space:nowrap}.ebook-reader__identity span,.ebook-reader__panel-heading span{font-size:12px;color:#8390a3}.ebook-reader__header-actions{display:flex;gap:4px}.ebook-reader__icon-button{width:40px;height:40px;padding:0}.ebook-reader__notice{display:flex;align-items:center;justify-content:center;gap:10px;min-height:44px;padding:6px 20px;background:#eef2ff;color:#4655a6}.ebook-reader__notice--warning{background:#fff7e8;color:#8a5b19}.ebook-reader__surface{min-height:0;overflow:auto;padding:36px 56px;scrollbar-gutter:stable}.ebook-reader__surface--paper{background:#edf0f4}.ebook-reader__surface--warm{background:#e8dfd0}.ebook-reader__surface--dark{background:#171a21}.ebook-reader__paper{width:min(780px,100%);min-height:calc(100vh - 250px);box-sizing:border-box;margin:0 auto;padding:68px 78px;border:1px solid rgba(76,90,116,.12);border-radius:8px;background:#fffdf9;box-shadow:0 12px 36px rgba(40,48,65,.08);line-height:1.85;color:#273244}.ebook-reader__surface--warm .ebook-reader__paper{background:#fbf3e4;color:#3c3328}.ebook-reader__surface--dark .ebook-reader__paper{border-color:#333a47;background:#232832;color:#e4e8ef}.ebook-reader__pdf-stage{display:flex;justify-content:center;min-height:100%;padding:0 0 40px}.ebook-reader__pdf-canvas{align-self:flex-start;max-width:none;border:1px solid #d6dce5;background:#fff;box-shadow:0 12px 38px rgba(32,42,60,.16)}.ebook-reader__state{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#68758a}.ebook-reader__state strong{font-size:16px;color:#2b3445}.ebook-reader__state--error>div{display:flex;gap:10px;margin-top:8px}.ebook-reader__toc,.ebook-reader__settings{position:fixed;top:64px;bottom:0;z-index:12002;width:min(360px,90vw);display:flex;flex-direction:column;background:#fffdfb;box-shadow:0 16px 48px rgba(30,37,50,.18);transition:transform .22s ease}.ebook-reader__toc{left:0;transform:translateX(-105%)}.ebook-reader__settings{right:0;transform:translateX(105%)}.ebook-reader__toc--open,.ebook-reader__settings--open{transform:translateX(0)}.ebook-reader__panel-heading{display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid #e5e9ef}.ebook-reader__panel-heading>div{display:flex;flex-direction:column;gap:2px}.ebook-reader__toc-list{overflow:auto;padding:10px}.ebook-reader__toc-list button{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:0;border-radius:8px;background:transparent;color:#445066;text-align:left;cursor:pointer}.ebook-reader__toc-list button:hover{background:#f2f4f8}.ebook-reader__toc-list button.active{background:#eef0ff;color:#4f5ed6}.ebook-reader__toc-list span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ebook-reader__toc-list small{color:#98a3b5}.ebook-reader__setting-group{display:flex;flex-direction:column;gap:10px;padding:18px 20px;border-bottom:1px solid #edf0f4}.ebook-reader__setting-group label{font-size:13px;color:#6b778a}.ebook-reader__stepper{display:grid;grid-template-columns:1fr 80px 1fr;align-items:center;gap:8px;text-align:center}.ebook-reader__segmented{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.ebook-reader__segmented button{min-height:38px;border:1px solid #dce2ea;border-radius:8px;background:#fff;color:#526076;cursor:pointer}.ebook-reader__segmented button.active{border-color:#6674e8;background:#eef0ff;color:#4c5bd1}.ebook-reader__footer{position:relative;z-index:12001;display:grid;grid-template-columns:132px minmax(220px,460px) 132px;align-items:center;justify-content:center;gap:22px;padding:12px 24px;border-top:1px solid #dce2ea;background:#fffdfb;box-shadow:0 -8px 24px rgba(40,48,65,.05)}.ebook-reader__nav-button{height:44px}.ebook-reader__progress{display:grid;grid-template-columns:minmax(120px,1fr) auto auto;align-items:center;gap:12px;padding:8px 12px;border:0;background:transparent;color:#526076;cursor:pointer}.ebook-reader__progress>span{height:4px;overflow:hidden;border-radius:99px;background:#dfe4ec}.ebook-reader__progress i{display:block;height:100%;border-radius:inherit;background:#5967dd}.ebook-reader__progress strong{font-size:13px}.ebook-reader__progress small{font-size:12px;color:#8995a8}.ebook-reader-fade-enter-active,.ebook-reader-fade-leave-active{transition:opacity .18s ease}.ebook-reader-fade-enter-from,.ebook-reader-fade-leave-to{opacity:0}@media(max-width:900px){.ebook-reader__surface{padding:24px 20px}.ebook-reader__paper{padding:44px 38px}.ebook-reader__footer{grid-template-columns:48px minmax(160px,1fr) 48px;gap:10px}.ebook-reader__nav-button{font-size:0}.ebook-reader__nav-button :deep(svg){font-size:16px}.ebook-reader__progress{grid-template-columns:1fr auto}.ebook-reader__progress small{display:none}}
 </style>

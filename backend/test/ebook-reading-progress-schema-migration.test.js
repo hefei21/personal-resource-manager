@@ -46,17 +46,18 @@ test('reading progress migrations are restart-safe and preserve existing rows', 
     const second = migrate(database)
     assert.deepEqual(first.executed.map(({ id }) => id), EBOOK_READING_PROGRESS_MIGRATIONS.map(({ id }) => id))
     assert.equal(second.executed.length, 0)
-    assert.equal(second.skipped.length, 2)
+    assert.equal(second.skipped.length, 3)
     for (const migration of EBOOK_READING_PROGRESS_MIGRATIONS) {
       assert.equal(checkMigrationCompatibility(database, migration.compatibility).status, 'satisfied')
     }
-    assert.deepEqual(database.prepare('SELECT book_id, user_id, current_page, progress, revision, last_mutation_id FROM reading_progress').get(), {
+    assert.deepEqual(database.prepare('SELECT book_id, user_id, current_page, progress, revision, last_mutation_id, chapter_fraction FROM reading_progress').get(), {
       book_id: 8,
       user_id: 2,
       current_page: 11,
       progress: 42.5,
       revision: 0,
-      last_mutation_id: null
+      last_mutation_id: null,
+      chapter_fraction: null
     })
   } finally { database.close() }
 })
