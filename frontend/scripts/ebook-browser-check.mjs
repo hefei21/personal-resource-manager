@@ -15,6 +15,7 @@ const errors = [], checks = [], writes = []
 const progress = new Map()
 const books = Array.from({ length: 49 }, (_, i) => ({ id: i + 1, title: ['漫步城市：生活的细节', '纸上的远行', '写给明天的信', '窗边的四季'][i % 4] + ` · ${i + 1}`, author: ['林岚', '顾川', '乔木', '陆遥'][i % 4], categoryId: i % 3 + 1, categoryName: ['随笔', '文学', '设计'][i % 3], fileType: i === 1 ? 'pdf' : i === 2 ? 'txt' : 'epub', coverImage: i % 4 !== 2, fileSize: 20480, progress: i === 0 ? 22 : 0, indexStatus: 'ready', publisher: '合成测试出版社', createdAt: '2026-01-01T00:00:00Z' }))
 const categories = Array.from({ length: 32 }, (_, i) => ({ id: i + 1, name: ['随笔', '文学', '设计'][i] || `分类 ${i + 1}`, bookCount: books.filter(book => book.categoryId === i + 1).length }))
+books[1].title = '这是一段用来验证移动端长书名换行后阅读进度仍然对齐的书籍标题'
 const chapters = Array.from({ length: 12 }, (_, i) => ({ id: `chapter-${i}`, href: `Text/ch${i}.xhtml`, title: `第 ${i + 1} 章 · 日常的风景` }))
 const content = index => `<h1 id="start">${chapters[index].title}</h1><p><a href="ch8.xhtml#note">跳转第九章注释</a></p>` + Array.from({ length: 65 }, (_, i) => `<p id="p${i}">段落 ${i + 1}。清晨的光沿着窗台铺开，街道从沉静中醒来。我们记录行走时遇见的细节，也记录那些尚未说出口的故事。阅读并不是赶路，而是看清沿途的风景。</p>`).join('') + '<h2 id="note">注释定位目标</h2><p>这里是章节内部的注释位置。</p>'
 function pdfFixture() {
@@ -26,7 +27,7 @@ function pdfFixture() {
   result += `xref\n0 6\n0000000000 65535 f \n${offsets.slice(1).map(offset => String(offset).padStart(10, '0') + ' 00000 n \n').join('')}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`
   return Buffer.from(result)
 }
-let failNextPage = false, offlineWrites = false, delayChapter = -1, uploadedBody = ''
+let failNextPage = false, offlineWrites = false, delayChapter = -1, uploadedBody = '', delayListMs = 0
 async function apiRoute(route) {
   const request = route.request(), url = new URL(request.url()), path = url.pathname
   if (!path.startsWith('/api/')) return route.continue()
@@ -36,6 +37,7 @@ async function apiRoute(route) {
   if (path === '/api/documents/categories') return json({ data: [{ id: 1, name: '文档', children: [], documentCount: 1 }] })
   if (path === '/api/ebooks/categories') return json({ data: categories })
   if (path === '/api/ebooks' && request.method() === 'GET') {
+    if (delayListMs) await new Promise(resolve => setTimeout(resolve, delayListMs))
     const page = Number(url.searchParams.get('page') || 1), size = Number(url.searchParams.get('pageSize') || 24)
     if (page > 1 && failNextPage) { failNextPage = false; return json({ message: '测试网络波动' }, 503) }
     let selected = books.filter(book => !book.deleted)
@@ -58,7 +60,8 @@ async function apiRoute(route) {
       if (url.searchParams.has('manifest')) return json({ chapters, toc: chapters.map((chapter, index) => ({ ...chapter, chapterIndex: index })) })
       const start = Number(url.searchParams.get('start') || 0)
       if (start === delayChapter) await new Promise(resolve => setTimeout(resolve, 600))
-      return json({ chapters: [{ ...chapters[start], content: content(start) }] })
+      const notes = '<p>注释样式 <a href="#note"><sup>(10)</sup></a> 与 <sup><a href="#note">11</a></sup>，普通序号 <a href="#note">[12]</a>；<a role="doc-noteref" href="#note">注</a>。<a href="https://example.com">普通外部链接</a></p>'
+      return json({ chapters: [{ ...chapters[start], content: notes + content(start) }] })
     }
     if (kind === 'content') return json({ content: '写给明天的信\n\n' + '合成文本阅读测试。\n'.repeat(180) })
     if (kind === 'preview') return route.fulfill({ contentType: 'application/pdf', body: pdfFixture() })
@@ -102,6 +105,16 @@ try {
     assert.ok((await mobile.locator('.mobile-book__more').first().boundingBox()).width >= 44)
     await noOverflow(mobile)
     await mobile.screenshot({ path: join(output, 'mobile-library.png'), fullPage: false })
+  })
+  await check('mobile progress baselines survive long titles and enlarged unclamped text', async () => {
+    const style = await mobile.addStyleTag({ content: '.mobile-book__heading>button:first-child { -webkit-line-clamp:unset!important; font-size:20px!important }' })
+    for (const width of [360, 390, 768]) {
+      await mobile.setViewportSize({ width, height: 900 })
+      const positions = await mobile.locator('.mobile-book').evaluateAll(items => items.slice(0, 6).map(el => ({ top: el.getBoundingClientRect().top, progress: el.querySelector('.mobile-book__progress').getBoundingClientRect().y })))
+      for (const item of positions) for (const other of positions) if (Math.abs(item.top - other.top) < 1) assert.ok(Math.abs(item.progress - other.progress) < 1, 'same-row progress baseline')
+    }
+    await style.evaluate(el => el.remove())
+    await mobile.setViewportSize({ width: 390, height: 844 })
   })
   await check('mobile paging keeps rows on failure and supports retry', async () => {
     failNextPage = true
@@ -161,7 +174,7 @@ try {
   })
   await check('mobile EPUB resume and internal link navigation', async () => {
     await mobile.locator('.mobile-book__cover').first().click(); await readerReady(mobile)
-    await mobile.locator('.ebook-reader__flow a').first().click()
+    await mobile.getByRole('link', { name: '跳转第九章注释' }).click()
     await mobile.waitForFunction(() => document.querySelector('.ebook-reader__flow')?.dataset.chapterId === 'chapter-8')
     await mobile.waitForFunction(() => document.querySelector('.ebook-reader__surface').scrollTop > 1000)
     await mobile.locator('.ebook-reader__surface').evaluate(el => { el.scrollTop = (el.scrollHeight - el.clientHeight) * .43 })
@@ -195,11 +208,39 @@ try {
     await mobile.setViewportSize({ width: 390, height: 844 })
   })
   const pc = await makePage({ width: 1440, height: 1000 })
+  await check('PC category actions stay within their own row on hover and keyboard focus', async () => {
+    const row = pc.locator('.ebook-category-row').first()
+    await row.hover()
+    const bounds = await row.boundingBox(), actions = await row.locator('.category-actions').boundingBox()
+    assert.ok(actions.y >= bounds.y && actions.y + actions.height <= bounds.y + bounds.height)
+    await pc.screenshot({ path: join(output, 'pc-category-hover.png') })
+    await row.getByTitle('重命名分类').focus()
+    assert.equal(await row.locator('.category-actions').evaluate(el => getComputedStyle(el).pointerEvents), 'auto')
+  })
+  await check('PC skeleton cover geometry matches loaded covers at desktop and 4K widths', async () => {
+    for (const width of [1440, 3840]) {
+      await pc.setViewportSize({ width, height: 1100 })
+      delayListMs = 700
+      await pc.reload()
+      await pc.locator('.ebook-loading-card__cover').first().waitFor()
+      const placeholders = await pc.locator('.ebook-loading-card__cover').evaluateAll(items => items.slice(0, 4).map(el => { const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height } }))
+      if (width === 3840) await pc.screenshot({ path: join(output, 'pc-loading-4k.png') })
+      delayListMs = 0
+      await pc.locator('.ebook-card__read').first().waitFor()
+      const covers = await pc.locator('.ebook-card__cover').evaluateAll(items => items.slice(0, 4).map(el => { const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height } }))
+      placeholders.forEach((item, i) => { for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(item[key] - covers[i][key]) < 1, `${width}px skeleton ${key}`) })
+      await noOverflow(pc)
+    }
+    await pc.setViewportSize({ width: 1440, height: 1000 })
+  })
   await check('PC selection mode, all-page selection and detail stacking', async () => {
     assert.equal(await pc.locator('.ebook-card__select').count(), 0)
     await pc.getByRole('button', { name: '多选', exact: true }).click()
+    assert.equal(await pc.getByText('点击卡片选择', { exact: true }).count(), 0)
+    assert.equal(await pc.locator('.ebook-card__read').count(), 0)
     await pc.getByRole('button', { name: /全选本页/ }).click()
     assert.equal(await pc.locator('.ebook-card__select input:checked').count(), 24)
+    await pc.screenshot({ path: join(output, 'pc-selection.png') })
     await pc.getByRole('button', { name: '退出多选', exact: true }).click()
     await pc.locator('.ebook-card').first().click()
     assert.equal(await pc.locator('.ebook-card__select').count(), 0)
@@ -222,6 +263,27 @@ try {
     assert.equal(await pc.locator('.ebook-reader__flow').getAttribute('data-chapter-id'), 'chapter-10')
     await pc.screenshot({ path: join(output, 'pc-reader.png') })
     await pc.getByLabel('关闭阅读器', { exact: true }).click()
+  })
+  await check('reader tools follow reading column; footnotes stay quiet but clickable', async () => {
+    await pc.setViewportSize({ width: 3840, height: 1920 })
+    await pc.locator('.ebook-card__read').first().click(); await readerReady(pc)
+    const topbar = await pc.locator('.ebook-reader__topbar').boundingBox()
+    const toc = await pc.getByLabel('打开或关闭目录').boundingBox()
+    const title = await pc.locator('.ebook-reader__identity').boundingBox()
+    assert.ok(topbar.width <= 980 && Math.abs(topbar.x + topbar.width / 2 - 1920) < 1)
+    assert.ok(toc.x < title.x)
+    const notes = pc.locator('.ebook-reader__flow a[data-reader-note]')
+    assert.equal(await notes.count(), 4)
+    for (const note of await notes.all()) assert.equal(await note.evaluate(el => getComputedStyle(el).textDecorationLine), 'none')
+    assert.equal(await pc.getByText('普通外部链接', { exact:true }).evaluate(el => getComputedStyle(el).textDecorationLine), 'underline')
+    await pc.locator('.ebook-reader__surface').evaluate(el => { el.scrollTop = 0 })
+    await pc.screenshot({ path: join(output, 'pc-reader-4k.png') })
+    await notes.first().click()
+    await pc.waitForTimeout(200)
+    const target = await pc.locator('#note').boundingBox(), surface = await pc.locator('.ebook-reader__surface').boundingBox()
+    assert.ok(target.y >= surface.y && target.y < surface.y + surface.height)
+    await pc.getByLabel('关闭阅读器', { exact:true }).click()
+    await pc.setViewportSize({ width:1440, height:1000 })
   })
   await check('mobile boundary widths and reduced motion', async () => {
     for (const width of [360, 768]) { await mobile.setViewportSize({ width, height: 900 }); await mobile.waitForTimeout(120); await noOverflow(mobile) }

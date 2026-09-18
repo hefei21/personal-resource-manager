@@ -178,4 +178,10 @@ onBeforeUnmount(() => { clearTimeout(searchTimer); listSequence += 1; detailSequ
 .mobile-books button:active,.mobile-books-sheet button:active{filter:brightness(.96)}.mobile-books button:focus:not(:focus-visible),:global(.mobile-books-sheet button:focus:not(:focus-visible)){outline:none;box-shadow:none}.mobile-books button:focus-visible{outline:2px solid var(--color-focus-ring);outline-offset:3px}
 @keyframes book-breathe{from{opacity:.5}to{opacity:1}}@media(min-width:540px){.mobile-books__grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(prefers-reduced-motion:reduce){.mobile-books__skeleton span{animation:none}.mobile-book__cover{transition:none}}
 :global(.mobile-books-detail-sheet .native-drawer__content){max-height:min(82dvh,680px)}
+/* Rows share a baseline even when a browser enlarges text or ignores line-clamp. */
+.mobile-book{display:flex;flex-direction:column;height:100%}
+.mobile-book__cover{flex-shrink:0}
+.mobile-book__heading>button:first-child{box-sizing:border-box;height:calc(3em + 4px);max-height:calc(3em + 4px);min-height:44px;overflow-wrap:anywhere}
+.mobile-book>p{line-height:1.5;min-height:1.5em}
+.mobile-book__progress{margin-top:auto;padding-top:2px}
 </style>

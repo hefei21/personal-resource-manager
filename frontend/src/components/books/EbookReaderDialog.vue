@@ -3,23 +3,25 @@
     <Transition name="ebook-reader-fade">
       <section v-if="modelValue" ref="readerRoot" class="ebook-reader" :class="`ebook-reader--${readerTheme}`" role="dialog" aria-modal="true" tabindex="-1" :aria-label="book?.title || '电子书阅读器'" @keydown.esc.stop="handleEscape">
         <header class="ebook-reader__header">
+          <div class="ebook-reader__topbar">
           <NativeButton variant="text" class="ebook-reader__icon-button" aria-label="关闭阅读器" @click="closeReader">
             <NativeIcon name="arrow-left" size="22" />
+          </NativeButton>
+          <NativeButton variant="text" class="ebook-reader__tool ebook-reader__toc-trigger" aria-label="打开或关闭目录" :aria-expanded="tocOpen" @click="settingsOpen = false; tocOpen = !tocOpen">
+            <NativeIcon name="list-dashes" size="20" /><span>目录</span>
           </NativeButton>
           <div class="ebook-reader__identity">
             <strong>{{ book?.title || '电子书阅读器' }}</strong>
             <span>{{ positionLabel }}</span>
           </div>
           <div class="ebook-reader__header-actions">
-            <NativeButton variant="text" class="ebook-reader__icon-button" aria-label="打开或关闭目录" :aria-expanded="tocOpen" @click="settingsOpen = false; tocOpen = !tocOpen">
-              <NativeIcon name="list-dashes" size="20" />
-            </NativeButton>
-            <NativeButton variant="text" class="ebook-reader__icon-button" aria-label="阅读设置" :aria-expanded="settingsOpen" @click="tocOpen = false; settingsOpen = !settingsOpen">
-              <NativeIcon name="gear" size="20" />
+            <NativeButton variant="text" class="ebook-reader__tool" aria-label="阅读设置" :aria-expanded="settingsOpen" @click="tocOpen = false; settingsOpen = !settingsOpen">
+              <NativeIcon name="gear" size="20" /><span>排版</span>
             </NativeButton>
             <NativeButton variant="text" class="ebook-reader__icon-button" aria-label="下载原件" @click="downloadOriginal">
               <NativeIcon name="download" size="20" />
             </NativeButton>
+          </div>
           </div>
         </header>
 
@@ -237,7 +239,19 @@ const effectiveToc = computed(() => {
   if (toc.value.length > 0) return toc.value.map((entry, index) => ({ ...entry, chapterIndex: Number.isSafeInteger(entry.chapterIndex) ? entry.chapterIndex : index }))
   return chapters.value.map((chapter, index) => ({ ...chapter, title: chapter.title || `章节 ${index + 1}`, chapterIndex: index }))
 })
-const safeChapterContent = computed(() => sanitizeRichHtml(currentChapter.value?.content || ''))
+const safeChapterContent = computed(() => {
+  const template = document.createElement('template')
+  template.innerHTML = sanitizeRichHtml(currentChapter.value?.content || '')
+  // Mark references without wrapping/reordering nodes: existing CFI paths remain stable.
+  for (const link of template.content.querySelectorAll('a[href]')) {
+    const label = link.textContent.trim()
+    const superscript = link.closest('sup') || link.querySelector('sup')
+    if (link.getAttribute('role') === 'doc-noteref' || (link.getAttribute('href').includes('#') && (superscript || /^[\[(（【]?\d{1,4}[\])）】]?$/.test(label)))) {
+      link.dataset.readerNote = superscript ? 'sup' : 'inline'
+    }
+  }
+  return template.innerHTML
+})
 const flowStyle = computed(() => ({
   fontSize: `${fontSize.value}px`,
   fontFamily: fontFamily.value === 'sans'
@@ -743,7 +757,16 @@ onBeforeUnmount(() => {
 .ebook-reader__flow :deep(img){max-width:100%;height:auto}
 .ebook-reader__flow :deep(table){max-width:100%;overflow-wrap:anywhere}
 .ebook-reader__flow :deep(pre){white-space:pre-wrap;overflow-wrap:anywhere}
-.ebook-reader__flow :deep(a){color:inherit;text-decoration:underline;text-underline-offset:3px}
+.ebook-reader__flow :deep(a){color:inherit;text-decoration:underline;text-decoration-thickness:1px;text-decoration-color:color-mix(in srgb,currentColor 35%,transparent);text-underline-offset:3px}
+.ebook-reader__flow :deep(a[data-reader-note]),.ebook-reader__flow :deep(a[data-reader-note] *){text-decoration:none;border-bottom:0;box-shadow:none}
+.ebook-reader__flow :deep(a[data-reader-note]){color:#626fa5;cursor:pointer}
+.ebook-reader__flow :deep(a[data-reader-note="inline"]){font-size:.75em;vertical-align:super;line-height:0}
+.ebook-reader__flow :deep(a[data-reader-note]:hover){color:#4356a3;background:#6371ac14;border-radius:2px}
+.ebook-reader__flow :deep(a:focus-visible){outline:1px solid currentColor;outline-offset:3px}
+.ebook-reader--dark .ebook-reader__flow :deep(a[data-reader-note]){color:#a9b7ec}
+.ebook-reader__topbar{display:flex;align-items:center;gap:14px;width:100%;max-width:980px;margin-inline:auto}
+.ebook-reader__tool{height:40px;padding:0 10px;gap:7px;flex-shrink:0;font-size:13px}
+.ebook-reader__toc-trigger{margin-right:8px;border-right:1px solid var(--color-border-subtle);border-radius:0;padding-right:18px}
 .ebook-reader__scrim{position:absolute;inset:64px 0 0;z-index:12001;border:0;background:#18202d30;cursor:default}
 .ebook-reader__toc,.ebook-reader__settings{overscroll-behavior:contain}
 .ebook-reader__settings{overflow:auto}
@@ -763,6 +786,11 @@ onBeforeUnmount(() => {
   .ebook-reader__identity span{font-size:11px;margin-top:2px}
   .ebook-reader__icon-button{width:44px;height:44px;flex-shrink:0}
   .ebook-reader__header-actions{gap:0}
+  .ebook-reader__topbar{gap:4px}
+  .ebook-reader__tool{width:44px;height:44px;padding:0}
+  .ebook-reader__tool>span{display:none}
+  .ebook-reader__toc-trigger{margin:0;border:0;order:2}
+  .ebook-reader__header-actions{order:3}
   .ebook-reader__header-actions .ebook-reader__icon-button:last-child{display:none}
   .ebook-reader__surface{padding:0;scrollbar-gutter:auto}
   .ebook-reader__paper{width:100%;min-height:100%;padding:28px 22px 48px;border:0;border-radius:0;box-shadow:none;line-height:1.85;overflow-wrap:anywhere}
