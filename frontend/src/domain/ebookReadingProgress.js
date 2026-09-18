@@ -41,7 +41,8 @@ function normalizeProgress(value = {}) {
   })
 }
 
-// Overall percentage and chapter index are the durable, cross-client locator.
+// Explicit chapterFraction and chapter index are the durable, cross-client locator.
+// Derivation from overall percentage is only a fallback for legacy records.
 // CFI remains a best-effort fine anchor because sanitizers, fonts and EPUB
 // markup can legitimately change the rendered DOM between sessions.
 export function deriveEbookChapterFraction(progress, currentPage, totalChapters) {
@@ -145,7 +146,8 @@ export class EbookReadingProgressSync {
     } else {
       this.status('synced', { progress: this.remote })
     }
-    return this.remote
+    // Resume the durable local write, not an older server position while it drains.
+    return persisted && !this.conflict ? persisted.position : this.remote
   }
 
   queue(position) {

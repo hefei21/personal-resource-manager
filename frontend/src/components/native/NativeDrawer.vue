@@ -3,8 +3,10 @@
     <Transition name="drawer-fade">
       <div 
         v-if="modelValue" 
+        v-bind="$attrs"
         class="native-drawer" 
         :class="[`native-drawer--${placement}`]" 
+        :style="{ zIndex }"
         role="dialog"
         :aria-modal="true"
         :aria-labelledby="titleId"
@@ -18,7 +20,7 @@
         ></div>
         
         <!-- 抽屉内容 -->
-        <Transition :name="`drawer-slide-${placement}`">
+        <Transition :name="`drawer-slide-${placement}`" appear>
           <div
             ref="drawerRef"
             v-show="modelValue"
@@ -71,6 +73,8 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { acquireBodyScrollLock, useModalFocus } from '@/composables/useModalFocus'
+
+defineOptions({ inheritAttrs: false })
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -208,7 +212,7 @@ onUnmounted(() => {
 
 .native-drawer__content {
   position: absolute;
-  background: #fff;
+  background: var(--color-surface-raised);
   display: flex;
   flex-direction: column;
   pointer-events: auto;
@@ -294,11 +298,11 @@ onUnmounted(() => {
 
 .native-drawer__close {
   background: var(--color-surface-subtle);
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--color-border-subtle);
   cursor: pointer;
   padding: 6px;
   color: var(--color-text-secondary);
-  transition: all 0.2s;
+  transition: background-color 160ms ease, color 160ms ease;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -310,7 +314,7 @@ onUnmounted(() => {
 .native-drawer__close:hover {
   background: var(--color-border-subtle);
   color: var(--color-text-primary);
-  border-color: #ccc;
+  border-color: var(--color-border-default);
 }
 
 .native-drawer__close:focus-visible {
@@ -320,6 +324,8 @@ onUnmounted(() => {
 
 .native-drawer__body {
   flex: 1;
+  min-height: 0;
+  overscroll-behavior: contain;
   padding: 20px;
   overflow-y: auto;
 }
@@ -386,4 +392,7 @@ onUnmounted(() => {
 .drawer-slide-bottom-leave-to {
   transform: translateY(100%);
 }
+.drawer-fade-enter-active,.drawer-fade-leave-active{transition-duration:180ms}
+.drawer-slide-left-enter-active,.drawer-slide-left-leave-active,.drawer-slide-right-enter-active,.drawer-slide-right-leave-active,.drawer-slide-top-enter-active,.drawer-slide-top-leave-active,.drawer-slide-bottom-enter-active,.drawer-slide-bottom-leave-active{transition:transform 220ms cubic-bezier(.2,.7,.2,1)}
+@media(prefers-reduced-motion:reduce){.drawer-fade-enter-active,.drawer-fade-leave-active,.drawer-slide-left-enter-active,.drawer-slide-left-leave-active,.drawer-slide-right-enter-active,.drawer-slide-right-leave-active,.drawer-slide-top-enter-active,.drawer-slide-top-leave-active,.drawer-slide-bottom-enter-active,.drawer-slide-bottom-leave-active{transition:none}}
 </style>

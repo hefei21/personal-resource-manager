@@ -1,1067 +1,181 @@
 <template>
-  <div class="books-mobile">
-    <!-- 搜索栏 -->
-    <div class="search-section">
-      <div class="search-bar">
-        <input
-          v-model="searchKeyword"
-          placeholder="搜索书名或作者..."
-          @keyup.enter="handleSearch"
-        />
-        <svg class="search-icon" viewBox="0 0 24 24" @click="handleSearch">
-          <path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-        </svg>
-      </div>
+  <section class="mobile-books">
+    <form class="mobile-books__search" role="search" @submit.prevent="applyFilters">
+      <div class="mobile-books__search-field"><NativeIcon name="magnifying-glass" size="19" /><input v-model="keyword" type="search" aria-label="搜索书名、作者或 ISBN" placeholder="搜索书名、作者" enterkeyhint="search" /></div>
+      <button v-if="canUpload" type="button" class="mobile-books__upload" aria-label="上传书籍" @click="uploadVisible = true"><NativeIcon name="plus" size="22" /></button>
+    </form>
+    <nav class="mobile-books__views" aria-label="阅读状态">
+      <button v-for="view in views" :key="view.value" :aria-pressed="readingStatus === view.value" :class="{ active: readingStatus === view.value }" @click="readingStatus = view.value; applyFilters()">{{ view.label }}</button>
+    </nav>
+    <div class="mobile-books__toolbar">
+      <button class="mobile-books__category" @click="categoryVisible = true"><NativeIcon name="folder" size="17" /><span>{{ categoryLabel }}</span><NativeIcon name="chevron-down" size="13" /></button>
+      <div class="mobile-books__tools"><button aria-label="排序与格式筛选" :class="{ active: fileType }" @click="filtersVisible = true"><NativeIcon name="sliders-horizontal" size="19" /></button><button aria-label="书籍回收站" @click="router.push({ name: 'Trash', query: { type: 'ebook' } })"><NativeIcon name="trash" size="18" /></button></div>
     </div>
-
-    <!-- 分类标签栏 -->
-    <div class="category-tabs">
-      <div class="tab-scroll">
-        <div
-          class="tab-item"
-          :class="{ active: !currentCategoryId }"
-          @click="selectCategory(null)"
-        >
-          <span>全部</span>
-        </div>
-        <div
-          v-for="category in validCategories"
-          :key="category.id"
-          class="tab-item"
-          :class="{ active: currentCategoryId === category.id }"
-          @click="selectCategory(category)"
-        >
-          <span>{{ category.name }}</span>
-        </div>
-        <div v-if="!isGuest" class="tab-item add-btn" @click="showCreateCategory = true">
-          <span>+</span>
-        </div>
-        <div
-          class="tab-item trash-tab"
-          @click="toggleTrash"
-        >
-          <span>回收站</span>
-        </div>
-      </div>
+    <div class="mobile-books__summary"><span>{{ fileType ? fileType.toUpperCase() + ' · ' : '' }}{{ loading ? '正在整理书架…' : `${pagination.total} 本书` }}</span><span>{{ sortLabel }}</span></div>
+    <div v-if="loading" class="mobile-books__skeleton" role="status" aria-label="正在加载书籍"><span v-for="n in 4" :key="n" /></div>
+    <div v-else-if="error" class="mobile-books__empty" role="alert"><NativeIcon name="warning-circle" size="30" /><strong>书库暂时无法加载</strong><p>{{ error }}</p><NativeButton variant="outline" @click="loadBooks()">重试</NativeButton></div>
+    <div v-else-if="!books.length" class="mobile-books__empty"><NativeIcon name="book-open" size="32" /><strong>{{ canUpload ? '从第一本书开始' : '没有符合条件的书籍' }}</strong><p>{{ canUpload ? '添加想读的书，随时从上次的位置继续。' : '试试其他分类或阅读状态。' }}</p><NativeButton v-if="canUpload" theme="primary" @click="uploadVisible = true">上传书籍</NativeButton><NativeButton v-else variant="outline" @click="clearFilters">查看全部书籍</NativeButton></div>
+    <div v-else class="mobile-books__grid">
+      <article v-for="book in books" :key="book.id" class="mobile-book">
+        <button class="mobile-book__cover" :class="`mobile-book__cover--${book.fileType}`" :aria-label="`${isReadable(book) ? '阅读' : '查看'} ${book.title}`" @click="isReadable(book) ? openReader(book) : openDetails(book)">
+          <img v-if="book.coverImage && !brokenCovers.has(book.id)" :src="coverUrl(book)" :alt="book.title" loading="lazy" @error="brokenCovers.add(book.id)" />
+          <span v-else class="mobile-book__placeholder"><NativeIcon :name="fileIcon(book)" size="30" /><strong>{{ book.title }}</strong><small>{{ (book.fileType || 'BOOK').toUpperCase() }}</small></span>
+        </button>
+        <div class="mobile-book__heading"><button @click="isReadable(book) ? openReader(book) : openDetails(book)">{{ book.title }}</button><button class="mobile-book__more" :aria-label="`${book.title} 的更多操作`" @click="openDetails(book)"><NativeIcon name="more" size="20" /></button></div>
+        <p>{{ book.author || '作者未知' }}</p>
+        <div class="mobile-book__progress"><span v-if="book.progress > 0"><i :style="{ width: `${Math.min(100, book.progress)}%` }" /></span><small>{{ book.progress >= 99.5 ? '已读完' : book.progress > 0 ? `已读 ${Math.round(book.progress)}%` : '未开始' }}</small></div>
+      </article>
     </div>
+    <footer v-if="books.length && !loading" class="mobile-books__pagination">
+      <NativeButton v-if="books.length < pagination.total" variant="outline" :loading="loadingMore" @click="loadBooks(true)">{{ loadingMore ? '正在加载…' : '加载下一批' }}</NativeButton>
+      <span>{{ books.length < pagination.total ? `已显示 ${books.length} / ${pagination.total} 本` : `共 ${pagination.total} 本 · 已加载全部` }}</span>
+      <button v-if="moreError" class="mobile-books__retry" @click="loadBooks(true)">{{ moreError }}，点击重试</button>
+    </footer>
 
-    <!-- 书籍网格 -->
-    <div class="books-container">
-      <div v-if="loading" class="loading-state">
-        <div class="spinner"></div>
-        <span>加载中...</span>
+    <NativeDrawer v-model="categoryVisible" class="mobile-books-sheet" placement="bottom" title="选择分类" size="min(70dvh, 560px)" :top-offset="0">
+      <div class="mobile-books-sheet__choices"><button v-for="item in categoryChoices" :key="item.value" :class="{ active: category === item.value }" @click="category = item.value; categoryVisible = false; applyFilters()"><NativeIcon name="folder" size="19" /><span>{{ item.label }}</span><small v-if="item.count != null">{{ item.count }} 本</small><NativeIcon v-if="category === item.value" name="check" size="18" /></button></div>
+    </NativeDrawer>
+    <NativeDrawer v-model="filtersVisible" class="mobile-books-sheet" placement="bottom" title="排序与筛选" size="min(78dvh, 600px)" :top-offset="0">
+      <div class="mobile-books-sheet__filter"><h4>排列顺序</h4><div class="mobile-books-sheet__choices"><button v-for="item in sortOptions" :key="item.value" :class="{ active: sortBy === item.value }" @click="sortBy = item.value; applyFilters()"><span>{{ item.label }}</span><NativeIcon v-if="sortBy === item.value" name="check" size="17" /></button></div><button class="mobile-books-sheet__direction" @click="sortOrder = sortOrder === 'desc' ? 'asc' : 'desc'; applyFilters()"><NativeIcon :name="sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'" size="18" />{{ sortOrder === 'desc' ? '降序排列' : '升序排列' }}</button><h4>文件格式</h4><div class="mobile-books-sheet__formats"><button v-for="type in ['', 'epub', 'pdf', 'txt', 'mobi', 'azw3']" :key="type" :class="{ active: fileType === type }" @click="fileType = type; applyFilters()">{{ type ? type.toUpperCase() : '全部' }}</button></div></div>
+      <template #footer><NativeButton theme="primary" block @click="filtersVisible = false">查看书籍</NativeButton></template>
+    </NativeDrawer>
+    <NativeDrawer v-model="detailVisible" class="mobile-books-sheet mobile-books-detail-sheet" placement="bottom" title="书籍信息" size="auto" :top-offset="0">
+      <div v-if="detailBook" class="mobile-book-detail">
+        <header><div class="mobile-book-detail__cover"><img v-if="detailBook.coverImage && !brokenCovers.has(detailBook.id)" :src="coverUrl(detailBook)" alt="" @error="brokenCovers.add(detailBook.id)" /><NativeIcon v-else :name="fileIcon(detailBook)" size="27" /></div><div><h3>{{ detailBook.title }}</h3><p>{{ detailBook.author || '作者未知' }}</p><small>{{ String(detailBook.fileType || '').toUpperCase() }} · {{ formatSize(detailBook.fileSize) }}</small></div></header>
+        <NativeButton v-if="isReadable(detailBook)" theme="primary" block @click="openReader(detailBook)"><NativeIcon name="book-open" size="18" />{{ detailBook.progress > 0 ? '继续阅读' : '开始阅读' }}<span v-if="detailBook.progress > 0"> · {{ Math.round(detailBook.progress) }}%</span></NativeButton>
+        <dl><dt>分类</dt><dd>{{ detailBook.categoryName || '未分类' }}</dd><dt>资料索引</dt><dd>{{ indexLabel(detailBook) }}</dd><template v-if="detailBook.publisher"><dt>出版社</dt><dd>{{ detailBook.publisher }}</dd></template></dl>
+        <p v-if="detailLoading" class="mobile-book-detail__hint" role="status">正在读取详细信息…</p>
+        <p v-if="detailError" class="mobile-book-detail__hint" role="alert">{{ detailError }}</p>
+        <p v-if="detailBook.description" class="mobile-book-detail__description">{{ detailBook.description }}</p>
+        <div class="mobile-books-sheet__choices mobile-book-detail__actions"><button @click="downloadBook(detailBook)"><NativeIcon name="download" size="20" /><span>下载原件</span></button><button v-if="!isGuest" :disabled="detailLoading || !!detailError" @click="openEdit"><NativeIcon name="pencil" size="20" /><span>编辑信息</span></button><button v-if="!isGuest" class="danger" @click="detailVisible = false; deleteVisible = true"><NativeIcon name="trash" size="20" /><span>移入回收站</span></button></div>
       </div>
-
-      <div v-else-if="books.length === 0" class="empty-state">
-        <svg class="empty-icon" viewBox="0 0 24 24">
-          <path fill="currentColor" d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/>
-        </svg>
-        <p>暂无书籍</p>
-        <p v-if="!isGuest" class="hint">点击右下角按钮上传</p>
-      </div>
-
-      <div v-else class="books-grid">
-        <div
-          v-for="book in books"
-          :key="book.id"
-          class="book-card"
-          @click="handleRead(book)"
-        >
-          <div class="book-cover">
-            <img v-if="book.coverImage" :src="getCoverUrl(book)" :alt="book.title" @error="handleCoverError($event, book)" />
-            <div v-else class="cover-placeholder">
-              <svg viewBox="0 0 24 24" width="32" height="32">
-                <path fill="currentColor" d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/>
-              </svg>
-            </div>
-            <!-- 阅读进度 -->
-            <div v-if="book.progress > 0" class="progress-badge">
-              {{ Math.round(book.progress) }}%
-            </div>
-          </div>
-          <div class="book-info">
-            <div class="book-title" :title="book.title">{{ book.title }}</div>
-            <div class="book-author">{{ book.author || '未知作者' }}</div>
-            <div v-if="metadataStatusLabel(book.metadataStatus)" class="metadata-status" :class="`is-${book.metadataStatus}`">
-              {{ metadataStatusLabel(book.metadataStatus) }}
-            </div>
-          </div>
-          <div v-if="!isGuest" class="book-card-actions" @click.stop>
-            <NativeButton v-if="canReparseBook(book)" theme="default" variant="outline" size="small"
-              :loading="metadataReparseLoading[book.id]" @click="handleMetadataReparse(book)">
-              <template #icon><NativeIcon name="arrow-clockwise" /></template>
-              重解析
-            </NativeButton>
-            <NativePopconfirm content="确定将这本书移入回收站吗？" @confirm="handleDelete(book.id)">
-              <template #trigger>
-                <NativeButton theme="danger" variant="outline" size="small">
-                  <template #icon><NativeIcon name="trash" /></template>
-                  移入回收站
-                </NativeButton>
-              </template>
-            </NativePopconfirm>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 浮动上传按钮 -->
-    <button v-if="!isGuest" class="fab-upload" @click="handleUpload">
-      <svg viewBox="0 0 24 24" width="24" height="24">
-        <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-      </svg>
-    </button>
-
-    <!-- 创建分类弹窗（原生实现） -->
-    <div v-if="showCreateCategory" class="modal-overlay" @click.self="showCreateCategory = false">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>新建分类</h3>
-          <button class="close-btn" @click="showCreateCategory = false">×</button>
-        </div>
-        <div class="modal-body">
-          <input
-            v-model="newCategoryName"
-            placeholder="请输入分类名称"
-            @keyup.enter="confirmCreateCategory"
-            ref="categoryInput"
-          />
-        </div>
-        <div class="modal-footer">
-          <button class="btn-cancel" @click="showCreateCategory = false">取消</button>
-          <button
-            class="btn-confirm"
-            :disabled="creatingCategory || !newCategoryName.trim()"
-            @click="confirmCreateCategory"
-          >
-            {{ creatingCategory ? '创建中...' : '创建' }}
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 提示消息（原生实现） -->
-    <div v-if="toastMessage" class="toast" :class="toastType">
-      {{ toastMessage }}
-    </div>
-
-    <!-- 阅读器 -->
-    <BookReader
-      v-model:visible="readerVisible"
-      :book="currentBook"
-      @close="handleReaderClose"
-    />
-
-    <!-- 上传书籍对话框（原生实现） -->
-    <div v-if="showUploadDialog" class="modal-overlay upload-modal" @click.self="closeUploadDialog">
-      <div class="modal-content upload-content">
-        <div class="modal-header">
-          <h3>上传书籍</h3>
-          <button class="close-btn" @click="closeUploadDialog">×</button>
-        </div>
-        <div class="modal-body upload-body">
-          <!-- 文件选择 -->
-          <div class="form-item">
-            <label class="form-label">文件 <span class="required">*</span></label>
-            <div class="file-selector">
-              <input
-                type="file"
-                ref="fileInput"
-                accept=".txt,.epub,.pdf,.mobi,.azw,.azw3"
-                @change="handleFileSelect"
-                style="display: none"
-              />
-              <button class="btn-file-select" @click="$refs.fileInput.click()" :disabled="parsingMetadata">
-                <svg v-if="!parsingMetadata" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/>
-                </svg>
-                <span v-else class="btn-spinner"></span>
-                {{ parsingMetadata ? '解析中...' : (selectedFileName || '选择文件') }}
-              </button>
-            </div>
-            <p v-if="!parsingMetadata" class="file-hint">支持 .txt, .epub, .pdf, .mobi, .azw, .azw3</p>
-            <p v-else class="parsing-hint">正在解析书籍信息...</p>
-          </div>
-
-          <!-- 书名 -->
-          <div class="form-item">
-            <label class="form-label">书名 <span class="required">*</span></label>
-            <input v-model="uploadForm.title" placeholder="书籍名称" class="form-input" />
-          </div>
-
-          <!-- 作者 -->
-          <div class="form-item">
-            <label class="form-label">作者</label>
-            <input v-model="uploadForm.author" placeholder="作者" class="form-input" />
-          </div>
-
-          <!-- 年份 -->
-          <div class="form-item">
-            <label class="form-label">年份</label>
-            <input v-model="uploadForm.year" placeholder="出版年份" class="form-input" type="number" />
-          </div>
-
-          <!-- 出版社 -->
-          <div class="form-item">
-            <label class="form-label">出版社</label>
-            <input v-model="uploadForm.publisher" placeholder="出版社" class="form-input" />
-          </div>
-
-          <!-- 分类 -->
-          <div class="form-item">
-            <label class="form-label">分类</label>
-            <select v-model="uploadForm.categoryId" class="form-select">
-              <option :value="null">无分类</option>
-              <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
-            </select>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn-cancel" @click="closeUploadDialog">取消</button>
-          <button
-            class="btn-confirm"
-            :disabled="uploading || parsingMetadata || !uploadForm.title.trim() || !selectedFile"
-            @click="confirmUpload"
-          >
-            {{ uploading ? '上传中...' : '确定' }}
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
+    </NativeDrawer>
+    <NativeDialog v-model="editVisible" title="编辑书籍信息" width="540px" :confirm-loading="saving" @confirm="saveBook"><NativeForm label-width="68px"><NativeFormItem label="书名" required><NativeInput v-model="editForm.title" /></NativeFormItem><NativeFormItem label="作者"><NativeInput v-model="editForm.author" /></NativeFormItem><NativeFormItem label="分类"><NativeSelect v-model="editForm.categoryId" clearable placeholder="未分类" :options="categories.map(item => ({ value: item.id, label: item.name }))" /></NativeFormItem></NativeForm></NativeDialog>
+    <NativeDialog v-model="deleteVisible" title="移入回收站？" width="440px" confirm-text="移入回收站" confirm-theme="danger" :confirm-loading="deleting" @confirm="deleteBook"><p class="mobile-books__delete-copy">“{{ detailBook?.title }}”将从书库移除，之后仍可在回收站恢复。</p></NativeDialog>
+    <EbookUploadDialog v-model="uploadVisible" :categories="categories" @uploaded="afterUpload" />
+    <BookReader :visible="readerVisible" :book="readerBook" :is-guest="isGuest" @close="readerVisible = false" @progress-saved="refreshProgress" />
+  </section>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
-import { authenticatedAssetUrl } from '@/utils/authentication'
-import { useAuthStore } from '@/stores/auth'
+import { NativeButton, NativeDialog, NativeDrawer, NativeForm, NativeFormItem, NativeIcon, NativeInput, NativeSelect } from '@/components/native'
+import EbookUploadDialog from '@/components/books/EbookUploadDialog.vue'
 import BookReader from '@/mobile/components/BookReader.vue'
-import { NativeButton, NativeIcon, NativePopconfirm } from '@/components/native'
+import { usePermission } from '@/composables/usePermission'
+import { useToast } from '@/composables/useToast'
+import { authenticatedAssetUrl } from '@/utils/authentication'
 
-const authStore = useAuthStore()
-const route = useRoute()
-const router = useRouter()
-const isGuest = computed(() => authStore.isGuest())
-
-// 搜索
-const searchKeyword = ref('')
-
-// 分类
-const categories = ref([])
-const currentCategoryId = ref(null)
-const showCreateCategory = ref(false)
-const newCategoryName = ref('')
-const creatingCategory = ref(false)
-const categoryInput = ref(null)
-
-// 过滤后的有效分类
-const validCategories = computed(() => {
-  if (!Array.isArray(categories.value)) return []
-  return categories.value.filter(c => c && c.id && c.name)
-})
-
-// 书籍列表
-const books = ref([])
-const loading = ref(false)
-
-// 阅读器
-const readerVisible = ref(false)
-const currentBook = ref(null)
-
-// 原生提示
-const toastMessage = ref('')
-const toastType = ref('success')
-let toastTimer = null
-
-// 上传对话框
-const showUploadDialog = ref(false)
-const fileInput = ref(null)
-const selectedFile = ref(null)
-const selectedFileName = ref('')
-const parsingMetadata = ref(false)
-const uploading = ref(false)
-const metadataReparseLoading = ref({})
-const uploadForm = ref({
-  title: '',
-  author: '',
-  year: '',
-  publisher: '',
-  categoryId: null
-})
-
-function showToast(message, type = 'success') {
-  toastMessage.value = message
-  toastType.value = type
-  if (toastTimer) clearTimeout(toastTimer)
-  toastTimer = setTimeout(() => {
-    toastMessage.value = ''
-  }, 2500)
+const route = useRoute(), router = useRouter(), toast = useToast()
+const { isGuest } = usePermission()
+const books = ref([]), categories = ref([]), brokenCovers = ref(new Set())
+const keyword = ref(String(route.query.keyword || '')), category = ref(String(route.query.category || ''))
+const readingStatus = ref(String(route.query.readingStatus || '')), fileType = ref(String(route.query.fileType || ''))
+const sortBy = ref(String(route.query.sortBy || 'last_read_at')), sortOrder = ref(String(route.query.sortOrder || 'desc'))
+const views = [{ value: '', label: '全部' }, { value: 'reading', label: '在读' }, { value: 'unread', label: '未开始' }, { value: 'finished', label: '已读完' }]
+const sortOptions = [{ value: 'last_read_at', label: '最近阅读' }, { value: 'updated_at', label: '最近上传' }, { value: 'title', label: '书名' }, { value: 'author', label: '作者' }]
+const sortLabel = computed(() => sortOptions.find(item => item.value === sortBy.value)?.label || '最近阅读')
+const pagination = ref({ page: 1, pageSize: 24, total: 0, totalPages: 1 })
+const loading = ref(false), loadingMore = ref(false), error = ref(''), moreError = ref('')
+const categoryVisible = ref(false), filtersVisible = ref(false), uploadVisible = ref(false)
+const detailVisible = ref(false), detailBook = ref(null), detailLoading = ref(false), detailError = ref('')
+const editVisible = ref(false), editForm = ref({}), saving = ref(false), deleteVisible = ref(false), deleting = ref(false)
+const readerVisible = ref(false), readerBook = ref(null)
+let listSequence = 0, detailSequence = 0, searchTimer = null
+const canUpload = computed(() => !isGuest.value && !keyword.value && !category.value && !readingStatus.value && !fileType.value)
+const categoryLabel = computed(() => category.value === 'uncategorized' ? '未分类' : categories.value.find(item => String(item.id) === category.value)?.name || '全部分类')
+const categoryChoices = computed(() => [{ value: '', label: '全部分类' }, { value: 'uncategorized', label: '未分类' }, ...categories.value.map(item => ({ value: String(item.id), label: item.name, count: item.bookCount }))])
+function currentFilters() { return { keyword: keyword.value.trim(), category: category.value, readingStatus: readingStatus.value, fileType: fileType.value, sortBy: sortBy.value, sortOrder: sortOrder.value } }
+async function loadBooks(append = false) {
+  if (append && (loadingMore.value || loading.value)) return
+  const sequence = ++listSequence
+  if (append) loadingMore.value = true
+  else { loading.value = true; loadingMore.value = false }
+  error.value = ''; moreError.value = ''
+  try {
+    const response = await api.books.list({ ...currentFilters(), page: append ? pagination.value.page + 1 : 1, pageSize: 24 })
+    if (sequence !== listSequence) return
+    const items = response.data?.data || []
+    books.value = append ? [...new Map([...books.value, ...items].map(item => [item.id, item])).values()] : items
+    pagination.value = response.data?.pagination || { page: 1, pageSize: 24, total: items.length, totalPages: 1 }
+  } catch (failure) {
+    if (sequence !== listSequence) return
+    const message = failure.response?.data?.message || '请检查连接后重试'
+    if (append) moreError.value = message
+    else error.value = message
+  } finally { if (sequence === listSequence) { loading.value = false; loadingMore.value = false } }
 }
-
-// 初始化
-onMounted(async () => {
-  await Promise.all([loadCategories(), loadBooks()])
-  const bookId = Number(route.query.bookId)
-  if (Number.isSafeInteger(bookId) && bookId > 0) {
-    const book = books.value.find((item) => Number(item.id) === bookId)
-    if (book) {
-      const chapterIndex = Number(route.query.chapterIndex)
-      handleRead({
-        ...book,
-        ...(Number.isSafeInteger(chapterIndex) && chapterIndex >= 0 ? { searchChapterIndex: chapterIndex } : {})
-      })
-    }
-  }
-})
-
-// 监听弹窗显示，自动聚焦输入框
-watch(showCreateCategory, (val) => {
-  if (val) {
-    nextTick(() => {
-      categoryInput.value?.focus()
-    })
-  }
-})
-
-// 加载分类
 async function loadCategories() {
-  try {
-    const response = await api.books.getCategories()
-    // API返回 {data: [...]} 结构
-    categories.value = response.data?.data || response.data || []
-  } catch (error) {
-    console.error('[BooksMobile] 加载分类失败:', error)
-  }
+  try { categories.value = (await api.books.getCategories()).data?.data || [] }
+  catch { toast.error('分类加载失败，请稍后重试') }
 }
-
-// 选择分类
-function selectCategory(category) {
-  currentCategoryId.value = category?.id || null
-  loadBooks()
+async function applyFilters() {
+  clearTimeout(searchTimer)
+  const query = Object.fromEntries(Object.entries(currentFilters()).filter(([, value]) => value))
+  void router.replace({ query })
+  await loadBooks()
+  document.querySelector('.layout-mobile .scrollable-content')?.scrollTo({ top: 0, behavior: 'auto' })
 }
-
-async function toggleTrash() {
-  await router.push({ name: 'Trash', query: { type: 'ebook' } })
+function clearFilters() { keyword.value = ''; category.value = ''; readingStatus.value = ''; fileType.value = ''; void applyFilters() }
+watch(keyword, () => { clearTimeout(searchTimer); searchTimer = setTimeout(applyFilters, 350) })
+function fileIcon(book) { return book.fileType === 'pdf' ? 'file-pdf' : book.fileType === 'txt' ? 'file-txt' : 'book-open' }
+function isReadable(book) { return ['epub', 'pdf', 'txt'].includes(String(book.fileType || '').toLowerCase()) }
+function coverUrl(book) { return authenticatedAssetUrl(`/api/ebooks/${book.id}/cover`) }
+function downloadBook(book) { window.open(authenticatedAssetUrl(`/api/ebooks/download/${book.id}`), '_blank', 'noopener') }
+function formatSize(value) { if (value == null || !Number.isFinite(Number(value))) return '大小未知'; const bytes = Number(value); if (bytes < 1024) return `${bytes} B`; const power = Math.min(3, Math.floor(Math.log(bytes) / Math.log(1024))); return `${Number((bytes / 1024 ** power).toFixed(1))} ${['B', 'KB', 'MB', 'GB'][power]}` }
+function indexLabel(book) { return ({ ready: '可问', partial: '部分可问', pending: '索引中', failed: '索引失败', stale: '待刷新', missing: '未索引', empty: '未索引' })[book.ragStatus?.status || book.ragStatus || book.indexStatus] || '未索引' }
+async function openDetails(book) {
+  const sequence = ++detailSequence
+  detailBook.value = { ...book }; detailVisible.value = true; detailLoading.value = true; detailError.value = ''
+  try { const response = await api.books.getDetail(book.id); if (sequence === detailSequence) detailBook.value = response.data?.data || book }
+  catch { if (sequence === detailSequence) detailError.value = '详细信息暂未加载，请关闭后重试。' }
+  finally { if (sequence === detailSequence) detailLoading.value = false }
 }
-
-// 创建分类
-async function confirmCreateCategory() {
-  if (!newCategoryName.value.trim()) {
-    showToast('请输入分类名称', 'warning')
-    return
-  }
-  creatingCategory.value = true
-  try {
-    await api.books.createCategory({ name: newCategoryName.value.trim() })
-    showToast('创建成功')
-    newCategoryName.value = ''
-    showCreateCategory.value = false
-    await loadCategories()
-  } catch (error) {
-    showToast(error.response?.data?.message || '创建失败', 'error')
-  } finally {
-    creatingCategory.value = false
-  }
+function openReader(book) { detailVisible.value = false; readerBook.value = { ...book }; readerVisible.value = true }
+async function refreshProgress() {
+  if (!readerBook.value) return
+  try { const response = await api.books.getDetail(readerBook.value.id); const updated = response.data?.data; if (updated) { const index = books.value.findIndex(book => book.id === updated.id); if (index >= 0) books.value[index] = updated } } catch { /* Keep loaded covers and scroll position when offline. */ }
 }
-
-// 搜索
-function handleSearch() {
-  loadBooks()
+function openEdit() { editForm.value = { id: detailBook.value.id, title: detailBook.value.title, author: detailBook.value.author || '', categoryId: detailBook.value.categoryId || null, year: detailBook.value.year || '', publisher: detailBook.value.publisher || '', isbn: detailBook.value.isbn || '', description: detailBook.value.description || '' }; detailVisible.value = false; editVisible.value = true }
+async function saveBook() {
+  if (saving.value) return
+  if (!editForm.value.title?.trim()) { toast.warning('请填写书名'); return }
+  saving.value = true
+  try { const { id, ...payload } = editForm.value; await api.books.update(id, payload); editVisible.value = false; toast.success('书籍信息已更新'); await Promise.all([loadBooks(), loadCategories()]) }
+  catch (failure) { toast.error(failure.response?.data?.message || '保存失败') }
+  finally { saving.value = false }
 }
-
-// 加载书籍
-async function loadBooks() {
-  loading.value = true
-  try {
-    const params = {
-      keyword: searchKeyword.value,
-      sortBy: 'last_read_at',
-      sortOrder: 'desc'
-    }
-    // 后端API使用'category'作为参数名，不是'categoryId'
-    if (currentCategoryId.value) {
-      params.category = Number(currentCategoryId.value)
-    }
-    console.log('[BooksMobile] 加载书籍参数:', params, '当前分类ID:', currentCategoryId.value)
-    const response = await api.books.list(params)
-    // API返回 {data: [...]} 结构
-    books.value = response.data?.data || response.data || []
-  } catch (error) {
-    console.error('[BooksMobile] 加载书籍失败:', error)
-    showToast('加载失败', 'error')
-  } finally {
-    loading.value = false
-  }
+async function deleteBook() {
+  if (deleting.value) return
+  deleting.value = true
+  try { await api.books.delete(detailBook.value.id); deleteVisible.value = false; toast.success('已移入回收站'); await Promise.all([loadBooks(), loadCategories()]) }
+  catch (failure) { toast.error(failure.response?.data?.message || '操作失败') }
+  finally { deleting.value = false }
 }
-
-async function handleDelete(id) {
-  try {
-    await api.books.delete(id)
-    showToast('已移入回收站')
-    await loadBooks()
-  } catch (error) {
-    console.error('[BooksMobile] 移入回收站失败:', error)
-    showToast(error.response?.data?.message || '移入回收站失败', 'error')
-  }
-}
-
-// 获取封面URL
-function getCoverUrl(book) {
-  if (book.coverImage) {
-    return authenticatedAssetUrl(`/api/ebooks/${book.id}/cover`)
-  }
-  return null
-}
-
-// 封面加载失败处理
-function handleCoverError(event, book) {
-  event.target.style.display = 'none'
-  book.coverImage = null
-}
-
-// 打开上传对话框
-function handleUpload() {
-  // 重置表单
-  selectedFile.value = null
-  selectedFileName.value = ''
-  uploadForm.value = {
-    title: '',
-    author: '',
-    year: '',
-    publisher: '',
-    categoryId: currentCategoryId.value || null
-  }
-  showUploadDialog.value = true
-}
-
-// 关闭上传对话框
-function closeUploadDialog() {
-  if (uploading.value || parsingMetadata.value) return
-  showUploadDialog.value = false
-}
-
-// 处理文件选择
-async function handleFileSelect(e) {
-  const file = e.target.files[0]
-  if (!file) return
-
-  selectedFile.value = file
-  selectedFileName.value = file.name
-
-  // 设置默认标题（去除扩展名）
-  uploadForm.value.title = file.name.replace(/\.[^/.]+$/, '')
-
-  // 如果是EPUB文件，自动解析元数据
-  const ext = file.name.split('.').pop().toLowerCase()
-  if (ext === 'epub') {
-    await parseBookMetadata(file)
-  }
-}
-
-// 解析书籍元数据
-async function parseBookMetadata(file) {
-  parsingMetadata.value = true
-  try {
-    const formData = new FormData()
-    formData.append('file', file)
-
-    const response = await api.books.parseMetadata(formData)
-    const metadata = response.data?.data
-
-    if (metadata) {
-      if (metadata.title) uploadForm.value.title = metadata.title
-      if (metadata.author) uploadForm.value.author = metadata.author
-      if (metadata.year) uploadForm.value.year = metadata.year
-      if (metadata.publisher) uploadForm.value.publisher = metadata.publisher
-      showToast('书籍信息已自动填充', 'success')
-    }
-  } catch (error) {
-    console.error('解析元数据失败:', error)
-    showToast('自动解析失败，请手动填写', 'warning')
-  } finally {
-    parsingMetadata.value = false
-  }
-}
-
-// 确认上传
-async function confirmUpload() {
-  if (uploading.value || parsingMetadata.value) return
-  if (!selectedFile.value || !uploadForm.value.title.trim()) {
-    showToast('请选择文件并填写书名', 'warning')
-    return
-  }
-
-  uploading.value = true
-  try {
-    const formData = new FormData()
-    formData.append('file', selectedFile.value)
-    formData.append('title', uploadForm.value.title.trim())
-    if (uploadForm.value.author) formData.append('author', uploadForm.value.author)
-    if (uploadForm.value.year) formData.append('year', uploadForm.value.year)
-    if (uploadForm.value.publisher) formData.append('publisher', uploadForm.value.publisher)
-    if (uploadForm.value.categoryId) formData.append('categoryId', uploadForm.value.categoryId)
-
-    const response = await api.books.upload(formData)
-    const metadataStatus = response.data?.metadataStatus
-    showToast(
-      metadataStatus === 'pending'
-        ? '上传成功，元数据将在后台重解析'
-        : metadataStatus === 'failed'
-          ? '上传成功，元数据解析失败，可稍后手动重试'
-          : '上传成功',
-      metadataStatus === 'pending' || metadataStatus === 'failed' ? 'warning' : 'success'
-    )
-    showUploadDialog.value = false
-    loadBooks()
-  } catch (error) {
-    console.error('上传失败:', error)
-    showToast(error.response?.data?.message || '上传失败', 'error')
-  } finally {
-    uploading.value = false
-  }
-}
-
-// 阅读书籍
-function handleRead(book) {
-  currentBook.value = book
-  readerVisible.value = true
-}
-
-// 阅读器关闭
-function handleReaderClose() {
-  readerVisible.value = false
-  currentBook.value = null
-  // 刷新列表以更新进度
-  loadBooks()
-}
-
-
-function canReparseBook(book) {
-  return String(book?.fileType || '').toLowerCase() === 'epub'
-}
-
-function metadataStatusLabel(status) {
-  return ({ pending: '元数据排队中', partial: '元数据不完整', failed: '元数据解析失败' })[status] || ''
-}
-
-async function handleMetadataReparse(book) {
-  if (!canReparseBook(book) || metadataReparseLoading.value[book.id]) return
-  metadataReparseLoading.value[book.id] = true
-  try {
-    await api.books.reparseMetadata(book.id)
-    showToast('元数据重解析任务已加入队列')
-  } catch (error) {
-    if (error.response?.status === 409 && error.response?.data?.activeConflict) {
-      showToast('该书的元数据重解析任务已在运行', 'warning')
-    } else {
-      showToast(error.response?.data?.message || '元数据重解析任务创建失败', 'error')
-    }
-  } finally {
-    metadataReparseLoading.value[book.id] = false
-    await loadBooks()
-  }
-}
-
+async function afterUpload() { await Promise.all([loadBooks(), loadCategories()]) }
+onMounted(async () => {
+  await Promise.all([loadBooks(), loadCategories()])
+  const id = Number(route.query.bookId)
+  if (!Number.isSafeInteger(id) || id <= 0) return
+  try { const book = (await api.books.getDetail(id)).data?.data; if (!book) return; const index = Number(route.query.chapterIndex); openReader({ ...book, ...(Number.isSafeInteger(index) && index >= 0 ? { searchChapterIndex: index } : {}) }) }
+  catch { toast.error('该书籍暂时无法打开') }
+})
+onBeforeUnmount(() => { clearTimeout(searchTimer); listSequence += 1; detailSequence += 1 })
 </script>
 
 <style scoped>
-.books-mobile {
-  padding: 12px;
-  min-height: 100vh;
-  background: var(--color-surface-subtle);
-}
-
-/* 搜索栏 */
-.search-section {
-  margin-bottom: 12px;
-}
-
-.search-bar {
-  display: flex;
-  align-items: center;
-  background: #fff;
-  border-radius: 8px;
-  padding: 8px 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.search-bar input {
-  flex: 1;
-  border: none;
-  outline: none;
-  font-size: 14px;
-  background: transparent;
-}
-
-.search-icon {
-  width: 20px;
-  height: 20px;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  margin-left: 8px;
-}
-
-/* 分类标签栏 */
-.category-tabs {
-  margin-bottom: 16px;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.tab-scroll {
-  display: flex;
-  gap: 8px;
-  padding-bottom: 4px;
-  overflow-x: scroll;
-  /* 隐藏滚动条但保留滚动功能 */
-  scrollbar-width: none !important; /* Firefox */
-  -ms-overflow-style: none !important; /* IE 10+ */
-}
-
-/* 隐藏Webkit滚动条 */
-.tab-scroll::-webkit-scrollbar,
-.tab-scroll::-webkit-scrollbar-track,
-.tab-scroll::-webkit-scrollbar-thumb {
-  display: none !important;
-  width: 0 !important;
-  height: 0 !important;
-  background: transparent !important;
-}
-
-.tab-item {
-  flex-shrink: 0;
-  padding: 6px 14px;
-  background: #fff;
-  border-radius: 16px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.2s;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.tab-item.active {
-  background: var(--color-primary);
-  color: #fff;
-}
-
-.trash-tab {
-  color: var(--color-text-secondary);
-}
-
-.tab-item.add-btn {
-  background: #e7e7e7;
-  color: var(--color-text-secondary);
-  font-weight: bold;
-  padding: 6px 12px;
-}
-
-/* 书籍容器 */
-.books-container {
-  min-height: 300px;
-}
-
-.loading-state,
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 20px;
-  color: var(--color-text-muted);
-}
-
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid #e7e7e7;
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin-bottom: 12px;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.empty-icon {
-  width: 48px;
-  height: 48px;
-  margin-bottom: 12px;
-  opacity: 0.5;
-}
-
-.hint {
-  font-size: 12px;
-  margin-top: 8px;
-}
-
-/* 书籍网格 - 改为3列 */
-.books-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-
-.book-card {
-  background: #fff;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  cursor: pointer;
-  transition: transform 0.2s;
-}
-
-.book-card:active {
-  transform: scale(0.98);
-}
-
-.book-cover {
-  position: relative;
-  aspect-ratio: 3 / 4;
-  background: #e7e7e7;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.book-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.cover-placeholder {
-  color: #ccc;
-}
-
-.progress-badge {
-  position: absolute;
-  bottom: 4px;
-  right: 4px;
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
-  font-size: 10px;
-  padding: 2px 5px;
-  border-radius: 4px;
-}
-
-.book-info {
-  padding: 8px;
-}
-
-.book-card-actions {
-  display: flex;
-  padding: 0 8px 8px;
-}
-
-.book-card-actions :deep(.native-btn) {
-  width: 100%;
-  font-size: 11px;
-}
-
-.book-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-height: 1.3;
-  min-height: 31px;
-}
-
-.book-author {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  margin-top: 3px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 浮动上传按钮 */
-.fab-upload {
-  position: fixed;
-  right: 20px;
-  bottom: calc(20px + var(--player-height, 0px));
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background: var(--color-primary);
-  color: #fff;
-  border: none;
-  box-shadow: 0 4px 12px rgba(0, 82, 217, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s;
-  z-index: 100;
-}
-
-.fab-upload:active {
-  transform: scale(0.95);
-}
-
-/* 原生弹窗样式 */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal-content {
-  background: #fff;
-  border-radius: 12px;
-  width: 80%;
-  max-width: 300px;
-  overflow: hidden;
-  animation: modal-in 0.2s ease;
-}
-
-@keyframes modal-in {
-  from {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid #eee;
-}
-
-.modal-header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 500;
-}
-
-.close-btn {
-  background: none;
-  border: none;
-  font-size: 24px;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  line-height: 1;
-}
-
-.modal-body {
-  padding: 16px;
-}
-
-.modal-body input {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-  box-sizing: border-box;
-}
-
-.modal-body input:focus {
-  outline: none;
-  border-color: var(--color-primary);
-}
-
-.modal-footer {
-  display: flex;
-  padding: 12px 16px;
-  gap: 12px;
-  border-top: 1px solid #eee;
-}
-
-.btn-cancel,
-.btn-confirm {
-  flex: 1;
-  padding: 10px;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  border: none;
-}
-
-.btn-cancel {
-  background: var(--color-surface-subtle);
-  color: var(--color-text-secondary);
-}
-
-.btn-confirm {
-  background: var(--color-primary);
-  color: #fff;
-}
-
-.btn-confirm:disabled {
-  background: #ccc;
-  cursor: not-allowed;
-}
-
-/* 原生提示样式 */
-.toast {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-size: 14px;
-  color: #fff;
-  z-index: 2000;
-  animation: fade-in-out 2.5s ease;
-}
-
-.toast.success {
-  background: rgba(0, 0, 0, 0.8);
-}
-
-.toast.error {
-  background: rgba(227, 77, 89, 0.9);
-}
-
-.toast.warning {
-  background: rgba(255, 165, 0, 0.9);
-}
-
-.toast.info {
-  background: rgba(0, 82, 217, 0.9);
-}
-
-@keyframes fade-in-out {
-  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
-  10% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  90% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
-}
-
-/* 上传对话框样式 */
-.upload-modal .modal-content {
-  max-height: 80vh;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.upload-body {
-  overflow-y: auto;
-  flex: 1;
-  padding: 16px;
-}
-
-.form-item {
-  margin-bottom: 16px;
-}
-
-.form-label {
-  display: block;
-  font-size: 14px;
-  color: var(--color-text-primary);
-  margin-bottom: 6px;
-  font-weight: 500;
-}
-
-.form-label .required {
-  color: var(--color-danger);
-}
-
-.form-input,
-.form-select {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  font-size: 14px;
-  box-sizing: border-box;
-  background: #fff;
-}
-
-.form-input:focus,
-.form-select:focus {
-  outline: none;
-  border-color: var(--color-primary);
-}
-
-.file-selector {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.btn-file-select {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 12px;
-  background: var(--color-surface-subtle);
-  border: 1px dashed #ccc;
-  border-radius: 6px;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.btn-file-select:active:not(:disabled) {
-  background: var(--color-border-subtle);
-}
-
-.btn-file-select:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.btn-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid var(--color-text-muted);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.file-hint {
-  font-size: 12px;
-  color: var(--color-text-muted);
-  margin: 4px 0 0 0;
-}
-
-.parsing-hint {
-  font-size: 12px;
-  color: var(--color-primary);
-  margin: 4px 0 0 0;
-}
-.metadata-status {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--native-color-text-secondary, var(--color-text-secondary));
-}
-
-.metadata-status.is-pending { color: #b26a00; }
-.metadata-status.is-failed { color: #c62828; }
-
+.mobile-books{padding:16px 18px 28px;color:var(--color-text-primary);-webkit-tap-highlight-color:transparent}
+.mobile-books button{font:inherit;cursor:pointer}.mobile-books__search{display:flex;gap:10px}.mobile-books__search-field{display:flex;align-items:center;flex:1;min-width:0;gap:8px;padding:0 12px;border:1px solid var(--color-border-default);border-radius:10px;background:var(--color-surface-raised);color:var(--color-text-muted)}.mobile-books__search input{width:100%;min-width:0;height:44px;padding:0;border:0;outline:0;background:transparent;color:var(--color-text-primary);font:inherit;font-size:14px}.mobile-books__search-field:focus-within{border-color:var(--color-text-muted)}.mobile-books__upload{width:44px;height:44px;flex-shrink:0;display:grid;place-items:center;border:0;border-radius:10px;background:var(--color-primary);color:#fff}
+.mobile-books__views{display:flex;gap:22px;margin-top:18px;border-bottom:1px solid var(--color-border-subtle)}.mobile-books__views button{position:relative;min-height:44px;padding:0 2px;border:0;background:transparent;color:var(--color-text-secondary);font-size:14px;white-space:nowrap}.mobile-books__views button.active{color:var(--color-text-primary);font-weight:600}.mobile-books__views button.active:after{position:absolute;content:'';height:2px;bottom:-1px;left:0;right:0;background:var(--color-primary)}
+.mobile-books__toolbar{display:flex;justify-content:space-between;align-items:center;padding-top:8px;gap:8px}.mobile-books__toolbar button{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;border:0;background:transparent;color:var(--color-text-secondary)}.mobile-books__category{min-width:0;padding:0;font-size:13px!important}.mobile-books__category span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mobile-books__tools{display:flex;flex-shrink:0}.mobile-books__tools button{width:44px}.mobile-books__tools button.active{color:var(--color-primary)}.mobile-books__summary{display:flex;justify-content:space-between;gap:12px;margin:4px 0 18px;color:var(--color-text-muted);font-size:12px}
+.mobile-books__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:26px 20px}.mobile-book{min-width:0}.mobile-book__cover{position:relative;display:block;width:100%;aspect-ratio:2/3;overflow:hidden;padding:0;border:0;border-radius:3px 7px 7px 3px;background:#e6e9f0;box-shadow:1px 3px 7px #17233318;text-align:left;color:#475671;transition:transform 160ms ease}.mobile-book__cover:before{position:absolute;z-index:1;inset:0;content:'';pointer-events:none;box-shadow:inset 2px 0 3px #ffffff35,inset -1px 0 2px #00000015}.mobile-book__cover img{width:100%;height:100%;object-fit:cover}.mobile-book__cover--pdf{background:#eee5e3;color:#84564e}.mobile-book__cover--txt{background:#e4e8e1;color:#4f665b}.mobile-book__placeholder{display:flex;height:100%;box-sizing:border-box;flex-direction:column;align-items:flex-start;justify-content:space-between;padding:20px 18px}.mobile-book__placeholder strong{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;font-family:serif;font-size:18px;font-weight:600;line-height:1.5}.mobile-book__placeholder small{font-size:10px;letter-spacing:.1em;opacity:.6}
+.mobile-book__heading{display:flex;align-items:flex-start;margin:10px -8px 0 0}.mobile-book__heading>button:first-child{flex:1;min-width:0;padding:2px 0;border:0;background:transparent;color:var(--color-text-primary);font-size:14px;font-weight:600;line-height:1.5;text-align:left;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:44px}.mobile-book__more{display:grid;place-items:center;flex-shrink:0;width:44px;min-height:44px;padding:0;border:0;background:transparent;color:var(--color-text-muted)}.mobile-book>p{overflow:hidden;margin:2px 0 7px;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--color-text-secondary)}.mobile-book__progress{display:flex;align-items:center;gap:8px;min-height:16px}.mobile-book__progress>span{height:2px;max-width:48px;flex:1;overflow:hidden;background:var(--color-border-subtle)}.mobile-book__progress i{display:block;height:100%;background:var(--color-primary)}.mobile-book__progress small{font-size:11px;color:var(--color-text-muted)}
+.mobile-books__empty{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;min-height:300px;text-align:center;color:var(--color-text-muted)}.mobile-books__empty strong{color:var(--color-text-primary);font-size:16px}.mobile-books__empty p{max-width:270px;margin:0 0 10px;line-height:1.6;font-size:13px}.mobile-books__skeleton{display:grid;grid-template-columns:repeat(2,1fr);gap:32px 20px}.mobile-books__skeleton span{aspect-ratio:2/3;background:var(--color-surface-subtle);border-radius:4px;animation:book-breathe 1.4s ease-in-out infinite alternate}.mobile-books__pagination{display:flex;align-items:center;flex-direction:column;gap:12px;margin-top:34px;font-size:12px;color:var(--color-text-muted)}.mobile-books__pagination :deep(button){min-height:44px}.mobile-books__retry{border:0;background:transparent;color:var(--color-text-secondary);min-height:44px}.mobile-books__delete-copy{font-size:14px;line-height:1.7}
+:global(.mobile-books-sheet){font-size:14px;-webkit-tap-highlight-color:transparent}:global(.mobile-books-sheet .native-drawer__content){max-width:640px;left:0;right:0;margin-inline:auto;border-radius:18px 18px 0 0}:global(.mobile-books-sheet .native-drawer__body){padding:12px 20px calc(20px + env(safe-area-inset-bottom))}:global(.mobile-books-sheet .native-drawer__title){font-size:16px}:global(.mobile-books-sheet .native-drawer__close){min-width:44px;min-height:44px}:global(.mobile-books-sheet .native-drawer__footer){padding-bottom:calc(12px + env(safe-area-inset-bottom))}.mobile-books-sheet__choices{display:grid;gap:2px}.mobile-books-sheet__choices button{display:flex;align-items:center;gap:12px;min-height:48px;width:100%;padding:10px 12px;border:0;border-radius:8px;background:transparent;color:var(--color-text-secondary);font:inherit;text-align:left;cursor:pointer}.mobile-books-sheet__choices button>span{flex:1}.mobile-books-sheet__choices small{font-size:12px;color:var(--color-text-muted)}.mobile-books-sheet__choices button.active{background:var(--color-primary-surface);color:var(--color-primary)}.mobile-books-sheet__choices button:disabled{opacity:.5;cursor:wait}.mobile-books-sheet__filter h4{font-size:12px;font-weight:500;color:var(--color-text-muted);margin:12px 0}.mobile-books-sheet__direction{display:flex;align-items:center;gap:10px;min-height:44px;padding:8px 12px;border:0;background:transparent;color:var(--color-text-secondary)}.mobile-books-sheet__formats{display:flex;flex-wrap:wrap;gap:8px}.mobile-books-sheet__formats button{min-height:44px;min-width:64px;padding:8px 12px;border:1px solid var(--color-border-subtle);border-radius:8px;background:transparent;color:var(--color-text-secondary)}.mobile-books-sheet__formats button.active{border-color:var(--color-primary-border);color:var(--color-primary);background:var(--color-primary-surface)}
+.mobile-book-detail{display:grid;gap:18px}.mobile-book-detail>header{display:flex;gap:16px;align-items:center}.mobile-book-detail__cover{width:56px;height:78px;flex-shrink:0;display:grid;place-items:center;border-radius:3px;overflow:hidden;background:var(--color-surface-subtle);color:var(--color-primary)}.mobile-book-detail__cover img{width:100%;height:100%;object-fit:cover}.mobile-book-detail h3{font-size:16px;line-height:1.5;margin:0;overflow-wrap:anywhere}.mobile-book-detail header p{font-size:13px;color:var(--color-text-secondary);margin:5px 0}.mobile-book-detail header small{font-size:12px;color:var(--color-text-muted)}.mobile-book-detail :deep(.native-btn){min-height:44px;width:100%}.mobile-book-detail dl{display:grid;grid-template-columns:70px 1fr;gap:12px;margin:0;padding:18px 0;border-block:1px solid var(--color-border-subtle);font-size:13px}.mobile-book-detail dt{color:var(--color-text-muted)}.mobile-book-detail dd{margin:0;overflow-wrap:anywhere}.mobile-book-detail__description{font-size:13px;line-height:1.8;white-space:pre-wrap;color:var(--color-text-secondary);margin:0}.mobile-book-detail__hint{font-size:12px;color:var(--color-text-muted);margin:0}.mobile-book-detail__actions .danger{color:var(--color-danger)}
+.mobile-books button:active,.mobile-books-sheet button:active{filter:brightness(.96)}.mobile-books button:focus:not(:focus-visible),:global(.mobile-books-sheet button:focus:not(:focus-visible)){outline:none;box-shadow:none}.mobile-books button:focus-visible{outline:2px solid var(--color-focus-ring);outline-offset:3px}
+@keyframes book-breathe{from{opacity:.5}to{opacity:1}}@media(min-width:540px){.mobile-books__grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(prefers-reduced-motion:reduce){.mobile-books__skeleton span{animation:none}.mobile-book__cover{transition:none}}
+:global(.mobile-books-detail-sheet .native-drawer__content){max-height:min(82dvh,680px)}
 </style>

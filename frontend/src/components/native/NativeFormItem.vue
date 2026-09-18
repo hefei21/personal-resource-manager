@@ -116,6 +116,11 @@ const hasError = computed(() => !!errorMessage.value)
   padding: 0 0 8px 0;
 }
 
+.native-form-item--vertical .native-form-item__content {
+  width: 100%;
+  flex: auto;
+}
+
 .required-mark {
   color: var(--color-danger);
   margin-left: 4px;
@@ -165,6 +170,10 @@ const hasError = computed(() => !!errorMessage.value)
   .native-form-item__label {
     width: auto !important;
     padding: 0 0 8px 0;
+  }
+  .native-form-item__content {
+    width: 100%;
+    flex: auto;
   }
 }
 </style>

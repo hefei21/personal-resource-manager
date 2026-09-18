@@ -54,8 +54,8 @@ import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { NativeDialog, NativeForm, NativeFormItem, NativeIcon, NativeInput, NativeSelect, NativeTextarea } from '@/components/native'
 import EbookDetailDrawer from '@/pc/components/books/EbookDetailDrawer.vue'
-import EbookReaderDialog from '@/pc/components/books/EbookReaderDialog.vue'
-import EbookUploadDialog from '@/pc/components/books/EbookUploadDialog.vue'
+import EbookReaderDialog from '@/components/books/EbookReaderDialog.vue'
+import EbookUploadDialog from '@/components/books/EbookUploadDialog.vue'
 import EbookWorkbench from '@/pc/components/books/EbookWorkbench.vue'
 import { usePermission } from '@/composables/usePermission'
 import { useToast } from '@/composables/useToast'
@@ -94,6 +94,8 @@ const batchConfirmVisible = ref(false)
 const metadataReparseLoading = ref({})
 const categoryOptions = computed(() => categories.value.map(category => ({ value: category.id, label: category.name })))
 const uploadCategoryId = computed(() => /^\d+$/u.test(filters.value.category) ? Number(filters.value.category) : null)
+let listSequence = 0
+let detailSequence = 0
 
 async function loadCategories() {
   try { categories.value = (await api.books.getCategories()).data?.data || [] }
@@ -101,9 +103,11 @@ async function loadCategories() {
 }
 
 async function loadBooks() {
+  const sequence = ++listSequence
   loading.value = true
   try {
     const response = await api.books.list({ ...filters.value, page: pagination.value.page, pageSize: pagination.value.pageSize })
+    if (sequence !== listSequence) return
     books.value = response.data?.data || []
     pagination.value = response.data?.pagination || pagination.value
     if (pagination.value.page > pagination.value.totalPages) {
@@ -113,7 +117,7 @@ async function loadBooks() {
   } catch (error) {
     console.error('加载书库失败:', error)
     toast.error(error.response?.data?.message || '加载书库失败')
-  } finally { loading.value = false }
+  } finally { if (sequence === listSequence) loading.value = false }
 }
 
 async function syncUrl() {
@@ -140,11 +144,12 @@ function openTrash() { void router.push({ name: 'Trash', query: { type: 'ebook' 
 function downloadBook(book) { window.open(authenticatedAssetUrl(`/api/ebooks/download/${book.id}`), '_blank') }
 
 async function openDetail(book) {
+  const sequence = ++detailSequence
   exitSelectionMode()
   detailBook.value = { ...book }
   detailVisible.value = true
-  try { detailBook.value = (await api.books.getDetail(book.id)).data?.data || detailBook.value }
-  catch (error) { toast.error(error.response?.data?.message || '加载书籍详情失败') }
+  try { const detail = (await api.books.getDetail(book.id)).data?.data; if (sequence === detailSequence && detail) detailBook.value = detail }
+  catch (error) { if (sequence === detailSequence) toast.error(error.response?.data?.message || '加载书籍详情失败') }
 }
 function openReader(book) { exitSelectionMode(); detailVisible.value = false; readerBook.value = { ...book }; readerVisible.value = true }
 function openCreateCategory() { categoryDialogMode.value = 'create'; pendingCategory.value = null; categoryName.value = ''; categoryDialogVisible.value = true }

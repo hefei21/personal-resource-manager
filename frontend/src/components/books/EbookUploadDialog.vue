@@ -8,24 +8,30 @@
     :confirm-disabled="uploading || parsing"
     :close-on-overlay-click="!uploading && !parsing"
     :close-btn="!uploading && !parsing"
-    @update:model-value="emit('update:modelValue', $event)"
+    :close-on-esc="!uploading && !parsing"
+    @update:model-value="value => { if (!uploading && !parsing) emit('update:modelValue', value) }"
     @confirm="submit"
   >
-    <div class="ebook-upload__intro"><span><NativeIcon name="book-open" size="22" /></span><div><strong>上传一本新书</strong><p>支持 EPUB、PDF、TXT、MOBI、AZW、AZW3 和 FB2；书籍原件保持不可变，更换文件时请作为新书上传。</p></div></div>
+    <div class="ebook-upload__intro"><span><NativeIcon name="book-open" size="22" /></span><div><strong>添加到书库</strong><p>EPUB、PDF 和 TXT 可在线阅读；其他格式可收藏与下载。书籍信息可以稍后补充。</p></div></div>
     <NativeForm class="ebook-upload__form" label-width="96px">
       <NativeFormItem label="书籍文件" required>
-        <NativeUpload v-model="form.file" drag accept=".txt,.epub,.pdf,.mobi,.azw,.azw3,.fb2,.html,.htm" :multiple="false" :auto-upload="false" :disabled="uploading || parsing" @change="onFileChange" />
+        <NativeUpload v-model="form.file" :drag="!isMobile" button-text="选择书籍文件" accept=".txt,.epub,.pdf,.mobi,.azw,.azw3,.fb2,.html,.htm" :multiple="false" :auto-upload="false" :disabled="uploading || parsing" @change="onFileChange" />
         <div v-if="parsing" class="ebook-upload__parsing"><NativeIcon name="arrow-clockwise" />正在读取 EPUB 元数据…</div>
       </NativeFormItem>
       <div class="ebook-upload__grid">
         <NativeFormItem label="书名" required><NativeInput v-model="form.title" placeholder="书籍名称" /></NativeFormItem>
         <NativeFormItem label="作者"><NativeInput v-model="form.author" placeholder="作者未知时可留空" /></NativeFormItem>
         <NativeFormItem label="分类"><NativeSelect v-model="form.categoryId" clearable placeholder="未分类" :options="categoryOptions" /></NativeFormItem>
+      </div>
+      <details class="ebook-upload__more" :open="!isMobile">
+        <summary>出版信息与简介 <span>可选</span></summary>
+        <div class="ebook-upload__grid">
         <NativeFormItem label="出版年份"><NativeInput v-model="form.year" placeholder="例如 2026" /></NativeFormItem>
         <NativeFormItem label="出版社"><NativeInput v-model="form.publisher" placeholder="出版社" /></NativeFormItem>
         <NativeFormItem label="ISBN"><NativeInput v-model="form.isbn" placeholder="ISBN" /></NativeFormItem>
       </div>
       <NativeFormItem label="内容简介"><NativeTextarea v-model="form.description" :rows="4" :maxlength="1000" placeholder="可选；EPUB 会尝试自动读取" /></NativeFormItem>
+      </details>
     </NativeForm>
     <div v-if="uploading" class="ebook-upload__progress"><div><strong>{{ uploadPhase }}</strong><span>{{ uploadProgress }}%</span></div><NativeProgress :percentage="uploadProgress" :label="false" /><small>上传期间请勿关闭窗口；失败不会创建残缺书籍记录。</small></div>
   </NativeDialog>
@@ -36,10 +42,12 @@ import { computed, reactive, ref, watch } from 'vue'
 import api from '@/api'
 import { NativeDialog, NativeForm, NativeFormItem, NativeIcon, NativeInput, NativeProgress, NativeSelect, NativeTextarea, NativeUpload } from '@/components/native'
 import { useToast } from '@/composables/useToast'
+import { useViewport } from '@/composables/useViewport'
 
 const props = defineProps({ modelValue: Boolean, categories: { type: Array, default: () => [] }, initialCategoryId: { type: [String, Number], default: null } })
 const emit = defineEmits(['update:modelValue', 'uploaded'])
 const toast = useToast()
+const { isMobile } = useViewport()
 const form = reactive(emptyForm())
 const parsing = ref(false)
 const uploading = ref(false)
@@ -141,4 +149,12 @@ watch(() => props.modelValue, visible => { if (visible) reset() })
 
 <style scoped>
 .ebook-upload__intro{display:flex;gap:12px;margin-bottom:18px;padding:14px;border:1px solid var(--color-primary-border);border-radius:var(--radius-md);background:var(--color-primary-surface)}.ebook-upload__intro>span{width:42px;height:42px;flex:0 0 auto;display:grid;place-items:center;border-radius:10px;background:var(--color-surface-raised);color:var(--color-primary)}.ebook-upload__intro strong,.ebook-upload__intro p{margin:0}.ebook-upload__intro p{margin-top:3px;font-size:12px;line-height:1.55;color:var(--color-text-secondary)}.ebook-upload__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 14px}.ebook-upload__parsing{display:flex;align-items:center;gap:6px;margin-top:7px;font-size:12px;color:var(--color-primary)}.ebook-upload__parsing :deep(svg){animation:ebook-spin 1s linear infinite}.ebook-upload__progress{display:grid;gap:8px;margin-top:16px;padding:14px;border-radius:var(--radius-md);background:var(--color-surface-subtle)}.ebook-upload__progress>div{display:flex;justify-content:space-between}.ebook-upload__progress small{color:var(--color-text-muted)}@keyframes ebook-spin{to{transform:rotate(360deg)}}
+.ebook-upload__intro{padding:0 0 18px;border:0;border-bottom:1px solid var(--color-border);border-radius:0;background:transparent}
+@media(max-width:768px){.ebook-upload__grid{grid-template-columns:1fr}.ebook-upload__intro{font-size:14px}.ebook-upload__intro>span{display:none}.ebook-upload__intro p{font-size:13px}.ebook-upload__grid :deep(.native-form-item){margin-bottom:16px}}
+@media(prefers-reduced-motion:reduce){.ebook-upload__parsing :deep(svg){animation:none}}
+.ebook-upload__form :deep(.native-select){width:100%}
+.ebook-upload__more{border-top:1px solid var(--color-border-subtle);margin-top:4px}
+.ebook-upload__more summary{cursor:pointer;padding:14px 0;font-size:13px;color:var(--color-text-secondary)}
+.ebook-upload__more summary span{margin-left:6px;color:var(--color-text-muted);font-size:12px}
+@media(max-width:768px){.ebook-upload__form :deep(.native-btn){min-height:44px}.ebook-upload__intro strong{display:none}.ebook-upload__intro{margin-bottom:16px;padding-bottom:12px}.ebook-upload__more summary{min-height:44px;box-sizing:border-box}}
 </style>

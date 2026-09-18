@@ -104,12 +104,31 @@ test('an offline write stays pending and resumes after a reload', async () => {
     }
   }
   const resumed = createEbookReadingProgressSync({ bookId: 9, api: onlineApi, storage: local })
-  await resumed.load()
+  const restored = await resumed.load()
+  assert.equal(restored.currentPage, 4)
+  assert.equal(restored.chapterFraction, 0.45)
   await resumed.flush()
   assert.equal(resumedWrites.length, 1)
   assert.equal(resumed.remote.currentPage, 4)
   assert.equal(resumed.remote.chapterFraction, 0.45)
   assert.equal(resumed.remote.revision, 3)
+})
+
+test('pending local position cannot silently replace a newer device position', async () => {
+  const local = storage()
+  local.setItem('pr-manager:ebook-progress-pending:v1:12', JSON.stringify({ position: { currentPage: 2, progress: 28, chapterFraction: 0.8 }, baseRevision: 1, mutationId: 'pending' }))
+  let writes = 0
+  const sync = createEbookReadingProgressSync({ bookId: 12, storage: local, api: {
+    getProgress: async () => ({ data: { currentPage: 6, progress: 63, chapterFraction: 0.3, revision: 2 } }),
+    saveProgress: async () => { writes += 1; throw new Error('unexpected write') }
+  } })
+  const restored = await sync.load()
+  assert.equal(restored.currentPage, 6)
+  assert.equal(sync.conflict.local.chapterFraction, 0.8)
+  assert.equal(writes, 0)
+  const chosen = await sync.resolveConflict('remote')
+  assert.equal(chosen.revision, 2)
+  assert.equal(local.getItem('pr-manager:ebook-progress-pending:v1:12'), null)
 })
 
 test('overall progress provides a stable chapter-relative fallback locator', () => {

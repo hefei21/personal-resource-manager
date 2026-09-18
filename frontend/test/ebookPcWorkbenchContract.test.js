@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import test from 'node:test'
 
 const page = fs.readFileSync(new URL('../src/pc/pages/BooksPC.vue', import.meta.url), 'utf8')
-const reader = fs.readFileSync(new URL('../src/pc/components/books/EbookReaderDialog.vue', import.meta.url), 'utf8')
+const reader = fs.readFileSync(new URL('../src/components/books/EbookReaderDialog.vue', import.meta.url), 'utf8')
 const workbench = fs.readFileSync(new URL('../src/pc/components/books/EbookWorkbench.vue', import.meta.url), 'utf8')
 const mobileReader = fs.readFileSync(new URL('../src/mobile/components/BookReader.vue', import.meta.url), 'utf8')
 const api = fs.readFileSync(new URL('../src/api/index.js', import.meta.url), 'utf8')
@@ -49,10 +49,7 @@ test('reader streams PDFs, loads EPUB chapters lazily, and uses the shared progr
 })
 
 test('reading position is shared across PC and mobile while appearance remains device-local', () => {
-  assert.match(mobileReader, /createEbookReadingProgressSync/u)
-  assert.match(mobileReader, /pr-manager:ebook-reader-preferences:v1/u)
-  assert.match(mobileReader, /persistDeviceFontSize/u)
-  assert.doesNotMatch(mobileReader, /fontSize\.value\s*=\s*progress\.fontSize/u)
-  assert.match(mobileReader, /chapterFraction/u)
-  assert.match(mobileReader, /strict:\s*true/u)
+  assert.match(mobileReader, /@\/components\/books\/EbookReaderDialog.vue/u)
+  assert.match(reader, /pr-manager:ebook-reader-preferences:v1/u)
+  assert.doesNotMatch(reader, /fontSize\.value\s*=\s*progress\.fontSize/u)
 })

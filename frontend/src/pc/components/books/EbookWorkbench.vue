@@ -62,11 +62,11 @@
 
         <div v-if="loading" class="ebook-workbench__skeleton" aria-label="正在加载书籍"><span v-for="index in 8" :key="index" /></div>
         <div v-else-if="books.length === 0" class="ebook-workbench__empty">
-          <span><NativeIcon name="book-open" size="34" /></span><strong>{{ filters.keyword ? '没有找到匹配的书籍' : '这里还没有书籍' }}</strong><p>{{ filters.keyword ? '尝试缩短关键词或清除筛选条件。' : '上传第一本书，阅读位置会在 PC 与移动端之间同步。' }}</p><NativeButton v-if="canUploadInView" theme="primary" :disabled="isGuest" @click="emit('upload')">上传书籍</NativeButton>
+          <span><NativeIcon name="book-open" size="34" /></span><strong>{{ filters.keyword ? '没有找到匹配的书籍' : '这里还没有书籍' }}</strong><p>{{ canUploadInView ? '添加想读的书，随时从上次的位置继续。' : '尝试其他分类、阅读状态或搜索条件。' }}</p><NativeButton v-if="canUploadInView" theme="primary" :disabled="isGuest" @click="emit('upload')">上传书籍</NativeButton>
         </div>
 
         <div v-else-if="viewMode === 'cover'" class="ebook-workbench__grid">
-          <article v-for="book in books" :key="book.id" class="ebook-card" :class="{ 'ebook-card--selection': selectionMode, 'ebook-card--selected': selectedKeys.includes(book.id) }" tabindex="0" @click="handleCardClick(book)" @keydown.enter="handleCardClick(book)">
+          <article v-for="book in books" :key="book.id" class="ebook-card" :class="{ 'ebook-card--selection': selectionMode, 'ebook-card--selected': selectedKeys.includes(book.id) }" tabindex="0" @click="handleCardClick(book)" @keydown.enter.self="handleCardClick(book)">
             <label v-if="selectionMode" class="ebook-card__select" @click.stop><input type="checkbox" :checked="selectedKeys.includes(book.id)" :aria-label="`选择 ${book.title}`" @change="emit('toggle-select', book.id)" /></label>
             <div class="ebook-card__cover" :class="`ebook-card__cover--${tone(book)}`">
               <img v-if="book.coverImage" :src="coverUrl(book)" :alt="book.title" loading="lazy" @error="$event.currentTarget.style.display = 'none'" />
@@ -74,7 +74,7 @@
             </div>
             <div class="ebook-card__info"><strong :title="book.title">{{ book.title }}</strong><span>{{ book.author || '作者未知' }}</span><small>{{ book.categoryName || '未分类' }} · {{ fileLabel(book) }}</small></div>
             <div class="ebook-card__progress" :class="{ 'ebook-card__progress--empty': !(book.progress > 0) }"><span><i :style="{ width: `${Math.min(100, book.progress || 0)}%` }" /></span><small>{{ Math.round(book.progress || 0) }}%</small></div>
-            <NativeButton v-if="!selectionMode" size="small" class="ebook-card__read" :disabled="!isReadable(book)" :theme="book.progress > 0 ? 'primary' : 'default'" :variant="book.progress > 0 ? 'base' : 'outline'" @click.stop="emit('read', book)">{{ isReadable(book) ? (book.progress > 0 ? '继续阅读' : '开始阅读') : '仅可下载' }}</NativeButton>
+            <NativeButton v-if="!selectionMode" size="small" class="ebook-card__read" :disabled="!isReadable(book)" variant="text" @click.stop="emit('read', book)"><NativeIcon name="book-open" size="15" />{{ isReadable(book) ? (book.progress > 0 ? '继续阅读' : '开始阅读') : '仅可下载' }}<NativeIcon name="arrow-right" size="13" /></NativeButton>
             <span v-else class="ebook-card__selection-hint">点击卡片选择</span>
           </article>
         </div>
@@ -147,4 +147,27 @@ function shortDate(value){ const date=new Date(value); return Number.isNaN(date.
 .ebook-card--selection{cursor:pointer}.ebook-card--selected{border-color:var(--color-primary);box-shadow:0 0 0 1px var(--color-primary-alpha-20)}.ebook-card__progress--empty{visibility:hidden}.ebook-card__read{width:auto;min-width:96px;min-height:32px;height:32px;justify-self:start;padding-inline:14px}.ebook-card__selection-hint{height:32px;display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);color:var(--color-primary);background:var(--color-primary-surface);font-size:12px;font-weight:600}
 .ebook-list-row--without-selection{grid-template-columns:minmax(220px,1.4fr) minmax(120px,.75fr) minmax(140px,.85fr) 140px 120px 156px}.ebook-list-row--selected{background:var(--color-primary-surface)}.ebook-list-row__actions{width:100%;align-items:center;justify-content:flex-start;gap:5px}.ebook-list-row__actions>small{color:var(--color-primary)}.ebook-list-row__action{min-height:30px;padding:5px 8px;display:inline-flex;align-items:center;justify-content:center;gap:4px;border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;color:var(--color-text-secondary);cursor:pointer;font:inherit;font-size:12px}.ebook-list-row__action:hover:not(:disabled),.ebook-list-row__action:focus-visible{color:var(--color-text-primary);border-color:var(--color-border-default);background:var(--color-surface-subtle)}.ebook-list-row__action--read{color:var(--color-primary);background:var(--color-primary-surface)}.ebook-list-row__action--read:hover:not(:disabled),.ebook-list-row__action--read:focus-visible{color:var(--color-primary-hover);border-color:var(--color-primary-border);background:color-mix(in srgb,var(--color-primary) 13%,var(--color-surface-raised))}.ebook-list-row__action:disabled{opacity:.46;cursor:not-allowed}
 @media(max-width:1200px){.ebook-workbench__toolbar{flex-wrap:wrap}.ebook-workbench__search{flex:1 0 100%}.ebook-workbench__sort{width:164px;flex:0 0 164px}.ebook-workbench__toolbar>.native-button:last-child{margin-left:auto}}
+/* The cover is the visual object; avoid an additional decorated card around every book. */
+.ebook-workbench__toolbar{box-shadow:none;border-radius:10px;padding:12px 14px}
+.ebook-workbench__body{border-radius:10px}
+.ebook-workbench__content{padding:26px 28px}
+.ebook-workbench__content-heading{margin-bottom:24px}
+.ebook-workbench__content-heading h2{font-size:18px;font-weight:600;letter-spacing:-.02em}
+.ebook-workbench__grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:30px 28px}
+.ebook-card{grid-template-rows:auto 62px 16px 32px;gap:8px;padding:8px;border-color:transparent;border-radius:8px;background:transparent;transition:background-color 160ms ease}
+.ebook-card:hover{transform:none;box-shadow:none;border-color:transparent;background:var(--color-surface-subtle)}
+.ebook-card__cover{position:relative;aspect-ratio:2/3;max-height:300px;width:100%;border-radius:3px 6px 6px 3px;box-shadow:1px 3px 8px #1723331a;transition:transform 180ms cubic-bezier(.2,.7,.2,1)}
+.ebook-card:hover .ebook-card__cover{transform:translateY(-3px)}
+.ebook-card__info{align-content:start;gap:4px;padding-top:3px}
+.ebook-card__info strong{font-weight:600;line-height:1.5}
+.ebook-card__read{padding:0 6px;margin-left:-6px;gap:6px;color:var(--color-text-secondary);font-weight:500;font-size:12px;border:0;min-width:0}
+.ebook-card__read:hover:not(:disabled){color:var(--color-primary)}
+.ebook-card__progress>span{height:2px;max-width:90px}
+.ebook-card__progress{grid-template-columns:minmax(0,90px) auto;justify-content:start}
+.ebook-card--selected,.ebook-card--selected:hover{background:var(--color-primary-surface);border-color:var(--color-primary-border);box-shadow:none}
+.ebook-card__select{top:16px;left:16px}
+.ebook-workbench__sidebar-heading strong{font-weight:600;font-size:13px}
+.ebook-workbench__nav button,.ebook-workbench__trash{font-size:13px}
+.ebook-workbench__nav button.active{font-weight:600}
+@media(prefers-reduced-motion:reduce){.ebook-card,.ebook-card__cover,.category-actions{transition:none}.ebook-card:hover .ebook-card__cover{transform:none}}
 </style>
