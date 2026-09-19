@@ -61,7 +61,7 @@
         </div>
 
         <div v-if="loading" :class="viewMode === 'cover' ? 'ebook-workbench__grid' : 'ebook-workbench__loading-list'" role="status" aria-label="正在加载书籍">
-          <div v-for="index in 8" :key="index" class="ebook-loading-card" :class="{ 'ebook-card': viewMode === 'cover' }" aria-hidden="true"><div class="ebook-card__cover ebook-loading-card__cover" /><div class="ebook-loading-card__text"><i /><i /><i /></div><i class="ebook-loading-card__progress" /><i class="ebook-loading-card__action" /></div>
+          <div v-for="index in 8" :key="index" class="ebook-loading-card" :class="{ 'ebook-card': viewMode === 'cover' }" aria-hidden="true"><div class="ebook-card__cover ebook-loading-card__cover" /><div class="ebook-loading-card__text"><i /><i /><i /></div><i class="ebook-loading-card__progress" /><i v-if="viewMode !== 'cover'" class="ebook-loading-card__action" /></div>
         </div>
         <div v-else-if="books.length === 0" class="ebook-workbench__empty">
           <span><NativeIcon name="book-open" size="34" /></span><strong>{{ filters.keyword ? '没有找到匹配的书籍' : '这里还没有书籍' }}</strong><p>{{ canUploadInView ? '添加想读的书，随时从上次的位置继续。' : '尝试其他分类、阅读状态或搜索条件。' }}</p><NativeButton v-if="canUploadInView" theme="primary" :disabled="isGuest" @click="emit('upload')">上传书籍</NativeButton>
@@ -73,11 +73,10 @@
             <div class="ebook-card__cover" :class="`ebook-card__cover--${tone(book)}`">
               <img v-if="book.coverImage" :src="coverUrl(book)" :alt="book.title" loading="lazy" @error="$event.currentTarget.style.display = 'none'" />
               <div v-else><NativeIcon :name="fileIcon(book)" size="36" /><span>{{ fileLabel(book) }}</span></div>
+              <NativeButton v-if="!selectionMode" size="small" class="ebook-card__read" :disabled="!isReadable(book)" variant="text" @click.stop="emit('read', book)"><NativeIcon name="book-open" size="15" />{{ isReadable(book) ? (book.progress > 0 ? '继续阅读' : '开始阅读') : '仅可下载' }}</NativeButton>
             </div>
             <div class="ebook-card__info"><strong :title="book.title">{{ book.title }}</strong><span>{{ book.author || '作者未知' }}</span><small>{{ book.categoryName || '未分类' }} · {{ fileLabel(book) }}</small></div>
             <div class="ebook-card__progress" :class="{ 'ebook-card__progress--empty': !(book.progress > 0) }"><span><i :style="{ width: `${Math.min(100, book.progress || 0)}%` }" /></span><small>{{ Math.round(book.progress || 0) }}%</small></div>
-            <NativeButton v-if="!selectionMode" size="small" class="ebook-card__read" :disabled="!isReadable(book)" variant="text" @click.stop="emit('read', book)"><NativeIcon name="book-open" size="15" />{{ isReadable(book) ? (book.progress > 0 ? '继续阅读' : '开始阅读') : '仅可下载' }}</NativeButton>
-            <span v-else class="ebook-card__selection-space" aria-hidden="true" />
           </article>
         </div>
 
@@ -156,7 +155,7 @@ function shortDate(value){ const date=new Date(value); return Number.isNaN(date.
 .ebook-workbench__content-heading{margin-bottom:24px}
 .ebook-workbench__content-heading h2{font-size:18px;font-weight:600;letter-spacing:-.02em}
 .ebook-workbench__grid{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:30px 28px}
-.ebook-card{grid-template-rows:auto 62px 16px 32px;gap:8px;padding:8px;border-color:transparent;border-radius:8px;background:transparent;transition:background-color 160ms ease}
+.ebook-card{grid-template-rows:auto 62px 16px;gap:8px;padding:8px;border-color:transparent;border-radius:8px;background:transparent;transition:background-color 160ms ease}
 .ebook-card:hover{transform:none;box-shadow:none;border-color:transparent;background:var(--color-surface-subtle)}
 .ebook-card__cover{position:relative;aspect-ratio:2/3;max-height:300px;width:100%;border-radius:3px 6px 6px 3px;box-shadow:1px 3px 8px #1723331a;transition:transform 180ms cubic-bezier(.2,.7,.2,1)}
 .ebook-card:hover .ebook-card__cover{transform:translateY(-3px)}
@@ -175,10 +174,11 @@ function shortDate(value){ const date=new Date(value); return Number.isNaN(date.
 .ebook-category-row .category-actions{top:50%;transform:translateY(-50%);height:28px;background:var(--color-surface-raised);padding-left:4px;border-radius:6px}
 .ebook-category-row.active .category-actions{background:var(--color-primary-surface)}
 .ebook-category-row:hover .ebook-category-row__main,.ebook-category-row:focus-within .ebook-category-row__main{padding-right:66px}
-.ebook-card__selection-space{height:32px}
 .ebook-card--selection:hover .ebook-card__cover{transform:none}
-.ebook-card__read{border:1px solid var(--color-border-subtle);border-radius:6px;padding:0 10px;margin:0;background:var(--color-surface-raised)}
+.ebook-card__read{position:absolute;inset:auto 10px 10px;width:calc(100% - 20px);height:36px;min-height:36px;justify-content:center;border:1px solid var(--color-border-subtle);border-radius:6px;padding:0 10px;margin:0;background:var(--color-surface-raised);color:var(--color-text-primary);box-shadow:0 2px 8px #17233314;opacity:0;visibility:hidden;pointer-events:none;transform:translateY(4px);transition:opacity 140ms ease,transform 140ms ease,visibility 140ms}
+.ebook-card:hover .ebook-card__read,.ebook-card:focus-within .ebook-card__read{opacity:1;visibility:visible;pointer-events:auto;transform:translateY(0)}
 .ebook-card__read:hover:not(:disabled){background:var(--color-surface-subtle);border-color:var(--color-border-default)}
+@media(prefers-reduced-motion:reduce){.ebook-card__read{transition:none;transform:none}}
 .ebook-loading-card{pointer-events:none}
 .ebook-loading-card .ebook-loading-card__cover{box-shadow:none;background:var(--color-surface-subtle)}
 .ebook-loading-card__text{display:flex;flex-direction:column;gap:8px;padding-top:3px}

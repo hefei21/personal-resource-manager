@@ -96,6 +96,7 @@ async function makePage(viewport, mobile = false) {
 async function check(name, action) { await action(); checks.push(name); console.log(`PASS ${name}`) }
 async function noOverflow(page) { assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'horizontal page overflow') }
 async function readerReady(page) { await page.locator('.ebook-reader__flow').waitFor(); await page.waitForFunction(() => document.querySelector('.ebook-reader__surface')?.scrollHeight > 1000); await page.waitForTimeout(150) }
+async function openPcReader(page) { await page.locator('.ebook-card').first().hover(); await page.locator('.ebook-card__read').first().click(); await readerReady(page) }
 try {
   const mobile = await makePage({ width: 390, height: 844 }, true)
   await check('mobile hierarchy, touch targets and first page', async () => {
@@ -231,12 +232,37 @@ try {
       const placeholders = await pc.locator('.ebook-loading-card__cover').evaluateAll(items => items.slice(0, 4).map(el => { const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height } }))
       if (width === 3840) await pc.screenshot({ path: join(output, 'pc-loading-4k.png') })
       delayListMs = 0
-      await pc.locator('.ebook-card__read').first().waitFor()
+      await pc.locator('.ebook-card__read').first().waitFor({state:'attached'})
       const covers = await pc.locator('.ebook-card__cover').evaluateAll(items => items.slice(0, 4).map(el => { const r = el.getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height } }))
       placeholders.forEach((item, i) => { for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(item[key] - covers[i][key]) < 1, `${width}px skeleton ${key}`) })
       await noOverflow(pc)
     }
     await pc.setViewportSize({ width: 1440, height: 1000 })
+  })
+  await check('PC reading actions appear over covers on hover or keyboard focus without reflow', async () => {
+    await pc.mouse.move(0, 0)
+    const card = pc.locator('.ebook-card').first(), action = card.locator('.ebook-card__read')
+    await action.waitFor({state:'hidden'})
+    const before = await card.boundingBox(), progressBefore = await card.locator('.ebook-card__progress').boundingBox()
+    await pc.screenshot({path:join(output,'pc-covers-idle.png')})
+    await card.hover(); await pc.waitForTimeout(220)
+    assert.ok(await action.isVisible())
+    const cover = await card.locator('.ebook-card__cover').boundingBox(), button = await action.boundingBox()
+    assert.ok(button.y >= cover.y && button.y + button.height <= cover.y + cover.height)
+    assert.deepEqual(await card.boundingBox(), before)
+    assert.deepEqual(await card.locator('.ebook-card__progress').boundingBox(), progressBefore)
+    assert.equal(await pc.locator('.ebook-card').nth(1).locator('.ebook-card__read').isVisible(), false)
+    await pc.screenshot({path:join(output,'pc-cover-hover.png')})
+    await pc.mouse.move(0, 0); await action.waitFor({state:'hidden'})
+    await card.focus(); await action.waitFor({state:'visible'})
+    await pc.keyboard.press('Tab')
+    assert.ok(await action.evaluate(el => document.activeElement === el))
+    await pc.keyboard.press('Enter'); await readerReady(pc)
+    await pc.getByLabel('关闭阅读器', {exact:true}).click()
+    await pc.emulateMedia({reducedMotion:'reduce'})
+    await card.hover()
+    assert.ok(await action.evaluate(el => getComputedStyle(el).transitionDuration.split(',').every(value => parseFloat(value) <= .001)))
+    await pc.emulateMedia({reducedMotion:'no-preference'})
   })
   await check('PC selection mode, all-page selection and detail stacking', async () => {
     assert.equal(await pc.locator('.ebook-card__select').count(), 0)
@@ -256,11 +282,11 @@ try {
   })
   await check('cross-device restore, fast chapter navigation, no-op close', async () => {
     const saved = progress.get(1), before = writes.length
-    await pc.locator('.ebook-card__read').first().click(); await readerReady(pc)
+    await openPcReader(pc)
     assert.equal(await pc.locator('.ebook-reader__flow').getAttribute('data-chapter-id'), `chapter-${saved.currentPage}`)
     await pc.getByLabel('关闭阅读器', { exact: true }).click(); await pc.waitForTimeout(250)
     assert.equal(writes.length, before, 'open/close without reading should not create a revision')
-    await pc.locator('.ebook-card__read').first().click(); await readerReady(pc)
+    await openPcReader(pc)
     delayChapter = 9
     await pc.getByLabel('打开或关闭目录').click(); await pc.getByRole('button', { name: /第 10 章 · 日常的风景/ }).click()
     await pc.getByLabel('打开或关闭目录').click(); await pc.getByRole('button', { name: /第 11 章 · 日常的风景/ }).click()
@@ -271,7 +297,7 @@ try {
   })
   await check('reader tools follow reading column; footnotes stay quiet but clickable', async () => {
     await pc.setViewportSize({ width: 3840, height: 1920 })
-    await pc.locator('.ebook-card__read').first().click(); await readerReady(pc)
+    await openPcReader(pc)
     const topbar = await pc.locator('.ebook-reader__topbar').boundingBox()
     const toc = await pc.getByLabel('打开或关闭目录').boundingBox()
     const footer = await pc.locator('.ebook-reader__footer').boundingBox()
@@ -360,7 +386,7 @@ try {
   await check('live device conflict requires a choice; offline position resumes on reconnect', async () => {
     await mobile.setViewportSize({ width: 390, height: 844 })
     await mobile.locator('.mobile-book__cover').first().click(); await readerReady(mobile)
-    await pc.locator('.ebook-card__read').first().click(); await readerReady(pc)
+    await openPcReader(pc)
     await mobile.locator('.ebook-reader__surface').evaluate(el => { el.scrollTop = (el.scrollHeight - el.clientHeight) * .21 })
     await mobile.waitForTimeout(1000)
     await pc.locator('.ebook-reader__surface').evaluate(el => { el.scrollTop = (el.scrollHeight - el.clientHeight) * .62 })
