@@ -2,12 +2,12 @@
   <Teleport to="body">
     <Transition name="ebook-reader-fade">
       <section v-if="modelValue" ref="readerRoot" class="ebook-reader" :class="`ebook-reader--${readerTheme}`" role="dialog" aria-modal="true" tabindex="-1" :aria-label="book?.title || '电子书阅读器'" @keydown.esc.stop="handleEscape">
-        <header class="ebook-reader__header">
+        <header v-show="!chromeHidden" class="ebook-reader__header">
           <div class="ebook-reader__topbar">
           <NativeButton variant="text" class="ebook-reader__icon-button" aria-label="关闭阅读器" @click="closeReader">
             <NativeIcon name="arrow-left" size="22" />
           </NativeButton>
-          <NativeButton variant="text" class="ebook-reader__tool ebook-reader__toc-trigger" aria-label="打开或关闭目录" :aria-expanded="tocOpen" @click="settingsOpen = false; tocOpen = !tocOpen">
+          <NativeButton v-if="isMobile" variant="text" class="ebook-reader__tool ebook-reader__toc-trigger" aria-label="打开或关闭目录" :aria-expanded="tocOpen" @click="settingsOpen = false; tocOpen = !tocOpen">
             <NativeIcon name="list-dashes" size="20" /><span>目录</span>
           </NativeButton>
           <div class="ebook-reader__identity">
@@ -36,6 +36,7 @@
           <NativeButton size="small" theme="primary" @click="resolveConflict('local')">保留本机位置</NativeButton>
         </div>
 
+        <div class="ebook-reader__workspace">
         <button v-if="tocOpen || settingsOpen" class="ebook-reader__scrim" aria-label="关闭阅读面板" @click="tocOpen = false; settingsOpen = false" />
         <Transition name="reader-panel-left">
         <aside v-if="tocOpen" class="ebook-reader__toc ebook-reader__toc--open">
@@ -77,6 +78,11 @@
               <NativeButton variant="outline" :disabled="fontSize >= 28" @click="fontSize += 1">A＋</NativeButton>
             </div>
           </div>
+          <div v-if="isMobile" class="ebook-reader__setting-group">
+            <label>沉浸阅读</label>
+            <small>轻点正文显示或隐藏上下工具栏；滚动、选字和注释跳转不受影响。</small>
+            <NativeButton variant="outline" @click="settingsOpen = false; toggleImmersive()">进入沉浸阅读</NativeButton>
+          </div>
           <div class="ebook-reader__setting-group">
             <label>字体</label>
             <div class="ebook-reader__segmented">
@@ -104,7 +110,7 @@
         </aside>
         </Transition>
 
-        <main ref="readingSurface" class="ebook-reader__surface" :class="`ebook-reader__surface--${readerTheme}`" @click="handleContentClick" @scroll.passive="handleScroll">
+        <main ref="readingSurface" class="ebook-reader__surface" :class="`ebook-reader__surface--${readerTheme}`" @pointerdown.passive="beginReadingTap" @pointermove.passive="moveReadingTap" @pointercancel="readingTap = null" @click="handleContentClick" @scroll.passive="handleScroll">
           <div v-if="loading" class="ebook-reader__state" role="status">
             <NativeIcon name="book-open" size="38" />
             <strong>正在准备阅读内容</strong>
@@ -134,7 +140,8 @@
           </div>
         </main>
 
-        <footer v-if="!loading && !loadError" class="ebook-reader__footer" :aria-busy="navigating">
+        <footer v-if="!loading && !loadError" v-show="!chromeHidden" class="ebook-reader__footer" :aria-busy="navigating">
+          <NativeButton v-if="!isMobile" variant="text" class="ebook-reader__footer-toc" aria-label="打开或关闭目录" :aria-expanded="tocOpen" @click="settingsOpen = false; tocOpen = !tocOpen"><NativeIcon name="list-dashes" size="18" />目录</NativeButton>
           <NativeButton variant="outline" class="ebook-reader__nav-button" :disabled="!canGoPrevious" @click="goPrevious">
             <NativeIcon name="chevron-left" />
             {{ isPdf ? '上一页' : '上一章' }}
@@ -149,6 +156,8 @@
             <NativeIcon :name="canMarkFinished ? 'check' : 'chevron-right'" />
           </NativeButton>
         </footer>
+        <button v-if="chromeHidden" class="ebook-reader__restore-chrome" @click="toggleImmersive()">显示阅读工具栏</button>
+        </div>
       </section>
     </Transition>
   </Teleport>
@@ -182,6 +191,10 @@ let renderSequence = 0
 let resizeObserver = null
 let resizeTimer = null
 const navigating = ref(false)
+const immersive = ref(false)
+const chromeHidden = computed(() => isMobile.value && immersive.value && !tocOpen.value && !settingsOpen.value && !loading.value && !loadError.value && !progressConflict.value)
+let readingTap = null
+let chromeChanging = false
 
 const DEVICE_PREF_KEY = 'pr-manager:ebook-reader-preferences:v1'
 const fontOptions = [
@@ -483,7 +496,7 @@ function updateFlowProgress() {
 }
 
 function handleScroll() {
-  if (!isFlowDocument.value || loading.value || restoringPosition || navigating.value) return
+  if (!isFlowDocument.value || loading.value || restoringPosition || navigating.value || chromeChanging) return
   updateFlowProgress()
   progressDirty = true
   scheduleProgressSave()
@@ -581,9 +594,41 @@ function currentChapterFraction() {
   return Math.min(1, Math.max(0, surface.scrollTop / scrollable))
 }
 
+function beginReadingTap(event) {
+  readingTap = event.isPrimary && event.button === 0
+    ? { x: event.clientX, y: event.clientY, time: performance.now(), scroll: readingSurface.value?.scrollTop || 0, moved: false }
+    : null
+}
+function moveReadingTap(event) {
+  if (readingTap && Math.hypot(event.clientX - readingTap.x, event.clientY - readingTap.y) > 10) readingTap.moved = true
+}
+async function toggleImmersive() {
+  if (!isMobile.value || loading.value || navigating.value || chromeChanging || restoringPosition) return
+  const surface = readingSurface.value
+  const top = surface?.scrollTop || 0
+  chromeChanging = true
+  // Toolbar controls may disappear; keep keyboard navigation in the reader.
+  readerRoot.value?.focus({ preventScroll: true })
+  immersive.value = !immersive.value
+  await nextTick()
+  if (surface) surface.scrollTop = top
+  // Ignore scroll events caused by changing the viewport, not by reading.
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+  chromeChanging = false
+}
 async function handleContentClick(event) {
-  if (!isFlowDocument.value) return
   const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null
+  const tap = readingTap
+  readingTap = null
+  if (!anchor) {
+    if (isMobile.value && tap && !tap.moved && performance.now() - tap.time < 450 &&
+        Math.abs((readingSurface.value?.scrollTop || 0) - tap.scroll) < 3 &&
+        !window.getSelection()?.toString() && !event.target.closest?.('button,input,select,textarea,[role="button"]')) {
+      await toggleImmersive()
+    }
+    return
+  }
+  if (!isFlowDocument.value) return
   if (!anchor || !flowArticle.value?.contains(anchor)) return
   const target = resolveEbookLink(anchor.getAttribute('href'), currentChapter.value?.href)
   if (!target) return
@@ -663,10 +708,13 @@ async function closeReader() {
 
 function handleEscape() {
   if (tocOpen.value || settingsOpen.value) { tocOpen.value = false; settingsOpen.value = false }
+  else if (chromeHidden.value) void toggleImmersive()
   else void closeReader()
 }
 
 watch(() => [props.modelValue, props.book?.id], ([visible]) => {
+  immersive.value = false
+  readingTap = null
   if (visible && props.book?.id) void openBook()
   if (visible && !releaseScrollLock) releaseScrollLock = acquireBodyScrollLock()
   if (!visible) {
@@ -679,6 +727,7 @@ watch(() => [props.modelValue, props.book?.id], ([visible]) => {
     void disposePdf()
   }
 }, { immediate: true })
+watch(isMobile, () => { immersive.value = false; readingTap = null })
 watch([fontSize, fontFamily, readerTheme], async () => {
   persistDevicePreferences()
   if (props.modelValue && isFlowDocument.value && !loading.value && !navigating.value) {
@@ -750,8 +799,14 @@ onBeforeUnmount(() => {
 /* Optional sync notices must not change the reading viewport's grid placement. */
 .ebook-reader{display:flex;flex-direction:column;height:100dvh;outline:none}
 .ebook-reader__header{min-height:64px;flex-shrink:0}
+.ebook-reader__workspace{position:relative;display:flex;flex:1;flex-direction:column;min-height:0}
+.ebook-reader__workspace>.ebook-reader__toc,.ebook-reader__workspace>.ebook-reader__settings{position:absolute;top:0}
+.ebook-reader__workspace>.ebook-reader__scrim{inset:0}
+.ebook-reader__restore-chrome{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.ebook-reader__restore-chrome:focus-visible{width:auto;height:44px;clip-path:none;left:16px;top:12px;z-index:12003;padding:0 16px}
+.ebook-reader__setting-group>small{font-size:12px;line-height:1.65;color:var(--color-text-secondary)}
 .ebook-reader__notice{flex-shrink:0;flex-wrap:wrap;font-size:13px}
-.ebook-reader__surface{flex:1;overscroll-behavior:contain}
+.ebook-reader__surface{flex:1;overscroll-behavior:contain;overflow-anchor:none}
 .ebook-reader__footer{flex-shrink:0;min-height:64px;box-sizing:border-box;box-shadow:none}
 .ebook-reader__paper{border-radius:3px;box-shadow:0 3px 18px #28304108}
 .ebook-reader__flow :deep(img){max-width:100%;height:auto}
@@ -767,6 +822,7 @@ onBeforeUnmount(() => {
 .ebook-reader__topbar{display:flex;align-items:center;gap:14px;width:100%;max-width:980px;margin-inline:auto}
 .ebook-reader__tool{height:40px;padding:0 10px;gap:7px;flex-shrink:0;font-size:13px}
 .ebook-reader__toc-trigger{margin-right:8px;border-right:1px solid var(--color-border-subtle);border-radius:0;padding-right:18px}
+@media(min-width:769px){.ebook-reader__footer{grid-template-columns:76px 120px minmax(180px,400px) 120px;gap:14px}.ebook-reader__footer-toc{height:44px;gap:7px;font-size:13px;border-right:1px solid var(--color-border-subtle);border-radius:0}}
 .ebook-reader__scrim{position:absolute;inset:64px 0 0;z-index:12001;border:0;background:#18202d30;cursor:default}
 .ebook-reader__toc,.ebook-reader__settings{overscroll-behavior:contain}
 .ebook-reader__settings{overflow:auto}
@@ -802,7 +858,12 @@ onBeforeUnmount(() => {
   .ebook-reader__progress{grid-template-columns:1fr auto;gap:8px;padding:10px 8px}
   .ebook-reader__progress strong{font-size:12px;font-weight:500;white-space:nowrap}
   .ebook-reader__progress>span{min-width:24px;height:3px}
-  .ebook-reader__toc,.ebook-reader__settings{top:calc(56px + env(safe-area-inset-top));width:min(340px,90vw);padding-bottom:env(safe-area-inset-bottom)}
+  .ebook-reader__toc,.ebook-reader__settings{width:min(76vw,320px);box-sizing:border-box;padding-bottom:env(safe-area-inset-bottom)}
+  .ebook-reader__panel-heading{padding:14px 16px}
+  .ebook-reader__setting-group{padding:16px}
+  .ebook-reader__stepper{grid-template-columns:1fr 56px 1fr}
+  .ebook-reader__segmented button,.ebook-reader__stepper button{min-height:44px}
+  .ebook-reader__toc-list button{font-size:13px}
   .ebook-reader__scrim{top:calc(56px + env(safe-area-inset-top))}
   .ebook-reader__notice{padding:8px 12px;gap:8px;font-size:12px}
   .ebook-reader__state{padding:24px;text-align:center;box-sizing:border-box;font-size:13px}
