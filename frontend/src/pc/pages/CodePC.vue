@@ -2,10 +2,6 @@
   <div class="code">
     <!-- 列表视图 -->
     <div v-if="!currentRepo">
-      <div class="page-header">
-        <p>管理 Git 代码仓库</p>
-      </div>
-
       <NativeCard class="toolbar">
         <NativeSpace>
           <NativeInput
@@ -18,6 +14,7 @@
               <NativeIcon name="magnifying-glass" />
             </template>
           </NativeInput>
+          <NativeButton variant="outline" :loading="loading" @click="loadRepos">刷新列表</NativeButton>
           <NativeButton theme="primary" @click="showAddDialog" :disabled="isGuest">
             <template #icon><NativeIcon name="plus" /></template>
             添加仓库
@@ -26,15 +23,17 @@
       </NativeCard>
 
       <NativeCard style="margin-top: 16px; min-height: 200px;">
+        <div v-if="listError" class="code-feedback" role="alert"><span>{{ listError }}{{ repoList.length ? '，当前保留上次加载的结果。' : '。' }}</span><NativeButton size="small" variant="outline" @click="loadRepos">重试列表</NativeButton></div>
+        <div v-else-if="loading && repoList.length" class="code-feedback" role="status">正在更新仓库列表…</div>
         <!-- 加载状态 -->
-        <div v-if="loading" class="content-loading">
+        <div v-if="loading && !repoList.length" class="content-loading">
           <NativeLoading size="small" />
         </div>
         <template v-else>
           <NativeList v-if="repoList && repoList.length > 0" :split="true">
             <NativeListItem v-for="repo in repoList" :key="repo.id">
               <div class="repo-item">
-                <div class="repo-info" @click="openRepo(repo)">
+                <div class="repo-info" role="button" tabindex="0" @click="openRepo(repo)" @keydown.enter="openRepo(repo)" @keydown.space.prevent="openRepo(repo)">
                   <div class="repo-name">
                     <NativeIcon name="git" />
                     {{ repo.name }}
@@ -78,7 +77,7 @@
             </NativeListItem>
           </NativeList>
           <div v-else class="empty-wrapper">
-            <NativeEmpty description="暂无代码仓库，请添加一个仓库" />
+            <NativeEmpty :description="listError ? '暂时无法获取仓库' : searchKeyword ? '没有找到匹配的仓库' : '暂无代码仓库，请添加一个仓库'" />
           </div>
         </template>
       </NativeCard>
@@ -118,14 +117,16 @@
         <!-- 左侧文件树 -->
         <NativeAside class="file-sidebar">
           <div class="sidebar-header">文件目录</div>
+          <div v-if="treeError" class="code-feedback" role="alert"><span>{{ treeError }}</span><NativeButton size="small" variant="text" @click="loadFileTree">重试目录</NativeButton></div>
           <div v-if="fileTreeLoading" class="sidebar-loading">
             <NativeLoading size="small" />
           </div>
-          <div v-else-if="fileTree.length === 0" class="sidebar-empty">
+          <div v-else-if="fileTree.length === 0 && !treeError" class="sidebar-empty">
             <NativeEmpty description="暂无文件" />
           </div>
           <NativeTree
             v-else
+            :key="currentRepo.id"
             :data="fileTree"
             :expand-all="false"
             key-field="path"
@@ -155,7 +156,7 @@
                 <div v-if="currentFile" class="file-header">
                   <span class="file-title">
                     <NativeIcon :name="isMarkdownFile(currentFile.name) ? 'file-text' : 'file'" />
-                    {{ currentFile.name }}
+                    {{ currentFile.path || currentFile.name }}
                     <span v-if="currentFile.searchLine" class="search-line-badge">第 {{ currentFile.searchLine }} 行</span>
                     <span v-if="currentFile.commit" class="search-line-badge">提交 {{ currentFile.commit.slice(0, 12) }}</span>
                   </span>
@@ -171,17 +172,18 @@
                 </div>
                 
                 <!-- 文件内容 -->
-                <div class="file-content">
+                <div ref="fileContentPanel" class="file-content">
                   <!-- 加载中 -->
-                  <div v-if="fileLoading || readmeLoading" class="file-loading">
+                  <div v-if="fileLoading || (!currentFile && !fileError && readmeLoading)" class="file-loading">
                     <NativeLoading size="medium" />
                     <span class="loading-text">加载中...</span>
                   </div>
+                  <div v-else-if="fileError" class="code-feedback code-feedback--file" role="alert"><strong>{{ fileError }}</strong><span>{{ requestedFile?.path }}</span><NativeButton variant="outline" @click="retryFile">重新加载文件</NativeButton><NativeButton variant="text" @click="closeFile">返回 README</NativeButton></div>
                   <!-- 当前选择的文件 -->
                   <template v-else-if="currentFile">
                     <!-- Markdown 文件预览 -->
                     <MdPreview
-                      v-if="isMarkdownFile(currentFile.name)"
+                      v-if="isMarkdownFile(currentFile.name) && !currentFile.searchLine"
                       :modelValue="currentFile.content"
                       :sanitize="sanitizeRichHtml"
                       :theme="editorTheme"
@@ -190,7 +192,7 @@
                       class="markdown-preview"
                     />
                     <!-- 文本/代码文件预览（带语法高亮） -->
-                    <pre v-else-if="currentFile.type === 'text'" class="code-content"><code :class="'language-' + getLanguageFromFilename(currentFile.name)" v-html="highlightedCode"></code></pre>
+                    <CodeSourcePreview v-else-if="currentFile.type === 'text' || isMarkdownFile(currentFile.name)" :content="currentFile.content" :html="highlightedCode" :line="currentFile.searchLine" />
                     <!-- 二进制文件 -->
                     <div v-else class="binary-file">
                       <NativeIcon name="file" size="48" />
@@ -200,8 +202,9 @@
                   </template>
                   <!-- 默认显示 README -->
                   <template v-else>
+                    <div v-if="readmeError" class="code-feedback" role="alert"><span>{{ readmeError }}</span><NativeButton variant="outline" @click="loadReadme">重试 README</NativeButton></div>
                     <MdPreview
-                      v-if="readmeContent"
+                      v-else-if="readmeContent"
                       :modelValue="readmeContent"
                       :sanitize="sanitizeRichHtml"
                       :theme="editorTheme"
@@ -216,6 +219,7 @@
             </NativeTabPanel>
             <NativeTabPanel name="commits" label="提交历史">
               <div class="commits-panel">
+                <div v-if="commitsError" class="code-feedback" role="alert"><span>{{ commitsError }}</span><NativeButton size="small" variant="outline" @click="loadCommits">重试历史</NativeButton></div>
                 <NativeList v-if="commits.length > 0" :split="true">
                   <NativeListItem v-for="commit in commits" :key="commit.hash" class="commit-list-item" interactive @click="showCommitDetail(commit)">
                     <div class="commit-item">
@@ -228,7 +232,7 @@
                     </div>
                   </NativeListItem>
                 </NativeList>
-                <NativeEmpty v-else description="暂无提交历史" />
+                <NativeEmpty v-else-if="!commitsError" description="暂无提交历史" />
               </div>
             </NativeTabPanel>
           </NativeTabs>
@@ -311,13 +315,14 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '@/api'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { usePermission } from '@/composables/usePermission'
 import { isReadOnlyRepository, repositorySourceLabel } from '@/utils/codeRepositoryCapabilities'
+import CodeSourcePreview from '@/components/CodeSourcePreview.vue'
 
 const route = useRoute()
 import { 
@@ -348,6 +353,21 @@ const codeTheme = ref('atom')
 const repoList = ref([])
 const searchKeyword = ref('')
 const loading = ref(false)
+const listError = ref('')
+let listRequest = 0
+let fileRequest = 0
+let repoEpoch = 0
+let treeRequest = 0
+let readmeRequest = 0
+let commitsRequest = 0
+let refreshRequest = 0
+let disposed = false
+const fileContentPanel = ref(null)
+const fileError = ref('')
+const treeError = ref('')
+const readmeError = ref('')
+const commitsError = ref('')
+const requestedFile = ref(null)
 const addDialogVisible = ref(false)
 
 // 克隆状态管理
@@ -378,6 +398,7 @@ function startSyncPolling(repoId, taskId) {
   syncPollInterval = setInterval(async () => {
     try {
       const response = await api.code.getSyncStatus(repoId)
+      if (disposed) return
       const data = response.data?.data
 
       if (data) {
@@ -625,6 +646,7 @@ function startClonePolling(repoId) {
   clonePollInterval = setInterval(async () => {
     try {
       const response = await api.code.getCloneStatus(repoId)
+      if (disposed) return
       const data = response.data?.data
       
       if (data) {
@@ -736,20 +758,18 @@ function getLanguageFromFilename(filename) {
 
 // 加载仓库列表
 async function loadRepos() {
+  if (disposed) return
+  const request = ++listRequest
   loading.value = true
-  console.log('[CodePC] 开始加载仓库列表')
+  listError.value = ''
   try {
     const response = await api.code.list({ keyword: searchKeyword.value })
-    console.log('[CodePC] API 响应:', response)
+    if (request !== listRequest) return
     repoList.value = response.data?.data || []
-    console.log('[CodePC] 仓库列表:', repoList.value)
-  } catch (error) {
-    console.error('[CodePC] 加载失败:', error)
-    toast.error('加载仓库列表失败')
-    repoList.value = []
+  } catch {
+    if (request === listRequest) listError.value = '加载仓库列表失败，请检查连接后重试'
   } finally {
-    loading.value = false
-    console.log('[CodePC] loading 状态:', loading.value)
+    if (request === listRequest) loading.value = false
   }
 }
 
@@ -811,32 +831,32 @@ async function syncRepo(repo) {
 }
 
 // 打开仓库浏览
+function invalidateRepoRequests() {
+  repoEpoch += 1
+  refreshRequest += 1
+  fileRequest += 1
+  treeRequest += 1
+  readmeRequest += 1
+  commitsRequest += 1
+  fileLoading.value = false
+  fileTreeLoading.value = false
+  readmeLoading.value = false
+  fileError.value = treeError.value = readmeError.value = commitsError.value = ''
+  requestedFile.value = null
+}
 async function openRepo(repo) {
-  console.log('[CodePC] 打开仓库:', repo.name, 'repoId:', repo.id)
+  invalidateRepoRequests()
   currentRepo.value = repo
   activeTab.value = 'files'
   currentFile.value = null
-  
-  // 重置数据
   fileTree.value = []
   commits.value = []
   readmeContent.value = ''
-  
-  // 并行加载数据
-  try {
-    await Promise.all([
-      loadFileTree(),
-      loadReadme(),
-      loadCommits()
-    ])
-    console.log('[CodePC] 仓库数据加载完成')
-  } catch (error) {
-    console.error('[CodePC] 加载仓库数据失败:', error)
-  }
+  await Promise.all([loadFileTree(), loadReadme(), loadCommits()])
 }
 
-// 关闭仓库浏览
 function closeRepo() {
+  invalidateRepoRequests()
   currentRepo.value = null
   fileTree.value = []
   commits.value = []
@@ -847,6 +867,7 @@ function closeRepo() {
 // 加载树节点（用于异步加载）- NativeTree lazy load 回调
 async function loadTreeNode(node) {
   if (!currentRepo.value) return []
+  const repositoryId = currentRepo.value.id, epoch = repoEpoch
   
   // node 是 TreeNode 实例，实际数据在 node.data 中
   const nodeData = node.data || node
@@ -855,7 +876,8 @@ async function loadTreeNode(node) {
   console.log('异步加载树节点:', targetPath, 'nodeData:', nodeData)
   
   try {
-    const response = await api.code.getTree(currentRepo.value.id, targetPath)
+    const response = await api.code.getTree(repositoryId, targetPath)
+    if (epoch !== repoEpoch) return []
     const items = response.data.data || []
     console.log('加载到的子项:', items)
     
@@ -869,6 +891,7 @@ async function loadTreeNode(node) {
       isLeaf: item.type === 'file'
     }))
   } catch (error) {
+    if (epoch !== repoEpoch) return []
     console.error('加载树节点失败:', error)
     toast.error('加载失败')
     return []
@@ -878,30 +901,23 @@ async function loadTreeNode(node) {
 // 加载文件树（初始加载根目录）
 async function loadFileTree() {
   if (!currentRepo.value) return
+  const repositoryId = currentRepo.value.id, epoch = repoEpoch, request = ++treeRequest
   fileTreeLoading.value = true
+  treeError.value = ''
   try {
-    console.log('[CodePC] 加载根目录')
-    const response = await api.code.getTree(currentRepo.value.id, '')
-    const items = response.data.data || []
-    console.log('[CodePC] 根目录文件:', items)
-    
-    // 转换为树形结构
-    fileTree.value = items.map(item => ({
-      path: item.path,
-      name: item.name,
-      type: item.type,
-      // 懒加载节点需要设置 children: true 表示可以展开
+    const response = await api.code.getTree(repositoryId, '')
+    if (epoch !== repoEpoch || request !== treeRequest) return
+    fileTree.value = (response.data.data || []).map(item => ({
+      path: item.path, name: item.name, type: item.type,
       children: item.type === 'directory' ? true : undefined,
       isLeaf: item.type === 'file'
     }))
-    
-    console.log('[CodePC] fileTree 已设置, 长度:', fileTree.value.length)
-  } catch (error) {
-    console.error('[CodePC] 加载文件树失败:', error)
-    toast.error('加载文件树失败')
-    fileTree.value = []
+    return true
+  } catch {
+    if (epoch === repoEpoch && request === treeRequest) treeError.value = '文件目录加载失败'
+    return false
   } finally {
-    fileTreeLoading.value = false
+    if (epoch === repoEpoch && request === treeRequest) fileTreeLoading.value = false
   }
 }
 
@@ -924,144 +940,45 @@ async function onTreeSelect(keys, node) {
 // 加载文件内容
 async function loadFile(path, searchLine = null, commit = null) {
   if (!currentRepo.value) return
+  const repositoryId = currentRepo.value.id, epoch = repoEpoch, request = ++fileRequest
+  requestedFile.value = { path, searchLine, commit }
   fileLoading.value = true
-  console.log('========== 开始加载文件 ==========', path)
+  fileError.value = ''
   try {
-    const response = await api.code.getFile(currentRepo.value.id, path, commit)
+    const response = await api.code.getFile(repositoryId, path, commit)
+    if (epoch !== repoEpoch || request !== fileRequest) return
     currentFile.value = {
       ...response.data.data,
       ...(Number.isSafeInteger(searchLine) && searchLine > 0 ? { searchLine } : {})
     }
-    console.log('文件加载完成:', {
-      name: currentFile.value?.name,
-      type: currentFile.value?.type,
-      contentLength: currentFile.value?.content?.length
-    })
-    
-    // 等待 Vue DOM 更新完成后再重置滚动条
-    await nextTick()
-    console.log('nextTick 完成，准备重置滚动条')
-    
-    // 多次重置以确保生效（立即 + 延迟）
-    console.log('--- 第一次重置滚动条 ---')
-    resetScrollPosition('第一次')
-    setTimeout(() => {
-      console.log('--- 第二次重置滚动条（延迟100ms） ---')
-      resetScrollPosition('第二次')
-      
-      // 如果是Markdown文件，绑定链接点击事件
-      if (isMarkdownFile(path)) {
-        setTimeout(() => {
-          bindMarkdownLinks()
-        }, 200)
-      }
-    }, 100)
-  } catch (error) {
-    if (error.response?.data?.code === 'CODE_SNAPSHOT_STALE') {
-      toast.warning('该搜索结果对应的提交已过期，请刷新搜索索引后重试')
-    } else {
-      toast.error('加载文件失败')
-    }
-    console.error('加载文件失败:', error)
-  } finally {
     fileLoading.value = false
+    await nextTick()
+    if (epoch !== repoEpoch || request !== fileRequest) return
+    if (fileContentPanel.value) {
+      fileContentPanel.value.scrollTop = 0
+      fileContentPanel.value.scrollLeft = 0
+    }
+    if (isMarkdownFile(path)) bindMarkdownLinks()
+  } catch (error) {
+    if (epoch !== repoEpoch || request !== fileRequest) return
+    fileError.value = error.response?.data?.code === 'CODE_SNAPSHOT_STALE'
+      ? '该引用对应的提交已过期，请刷新搜索结果后重新打开'
+      : '文件加载失败，请重试'
+  } finally {
+    if (epoch === repoEpoch && request === fileRequest) fileLoading.value = false
   }
 }
 
-// 重置滚动位置
-function resetScrollPosition(label = '') {
-  console.log(`[${label}] 开始重置滚动位置`)
-  
-  // 重置外层 .file-content 容器
-  const fileContentPanel = document.querySelector('.file-content')
-  console.log(`[${label}] .file-content 容器:`, fileContentPanel ? '找到' : '未找到')
-  if (fileContentPanel) {
-    console.log(`[${label}] .file-content 当前滚动位置:`, {
-      scrollTop: fileContentPanel.scrollTop,
-      scrollLeft: fileContentPanel.scrollLeft,
-      scrollHeight: fileContentPanel.scrollHeight,
-      clientHeight: fileContentPanel.clientHeight
-    })
-    fileContentPanel.scrollTop = 0
-    fileContentPanel.scrollLeft = 0
-    console.log(`[${label}] .file-content 重置后滚动位置:`, {
-      scrollTop: fileContentPanel.scrollTop,
-      scrollLeft: fileContentPanel.scrollLeft
-    })
+function retryFile() {
+  if (requestedFile.value) {
+    const { path, searchLine, commit } = requestedFile.value
+    void loadFile(path, searchLine, commit)
   }
-  
-  // 重置 Markdown 预览容器
-  const markdownPanel = document.querySelector('.markdown-preview')
-  console.log(`[${label}] .markdown-preview 容器:`, markdownPanel ? '找到' : '未找到')
-  if (markdownPanel) {
-    console.log(`[${label}] .markdown-preview 当前滚动位置:`, {
-      scrollTop: markdownPanel.scrollTop,
-      scrollLeft: markdownPanel.scrollLeft,
-      scrollHeight: markdownPanel.scrollHeight,
-      clientHeight: markdownPanel.clientHeight
-    })
-    markdownPanel.scrollTop = 0
-    markdownPanel.scrollLeft = 0
-    console.log(`[${label}] .markdown-preview 重置后滚动位置:`, {
-      scrollTop: markdownPanel.scrollTop,
-      scrollLeft: markdownPanel.scrollLeft
-    })
-    
-    // 尝试找到 MdPreview 内部的滚动容器
-    const innerScroll = markdownPanel.querySelector('.md-preview-wrapper')
-    console.log(`[${label}] .md-preview-wrapper 容器:`, innerScroll ? '找到' : '未找到')
-    if (innerScroll) {
-      console.log(`[${label}] .md-preview-wrapper 当前滚动位置:`, {
-        scrollTop: innerScroll.scrollTop,
-        scrollLeft: innerScroll.scrollLeft
-      })
-      innerScroll.scrollTop = 0
-      innerScroll.scrollLeft = 0
-    }
-  }
-  
-  // 重置代码预览容器
-  const codePanel = document.querySelector('.code-content')
-  console.log(`[${label}] .code-content 容器:`, codePanel ? '找到' : '未找到')
-  if (codePanel) {
-    console.log(`[${label}] .code-content 当前滚动位置:`, {
-      scrollTop: codePanel.scrollTop,
-      scrollLeft: codePanel.scrollLeft,
-      scrollHeight: codePanel.scrollHeight,
-      clientHeight: codePanel.clientHeight
-    })
-    codePanel.scrollTop = 0
-    codePanel.scrollLeft = 0
-    console.log(`[${label}] .code-content 重置后滚动位置:`, {
-      scrollTop: codePanel.scrollTop,
-      scrollLeft: codePanel.scrollLeft
-    })
-  }
-  
-  // 重置 content-area 容器（可能是真正的滚动容器）
-  const contentArea = document.querySelector('.content-area')
-  console.log(`[${label}] .content-area 容器:`, contentArea ? '找到' : '未找到')
-  if (contentArea) {
-    console.log(`[${label}] .content-area 当前滚动位置:`, {
-      scrollTop: contentArea.scrollTop,
-      scrollLeft: contentArea.scrollLeft,
-      scrollHeight: contentArea.scrollHeight,
-      clientHeight: contentArea.clientHeight
-    })
-    contentArea.scrollTop = 0
-    contentArea.scrollLeft = 0
-    console.log(`[${label}] .content-area 重置后滚动位置:`, {
-      scrollTop: contentArea.scrollTop,
-      scrollLeft: contentArea.scrollLeft
-    })
-  }
-  
-  console.log(`[${label}] 滚动位置重置完成`)
 }
 
 // 绑定Markdown链接点击事件，阻止默认跳转，改为新标签页打开
 function bindMarkdownLinks() {
-  const previewPanel = document.querySelector('.markdown-preview')
+  const previewPanel = fileContentPanel.value?.querySelector('.markdown-preview')
   if (!previewPanel) return
   
   const links = previewPanel.querySelectorAll('a')
@@ -1083,16 +1000,12 @@ function bindMarkdownLinks() {
       else if (href.startsWith('#')) {
         e.preventDefault()
         // URL解码锚点ID（处理中文锚点）
-        const anchorId = decodeURIComponent(href.substring(1))
+        let anchorId
+        try { anchorId = decodeURIComponent(href.substring(1)) } catch { return }
         console.log('点击锚点:', anchorId)
         
         // 首先尝试通过 id 查找
-        let anchorElement = previewPanel.querySelector(`[id="${anchorId}"]`)
-        
-        // 如果没找到，尝试通过 name 查找
-        if (!anchorElement) {
-          anchorElement = previewPanel.querySelector(`[name="${anchorId}"]`)
-        }
+        let anchorElement = Array.from(previewPanel.querySelectorAll('[id],[name]')).find(el => el.id === anchorId || el.getAttribute('name') === anchorId)
         
         // 还是没找到，尝试查找标题元素并匹配生成的 ID
         if (!anchorElement) {
@@ -1128,50 +1041,56 @@ function bindMarkdownLinks() {
 
 // 关闭文件预览
 function closeFile() {
+  fileRequest += 1
   currentFile.value = null
+  requestedFile.value = null
+  fileError.value = ''
+  fileLoading.value = false
+  void nextTick().then(bindMarkdownLinks)
 }
 
-// 加载 README
 async function loadReadme() {
   if (!currentRepo.value) return
+  const repositoryId = currentRepo.value.id, epoch = repoEpoch, request = ++readmeRequest
   readmeLoading.value = true
-  console.log('[CodePC] 开始加载 README, repoId:', currentRepo.value.id)
+  readmeError.value = ''
   try {
-    const response = await api.code.getReadme(currentRepo.value.id)
-    console.log('[CodePC] README 响应:', response.data)
+    const response = await api.code.getReadme(repositoryId)
+    if (epoch !== repoEpoch || request !== readmeRequest) return
     readmeContent.value = response.data.data?.content || ''
-    console.log('[CodePC] readmeContent 已设置:', readmeContent.value ? '有内容' : '空')
-  } catch (error) {
-    console.error('[CodePC] 加载 README 失败:', error)
-    readmeContent.value = ''
-  } finally {
     readmeLoading.value = false
+    await nextTick()
+    if (epoch === repoEpoch && request === readmeRequest) bindMarkdownLinks()
+    return true
+  } catch {
+    if (epoch === repoEpoch && request === readmeRequest) readmeError.value = 'README 加载失败'
+    return false
+  } finally {
+    if (epoch === repoEpoch && request === readmeRequest) readmeLoading.value = false
   }
 }
 
-// 加载提交历史
 async function loadCommits() {
   if (!currentRepo.value) return
-  console.log('[CodePC] 开始加载提交历史, repoId:', currentRepo.value.id)
+  const repositoryId = currentRepo.value.id, epoch = repoEpoch, request = ++commitsRequest
+  commitsError.value = ''
   try {
-    const response = await api.code.getCommits(currentRepo.value.id, 20)
-    console.log('[CodePC] 提交历史响应:', response.data)
+    const response = await api.code.getCommits(repositoryId, 20)
+    if (epoch !== repoEpoch || request !== commitsRequest) return
     commits.value = response.data.data || []
-    console.log('[CodePC] commits 已设置, 数量:', commits.value.length)
-  } catch (error) {
-    console.error('[CodePC] 加载提交历史失败:', error)
-    commits.value = []
+    return true
+  } catch {
+    if (epoch === repoEpoch && request === commitsRequest) commitsError.value = '提交历史加载失败'
+    return false
   }
 }
 
-// 刷新仓库
 async function refreshRepo() {
-  await Promise.all([
-    loadFileTree(),
-    loadReadme(),
-    loadCommits()
-  ])
-  toast.success('刷新成功')
+  const epoch = repoEpoch, request = ++refreshRequest
+  const results = await Promise.all([loadFileTree(), loadReadme(), loadCommits()])
+  if (epoch !== repoEpoch || request !== refreshRequest) return
+  if (results.every(Boolean)) toast.success('刷新成功')
+  else toast.warning('部分内容更新失败，可在对应区域重试')
 }
 
 // 格式化日期
@@ -1190,16 +1109,31 @@ onMounted(async () => {
     try { repository = (await api.code.get(repositoryId)).data?.data } catch { return }
   }
   if (!repository) return
-  await openRepo(repository)
+  const opening = openRepo(repository)
+  const epoch = repoEpoch
+  await opening
+  if (epoch !== repoEpoch) return
   if (typeof route.query.path === 'string' && route.query.path) {
     const line = Number(route.query.line)
     const commit = typeof route.query.commit === 'string' ? route.query.commit : null
     await loadFile(route.query.path, Number.isSafeInteger(line) && line > 0 ? line : null, commit)
   }
 })
+onBeforeUnmount(() => {
+  disposed = true
+  listRequest += 1
+  invalidateRepoRequests()
+  clearInterval(clonePollInterval)
+  clearInterval(syncPollInterval)
+})
 </script>
 
 <style scoped>
+.code-feedback{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;font-size:13px;line-height:1.6;color:var(--color-text-secondary);background:var(--color-surface-subtle);border-bottom:1px solid var(--color-border-subtle)}
+.code-feedback--file{height:100%;box-sizing:border-box;justify-content:center;flex-direction:column}
+.code-feedback--file strong{color:var(--color-text-primary);font-size:15px}
+.code-feedback--file span{overflow-wrap:anywhere}
+.repo-info:focus-visible{outline:2px solid var(--color-primary);outline-offset:4px;border-radius:4px}
 .code {
   padding: 0;
 }
@@ -1945,4 +1879,27 @@ onMounted(async () => {
 .btn-delete :deep(.native-icon) {
   color: var(--color-danger) !important;
 }
+/* PC knowledge browsing: one constrained reader surface, not nested page scrolls. */
+.toolbar{box-shadow:none}
+.toolbar :deep(.native-card__body){padding:12px 16px}
+.repo-item{padding:18px 16px;gap:16px;box-sizing:border-box}
+.repo-name{font-size:15px}.repo-desc{font-size:13px}.repo-actions{gap:5px}
+.repo-actions :deep(.native-button){min-width:30px;height:30px;padding:5px}
+.repo-actions :deep(svg){width:15px;height:15px}
+.repo-browser{display:flex;flex-direction:column;gap:12px;height:calc(100dvh - 120px);min-height:460px}
+.browser-header{margin:0;padding:10px 14px;background:var(--color-surface-raised);border:1px solid var(--color-border-subtle)}
+.browser-title{font-size:16px;min-width:0}
+.browser-layout{height:auto;flex:1;min-height:0;background:var(--color-surface-raised);border:1px solid var(--color-border-subtle)}
+.file-sidebar{width:clamp(200px,20vw,280px);min-width:200px;border-color:var(--color-border-subtle);background:var(--color-surface-subtle)}
+.content-area{padding:0;min-width:0;overflow:hidden}
+.content-area :deep(.native-tabs){display:flex;flex-direction:column;height:100%;min-height:0}
+.content-area :deep(.native-tabs__header){flex-shrink:0;margin:0;padding-inline:16px}
+.content-area :deep(.native-tabs__content){flex:1;min-height:0;overflow:hidden;padding:0}
+.content-area :deep(.native-tab-panel){height:100%;overflow:auto}
+.file-preview-area,.file-content{min-height:0}
+.file-content{background:var(--color-surface-raised)}
+.file-header{flex-shrink:0;min-height:42px;padding:8px 14px;border-radius:0;box-sizing:border-box;border-color:var(--color-border-subtle)}
+.file-title{font-size:13px;min-width:0;overflow-wrap:anywhere;flex-wrap:wrap}
+.search-line-badge{font-size:11px;background:var(--color-primary-surface);color:var(--color-primary)}
+.file-sidebar .code-feedback{flex-direction:column;align-items:start}
 </style>
