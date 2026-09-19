@@ -296,6 +296,7 @@ export function normalizeSearchQuery(input = {}) {
     matchTokens: Object.freeze(uniqueTokens),
     types: Object.freeze([...new Set(types)]),
     scope,
+    repositoryId: input.repositoryId === undefined ? null : positiveInteger(input.repositoryId, 'repositoryId'),
     tag: optionalText(input.tag, 'tag', 80),
     author: optionalText(input.author, 'author', 256),
     status: optionalText(input.status, 'status', 128),
@@ -533,6 +534,10 @@ export class SearchIndexService {
     }
     const clauses = ['search_index_fts MATCH ?']
     const parameters = [query.ftsQuery]
+    if (query.repositoryId !== null) {
+      clauses.push("((e.resource_type = 'code_file' AND e.parent_domain_id = ?) OR (e.resource_type = 'code_repository' AND e.domain_id = ?))")
+      parameters.push(query.repositoryId, query.repositoryId)
+    }
     if (query.scope !== 'all') {
       clauses.push('e.result_scope = ?')
       parameters.push(query.scope)

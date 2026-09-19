@@ -17,8 +17,8 @@ test('commit-bound symbol navigation verifies current HEAD before reading a file
 
 test('PC and mobile clients forward opaque commit locators without filesystem paths', () => {
   assert.match(apiSource, /getFile: \(id, path, commit\).*\{ commit \}/u)
-  assert.match(pcSource, /api\.code\.getFile\(currentRepo\.value\.id, path, commit\)/u)
+  assert.match(pcSource, /api\.code\.getFile\(repositoryId, path, commit\)/u)
   assert.match(pcSource, /route\.query\.commit/u)
-  assert.match(mobileSource, /api\.code\.getFile\(currentRepo\.value\.id, file\.path, file\.commit\)/u)
+  assert.match(mobileSource, /api\.code\.getFile\(currentRepo\.value\.id, filePath\.value, typeof route\.query\.commit/u)
   assert.match(mobileSource, /route\.query\.commit/u)
 })

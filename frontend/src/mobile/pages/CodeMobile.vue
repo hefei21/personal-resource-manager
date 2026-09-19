@@ -1,1195 +1,160 @@
 <template>
   <div class="code-mobile">
-    <!-- 列表视图 -->
-    <div v-if="!currentRepo" class="list-view">
-      <div class="page-header">
-        <h2>代码仓库</h2>
+    <template v-if="!currentRepo">
+      <form class="repo-search" @submit.prevent="loadRepos"><NativeInput v-model="keyword" aria-label="搜索代码仓库" placeholder="搜索代码仓库" clearable /><NativeButton variant="text" type="submit" aria-label="刷新仓库列表"><NativeIcon name="magnifying-glass" /></NativeButton></form>
+      <div v-if="listError" class="feedback" role="alert">{{ listError }}<NativeButton variant="text" @click="loadRepos">重试列表</NativeButton></div>
+      <p v-if="loading" class="feedback" role="status">正在加载仓库…</p>
+      <article v-for="repo in repoList" :key="repo.id" class="repo-card">
+        <button class="repo-open" @click="openRepo(repo)"><span class="repo-title"><NativeIcon name="git" /><strong>{{ repo.name }}</strong><NativeIcon name="chevron-right" /></span><span class="repo-desc">{{ repo.description || '暂无描述' }}</span><span class="repo-meta">{{ repositorySourceLabel(repo) }}<template v-if="repo.last_sync"> · {{ formatDate(repo.last_sync) }}</template></span></button>
+        <RepositoryTaskStatus v-if="!isReadOnlyRepository(repo)" :task="tasks.latest(repo.id)" :error="tasks.errors.value.get(String(repo.id))" @refresh="tasks.refresh(repo.id)" />
+      </article>
+      <p v-if="!loading && !listError && !repoList.length" class="feedback">{{ keyword ? '没有匹配的仓库' : '尚未纳管代码仓库' }}</p>
+    </template>
+    <section v-else class="repo-detail">
+      <header class="detail-header"><button class="icon-button" aria-label="返回仓库列表" @click="closeRepo"><NativeIcon name="arrow-left" /></button><div class="detail-title"><strong>{{ currentRepo.name }}</strong><span>{{ repositorySourceLabel(currentRepo) }}</span></div><button class="icon-button" aria-label="刷新当前视图" @click="refreshCurrent"><NativeIcon name="arrow-clockwise" /></button></header>
+      <nav class="detail-tabs" aria-label="仓库内容"><button v-for="tab in tabs" :key="tab.value" :aria-current="activeTab === tab.value ? 'page' : undefined" @click="navigate({ tab: tab.value })">{{ tab.label }}</button></nav>
+      <RepositorySearch v-if="activeTab === 'search'" :repository-id="currentRepo.id" @open="openSearchResult" />
+      <div v-else class="detail-content" ref="contentPanel" @click="onMarkdownClick">
+        <div v-if="busy[activeTab]" class="feedback" role="status">正在加载…</div>
+        <div v-else-if="errors[activeTab]" class="feedback" role="alert">{{ errors[activeTab] }}<NativeButton variant="text" @click="refreshCurrent">重试加载</NativeButton></div>
+        <template v-else-if="activeTab === 'readme'"><MdPreview v-if="readme" :model-value="readme" :sanitize="sanitizeRichHtml" :theme="theme" class="markdown-preview" /><p v-else class="feedback">该仓库暂无 README 文件</p></template>
+        <template v-else-if="activeTab === 'files'">
+          <nav class="path-nav" aria-label="文件位置"><button v-if="directory" @click="navigate({ dir: directory.split('/').slice(0, -1).join('/') })"><NativeIcon name="arrow-left" />上一级</button><span>{{ directory || '根目录' }}</span></nav>
+          <button v-for="item in files" :key="item.path" class="file-item" @click="item.type === 'directory' ? navigate({ dir: item.path }) : openFile(item.path)"><NativeIcon :name="item.type === 'directory' ? 'folder' : 'file'" /><span>{{ item.name }}</span><NativeIcon v-if="item.type === 'directory'" name="chevron-right" /></button>
+          <p v-if="!files.length" class="feedback">此目录暂无文件</p>
+        </template>
+        <template v-else-if="activeTab === 'commits'"><article v-for="commit in commits" :key="commit.hash" class="commit-item"><code>{{ commit.hash.slice(0, 12) }}</code><p>{{ commit.message }}</p><span>{{ commit.author }} · {{ commit.date }}</span></article><p v-if="!commits.length" class="feedback">暂无提交历史</p></template>
       </div>
-
-      <div class="search-bar">
-        <NativeInput
-          v-model="searchKeyword"
-          placeholder="搜索代码仓库..."
-          clearable
-          @enter="loadRepos"
-        >
-          <template #prefix-icon>
-            <NativeIcon name="magnifying-glass" />
-          </template>
-        </NativeInput>
-      </div>
-
-      <!-- 加载状态 -->
-      <div v-if="loading" class="content-loading">
-        <NativeLoading size="small" />
-      </div>
-
-      <!-- 仓库列表 -->
-      <div v-else-if="repoList.length > 0" class="repo-list">
-        <div
-          v-for="repo in repoList"
-          :key="repo.id"
-          class="repo-card"
-          @click="openRepo(repo)"
-        >
-          <div class="repo-header">
-            <div class="repo-name">
-              <NativeIcon name="git" size="18" />
-              <span class="name-text">{{ repo.name }}</span>
-              <NativeTag v-if="isReadOnlyRepository(repo)" theme="success" size="small">
-                NAS 只读
-              </NativeTag>
-              <NativeTag v-else-if="isCloning(repo.id)" theme="warning" size="small">
-                克隆中 {{ cloneProgress(repo.id) }}%
-              </NativeTag>
-              <NativeTag v-else-if="isSyncing(repo.id)" theme="primary" size="small">
-                同步中
-              </NativeTag>
-              <NativeTag v-else-if="!repo.last_sync" theme="warning" size="small">
-                等待克隆
-              </NativeTag>
-            </div>
-          </div>
-          
-          <div class="repo-desc">{{ repo.description || '暂无描述' }}</div>
-          
-          <div v-if="isCloning(repo.id)" class="clone-progress-bar">
-            <div class="clone-progress-fill" :style="{ width: cloneProgress(repo.id) + '%' }"></div>
-          </div>
-          
-          <div class="repo-meta">
-            <span class="repo-type">{{ repositorySourceLabel(repo) }}</span>
-            <span v-if="repo.last_sync">同步: {{ formatDate(repo.last_sync) }}</span>
-          </div>
-          
-          <div v-if="repo.languages && repo.languages.length > 0" class="repo-langs">
-            <span v-for="(lang, idx) in repo.languages.slice(0, 3)" :key="idx" class="lang-tag">
-              {{ lang.name }}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      <!-- 空状态 -->
-      <div v-else class="empty-state">
-        <NativeIcon name="git" size="48" color="#ccc" />
-        <p>暂无代码仓库</p>
-        <span class="empty-tip">尚未纳管代码仓库</span>
-      </div>
-    </div>
-
-    <!-- 仓库详情视图 -->
-    <div v-else class="repo-detail">
-      <div class="detail-header">
-        <button class="back-btn" @click="closeRepo">
-          <NativeIcon name="arrow-left" size="20" />
-        </button>
-        <div class="detail-title">
-          {{ currentRepo.name }}
-          <NativeTag v-if="isReadOnlyRepository(currentRepo)" theme="success" size="small">NAS 只读</NativeTag>
-        </div>
-        <button class="action-btn" @click="refreshRepo">
-          <NativeIcon name="arrow-clockwise" size="18" />
-        </button>
-      </div>
-
-      <div class="detail-tabs">
-        <div
-          v-for="tab in tabs"
-          :key="tab.value"
-          class="tab-item"
-          :class="{ active: activeTab === tab.value }"
-          @click="activeTab = tab.value"
-        >
-          {{ tab.label }}
-        </div>
-      </div>
-
-      <!-- README 内容 -->
-      <div v-if="activeTab === 'readme'" class="detail-content">
-        <div v-if="readmeLoading" class="content-loading">
-          <NativeLoading size="small" />
-        </div>
-        <MdPreview
-          v-else-if="readmeContent"
-          :modelValue="readmeContent"
-          :sanitize="sanitizeRichHtml"
-          :theme="editorTheme"
-          :previewTheme="previewTheme"
-          :codeTheme="codeTheme"
-          class="markdown-preview"
-        />
-        <div v-else class="empty-content">
-          <NativeIcon name="file-text" size="48" color="#ccc" />
-          <p>暂无 README 文件</p>
-        </div>
-      </div>
-
-      <!-- 文件列表 -->
-      <div v-else-if="activeTab === 'files'" class="detail-content">
-        <!-- 路径导航 -->
-        <div class="path-nav">
-          <button v-if="pathStack.length > 0" class="path-back" @click="goBack">
-            <NativeIcon name="arrow-left" size="16" />
-            返回上级
-          </button>
-          <span v-else class="path-current">{{ currentPath || '根目录' }}</span>
-        </div>
-        <!-- 加载中 -->
-        <div v-if="fileLoading" class="content-loading">
-          <NativeLoading size="small" />
-        </div>
-        <!-- 文件列表 -->
-        <div v-else-if="fileList.length > 0" class="file-list">
-          <div
-            v-for="file in fileList"
-            :key="file.path"
-            class="file-item"
-            :class="{ 'is-directory': file.type === 'directory' }"
-            @click="onFileClick(file)"
-          >
-            <NativeIcon :name="file.type === 'directory' ? 'folder' : 'file'" size="18" />
-            <span class="file-name">{{ file.name }}</span>
-            <NativeIcon v-if="file.type === 'directory'" name="chevron-right" size="16" color="var(--color-text-muted)" />
-          </div>
-        </div>
-        <div v-else class="empty-content">
-          <NativeIcon name="folder" size="48" color="#ccc" />
-          <p>暂无文件</p>
-        </div>
-      </div>
-
-      <!-- 提交历史 -->
-      <div v-else-if="activeTab === 'commits'" class="detail-content">
-        <div v-if="commitsLoading" class="content-loading">
-          <NativeLoading size="small" />
-        </div>
-        <div v-else-if="commits.length > 0" class="commit-list">
-          <div
-            v-for="commit in commits"
-            :key="commit.hash"
-            class="commit-item"
-          >
-            <div class="commit-hash">{{ commit.hash }}</div>
-            <div class="commit-message">{{ commit.message }}</div>
-            <div class="commit-meta">
-              <span>{{ commit.author }}</span>
-              <span>{{ commit.date }}</span>
-            </div>
-          </div>
-        </div>
-        <div v-else class="empty-content">
-          <NativeIcon name="git-commit" size="48" color="#ccc" />
-          <p>暂无提交历史</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- 添加仓库对话框 -->
-    <NativeDialog v-model="addDialogVisible" title="添加代码仓库" @confirm="confirmAdd">
-      <NativeForm>
-        <NativeFormItem label="仓库URL">
-          <div class="url-input-row">
-            <NativeInput v-model="addForm.url" placeholder="https://github.com/xxx/xxx.git" />
-            <NativeButton
-              theme="default"
-              size="small"
-              @click="fetchGithubInfo"
-              :loading="fetchingInfo"
-              :disabled="!isGithubUrl(addForm.url)"
-            >
-              获取信息
-            </NativeButton>
-          </div>
-        </NativeFormItem>
-        <NativeFormItem label="仓库名称">
-          <NativeInput v-model="addForm.name" placeholder="给仓库起个名字" />
-        </NativeFormItem>
-        <NativeFormItem label="简介">
-          <NativeTextarea v-model="addForm.description" placeholder="仓库简介（可选）" :rows="3" />
-        </NativeFormItem>
-      </NativeForm>
-    </NativeDialog>
-
-    <!-- 编辑仓库对话框 -->
-    <NativeDialog v-model="editDialogVisible" title="编辑代码仓库" @confirm="confirmEdit">
-      <NativeForm>
-        <NativeFormItem label="仓库名称">
-          <NativeInput v-model="editForm.name" placeholder="仓库名称" />
-        </NativeFormItem>
-        <NativeFormItem label="简介">
-          <NativeTextarea v-model="editForm.description" placeholder="仓库简介" :rows="3" />
-        </NativeFormItem>
-      </NativeForm>
-    </NativeDialog>
-
-    <!-- 删除确认对话框 -->
-    <NativeDialog v-model="deleteDialogVisible" title="确认删除" :show-footer="false">
-      <div class="delete-confirm">
-        <p>确定删除仓库 "{{ deleteTarget?.name }}" 吗？</p>
-        <p class="delete-warning">这将同时删除本地代码文件，此操作不可恢复。</p>
-        <div class="delete-actions">
-          <NativeButton theme="default" @click="deleteDialogVisible = false">取消</NativeButton>
-          <NativeButton theme="danger" @click="doDelete">删除</NativeButton>
-        </div>
-      </div>
-    </NativeDialog>
-
-    <!-- 文件预览弹窗 -->
-    <NativeDialog v-model="filePreviewVisible" :title="currentFile?.name || '文件预览'" :show-footer="false" width="95%">
-      <div class="file-preview-dialog">
-        <!-- 加载中 -->
-        <div v-if="fileLoading" class="preview-loading">
-          <NativeLoading size="medium" />
-          <span>加载中...</span>
-        </div>
-        <!-- Markdown 文件 -->
-        <MdPreview
-          v-else-if="isMarkdownFile(currentFile?.name)"
-          :modelValue="currentFileContent"
-          :sanitize="sanitizeRichHtml"
-          :theme="editorTheme"
-          :previewTheme="previewTheme"
-          :codeTheme="codeTheme"
-          class="markdown-preview"
-        />
-        <!-- 文本文件 -->
-        <pre v-else-if="currentFile?.type === 'text'" class="text-preview"><code>{{ currentFileContent }}</code></pre>
-        <!-- 二进制文件 -->
-        <div v-else class="binary-preview">
-          <NativeIcon name="file" size="64" color="#ccc" />
-          <p>二进制文件，无法预览</p>
-          <p class="file-size" v-if="currentFile?.size">大小: {{ formatSize(currentFile.size) }}</p>
-        </div>
+    </section>
+    <NativeDialog :model-value="Boolean(filePath && currentRepo)" :title="filePath.split('/').pop() || '文件预览'" :show-footer="false" class="mobile-code-preview" @update:model-value="value => !value && closeFile()">
+      <div class="preview-meta">{{ filePath }}<template v-if="searchLine"> · 第 {{ searchLine }} 行</template><template v-if="route.query.commit"> · {{ String(route.query.commit).slice(0, 8) }}</template></div>
+      <div ref="previewPanel" class="preview-content" @click="onMarkdownClick">
+        <p v-if="previewLoading" class="feedback" role="status">正在加载文件…</p>
+        <div v-else-if="previewError" class="feedback" role="alert"><span>{{ previewError }}</span><NativeButton variant="outline" @click="loadPreview">重新加载文件</NativeButton></div>
+        <MdPreview v-else-if="file && isMarkdown && !searchLine" :model-value="file.content || ''" :sanitize="sanitizeRichHtml" :theme="theme" class="markdown-preview" />
+        <CodeSourcePreview v-else-if="file && (file.type === 'text' || isMarkdown)" :content="file.content || ''" :html="escapeHtml(file.content || '')" :line="searchLine" />
+        <p v-else-if="file" class="feedback">二进制文件，无法预览</p>
       </div>
     </NativeDialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
-import { usePermission } from '@/composables/usePermission'
+import { NativeButton, NativeInput, NativeIcon, NativeDialog } from '@/components/native'
+import RepositorySearch from '@/components/RepositorySearch.vue'
+import RepositoryTaskStatus from '@/components/RepositoryTaskStatus.vue'
+import CodeSourcePreview from '@/components/CodeSourcePreview.vue'
+import { useRepositoryTasks } from '@/composables/useRepositoryTasks'
 import { isReadOnlyRepository, repositorySourceLabel } from '@/utils/codeRepositoryCapabilities'
-
-const route = useRoute()
-import { 
-  NativeButton, NativeInput, NativeDialog, NativeLoading, 
-  NativeIcon, NativeTag, NativeForm, NativeFormItem,
-  NativeRadio, NativeRadioGroup, NativeTextarea 
-} from '@/components/native'
-import { useToast } from '@/composables/useToast'
+import { resolveRepositoryLink, scrollRepositoryAnchor } from '@/utils/repositoryNavigation'
+import { sanitizeRichHtml, escapeHtml } from '@/utils/sanitizeHtml'
 import { MdPreview } from 'md-editor-v3'
-import { sanitizeRichHtml } from '@/utils/sanitizeHtml'
 import 'md-editor-v3/lib/style.css'
-
-const toast = useToast()
-const { isGuest } = usePermission()
-
-// Markdown预览主题配置
-const editorTheme = ref('light')
-const previewTheme = ref('default')
-const codeTheme = ref('atom')
-
-const repoList = ref([])
-const searchKeyword = ref('')
-const loading = ref(false)
-const addDialogVisible = ref(false)
-const editDialogVisible = ref(false)
-const deleteDialogVisible = ref(false)
-const deleteTarget = ref(null)
-
-// 克隆状态管理
-const cloneStatuses = ref(new Map())
-const syncStatuses = ref(new Map())
-
-// 当前浏览的仓库
-const currentRepo = ref(null)
-const fileList = ref([])
-const commits = ref([])
-const readmeContent = ref('')
-const readmeLoading = ref(false)
-const commitsLoading = ref(false)
-const activeTab = ref('readme')
-
-// 目录浏览状态
-const currentPath = ref('')
-const pathStack = ref([])  // 路径历史栈，用于返回上级
-const fileLoading = ref(false)
-
-// 文件预览状态
-const filePreviewVisible = ref(false)
-const currentFile = ref(null)
-const currentFileContent = ref('')
-
-const tabs = [
-  { value: 'readme', label: 'README' },
-  { value: 'files', label: '文件' },
-  { value: 'commits', label: '提交' }
-]
-
-const addForm = ref({
-  name: '',
-  url: '',
-  type: 'git',
-  description: ''
-})
-
-const fetchingInfo = ref(false)
-
-const editForm = ref({
-  id: null,
-  name: '',
-  url: '',
-  description: ''
-})
-
-// 检查是否正在克隆
-function isCloning(repoId) {
-  const status = cloneStatuses.value.get(String(repoId))
-  return status && status.status === 'cloning'
+const route = useRoute(), router = useRouter()
+const repoList = ref([]), keyword = ref(''), loading = ref(false), listError = ref(''), currentRepo = ref(null)
+const files = ref([]), readme = ref(''), commits = ref([]), contentPanel = ref(null), previewPanel = ref(null)
+const busy = reactive({}), errors = reactive({}), file = ref(null), previewLoading = ref(false), previewError = ref('')
+const tasks = useRepositoryTasks(() => loadRepos())
+const tabs = [{ value: 'readme', label: 'README' }, { value: 'files', label: '文件' }, { value: 'search', label: '检索' }, { value: 'commits', label: '提交' }]
+const activeTab = computed(() => tabs.some(tab => tab.value === route.query.tab) ? route.query.tab : 'readme')
+const directory = computed(() => typeof route.query.dir === 'string' ? route.query.dir : '')
+const filePath = computed(() => typeof route.query.path === 'string' ? route.query.path : '')
+const searchLine = computed(() => { const value = Number(route.query.line); return Number.isSafeInteger(value) && value > 0 ? value : null })
+const isMarkdown = computed(() => /\.(md|markdown)$/i.test(filePath.value))
+const theme = ref(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light')
+let disposed = false, listSequence = 0, navigation = 0, previewSequence = 0
+const sequences = { readme: 0, files: 0, commits: 0 }
+function navigate(patch) {
+  const query = { ...route.query, ...patch }
+  for (const key of Object.keys(query)) if (query[key] === null || query[key] === '') delete query[key]
+  return router.push({ query })
 }
-
-// 获取克隆进度
-function cloneProgress(repoId) {
-  const status = cloneStatuses.value.get(String(repoId))
-  return status ? status.progress : 0
-}
-
-// 轮询克隆状态
-let clonePollInterval = null
-function startClonePolling(repoId) {
-  cloneStatuses.value.set(String(repoId), { status: 'cloning', progress: 0, message: '准备中...' })
-  
-  if (clonePollInterval) {
-    clearInterval(clonePollInterval)
-  }
-  
-  clonePollInterval = setInterval(async () => {
-    try {
-      const response = await api.code.getCloneStatus(repoId)
-      const data = response.data?.data
-      
-      if (data) {
-        cloneStatuses.value.set(String(repoId), data)
-        
-        if (data.status === 'completed' || data.status === 'failed') {
-          clearInterval(clonePollInterval)
-          clonePollInterval = null
-          loadRepos()
-        }
-      }
-    } catch (e) {
-      console.error('获取克隆状态失败:', e)
-    }
-  }, 1000)
-}
-
-// 加载仓库列表
+function openRepo(repo) { navigate({ repositoryId: String(repo.id), path: null, line: null, commit: null, dir: null, tab: 'readme', codeQ: null, codeMode: null, codePage: null, anchor: null }) }
+function closeRepo() { navigate({ repositoryId: null, path: null, line: null, commit: null, dir: null, tab: null, codeQ: null, codeMode: null, codePage: null, anchor: null }) }
+function openFile(path, line = null, commit = null, anchor = null) { navigate({ path, line: line ? String(line) : null, commit, anchor, tab: 'files' }) }
+function closeFile() { navigate({ path: null, line: null, commit: null, anchor: null }) }
+function openSearchResult(locator) { openFile(locator.path, locator.line, locator.commit || null) }
 async function loadRepos() {
-  loading.value = true
+  const request = ++listSequence; loading.value = true; listError.value = ''
   try {
-    const response = await api.code.list({ keyword: searchKeyword.value })
+    const response = await api.code.list({ keyword: keyword.value })
+    if (disposed || request !== listSequence) return
     repoList.value = response.data.data || []
-  } catch (error) {
-    toast.error('加载仓库列表失败')
-  } finally {
-    loading.value = false
-  }
+    for (const repo of repoList.value) if (!isReadOnlyRepository(repo)) tasks.refresh(repo.id)
+  } catch { if (!disposed && request === listSequence) listError.value = '仓库列表加载失败，保留上次结果。' }
+  finally { if (!disposed && request === listSequence) loading.value = false }
 }
-
-// 显示添加对话框
-function showAddDialog() {
-  addForm.value = { name: '', url: '', type: 'git', description: '' }
-  addDialogVisible.value = true
-}
-
-// 确认添加
-async function confirmAdd() {
-  if (!addForm.value.name || !addForm.value.url) {
-    toast.warning('请填写完整信息')
-    return
-  }
+async function loadSection(section = activeTab.value) {
+  if (!currentRepo.value || section === 'search') return
+  const repoId = currentRepo.value.id, epoch = navigation, request = ++sequences[section]
+  busy[section] = true; errors[section] = ''
   try {
-    const response = await api.code.create(addForm.value)
-    toast.success('仓库添加成功')
-    addDialogVisible.value = false
-    
-    if (response.data?.id) {
-      startClonePolling(response.data.id)
+    const response = section === 'files' ? await api.code.getTree(repoId, directory.value) : section === 'readme' ? await api.code.getReadme(repoId) : await api.code.getCommits(repoId, 30)
+    if (disposed || epoch !== navigation || request !== sequences[section]) return
+    if (section === 'files') files.value = response.data.data || []
+    else if (section === 'readme') readme.value = response.data.data?.content || ''
+    else commits.value = response.data.data || []
+  } catch { if (!disposed && epoch === navigation && request === sequences[section]) errors[section] = '内容加载失败，请重试。' }
+  finally { if (!disposed && epoch === navigation && request === sequences[section]) busy[section] = false }
+}
+function refreshCurrent() { if (currentRepo.value) { loadSection(); if (!isReadOnlyRepository(currentRepo.value)) tasks.refresh(currentRepo.value.id) } }
+async function restoreRepository() {
+  const epoch = ++navigation; previewSequence++
+  currentRepo.value = null; files.value = []; readme.value = ''; commits.value = []; file.value = null
+  const id = Number(route.query.repositoryId)
+  if (!Number.isSafeInteger(id) || id <= 0) return
+  try {
+    const repo = repoList.value.find(item => Number(item.id) === id) || (await api.code.get(id)).data.data
+    if (disposed || epoch !== navigation) return
+    if (!repo) throw new Error('missing')
+    currentRepo.value = repo
+    loadSection(); loadPreview()
+  } catch { if (!disposed && epoch === navigation) listError.value = '仓库暂不可用，请刷新后重试。' }
+}
+async function loadPreview() {
+  const request = ++previewSequence, epoch = navigation
+  file.value = null; previewError.value = ''; previewLoading.value = false
+  if (!currentRepo.value || !filePath.value) return
+  previewLoading.value = true
+  try {
+    const response = await api.code.getFile(currentRepo.value.id, filePath.value, typeof route.query.commit === 'string' ? route.query.commit : null)
+    if (disposed || request !== previewSequence || epoch !== navigation) return
+    file.value = response.data.data
+  } catch (failure) {
+    if (!disposed && request === previewSequence && epoch === navigation) previewError.value = failure.response?.data?.code === 'CODE_SNAPSHOT_STALE' ? '该引用对应的提交已过期，请重新检索后打开。' : '文件加载失败，请重试。'
+  } finally {
+    if (!disposed && request === previewSequence && epoch === navigation) {
+      previewLoading.value = false
+      await nextTick()
+      if (request === previewSequence) scrollRepositoryAnchor(previewPanel.value, route.query.anchor)
     }
-    
-    loadRepos()
-  } catch (error) {
-    toast.error(error.response?.data?.message || '添加失败')
   }
 }
-
-// 编辑仓库
-function editRepo(repo) {
-  editForm.value = {
-    id: repo.id,
-    name: repo.name,
-    url: repo.url,
-    description: repo.description || ''
-  }
-  editDialogVisible.value = true
+function onMarkdownClick(event) {
+  const link = event.target.closest?.('.markdown-preview a')
+  if (!link) return
+  event.preventDefault()
+  const href = link.getAttribute('href')
+  if (/^https?:\/\//i.test(href)) { window.open(href, '_blank', 'noopener,noreferrer'); return }
+  const target = resolveRepositoryLink(href, filePath.value || 'README.md')
+  if (!target) return
+  if (target.sameFile) scrollRepositoryAnchor(event.currentTarget, target.anchor)
+  else openFile(target.path, null, file.value?.commit || null, target.anchor)
 }
-
-// 确认编辑
-async function confirmEdit() {
-  if (!editForm.value.name) {
-    toast.warning('请输入仓库名称')
-    return
-  }
-  
-  try {
-    await api.code.update(editForm.value.id, {
-      name: editForm.value.name,
-      description: editForm.value.description
-    })
-    toast.success('更新成功')
-    editDialogVisible.value = false
-    loadRepos()
-  } catch (error) {
-    toast.error(error.response?.data?.message || '更新失败')
-  }
-}
-
-// 确认删除
-function confirmDelete(repo) {
-  deleteTarget.value = repo
-  deleteDialogVisible.value = true
-}
-
-// 执行删除
-async function doDelete() {
-  if (!deleteTarget.value) return
-  
-  try {
-    await api.code.delete(deleteTarget.value.id)
-    toast.success('删除成功')
-    deleteDialogVisible.value = false
-    deleteTarget.value = null
-    loadRepos()
-  } catch (error) {
-    toast.error('删除失败')
-  }
-}
-
-// 检查是否正在同步
-function isSyncing(repoId) {
-  const status = syncStatuses.value.get(String(repoId))
-  return status && status.status === 'syncing'
-}
-
-// 获取同步进度
-function syncProgress(repoId) {
-  const status = syncStatuses.value.get(String(repoId))
-  return status ? status.progress : 0
-}
-
-// 轮询同步状态
-let syncPollInterval = null
-function startSyncPolling(repoId, taskId) {
-  syncStatuses.value.set(String(repoId), { status: 'syncing', progress: 0, message: '准备中...' })
-
-  if (syncPollInterval) {
-    clearInterval(syncPollInterval)
-  }
-
-  syncPollInterval = setInterval(async () => {
-    try {
-      const response = await api.code.getSyncStatus(repoId)
-      const data = response.data?.data
-
-      if (data) {
-        syncStatuses.value.set(String(repoId), data)
-
-        if (data.status === 'completed') {
-          clearInterval(syncPollInterval)
-          syncPollInterval = null
-          toast.success('同步成功')
-          loadRepos() // 刷新列表
-        } else if (data.status === 'failed') {
-          clearInterval(syncPollInterval)
-          syncPollInterval = null
-          if (data.code === 'REPOSITORY_DIRTY') {
-            const confirmed = window.confirm(
-              `${data.message}\n\n是否立即安全重克隆？旧文件不会删除，并会作为“同步前本地备份”仓库保留。`
-            )
-            if (confirmed) {
-              const response = await api.code.reclone(repoId)
-              toast.success('开始安全重克隆...')
-              startSyncPolling(repoId, response.data?.taskId)
-              return
-            }
-          }
-          toast.error(data.message || '同步失败')
-        }
-      }
-    } catch (e) {
-      console.error('获取同步状态失败:', e)
-    }
-  }, 1000) // 每秒轮询一次
-}
-
-// 同步仓库
-async function syncRepo(repo) {
-  try {
-    const response = await api.code.sync(repo.id)
-    toast.success('开始同步仓库...')
-    
-    // 立即刷新列表显示同步状态
-    loadRepos()
-    
-    // 开始轮询同步进度
-    if (response.data?.taskId) {
-      startSyncPolling(repo.id, response.data.taskId)
-    }
-  } catch (error) {
-    toast.error('同步失败')
-  }
-}
-
-// 打开仓库
-async function openRepo(repo) {
-  currentRepo.value = repo
-  activeTab.value = 'readme'
-  fileList.value = []
-  commits.value = []
-  readmeContent.value = ''
-  currentPath.value = ''
-  pathStack.value = []
-  
-  // 并行加载数据
-  Promise.all([
-    loadFileList(),
-    loadReadme(),
-    loadCommits()
-  ])
-}
-
-// 关闭仓库
-function closeRepo() {
-  currentRepo.value = null
-}
-
-// 加载文件列表
-async function loadFileList(path = '') {
-  if (!currentRepo.value) return
-  fileLoading.value = true
-  try {
-    const response = await api.code.getTree(currentRepo.value.id, path)
-    fileList.value = response.data.data || []
-  } catch (error) {
-    console.error('加载文件列表失败:', error)
-    fileList.value = []
-  } finally {
-    fileLoading.value = false
-  }
-}
-
-// 判断是否为 Markdown 文件
-function isMarkdownFile(filename) {
-  if (!filename) return false
-  return filename.toLowerCase().endsWith('.md') || filename.toLowerCase().endsWith('.markdown')
-}
-
-// 格式化文件大小
-function formatSize(size) {
-  if (size === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const index = Math.floor(Math.log(size) / Math.log(1024))
-  return (size / Math.pow(1024, index)).toFixed(2) + ' ' + units[index]
-}
-
-// 检查是否为 GitHub URL
-function isGithubUrl(url) {
-  return url && url.includes('github.com')
-}
-
-// 从 GitHub 获取仓库信息
-async function fetchGithubInfo() {
-  if (!addForm.value.url) {
-    toast.warning('请先输入仓库URL')
-    return
-  }
-
-  fetchingInfo.value = true
-  try {
-    const response = await api.code.getGithubInfo(addForm.value.url)
-    const data = response.data?.data
-
-    if (data) {
-      // 自动填充信息
-      if (!addForm.value.name) {
-        addForm.value.name = data.name
-      }
-      if (!addForm.value.description) {
-        addForm.value.description = data.description || ''
-      }
-      toast.success('获取GitHub信息成功')
-    }
-  } catch (error) {
-    toast.error(error.response?.data?.message || '获取GitHub信息失败')
-  } finally {
-    fetchingInfo.value = false
-  }
-}
-
-// 加载 README
-async function loadReadme() {
-  if (!currentRepo.value) return
-  readmeLoading.value = true
-  try {
-    const response = await api.code.getReadme(currentRepo.value.id)
-    readmeContent.value = response.data.data?.content || ''
-  } catch (error) {
-    readmeContent.value = ''
-  } finally {
-    readmeLoading.value = false
-  }
-}
-
-// 加载提交历史
-async function loadCommits() {
-  if (!currentRepo.value) return
-  commitsLoading.value = true
-  try {
-    const response = await api.code.getCommits(currentRepo.value.id, 20)
-    commits.value = response.data.data || []
-  } catch (error) {
-    commits.value = []
-  } finally {
-    commitsLoading.value = false
-  }
-}
-
-// 刷新仓库
-async function refreshRepo() {
-  if (activeTab.value === 'files') {
-    await loadFileList(currentPath.value)
-  } else if (activeTab.value === 'readme') {
-    await loadReadme()
-  } else if (activeTab.value === 'commits') {
-    await loadCommits()
-  }
-  toast.success('刷新成功')
-}
-
-// 文件点击
-async function onFileClick(file) {
-  if (file.type === 'directory') {
-    // 进入子目录
-    pathStack.value.push(currentPath.value)
-    currentPath.value = file.path
-    await loadFileList(file.path)
-  } else {
-    // 预览文件
-    await previewFile(file)
-  }
-}
-
-// 返回上级目录
-async function goBack() {
-  if (pathStack.value.length > 0) {
-    currentPath.value = pathStack.value.pop()
-    await loadFileList(currentPath.value)
-  }
-}
-
-// 预览文件
-async function previewFile(file) {
-  if (!currentRepo.value) return
-  currentFile.value = file
-  filePreviewVisible.value = true
-  fileLoading.value = true
-  currentFileContent.value = ''
-  
-  try {
-    const response = await api.code.getFile(currentRepo.value.id, file.path, file.commit)
-    const fileData = response.data.data
-    currentFile.value = { ...file, ...fileData }
-    currentFileContent.value = fileData.content || ''
-  } catch (error) {
-    console.error('加载文件失败:', error)
-    toast.error(error.response?.data?.code === 'CODE_SNAPSHOT_STALE'
-      ? '该搜索结果对应的提交已过期，请刷新搜索索引后重试'
-      : '加载文件失败')
-  } finally {
-    fileLoading.value = false
-  }
-}
-
-// 格式化日期
-function formatDate(dateStr) {
-  if (!dateStr) return ''
-  const date = new Date(dateStr)
-  return date.toLocaleDateString('zh-CN')
-}
-
-onMounted(async () => {
-  await loadRepos()
-  const repositoryId = Number(route.query.repositoryId)
-  if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) return
-  let repository = repoList.value.find((item) => Number(item.id) === repositoryId)
-  if (!repository) {
-    try { repository = (await api.code.get(repositoryId)).data?.data } catch { return }
-  }
-  if (!repository) return
-  await openRepo(repository)
-  if (typeof route.query.path === 'string' && route.query.path) {
-    activeTab.value = 'files'
-    const line = Number(route.query.line)
-    await previewFile({
-      name: route.query.path.split('/').pop(),
-      path: route.query.path,
-      type: 'file',
-      ...(Number.isSafeInteger(line) && line > 0 ? { searchLine: line } : {}),
-      ...(typeof route.query.commit === 'string' ? { commit: route.query.commit } : {})
-    })
-  }
-})
-
-// 组件卸载时清理定时器
-onUnmounted(() => {
-  if (clonePollInterval) {
-    clearInterval(clonePollInterval)
-  }
-  if (syncPollInterval) {
-    clearInterval(syncPollInterval)
-  }
-})
+function formatDate(value) { return new Date(value).toLocaleDateString('zh-CN') }
+watch(() => route.query.repositoryId, restoreRepository)
+watch(() => JSON.stringify([activeTab.value, directory.value]), () => loadSection())
+watch(() => JSON.stringify([filePath.value, route.query.line, route.query.commit, route.query.anchor]), loadPreview)
+onMounted(async () => { await loadRepos(); if (!disposed) restoreRepository() })
+onBeforeUnmount(() => { disposed = true; navigation++; listSequence++; previewSequence++ })
 </script>
 
 <style scoped>
-.code-mobile {
-  min-height: 100vh;
-  background: var(--color-surface-subtle);
-}
-
-.list-view {
-  padding: 16px;
-}
-
-.page-header {
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0 0 4px 0;
-  font-size: 20px;
-  color: var(--color-text-primary);
-}
-
-.page-header .subtitle {
-  margin: 0;
-  font-size: 13px;
-  color: var(--color-text-muted);
-}
-
-.search-bar {
-  margin-bottom: 16px;
-}
-
-.content-loading {
-  display: flex;
-  justify-content: center;
-  padding: 48px;
-}
-
-.repo-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.repo-card {
-  background: #fff;
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-
-.repo-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 8px;
-}
-
-.repo-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-}
-
-.name-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.repo-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.repo-desc {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  margin-bottom: 8px;
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.clone-progress-bar {
-  width: 100%;
-  height: 4px;
-  background: #f0f0f0;
-  border-radius: 2px;
-  margin: 8px 0;
-  overflow: hidden;
-}
-
-.clone-progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--color-primary), #00a8ff);
-  border-radius: 2px;
-  transition: width 0.3s;
-}
-
-.repo-meta {
-  display: flex;
-  gap: 12px;
-  font-size: 12px;
-  color: var(--color-text-muted);
-  margin-bottom: 8px;
-}
-
-.repo-type {
-  background: #e8f4ff;
-  color: var(--color-primary);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 11px;
-}
-
-.repo-langs {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.lang-tag {
-  background: #f0f0f0;
-  color: var(--color-text-secondary);
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-}
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 64px 16px;
-  color: var(--color-text-muted);
-}
-
-.empty-state p {
-  margin: 16px 0 4px 0;
-  font-size: 16px;
-}
-
-.empty-tip {
-  font-size: 13px;
-  color: #bbb;
-}
-
-.fab-add {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background: var(--color-primary);
-  border: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 4px 12px rgba(0, 82, 217, 0.4);
-  z-index: 100;
-}
-
-/* 仓库详情视图 */
-.repo-detail {
-  min-height: 100vh;
-  background: #fff;
-}
-
-.detail-header {
-  display: flex;
-  align-items: center;
-  padding: 12px 16px;
-  background: #fff;
-  border-bottom: 1px solid #eee;
-  position: sticky;
-  top: 0;
-  z-index: 10;
-}
-
-.back-btn {
-  width: 36px;
-  height: 36px;
-  border: none;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 8px;
-}
-
-.detail-title {
-  flex: 1;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.action-btn {
-  width: 36px;
-  height: 36px;
-  border: none;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.detail-tabs {
-  display: flex;
-  background: #fff;
-  border-bottom: 1px solid #eee;
-}
-
-.tab-item {
-  flex: 1;
-  text-align: center;
-  padding: 12px;
-  font-size: 14px;
-  color: var(--color-text-secondary);
-  border-bottom: 2px solid transparent;
-  transition: all 0.2s;
-}
-
-.tab-item.active {
-  color: var(--color-primary);
-  border-bottom-color: var(--color-primary);
-  font-weight: 500;
-}
-
-.detail-content {
-  padding: 16px;
-  min-height: calc(100vh - 110px);
-}
-
-.file-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.file-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-.file-name {
-  flex: 1;
-  font-size: 14px;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.commit-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.commit-item {
-  padding: 12px;
-  border-bottom: 1px solid #f0f0f0;
-}
-
-.commit-hash {
-  font-family: monospace;
-  font-size: 12px;
-  color: var(--color-primary);
-  background: #e8f4ff;
-  display: inline-block;
-  padding: 2px 6px;
-  border-radius: 4px;
-  margin-bottom: 6px;
-}
-
-.commit-message {
-  font-size: 14px;
-  color: var(--color-text-primary);
-  margin-bottom: 6px;
-  line-height: 1.4;
-}
-
-.commit-meta {
-  font-size: 12px;
-  color: var(--color-text-muted);
-  display: flex;
-  gap: 12px;
-}
-
-.empty-content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 64px 16px;
-  color: var(--color-text-muted);
-}
-
-.empty-content p {
-  margin: 16px 0 0 0;
-}
-
-.delete-confirm {
-  text-align: center;
-  padding: 16px;
-}
-
-.delete-confirm p {
-  margin: 0 0 8px 0;
-  font-size: 15px;
-}
-
-.delete-warning {
-  color: #d32f2f;
-  font-size: 13px;
-}
-
-.delete-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  margin-top: 24px;
-}
-
-/* URL 输入行 */
-.url-input-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-}
-
-.url-input-row .native-input {
-  flex: 1;
-}
-
-/* 路径导航 */
-.path-nav {
-  display: flex;
-  align-items: center;
-  padding: 8px 0 16px 0;
-  border-bottom: 1px solid #f0f0f0;
-  margin-bottom: 8px;
-}
-
-.path-back {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: transparent;
-  border: none;
-  color: var(--color-primary);
-  font-size: 14px;
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-.path-back:active {
-  background: #f0f0f0;
-}
-
-.path-current {
-  font-size: 14px;
-  color: var(--color-text-secondary);
-}
-
-/* 文件列表项 */
-.file-item.is-directory {
-  background: #fafafa;
-}
-
-.file-item:active {
-  background: #f0f0f0;
-}
-
-/* 文件预览弹窗 */
-.file-preview-dialog {
-  max-height: 70vh;
-  overflow: auto;
-}
-
-.preview-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 20px;
-  color: var(--color-text-secondary);
-  gap: 12px;
-}
-
-.text-preview {
-  background: #f8f9fa;
-  padding: 16px;
-  border-radius: 8px;
-  overflow-x: auto;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--color-text-primary);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.binary-preview {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 20px;
-  color: var(--color-text-secondary);
-  gap: 12px;
-}
-
-.binary-preview .file-size {
-  font-size: 13px;
-  color: var(--color-text-muted);
-}
+.code-mobile{min-height:70dvh;background:var(--color-surface-raised);color:var(--color-text-primary);padding:12px}.repo-search{display:flex;gap:8px;align-items:center;margin-bottom:12px}.repo-search :deep(.native-input){flex:1;min-width:0}.repo-card{border-bottom:1px solid var(--color-border-subtle);padding:14px 4px}.repo-open{display:flex;flex-direction:column;gap:8px;width:100%;background:none;border:0;color:inherit;text-align:left;cursor:pointer}.repo-title{display:flex;align-items:center;gap:10px;width:100%}.repo-title strong{flex:1;min-width:0;font-size:15px;overflow-wrap:anywhere}.repo-desc{font-size:14px;line-height:1.65;color:var(--color-text-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.repo-meta{font-size:12px;color:var(--color-text-secondary)}.detail-header{display:flex;align-items:center;gap:8px;padding-bottom:10px}.detail-title{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}.detail-title strong{font-size:16px;overflow-wrap:anywhere}.detail-title span{font-size:12px;color:var(--color-text-secondary)}.icon-button{width:44px;height:44px;flex-shrink:0;display:grid;place-items:center;border:0;border-radius:8px;background:transparent;color:inherit}.detail-tabs{display:flex;border-bottom:1px solid var(--color-border-default);margin-bottom:12px;gap:4px}.detail-tabs button{flex:1;min-height:44px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--color-text-secondary);font-size:14px}.detail-tabs button[aria-current]{color:var(--color-primary);border-bottom-color:var(--color-primary);font-weight:600}.feedback{font-size:14px;line-height:1.8;padding:24px 12px;display:flex;flex-direction:column;gap:12px;color:var(--color-text-secondary)}.path-nav{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-text-secondary);overflow-wrap:anywhere}.path-nav button{display:flex;align-items:center;gap:4px;min-height:44px;flex-shrink:0;border:0;background:none;color:inherit}.file-item{display:flex;width:100%;gap:12px;align-items:center;min-height:48px;padding:10px 4px;border:0;border-bottom:1px solid var(--color-border-subtle);background:transparent;color:inherit;text-align:left}.file-item span{flex:1;min-width:0;overflow-wrap:anywhere;font-size:14px}.commit-item{padding:16px 4px;border-bottom:1px solid var(--color-border-subtle)}.commit-item code{font-size:12px;color:var(--color-primary)}.commit-item p{font-size:14px;line-height:1.7;overflow-wrap:anywhere;margin:6px 0}.commit-item span{font-size:12px;color:var(--color-text-secondary)}.markdown-preview{background:var(--color-surface-raised);color:inherit}.detail-content :deep(.md-editor-preview-wrapper){padding:12px 0}.preview-meta{padding:8px 12px;font-size:12px;color:var(--color-text-secondary);overflow-wrap:anywhere;border-bottom:1px solid var(--color-border-subtle)}.preview-content{flex:1;min-height:0;overflow:auto}.preview-content :deep(.md-editor-preview-wrapper){padding:16px}.code-mobile button:focus-visible{outline:2px solid var(--color-primary);outline-offset:-2px}.code-mobile button:active{background:var(--color-surface-subtle)}
+</style>
+<style>
+.native-dialog.mobile-code-preview{position:fixed;inset:0;width:100%!important;max-width:none!important;height:100dvh;max-height:100dvh!important;margin:0!important;border-radius:0;transform:none!important;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);box-sizing:border-box}.mobile-code-preview .native-dialog__header{flex-shrink:0;min-height:56px;box-sizing:border-box}.mobile-code-preview .native-dialog__title{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.mobile-code-preview .native-dialog__close{min-width:44px;min-height:44px}.mobile-code-preview .native-dialog__body{display:flex;flex-direction:column;padding:0;flex:1;min-height:0;overflow:hidden}
 </style>

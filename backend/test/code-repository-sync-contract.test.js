@@ -21,7 +21,7 @@ test('Git sync blocks dirty repositories without destructive commands', () => {
   assert.doesNotMatch(processorSource, /['"]stash['"]/) // no hidden stash
 })
 
-test('safe reclone is available on desktop and mobile and keeps a backup entry', () => {
+test('safe reclone requires desktop confirmation, keeps a backup, and is absent on mobile', () => {
   const routeSource = read('backend/src/routes/code.js')
   const processorSource = read('backend/src/services/codeRepositoryTaskProcessor.js')
   const apiSource = read('frontend/src/api/index.js')
@@ -33,8 +33,10 @@ test('safe reclone is available on desktop and mobile and keeps a backup entry',
   assert.match(processorSource, /fs\.renameSync\(repo\.repositoryPath, backupPath\)/)
   assert.match(processorSource, /local-backup-\$\{taskId\}/)
   assert.match(apiSource, /reclone: \(id\) => api\.post\(`\/code\/\$\{id\}\/reclone`\)/)
-  assert.match(desktopSource, /data\.code === 'REPOSITORY_DIRTY'/)
-  assert.match(mobileSource, /data\.code === 'REPOSITORY_DIRTY'/)
+  const statusSource = read('frontend/src/components/RepositoryTaskStatus.vue')
+  assert.match(statusSource, /allowReclone[\s\S]*REPOSITORY_DIRTY[\s\S]*NativePopconfirm/u)
+  assert.match(desktopSource, /api\.code\.reclone\(repo\.id\)/u)
+  assert.doesNotMatch(mobileSource, /api\.code\.reclone|allow-reclone/u)
 })
 
 test('code repository routes enqueue persistent exclusive tasks and no longer keep process-local maps', () => {

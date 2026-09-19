@@ -77,6 +77,25 @@ function fixtures(version = 1) {
   ]
 }
 
+test('repository scope filters before totals and pagination and rejects invalid ids', nativeTestOptions, async () => {
+  const database = createDatabase()
+  try {
+    const original = fixtures()[1]
+    const other = { ...original, entryKey: 'code-file:3:src/search.js', domainId: 3, parentDomainId: 3, locator: { ...original.locator, repositoryId: 3 } }
+    const unrelated = { ...fixtures()[0], domainId: 2, title: 'buildUnifiedSearch', body: 'buildUnifiedSearch' }
+    const service = createSearchIndexService({ database, collectEntries: async () => [original, other, unrelated] })
+    await service.refresh()
+    const result = service.query({ q: 'buildUnifiedSearch', repositoryId: '2', limit: 1 })
+    assert.equal(result.total, 1)
+    assert.equal(result.data[0].locator.repositoryId, 2)
+    assert.equal(service.query({ q: 'buildUnifiedSearch', repositoryId: 99 }).total, 0)
+    assert.equal(service.query({ q: 'buildUnifiedSearch', repositoryId: 2, offset: 1 }).data.length, 0)
+    for (const repositoryId of [0, -1, '', null, '2 OR 1=1', ['2'], 1.5]) {
+      assert.throws(() => service.query({ q: 'buildUnifiedSearch', repositoryId }), { code: 'SEARCH_INPUT_INVALID' })
+    }
+  } finally { database.close() }
+})
+
 test('normalizes CJK queries and rejects internal paths', () => {
   const query = normalizeSearchQuery({ q: '统一搜索', types: 'note,code_file', limit: 10 })
   assert.match(query.ftsQuery, /统一/u)

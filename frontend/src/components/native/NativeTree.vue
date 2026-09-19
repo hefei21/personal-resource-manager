@@ -10,7 +10,7 @@
       }"
       :style="{ paddingLeft: node._level * 20 + 'px' }"
     >
-      <div class="native-tree-node__content" @click="handleContentClick(node)">
+      <div class="native-tree-node__content" role="button" :tabindex="node.disabled ? -1 : 0" :aria-label="node[labelField]" :aria-expanded="canExpand(node) ? isExpanded(node) : undefined" :aria-pressed="canExpand(node) ? undefined : isSelected(node)" @click="handleContentClick(node)" @keydown.enter.prevent="handleContentClick(node)" @keydown.space.prevent="handleContentClick(node)">
         <!-- 展开图标 - 点击也能展开 -->
         <span 
           class="native-tree-node__expand-icon"
@@ -66,6 +66,7 @@ const props = defineProps({
   defaultExpandAll: { type: Boolean, default: false },
   defaultExpandedKeys: { type: Array, default: () => [] },
   defaultSelectedKeys: { type: Array, default: () => [] },
+  selectedKeys: { type: Array, default: null },
   defaultCheckedKeys: { type: Array, default: () => [] },
   checkStrictly: { type: Boolean, default: false },
   lazy: { type: Boolean, default: false },
@@ -157,7 +158,7 @@ function isExpanded(node) {
 
 // 检查是否选中
 function isSelected(node) {
-  return selectedKeysSet.value.has(node._key)
+  return props.selectedKeys ? props.selectedKeys.includes(node._key) : selectedKeysSet.value.has(node._key)
 }
 
 // 检查是否勾选

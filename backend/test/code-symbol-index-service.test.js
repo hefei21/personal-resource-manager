@@ -67,6 +67,21 @@ function snapshot(commit = COMMIT_A, overrides = {}) {
     return input
   }
 }
+
+test('symbol repository scope preserves commit locators and repository-local totals', nativeTestOptions, () => {
+  const { database, service } = setup()
+  try {
+    database.prepare('INSERT INTO code_repositories (id, name) VALUES (?, ?)').run(2, 'other')
+    service.refreshSnapshot(snapshot())
+    service.refreshSnapshot(snapshot(COMMIT_B, { repositoryId: 2 }))
+    const result = service.query({ q: 'SearchService.query', repositoryId: '2', limit: 1 })
+    assert.equal(result.total, 1)
+    assert.equal(result.data[0].locator.repositoryId, 2)
+    assert.equal(result.data[0].locator.commit, COMMIT_B)
+    assert.equal(service.query({ q: 'SearchService.query', repositoryId: 99 }).total, 0)
+    for (const repositoryId of [0, -1, null, '', '2 OR 1=1', ['2']]) assert.throws(() => service.query({ q: 'SearchService', repositoryId }))
+  } finally { database.close() }
+})
 `
   return {
     repositoryId: 1,

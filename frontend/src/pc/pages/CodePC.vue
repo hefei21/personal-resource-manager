@@ -39,7 +39,7 @@
                     {{ repo.name }}
                     <NativeTag v-if="isReadOnlyRepository(repo)" theme="success" variant="light">NAS 只读</NativeTag>
                     <NativeTag v-else-if="isCloning(repo.id)" theme="warning" variant="light">克隆中 {{ cloneProgress(repo.id) }}%</NativeTag>
-                    <NativeTag v-else-if="!repo.last_sync" theme="warning" variant="light">等待克隆</NativeTag>
+                    <NativeTag v-else-if="!repo.last_sync && !tasks.latest(repo.id)" theme="warning" variant="light">尚未完成克隆</NativeTag>
                   </div>
                   <div class="repo-desc">{{ repo.description || '暂无描述' }}</div>
                   <div v-if="isCloning(repo.id)" class="clone-progress-bar">
@@ -58,16 +58,17 @@
                     <span v-if="repo.size !== undefined" class="repo-size">{{ formatSize(repo.size) }}</span>
                   </div>
                 </div>
+                <RepositoryTaskStatus v-if="!isReadOnlyRepository(repo)" :task="tasks.latest(repo.id)" :error="tasks.errors.value.get(String(repo.id))" :allow-reclone="!isGuest" @refresh="tasks.refresh(repo.id)" @reclone="recloneRepo(repo)" />
                 <div v-if="!isReadOnlyRepository(repo)" class="repo-actions">
-                  <NativeButton theme="default" size="small" @click.stop="editRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id) || isGuest">
+                  <NativeButton theme="default" size="small" aria-label="编辑仓库" @click.stop="editRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id) || isGuest">
                     <template #icon><NativeIcon name="pencil" /></template>
                   </NativeButton>
-                  <NativeButton theme="default" size="small" @click.stop="syncRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id) || isGuest">
+                  <NativeButton theme="default" size="small" aria-label="同步仓库" @click.stop="syncRepo(repo)" :disabled="isCloning(repo.id) || isSyncing(repo.id) || isGuest">
                     <template #icon><NativeIcon name="arrow-clockwise" /></template>
                   </NativeButton>
                   <NativePopconfirm content="确定删除吗？这将同时删除本地代码文件。" @confirm="deleteRepo(repo.id)">
                     <template #trigger>
-                      <NativeButton theme="default" size="small" class="btn-delete" :disabled="isGuest">
+                      <NativeButton theme="default" size="small" class="btn-delete" aria-label="删除仓库" :disabled="isGuest || isCloning(repo.id) || isSyncing(repo.id)">
                         <template #icon><NativeIcon name="trash" color="var(--color-danger)" /></template>
                       </NativeButton>
                     </template>
@@ -133,6 +134,7 @@
             label-field="name"
             children-field="children"
             :activable="true"
+            :selected-keys="requestedFile ? [requestedFile.path] : []"
             lazy
             :load="loadTreeNode"
             @select="onTreeSelect"
@@ -147,8 +149,8 @@
         </NativeAside>
 
         <!-- 右侧内容区 -->
-        <NativeContent class="content-area">
-          <NativeTabs v-model="activeTab">
+        <NativeContent class="content-area" padding="0" background="var(--color-surface-raised)">
+          <NativeTabs :model-value="activeTab" @update:model-value="changeTab">
             <NativeTabPanel name="files" label="文件">
               <!-- 文件预览区域 -->
               <div class="file-preview-area">
@@ -217,6 +219,7 @@
                 </div>
               </div>
             </NativeTabPanel>
+            <NativeTabPanel name="search" label="仓库内搜索"><RepositorySearch :key="currentRepo.id" :repository-id="currentRepo.id" @open="openSearchResult" /></NativeTabPanel>
             <NativeTabPanel name="commits" label="提交历史">
               <div class="commits-panel">
                 <div v-if="commitsError" class="code-feedback" role="alert"><span>{{ commitsError }}</span><NativeButton size="small" variant="outline" @click="loadCommits">重试历史</NativeButton></div>
@@ -241,7 +244,7 @@
     </div>
 
     <!-- 添加仓库对话框 -->
-    <NativeDialog v-model="addDialogVisible" title="添加代码仓库" @confirm="confirmAdd" :width="700">
+    <NativeDialog v-model="addDialogVisible" title="添加代码仓库" @confirm="confirmAdd" :width="700" :confirm-loading="savingRepository" :confirm-disabled="savingRepository" :close-on-overlay-click="!savingRepository" :close-on-esc="!savingRepository" :close-btn="!savingRepository">
       <NativeForm :data="addForm">
         <NativeFormItem label="仓库URL">
           <NativeSpace style="width: 100%">
@@ -261,7 +264,7 @@
     </NativeDialog>
 
     <!-- 编辑仓库对话框 -->
-    <NativeDialog v-model="editDialogVisible" title="编辑代码仓库" @confirm="confirmEdit" :width="600">
+    <NativeDialog v-model="editDialogVisible" title="编辑代码仓库" @confirm="confirmEdit" :width="600" :confirm-loading="savingRepository" :confirm-disabled="savingRepository" :close-on-overlay-click="!savingRepository" :close-on-esc="!savingRepository" :close-btn="!savingRepository">
       <NativeForm :data="editForm">
         <NativeFormItem label="仓库名称">
           <NativeInput v-model="editForm.name" placeholder="仓库名称" />
@@ -285,6 +288,7 @@
       <div v-if="commitLoading" class="commit-loading">
         <NativeLoading text="加载中..." />
       </div>
+      <div v-else-if="commitError" class="code-feedback" role="alert"><span>{{ commitError }}</span><NativeButton variant="outline" @click="showCommitDetail(requestedCommit)">重试提交详情</NativeButton></div>
       <div v-else-if="commitDetail" class="commit-detail">
         <div class="commit-detail-header">
           <div class="commit-info-row">
@@ -315,16 +319,20 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, onBeforeUnmount, computed, nextTick, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import { usePermission } from '@/composables/usePermission'
 import { isReadOnlyRepository, repositorySourceLabel } from '@/utils/codeRepositoryCapabilities'
 import CodeSourcePreview from '@/components/CodeSourcePreview.vue'
+import { resolveRepositoryLink, scrollRepositoryAnchor } from '@/utils/repositoryNavigation'
 
-const route = useRoute()
+import RepositorySearch from '@/components/RepositorySearch.vue'
+import RepositoryTaskStatus from '@/components/RepositoryTaskStatus.vue'
+import { useRepositoryTasks } from '@/composables/useRepositoryTasks'
+const route = useRoute(), router = useRouter()
 import { 
   NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, 
   NativeCheckbox, NativeLoading, NativeEmpty, NativeIcon, NativeSpace, 
@@ -369,67 +377,16 @@ const readmeError = ref('')
 const commitsError = ref('')
 const requestedFile = ref(null)
 const addDialogVisible = ref(false)
+const savingRepository = ref(false)
 
-// 克隆状态管理
-const cloneStatuses = ref(new Map())
-const syncStatuses = ref(new Map())
-let syncPollInterval = null
-
-// 检查是否正在同步
-function isSyncing(repoId) {
-  const status = syncStatuses.value.get(String(repoId))
-  return status && status.status === 'syncing'
-}
-
-// 获取同步进度
-function syncProgress(repoId) {
-  const status = syncStatuses.value.get(String(repoId))
-  return status ? status.progress : 0
-}
-
-// 轮询同步状态
-function startSyncPolling(repoId, taskId) {
-  syncStatuses.value.set(String(repoId), { status: 'syncing', progress: 0, message: '准备中...' })
-
-  if (syncPollInterval) {
-    clearInterval(syncPollInterval)
-  }
-
-  syncPollInterval = setInterval(async () => {
-    try {
-      const response = await api.code.getSyncStatus(repoId)
-      if (disposed) return
-      const data = response.data?.data
-
-      if (data) {
-        syncStatuses.value.set(String(repoId), data)
-
-        if (data.status === 'completed') {
-          clearInterval(syncPollInterval)
-          syncPollInterval = null
-          toast.success('同步成功')
-          loadRepos() // 刷新列表
-        } else if (data.status === 'failed') {
-          clearInterval(syncPollInterval)
-          syncPollInterval = null
-          if (data.code === 'REPOSITORY_DIRTY') {
-            const confirmed = window.confirm(
-              `${data.message}\n\n是否立即安全重克隆？旧文件不会删除，并会作为“同步前本地备份”仓库保留。`
-            )
-            if (confirmed) {
-              const response = await api.code.reclone(repoId)
-              toast.success('开始安全重克隆...')
-              startSyncPolling(repoId, response.data?.taskId)
-              return
-            }
-          }
-          toast.error(data.message || '同步失败')
-        }
-      }
-    } catch (e) {
-      console.error('获取同步状态失败:', e)
-    }
-  }, 1000) // 每秒轮询一次
+const tasks = useRepositoryTasks(() => loadRepos())
+const { cloneStatuses, syncStatuses } = tasks
+function isSyncing(repoId) { return syncStatuses.value.get(String(repoId))?.status === 'syncing' }
+function startSyncPolling(repoId) { return tasks.track(repoId) }
+async function recloneRepo(repo) {
+  if (isGuest.value || isReadOnlyRepository(repo)) return
+  try { await api.code.reclone(repo.id); tasks.track(repo.id) }
+  catch { toast.error('安全重克隆未启动，请重试') }
 }
 
 // 当前浏览的仓库
@@ -466,6 +423,9 @@ const fetchingEditInfo = ref(false)
 const commitDialogVisible = ref(false)
 const commitDetail = ref(null)
 const commitLoading = ref(false)
+const commitError = ref(''), requestedCommit = ref(null)
+let commitDetailRequest = 0
+watch(commitDialogVisible, visible => { if (!visible) commitDetailRequest++ })
 
 // 检查是否为GitHub URL
 function isGithubUrl(url) {
@@ -538,12 +498,14 @@ async function fetchEditGithubInfo() {
 
 // 确认编辑
 async function confirmEdit() {
+  if (savingRepository.value) return
   if (!editForm.value.name) {
     toast.warning('请输入仓库名称')
     return
   }
   
   try {
+    savingRepository.value = true
     await api.code.update(editForm.value.id, {
       name: editForm.value.name,
       description: editForm.value.description
@@ -553,12 +515,14 @@ async function confirmEdit() {
     loadRepos()
   } catch (error) {
     toast.error(error.response?.data?.message || '更新失败')
-  }
+  } finally { savingRepository.value = false }
 }
 
 // 显示提交详情
 async function showCommitDetail(commit) {
-  if (!currentRepo.value) return
+  if (!currentRepo.value || !commit) return
+  const request = ++commitDetailRequest, epoch = repoEpoch
+  requestedCommit.value = commit; commitError.value = ''
   
   commitDialogVisible.value = true
   commitLoading.value = true
@@ -566,12 +530,12 @@ async function showCommitDetail(commit) {
   
   try {
     const response = await api.code.getCommitDetail(currentRepo.value.id, commit.fullHash || commit.hash)
+    if (disposed || request !== commitDetailRequest || epoch !== repoEpoch) return
     commitDetail.value = response.data?.data
   } catch (error) {
-    toast.error('获取提交详情失败')
-    commitDialogVisible.value = false
+    if (!disposed && request === commitDetailRequest && epoch === repoEpoch) commitError.value = '提交详情加载失败'
   } finally {
-    commitLoading.value = false
+    if (!disposed && request === commitDetailRequest && epoch === repoEpoch) commitLoading.value = false
   }
 }
 
@@ -634,35 +598,7 @@ function cloneProgress(repoId) {
   return status ? status.progress : 0
 }
 
-// 轮询克隆状态
-let clonePollInterval = null
-function startClonePolling(repoId) {
-  cloneStatuses.value.set(String(repoId), { status: 'cloning', progress: 0, message: '准备中...' })
-  
-  if (clonePollInterval) {
-    clearInterval(clonePollInterval)
-  }
-  
-  clonePollInterval = setInterval(async () => {
-    try {
-      const response = await api.code.getCloneStatus(repoId)
-      if (disposed) return
-      const data = response.data?.data
-      
-      if (data) {
-        cloneStatuses.value.set(String(repoId), data)
-        
-        if (data.status === 'completed' || data.status === 'failed') {
-          clearInterval(clonePollInterval)
-          clonePollInterval = null
-          loadRepos() // 刷新列表
-        }
-      }
-    } catch (e) {
-      console.error('获取克隆状态失败:', e)
-    }
-  }, 1000) // 每秒轮询一次
-}
+function startClonePolling(repoId) { return tasks.track(repoId, 'clone') }
 
 // 配置 marked 使用 highlight.js 和标题 ID
 const renderer = new marked.Renderer()
@@ -766,6 +702,7 @@ async function loadRepos() {
     const response = await api.code.list({ keyword: searchKeyword.value })
     if (request !== listRequest) return
     repoList.value = response.data?.data || []
+    for (const repo of repoList.value) if (!isReadOnlyRepository(repo)) tasks.refresh(repo.id)
   } catch {
     if (request === listRequest) listError.value = '加载仓库列表失败，请检查连接后重试'
   } finally {
@@ -781,11 +718,13 @@ function showAddDialog() {
 
 // 确认添加
 async function confirmAdd() {
+  if (savingRepository.value) return
   if (!addForm.value.name || !addForm.value.url) {
     toast.warning('请填写完整信息')
     return
   }
   try {
+    savingRepository.value = true
     const response = await api.code.create(addForm.value)
     toast.success('仓库添加成功，正在后台克隆...')
     addDialogVisible.value = false
@@ -798,13 +737,14 @@ async function confirmAdd() {
     loadRepos()
   } catch (error) {
     toast.error(error.response?.data?.message || '添加失败')
-  }
+  } finally { savingRepository.value = false }
 }
 
 // 删除仓库
 async function deleteRepo(id) {
   try {
     await api.code.delete(id)
+    if (String(currentRepo.value?.id) === String(id)) closeRepo()
     toast.success('删除成功')
     loadRepos()
   } catch (error) {
@@ -844,7 +784,7 @@ function invalidateRepoRequests() {
   fileError.value = treeError.value = readmeError.value = commitsError.value = ''
   requestedFile.value = null
 }
-async function openRepo(repo) {
+async function openRepoState(repo) {
   invalidateRepoRequests()
   currentRepo.value = repo
   activeTab.value = 'files'
@@ -855,7 +795,7 @@ async function openRepo(repo) {
   await Promise.all([loadFileTree(), loadReadme(), loadCommits()])
 }
 
-function closeRepo() {
+function closeRepoState() {
   invalidateRepoRequests()
   currentRepo.value = null
   fileTree.value = []
@@ -873,13 +813,11 @@ async function loadTreeNode(node) {
   const nodeData = node.data || node
   const targetPath = nodeData.path || ''
   
-  console.log('异步加载树节点:', targetPath, 'nodeData:', nodeData)
   
   try {
     const response = await api.code.getTree(repositoryId, targetPath)
     if (epoch !== repoEpoch) return []
     const items = response.data.data || []
-    console.log('加载到的子项:', items)
     
     // 转换为树形结构
     return items.map(item => ({
@@ -893,8 +831,8 @@ async function loadTreeNode(node) {
   } catch (error) {
     if (epoch !== repoEpoch) return []
     console.error('加载树节点失败:', error)
-    toast.error('加载失败')
-    return []
+    toast.error('目录加载失败，可再次点击该目录重试')
+    throw error
   }
 }
 
@@ -925,7 +863,6 @@ async function loadFileTree() {
 async function onTreeSelect(keys, node) {
   if (!node) return
   
-  console.log('树节点选择:', node)
   
   if (node.type === 'file') {
     // 如果当前在提交历史标签页，自动切换回文件标签页
@@ -938,7 +875,7 @@ async function onTreeSelect(keys, node) {
 }
 
 // 加载文件内容
-async function loadFile(path, searchLine = null, commit = null) {
+async function loadFileState(path, searchLine = null, commit = null) {
   if (!currentRepo.value) return
   const repositoryId = currentRepo.value.id, epoch = repoEpoch, request = ++fileRequest
   requestedFile.value = { path, searchLine, commit }
@@ -948,7 +885,7 @@ async function loadFile(path, searchLine = null, commit = null) {
     const response = await api.code.getFile(repositoryId, path, commit)
     if (epoch !== repoEpoch || request !== fileRequest) return
     currentFile.value = {
-      ...response.data.data,
+      ...response.data.data, path,
       ...(Number.isSafeInteger(searchLine) && searchLine > 0 ? { searchLine } : {})
     }
     fileLoading.value = false
@@ -976,71 +913,26 @@ function retryFile() {
   }
 }
 
-// 绑定Markdown链接点击事件，阻止默认跳转，改为新标签页打开
+// Delegate links to the current preview container; never attach handlers to stale content.
 function bindMarkdownLinks() {
-  const previewPanel = fileContentPanel.value?.querySelector('.markdown-preview')
-  if (!previewPanel) return
-  
-  const links = previewPanel.querySelectorAll('a')
-  links.forEach(link => {
-    // 跳过已处理的链接
-    if (link.dataset.linkBound) return
-    link.dataset.linkBound = 'true'
-    
-    link.addEventListener('click', (e) => {
-      const href = link.getAttribute('href')
-      if (!href) return
-      
-      // 如果是外部链接（http/https），在新标签页打开
-      if (href.startsWith('http://') || href.startsWith('https://')) {
-        e.preventDefault()
-        window.open(href, '_blank', 'noopener,noreferrer')
-      }
-      // 如果是内部锚点链接（#开头），滚动到对应锚点
-      else if (href.startsWith('#')) {
-        e.preventDefault()
-        // URL解码锚点ID（处理中文锚点）
-        let anchorId
-        try { anchorId = decodeURIComponent(href.substring(1)) } catch { return }
-        console.log('点击锚点:', anchorId)
-        
-        // 首先尝试通过 id 查找
-        let anchorElement = Array.from(previewPanel.querySelectorAll('[id],[name]')).find(el => el.id === anchorId || el.getAttribute('name') === anchorId)
-        
-        // 还是没找到，尝试查找标题元素并匹配生成的 ID
-        if (!anchorElement) {
-          const headings = previewPanel.querySelectorAll('h1, h2, h3, h4, h5, h6')
-          for (const heading of headings) {
-            const headingText = heading.textContent.trim()
-            // 计算标题应该生成的 ID（与 marked 渲染器一致）
-            const expectedId = headingText.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\u4e00-\u9fa5-]/g, '')
-            if (heading.id === anchorId || 
-                expectedId === anchorId ||
-                headingText.toLowerCase().replace(/\s+/g, '-') === anchorId.toLowerCase()) {
-              anchorElement = heading
-              break
-            }
-          }
-        }
-        
-        if (anchorElement) {
-          console.log('找到锚点元素:', anchorElement)
-          anchorElement.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        } else {
-          console.log('未找到锚点元素:', anchorId)
-        }
-      }
-      // 如果是其他相对链接（如 ./xxx.md），阻止默认行为并提示
-      else {
-        e.preventDefault()
-        toast.info('内部文档链接暂不支持跳转')
-      }
-    })
-  })
+  const panel = fileContentPanel.value
+  if (!panel) return
+  panel.onclick = (event) => {
+    const link = event.target.closest?.('.markdown-preview a')
+    if (!link) return
+    event.preventDefault()
+    const href = link.getAttribute('href')
+    if (/^https?:\/\//i.test(href)) { window.open(href, '_blank', 'noopener,noreferrer'); return }
+    const target = resolveRepositoryLink(href, currentFile.value?.path || 'README.md')
+    if (!target) { toast.info('此链接不能在仓库内打开'); return }
+    if (target.sameFile) scrollRepositoryAnchor(panel, target.anchor)
+    else updateLocation({ path: target.path, line: null, commit: currentFile.value?.commit || null, anchor: target.anchor, tab: 'files' })
+  }
+  scrollRepositoryAnchor(panel, route.query.anchor)
 }
 
 // 关闭文件预览
-function closeFile() {
+function closeFileState() {
   fileRequest += 1
   currentFile.value = null
   requestedFile.value = null
@@ -1100,31 +992,54 @@ function formatDate(dateStr) {
   return date.toLocaleDateString('zh-CN')
 }
 
-onMounted(async () => {
-  await loadRepos()
+let navigationRequest = 0
+const locationKeys = ['repositoryId', 'path', 'line', 'commit', 'anchor']
+function updateLocation(patch) {
+  const query = { ...route.query, ...patch }
+  for (const key of Object.keys(query)) if (query[key] === null || query[key] === '') delete query[key]
+  return router.push({ query })
+}
+function openRepo(repo) { return updateLocation({ repositoryId: String(repo.id), path: null, line: null, commit: null, tab: 'files', codeQ: null, codeMode: null, codePage: null }) }
+function closeRepo() { return updateLocation({ repositoryId: null, path: null, line: null, commit: null, tab: null, codeQ: null, codeMode: null, codePage: null }) }
+function loadFile(path, line = null, commit = null) {
+  if (route.query.path === path && String(route.query.line || '') === String(line || '') && (route.query.commit || null) === commit) return loadFileState(path, line, commit)
+  return updateLocation({ path, line: line ? String(line) : null, commit, anchor: null, tab: 'files' })
+}
+function closeFile() { return updateLocation({ path: null, line: null, commit: null, anchor: null }) }
+function openSearchResult(locator) { loadFile(locator.path, locator.line, locator.commit || null) }
+async function restoreLocation() {
+  const request = ++navigationRequest
   const repositoryId = Number(route.query.repositoryId)
-  if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) return
-  let repository = repoList.value.find((item) => Number(item.id) === repositoryId)
-  if (!repository) {
-    try { repository = (await api.code.get(repositoryId)).data?.data } catch { return }
+  if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) { closeRepoState(); return }
+  if (Number(currentRepo.value?.id) !== repositoryId) {
+    closeRepoState()
+    let repository = repoList.value.find(item => Number(item.id) === repositoryId)
+    try {
+      if (!repository) repository = (await api.code.get(repositoryId)).data?.data
+      if (disposed || request !== navigationRequest) return
+      if (!repository) throw new Error('missing')
+      await openRepoState(repository)
+    } catch {
+      if (!disposed && request === navigationRequest) listError.value = '仓库暂不可用，请刷新列表后重试'
+      return
+    }
   }
-  if (!repository) return
-  const opening = openRepo(repository)
-  const epoch = repoEpoch
-  await opening
-  if (epoch !== repoEpoch) return
+  if (disposed || request !== navigationRequest) return
+  activeTab.value = ['files', 'commits', 'search'].includes(route.query.tab) ? route.query.tab : 'files'
   if (typeof route.query.path === 'string' && route.query.path) {
     const line = Number(route.query.line)
-    const commit = typeof route.query.commit === 'string' ? route.query.commit : null
-    await loadFile(route.query.path, Number.isSafeInteger(line) && line > 0 ? line : null, commit)
-  }
-})
+    await loadFileState(route.query.path, Number.isSafeInteger(line) && line > 0 ? line : null, typeof route.query.commit === 'string' ? route.query.commit : null)
+  } else closeFileState()
+}
+watch(() => JSON.stringify(locationKeys.map(key => route.query[key])), restoreLocation)
+watch(() => route.query.tab, (tab) => { if (['files', 'commits', 'search'].includes(tab)) activeTab.value = tab })
+function changeTab(tab) { activeTab.value = tab; updateLocation({ tab }) }
+onMounted(async () => { await loadRepos(); if (!disposed) restoreLocation() })
 onBeforeUnmount(() => {
   disposed = true
   listRequest += 1
   invalidateRepoRequests()
-  clearInterval(clonePollInterval)
-  clearInterval(syncPollInterval)
+  navigationRequest += 1
 })
 </script>
 
@@ -1134,6 +1049,9 @@ onBeforeUnmount(() => {
 .code-feedback--file strong{color:var(--color-text-primary);font-size:15px}
 .code-feedback--file span{overflow-wrap:anywhere}
 .repo-info:focus-visible{outline:2px solid var(--color-primary);outline-offset:4px;border-radius:4px}
+.repo-item{grid-template-columns:minmax(0,1fr) auto}
+.repo-item>.repo-info{grid-column:1;grid-row:1}.repo-item>.repo-actions{grid-column:2;grid-row:1}.repo-item>:deep(.repository-task){grid-column:1/-1;margin-top:0}
+.content-area{background:var(--color-surface-raised)}
 .code {
   padding: 0;
 }
@@ -1166,11 +1084,11 @@ onBeforeUnmount(() => {
 }
 
 .repo-item {
-  display: flex;
+  display: grid;
   justify-content: space-between;
   align-items: flex-start;
   padding: 16px;
-  gap: 24px;
+  gap: 8px 20px;
   width: 100%;
 }
 

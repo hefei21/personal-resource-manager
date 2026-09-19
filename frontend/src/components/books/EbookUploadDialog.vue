@@ -117,6 +117,7 @@ function metadataPayloadWithParsed(file) {
   return payload
 }
 async function submit() {
+  if (uploading.value || parsing.value) return
   const file = actualFile()
   if (!file) return toast.error('请选择书籍文件')
   if (!form.title.trim()) return toast.error('请输入书名')

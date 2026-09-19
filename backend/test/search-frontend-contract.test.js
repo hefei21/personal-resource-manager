@@ -50,9 +50,10 @@ test('resource pages consume public search locators on both layouts', () => {
     ['src/mobile/pages/DocumentsMobile.vue', /route\.query\.documentId/u],
     ['src/pc/pages/BooksPC.vue', /route\.query\.bookId[\s\S]*searchChapterIndex/u],
     ['src/mobile/pages/BooksMobile.vue', /route\.query\.bookId[\s\S]*searchChapterIndex/u],
-    ['src/mobile/components/BookReader.vue', /props\.book\.searchChapterIndex/u],
-    ['src/pc/pages/CodePC.vue', /route\.query\.repositoryId[\s\S]*loadFile\(route\.query\.path/u],
-    ['src/mobile/pages/CodeMobile.vue', /route\.query\.repositoryId[\s\S]*previewFile/u],
+    ['src/mobile/components/BookReader.vue', /EbookReaderDialog[\s\S]*:book="book"/u],
+    ['src/components/books/EbookReaderDialog.vue', /props\.book\.searchChapterIndex/u],
+    ['src/pc/pages/CodePC.vue', /route\.query\.repositoryId[\s\S]*loadFileState\(route\.query\.path/u],
+    ['src/mobile/pages/CodeMobile.vue', /route\.query\.repositoryId[\s\S]*loadPreview/u],
     ['src/pc/pages/BlogPC.vue', /route\.query\.postId/u],
     ['src/mobile/pages/BlogMobile.vue', /route\.query\.postId/u]
   ]

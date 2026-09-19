@@ -193,6 +193,7 @@ function normalizeQuery(input) {
   return Object.freeze({
     keyword,
     normalized: keyword.toLocaleLowerCase('und'),
+    repositoryId: input.repositoryId === undefined ? null : positiveInteger(input.repositoryId, 'repositoryId'),
     limit,
     offset,
     types: Object.freeze(types),
@@ -483,6 +484,10 @@ export class CodeSymbolIndexService {
       ELSE 6 END`
     const clauses = ["(lower(entry.name) LIKE ? ESCAPE '\\' OR lower(entry.qualified_name) LIKE ? ESCAPE '\\')"]
     const whereParameters = [contains, contains]
+    if (query.repositoryId !== null) {
+      clauses.push('entry.repository_id = ?')
+      whereParameters.push(query.repositoryId)
+    }
     if (query.source) {
       clauses.push('snapshot.source_kind = ?')
       whereParameters.push(query.source)

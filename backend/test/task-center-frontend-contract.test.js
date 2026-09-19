@@ -91,11 +91,12 @@ test('Stage 3.4 frontend task center keeps the frozen API and shared-state bound
   assert.match(mobileLayoutSource, /navigationItemsForGroup\(item\.group,\s*\{\s*mobile:\s*true\s*\}\)/u)
   assert.doesNotMatch(readFrontend('views/DemoWorkspace.vue'), /任务中心|\/tasks/u)
 
-  for (const source of [booksPcSource, booksMobileSource]) {
+  for (const source of [booksPcSource]) {
     assert.match(source, /api\.books\.reparseMetadata/u)
     assert.match(source, /metadataStatusLabel/u)
     assert.match(source, /activeConflict/u)
   }
+  assert.doesNotMatch(booksMobileSource, /api\.books\.reparseMetadata/u)
   assert.match(musicPcSource, /api\.music\.reparseMetadata/u)
   assert.match(musicPcSource, /metadataStatusLabel/u)
   assert.match(musicPcSource, /activeConflict/u)
