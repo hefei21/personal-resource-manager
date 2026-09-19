@@ -1896,6 +1896,21 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
     const page = parseInt(req.query.page) || PAGINATION.DEFAULT_PAGE
     const pageSize = parseInt(req.query.pageSize) || PAGINATION.DEFAULT_PAGE_SIZE
     const offset = (page - 1) * pageSize
+    // Apply the same scope to count and rows; filtering must happen before pagination.
+    const filters = []
+    const filterParams = []
+    if (typeof req.query.keyword === 'string' && req.query.keyword.trim()) {
+      filters.push('(m.title LIKE ? OR m.artist LIKE ? OR m.album LIKE ?)')
+      const keyword = `%${req.query.keyword.trim().slice(0, 300)}%`
+      filterParams.push(keyword, keyword, keyword)
+    }
+    for (const field of ['artist', 'album']) {
+      if (typeof req.query[field] === 'string' && req.query[field]) {
+        filters.push(`m.${field} = ?`)
+        filterParams.push(req.query[field])
+      }
+    }
+    const filterSql = filters.length ? ` AND ${filters.join(' AND ')}` : ''
     
     // 检查表结构
     const columns = db.prepare("PRAGMA table_info(music)").all()
@@ -1921,12 +1936,12 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
       SELECT COUNT(*) as total
       FROM music m
       JOIN playlist_songs ps ON m.id = ps.music_id
-      WHERE ps.playlist_id = ?
+      WHERE ps.playlist_id = ? ${filterSql}
         AND NOT EXISTS (
           SELECT 1 FROM resource_trash_entries t
           WHERE t.resource_type = 'music' AND t.resource_id = m.id
         )
-    `).get(playlistId)
+    `).get(playlistId, ...filterParams)
     const total = countResult ? countResult.total : 0
     
     // 获取分页数据
@@ -1934,14 +1949,14 @@ router.get('/playlists/:id/songs', authenticateToken, async (req, res) => {
       SELECT ${selectFields.join(', ')}
       FROM music m
       JOIN playlist_songs ps ON m.id = ps.music_id
-      WHERE ps.playlist_id = ?
+      WHERE ps.playlist_id = ? ${filterSql}
         AND NOT EXISTS (
           SELECT 1 FROM resource_trash_entries t
           WHERE t.resource_type = 'music' AND t.resource_id = m.id
         )
       ORDER BY ps.sort_order
       LIMIT ? OFFSET ?
-    `).all(playlistId, pageSize, offset)
+    `).all(playlistId, ...filterParams, pageSize, offset)
     
     const songs = rows.map(row => ({
       ...row,

@@ -1,0 +1,178 @@
+// Synthetic music API + generated PCM audio. No production data or external music service.
+import assert from 'node:assert/strict'
+import { mkdir, writeFile, mkdtemp } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
+const output = process.env.MUSIC_TEST_OUTPUT || await mkdtemp(join(tmpdir(), 'music-browser-'))
+await mkdir(output, { recursive: true })
+const browser = await chromium.launch({ headless: true, ...(process.env.MUSIC_BROWSER_PATH ? { executablePath: process.env.MUSIC_BROWSER_PATH } : {}) })
+const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
+const base = process.env.MUSIC_TEST_URL || 'http://127.0.0.1:5178'
+const songs = Array.from({ length: 55 }, (_, i) => ({ id: i + 1, title: i ? '测试曲目 ' + (i + 1) : '雨后散步 · 一首很长名字的音乐用于验证省略显示', artist: '合成演奏者', album: '日常片段', duration: 20, file_size: 320000, has_cover: false }))
+const wave = Buffer.alloc(44 + 16000 * 20 * 2)
+wave.write('RIFF'); wave.writeUInt32LE(wave.length - 8, 4); wave.write('WAVEfmt ', 8); wave.writeUInt32LE(16, 16)
+wave.writeUInt16LE(1, 20); wave.writeUInt16LE(1, 22); wave.writeUInt32LE(16000, 24); wave.writeUInt32LE(32000, 28)
+wave.writeUInt16LE(2, 32); wave.writeUInt16LE(16, 34); wave.write('data', 36); wave.writeUInt32LE(wave.length - 44, 40)
+let listFailure = false, audioFailure = false, page2Failure = false
+const errors = [], checks = [], writes = []
+await context.route('**/api/**', async route => {
+  const request = route.request(), url = new URL(request.url()), path = url.pathname
+  if (!path.startsWith('/api/')) return route.continue()
+  const json = (data, status = 200) => route.fulfill({ json: data, status })
+  if (request.method() !== 'GET') writes.push(path)
+  if (path === '/api/auth/check') return json({ authenticated: true, user: { id: 1, username: 'fixture', principal: 'owner', isGuest: false } })
+  if (path.startsWith('/api/music/play/')) {
+    if (audioFailure) return route.fulfill({ status: 503 })
+    const range = /bytes=(\d+)-(\d*)/.exec(request.headers().range || '')
+    const start = range ? Number(range[1]) : 0, end = range?.[2] ? Math.min(Number(range[2]), wave.length - 1) : wave.length - 1
+    return route.fulfill({ status: range ? 206 : 200, headers: { 'Content-Type': 'audio/wav', 'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': 'bytes ' + start + '-' + end + '/' + wave.length } : {}) }, body: wave.subarray(start, end + 1) })
+  }
+  if (path === '/api/music' || /^\/api\/music\/playlists\/\d+\/songs$/.test(path)) {
+    if (listFailure || page2Failure && url.searchParams.get('page') === '2') return json({ message: '合成失败' }, 503)
+    const keyword = url.searchParams.get('keyword') || ''
+    if (keyword === 'slow') await new Promise(resolve => setTimeout(resolve, 500))
+    const matches = keyword === 'slow' ? [songs[0]] : keyword === 'fast' ? [songs[1]] : songs.filter(song => song.title.includes(keyword))
+    const page = Number(url.searchParams.get('page') || 1), size = Number(url.searchParams.get('pageSize') || 30)
+    return json({ data: matches.slice((page - 1) * size, page * size), total: matches.length })
+  }
+  if (path === '/api/music/playlists') return json({ data: [{ id: 7, name: '通勤时听', song_count: 35 }] })
+  if (path === '/api/music/artists' || path === '/api/music/albums' || path === '/api/music/upload-progress') return json({ data: [] })
+  return json({ data: [], total: 0, success: true })
+})
+const page = await context.newPage()
+page.on('pageerror', error => errors.push(error.message))
+page.on('console', message => { if (message.type() === 'error') console.error('BROWSER', message.text()) })
+page.on('requestfailed', request => console.error('REQUEST', request.url(), request.failure()?.errorText))
+async function check(name, action) { await action(); checks.push(name); console.log('PASS ' + name) }
+const audioPlaying = () => page.waitForFunction(() => { const a = document.querySelector('audio'); return a && !a.paused && a.currentTime > 0 })
+try {
+  await page.goto(base + '/music')
+  await page.getByRole('button', { name: '播放 ' + songs[0].title, exact: true }).waitFor()
+  await check('PC selection is opt-in with page select-all; details never show selection controls', async () => {
+    assert.equal(await page.locator('.song-title input[type=checkbox]').count(), 0)
+    await page.getByRole('button', { name: '多选', exact: true }).click()
+    await page.getByRole('button', { name: '全选本页', exact: true }).click()
+    await page.getByText('已选择 30 首', { exact: true }).waitFor()
+    await page.getByRole('button', { name: '退出多选', exact: true }).first().click()
+    await page.getByRole('button', { name: '详情', exact: true }).first().click()
+    await page.getByRole('heading', { name: '曲目详情', exact: true }).waitFor()
+    assert.equal(await page.locator('.native-drawer input[type=checkbox]').count(), 0)
+    await page.locator('.native-drawer').getByRole('button', { name: '关闭', exact: true }).click()
+  })
+  await check('real audio plays, pauses, seeks; canplay cannot undo pause', async () => {
+    await page.getByRole('button', { name: '播放 ' + songs[0].title, exact: true }).click()
+    await audioPlaying()
+    await page.locator('.media-player').getByRole('button', { name: '暂停', exact: true }).click()
+    await page.evaluate(() => document.querySelector('audio').dispatchEvent(new Event('canplay')))
+    await page.waitForTimeout(150)
+    assert.equal(await page.locator('audio').evaluate(a => a.paused), true)
+    await page.getByRole('slider', { name: '播放进度', exact: true }).fill('8')
+    assert.ok(await page.locator('audio').evaluate(a => a.currentTime >= 7.9))
+    await page.getByRole('slider', { name: '音量', exact: true }).fill('0')
+    await page.locator('.scrollable-content').evaluate(el => { el.scrollTop = 0 })
+    await page.screenshot({ path: join(output, 'pc-music.png') })
+  })
+  await check('reload restores local queue and zero volume without autoplay', async () => {
+    await page.reload()
+    await page.getByText('已恢复，点击播放', { exact: true }).waitFor()
+    assert.equal(await page.locator('audio').evaluate(a => a.paused), true)
+    assert.equal(await page.getByRole('slider', { name: '音量', exact: true }).inputValue(), '0')
+    await page.locator('.media-player').getByRole('button', { name: '播放', exact: true }).click()
+    await audioPlaying()
+    assert.ok(await page.locator('audio').evaluate(a => a.currentTime >= 7.9))
+  })
+  await check('route navigation keeps audio element and time, player remains at bottom', async () => {
+    const before = await page.locator('audio').evaluate(a => { a.dataset.fixture = 'same'; return a.currentTime })
+    await page.getByRole('button', { name: '首页', exact: true }).first().click()
+    assert.equal(await page.locator('audio').getAttribute('data-fixture'), 'same')
+    assert.ok(await page.locator('audio').evaluate(a => a.currentTime >= 0))
+    assert.ok((await page.locator('.media-player').boundingBox()).y > 850)
+    await page.goto(base + '/music')
+    await page.locator('.media-player').waitFor()
+  })
+  await check('playback error is actionable and retry resumes without silent skipping', async () => {
+    audioFailure = true
+    await page.locator('.media-player').getByRole('button', { name: '下一首', exact: true }).click()
+    await page.locator('.media-player').getByRole('button', { name: '重试', exact: true }).waitFor()
+    audioFailure = false
+    await page.locator('.media-player').getByRole('button', { name: '重试', exact: true }).click()
+    await audioPlaying()
+    assert.match(await page.locator('.track-copy strong').innerText(), /测试曲目 2/)
+  })
+  await check('PC equalizer remains available as a secondary control without stopping audio', async () => {
+    await page.getByRole('button', { name: '展开播放页', exact: true }).click()
+    await page.getByRole('button', { name: '均衡器', exact: true }).click()
+    await page.locator('.equalizer-panel').waitFor()
+    await audioPlaying()
+    await page.locator('.native-drawer').last().getByRole('button', { name: '关闭', exact: true }).click()
+    await page.getByRole('dialog', { name: '均衡器', exact: true }).waitFor({ state: 'hidden' })
+    await page.getByRole('dialog', { name: '正在播放', exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+  })
+  await check('removing current queue entry retains correct next index; clearing stops playback', async () => {
+    await page.locator('.media-player').getByRole('button', { name: '播放队列', exact: true }).click()
+    await page.getByRole('button', { name: '从队列移除 测试曲目 2', exact: true }).click()
+    await audioPlaying()
+    assert.equal(await page.locator('.track-copy strong').innerText(), '测试曲目 3')
+    await page.getByRole('button', { name: '清空', exact: true }).click()
+    await page.locator('.media-player').waitFor({ state: 'hidden' })
+    assert.equal(await page.locator('audio').evaluate(a => a.paused), true)
+  })
+  await check('list failure retains rows and latest search wins', async () => {
+    const search = page.getByPlaceholder('搜索音乐...')
+    listFailure = true; await search.press('Enter')
+    await page.getByText('列表加载失败，已保留上次结果。', { exact: false }).waitFor()
+    assert.equal(await page.locator('.song-title-link').count(), 30)
+    listFailure = false; await page.getByRole('button', { name: '重试', exact: true }).click()
+    await search.fill('slow'); await search.press('Enter'); await search.fill('fast'); await search.press('Enter')
+    await page.waitForTimeout(650)
+    assert.equal(await page.locator('.song-title-link').count(), 1)
+    assert.equal(await page.locator('.song-title-link').innerText(), '测试曲目 2')
+  })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto(base + '/music')
+  await page.locator('.music-item').first().waitFor()
+  await check('mobile playlist selector paginates with retry and no skipped page', async () => {
+    await page.locator('.playlist-picker [role=combobox]').click()
+    await page.getByRole('option', { name: '通勤时听', exact: true }).click()
+    await page.waitForFunction(() => document.querySelectorAll('.music-item').length === 50)
+    page2Failure = true; await page.getByRole('button', { name: '加载下一批', exact: true }).click()
+    await page.getByRole('button', { name: '加载失败，点击重试', exact: true }).waitFor()
+    assert.equal(await page.locator('.music-item').count(), 50)
+    page2Failure = false; await page.getByRole('button', { name: '加载失败，点击重试', exact: true }).click()
+    await page.getByText('已显示全部 55 首', { exact: true }).waitFor()
+    assert.equal(await page.locator('.music-item').count(), 55)
+  })
+  await check('mobile mini player stays above nav; expanded page and queue remain usable', async () => {
+    await page.locator('.music-item').first().click()
+    await audioPlaying()
+    await page.waitForTimeout(220)
+    const playerBox = await page.locator('.media-player').boundingBox(), navBox = await page.locator('.bottom-navigation').boundingBox()
+    assert.ok(playerBox.y + playerBox.height <= navBox.y + 1, JSON.stringify({ playerBox, navBox }))
+    await page.locator('.scrollable-content').evaluate(el => { el.scrollTop = 0 })
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+    await page.screenshot({ path: join(output, 'mobile-music.png') })
+    await page.getByRole('button', { name: '展开播放页', exact: true }).click()
+    await page.getByRole('heading', { name: '正在播放', exact: true }).waitFor()
+    await page.waitForTimeout(350)
+    await page.screenshot({ path: join(output, 'mobile-now-playing.png') })
+    await page.locator('.native-drawer').getByRole('button', { name: '关闭', exact: true }).click()
+    await page.setViewportSize({ width: 320, height: 740 })
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+  })
+  await check('logout clears device snapshot and stops audio', async () => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.getByRole('button', { name: '退出', exact: true }).click()
+    await page.waitForTimeout(300)
+    assert.equal(await page.evaluate(() => Object.keys(localStorage).some(key => key.startsWith('pr-manager:music:v1:'))), false)
+    assert.equal(await page.locator('.media-player').count(), 0)
+  })
+  assert.deepEqual(errors, [])
+  await writeFile(join(output, 'results.json'), JSON.stringify({ checks, errors, writes }, null, 2))
+  console.log(JSON.stringify({ passed: checks.length, errors, output }))
+} catch (error) {
+  console.error('PAGE', page.url(), (await page.locator('body').innerText()).slice(0, 1500))
+  await page.screenshot({ path: join(output, 'failure.png') })
+  console.error({ checks, errors })
+  throw error
+} finally { await browser.close() }

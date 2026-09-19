@@ -29,11 +29,9 @@
       @ended="handleEnded"
       @loadedmetadata="handleLoaded"
       @error="handleError"
-      @play="isPlaying = true"
-      @pause="isPlaying = false"
-      @waiting="isPlaying = false"
-      @playing="isPlaying = true"
-      @canplay="handleCanPlay"
+      @playing="handlePlaying"
+      @pause="handlePause"
+      @waiting="handleWaiting"
     />
   </div>
 </template>
@@ -51,25 +49,26 @@ const {
   playMode, showLyricsWindow, hasPrev, hasNext,
   closeLyricsWindow, togglePlay, playPrev, playNext, seekToTime,
   changeVolume, toggleMute, togglePlayMode,
-  handleTimeUpdate, handleEnded, handleLoaded, handleError, handleCanPlay
+  handleTimeUpdate, handleEnded, handleLoaded, handleError, handlePlaying, handlePause, handleWaiting
 } = player
 
 // 独立的移动端检测（不依赖单例中的 isMobile）
-const isMobile = ref(false)
+const isMobile = ref(window.innerWidth <= 768)
 
 // 挂载后检测窗口大小
 onMounted(() => {
   isMobile.value = window.innerWidth <= 768
-  console.log('[MediaPlayer] isMobile:', isMobile.value, 'windowWidth:', window.innerWidth)
+  player.attach()
   window.addEventListener('resize', handleResize)
 })
 
 function handleResize() {
   isMobile.value = window.innerWidth <= 768
-  console.log('[MediaPlayer] resize isMobile:', isMobile.value)
+
 }
 
 onUnmounted(() => {
+  player.detach()
   window.removeEventListener('resize', handleResize)
 })
 </script>

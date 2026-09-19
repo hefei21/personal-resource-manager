@@ -319,7 +319,7 @@ async function handlePasswordChange() {
   margin-left: 256px;
   margin-top: 72px;
   height: calc(100vh - 72px);
-  padding: 28px;
+  padding: 28px 28px calc(28px + var(--player-height, 0px));
   overflow-y: auto;
   background: var(--color-surface-subtle);
   scrollbar-width: thin;

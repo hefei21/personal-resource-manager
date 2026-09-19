@@ -135,115 +135,7 @@ onMounted(() => {
     initialLoading.value = false
   }, 500)
   
-  // 移动端：监听播放器高度变化
-  adjustForPlayer()
-  observePlayer()
-  
-  // 监听播放器出现事件
-  window.addEventListener('player-appeared', () => {
-    setTimeout(() => adjustForPlayer(), 100)
-    setTimeout(() => adjustForPlayer(), 500)
-  })
-  
-  // 监听播放器最小化事件
-  window.addEventListener('player-minimized', () => {
-    document.documentElement.style.setProperty('--player-height', '0px')
-    document.body.style.paddingBottom = '20px'
-    const mainContent = document.querySelector('.main-content')
-    if (mainContent) {
-      mainContent.style.paddingBottom = '20px'
-    }
-    const scrollContent = document.querySelector('.scrollable-content')
-    if (scrollContent) {
-      scrollContent.style.paddingBottom = '84px'
-    }
-  })
-  
-  // 监听播放器恢复事件
-  window.addEventListener('player-restored', () => {
-    setTimeout(() => adjustForPlayer(), 300)
-  })
-  
-  // 监听播放器关闭事件
-  window.addEventListener('player-closed', () => {
-    document.documentElement.style.setProperty('--player-height', '0px')
-    document.body.style.paddingBottom = '20px'
-    const mainContent = document.querySelector('.main-content')
-    if (mainContent) {
-      mainContent.style.paddingBottom = '20px'
-    }
-    const scrollContent = document.querySelector('.scrollable-content')
-    if (scrollContent) {
-      scrollContent.style.paddingBottom = '84px'
-    }
-  })
 })
-
-// 播放器高度适配
-const adjustForPlayer = () => {
-  let mediaPlayer = document.querySelector('.media-player') || 
-                    document.querySelector('[class*="media-player"]')
-  
-  if (mediaPlayer && mediaPlayer.offsetHeight > 0 && window.getComputedStyle(mediaPlayer).display !== 'none') {
-    const playerHeight = mediaPlayer.offsetHeight
-    document.documentElement.style.setProperty('--player-height', playerHeight + 'px')
-    document.body.style.paddingBottom = playerHeight + 'px'
-    const mainContent = document.querySelector('.main-content')
-    if (mainContent) {
-      mainContent.style.paddingBottom = playerHeight + 'px'
-    }
-    const scrollContent = document.querySelector('.scrollable-content')
-    if (scrollContent) {
-      scrollContent.style.paddingBottom = (playerHeight + 84) + 'px'
-    }
-    return playerHeight
-  } else {
-    document.documentElement.style.setProperty('--player-height', '0px')
-    document.body.style.paddingBottom = '20px'
-    const mainContent = document.querySelector('.main-content')
-    if (mainContent) {
-      mainContent.style.paddingBottom = '20px'
-    }
-    const scrollContent = document.querySelector('.scrollable-content')
-    if (scrollContent) {
-      scrollContent.style.paddingBottom = '84px'
-    }
-    return 0
-  }
-}
-
-// 监听播放器变化
-let playerObserver = null
-const observePlayer = () => {
-  let checkCount = 0
-  const checkInterval = setInterval(() => {
-    checkCount++
-    const player = document.querySelector('.media-player')
-    if (player) {
-      clearInterval(checkInterval)
-      
-      if (!playerObserver) {
-        playerObserver = new MutationObserver(() => {
-          adjustForPlayer()
-        })
-        playerObserver.observe(player, { 
-          attributes: true, 
-          attributeFilter: ['class', 'style'],
-          childList: true,
-          subtree: true
-        })
-      }
-      
-      adjustForPlayer()
-      setTimeout(adjustForPlayer, 500)
-      setTimeout(adjustForPlayer, 1000)
-    }
-    
-    if (checkCount > 30) {
-      clearInterval(checkInterval)
-    }
-  }, 200)
-}
 
 watch(activeNavigation, item => {
   if (!item || item.kind !== 'module' || !item.mobile || item.group === 'home') return
@@ -522,8 +414,8 @@ async function handleMobilePasswordChange() {
   z-index: 120;
   left: 0;
   right: 0;
-  bottom: var(--player-height, 0px);
-  height: 68px;
+  bottom: 0;
+  height: calc(68px + env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   padding: 5px max(4px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));

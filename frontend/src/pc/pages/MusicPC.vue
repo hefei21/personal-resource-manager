@@ -14,12 +14,9 @@
       </div>
     </div>
 
-    <div class="page-header">
-      <p>管理 MP3、FLAC、WAV 等音乐文件</p>
-    </div>
 
     <!-- 工具栏 -->
-    <NativeCard class="toolbar-card">
+    <section class="toolbar-card">
       <div class="toolbar">
         <div class="toolbar-left">
           <NativeInput
@@ -67,6 +64,7 @@
               { value: 'duration', label: '时长' }
             ]"
           />
+          <NativeButton v-if="!currentPlaylist" variant="text" :aria-label="sortDirection === 'DESC' ? '切换为升序' : '切换为降序'" @click="sortDirection = sortDirection === 'DESC' ? 'ASC' : 'DESC'; searchMusic()"><NativeIcon :name="sortDirection === 'DESC' ? 'arrow-down' : 'arrow-up'" size="16" /></NativeButton>
         </div>
 
         <div class="toolbar-right">
@@ -74,22 +72,19 @@
             <template #icon><NativeIcon name="trash" /></template>
             回收站
           </NativeButton>
-          <NativeButton theme="success" variant="outline" @click="batchDownloadLyrics" :loading="downloadingAllLyrics" :disabled="isGuest">
-            <template #icon><NativeIcon name="download" /></template>
-            批量获取歌词
-          </NativeButton>
-          <NativeButton theme="primary" @click="showUploadDialog = true" :disabled="isGuest">
+          <NativeButton v-if="!isGuest" variant="outline" @click="selectionMode = !selectionMode; selectedSongs = []">{{ selectionMode ? '退出多选' : '多选' }}</NativeButton>
+          <NativeButton v-if="!currentPlaylist" theme="primary" @click="showUploadDialog = true" :disabled="isGuest">
             <template #icon><NativeIcon name="upload" /></template>
             上传音乐
           </NativeButton>
         </div>
       </div>
-    </NativeCard>
+    </section>
 
     <!-- 主体内容 -->
     <div class="main-content">
       <!-- 歌单列表侧边栏 -->
-      <div class="sidebar" v-if="currentPlaylist || playlists.length > 0">
+      <div class="sidebar">
         <div class="sidebar-header">
           <span>歌单</span>
           <div class="sidebar-actions">
@@ -154,11 +149,13 @@
 
       <!-- 音乐列表 -->
       <div class="music-list-container">
+        <div class="library-heading"><div><h3>{{ currentPlaylist?.name || '全部音乐' }}</h3><span>{{ currentPlaylist ? playlistTotal : total }} 首 · 点击播放后以本页曲目建立队列</span></div><NativeButton size="small" variant="text" :disabled="!musicList.length" @click="playSong(musicList[0])"><template #icon><NativeIcon name="play" size="16" /></template>播放本页</NativeButton></div>
+        <div v-if="listError" class="music-feedback" role="alert">{{ listError }}<NativeButton size="small" variant="text" @click="refreshCurrentPage">重试</NativeButton></div>
         <!-- 批量操作栏 -->
-        <div class="batch-actions" v-if="selectedSongs.length > 0">
+        <div class="batch-actions" v-if="selectionMode">
           <span>已选择 {{ selectedSongs.length }} 首</span>
           <NativeButton size="small" @click="toggleSelectAll" :loading="selectAllLoading">
-            {{ selectedSongs.length === total && total > 0 ? '取消全选' : '全选' }}
+            {{ isAllSelected ? '取消本页全选' : '全选本页' }}
           </NativeButton>
           <NativeButton size="small" @click="addToPlaylist" :disabled="isGuest">
             添加到歌单 {{ selectedSongs.length > 0 ? `(${selectedSongs.length})` : '' }}
@@ -181,7 +178,7 @@
               <template #icon><NativeIcon name="download" /></template>
             下载歌词
           </NativeButton>
-          <NativeButton size="small" variant="text" @click="selectedSongs = []">取消选择</NativeButton>
+          <NativeButton size="small" variant="text" @click="selectionMode = false; selectedSongs = []">退出多选</NativeButton>
         </div>
 
         <NativeTable
@@ -194,7 +191,7 @@
         >
           <template #cell-title="{ row }">
             <div class="song-title">
-              <NativeCheckbox
+              <NativeCheckbox v-if="selectionMode"
                 :modelValue="selectedSongs.includes(row.id)"
                 @change="(val) => toggleSelect(row.id, val)"
                 @click.stop
@@ -204,7 +201,7 @@
                   <NativeIcon name="music" v-if="!coverCache[row.id]" />
                   <img v-else :src="coverCache[row.id]" alt="cover" />
                 </div>
-                 <span class="title-text" :title="row.title">{{ row.title }}</span>
+                 <button class="title-text song-title-link" :title="row.title" @click.stop="selectionMode ? toggleSelect(row.id, !selectedSongs.includes(row.id)) : openSongDetails(row)">{{ row.title }}</button>
                  <NativeTag v-if="metadataStatusLabel(row.metadataStatus)" :theme="metadataStatusTheme(row.metadataStatus)" variant="light">
                    {{ metadataStatusLabel(row.metadataStatus) }}
                  </NativeTag>
@@ -224,25 +221,9 @@
             <span>{{ formatFileSize(row.file_size) }}</span>
           </template>
           <template #cell-operation="{ row }">
-            <div class="operation-btns">
-              <NativeButton class="music-op-btn" theme="primary" variant="outline" size="small" iconSize="1.2em" @click.stop="playSong(row)">
-                <template #icon><NativeIcon name="play-circle" /></template>
-              </NativeButton>
-              <NativeButton class="music-op-btn" theme="default" size="small" iconSize="1.2em" @click.stop="editSong(row)" :disabled="isGuest">
-                <template #icon><NativeIcon name="pencil" /></template>
-              </NativeButton>
-              <NativeButton class="music-op-btn" theme="default" variant="outline" size="small" iconSize="1.2em"
-                :loading="metadataReparseLoading[row.id]" :disabled="isGuest" title="重新解析元数据"
-                @click.stop="reparseSongMetadata(row)">
-                <template #icon><NativeIcon name="arrow-clockwise" /></template>
-              </NativeButton>
-              <NativePopconfirm :content="currentPlaylist ? '确定从歌单移除吗？' : '确定将这首音乐移入回收站吗？'" @confirm="deleteSong(row.id)">
-                <template #trigger>
-                  <NativeButton class="music-op-btn" theme="danger" variant="outline" size="small" iconSize="1.2em" :disabled="isGuest">
-                    <template #icon><NativeIcon name="trash" /></template>
-                  </NativeButton>
-                </template>
-              </NativePopconfirm>
+            <div class="operation-btns" v-if="!selectionMode">
+              <NativeButton variant="text" size="small" @click.stop="playSong(row)" :aria-label="'播放 ' + row.title"><template #icon><NativeIcon name="play" size="16" /></template>播放</NativeButton>
+              <NativeButton variant="text" size="small" @click.stop="openSongDetails(row)"><template #icon><NativeIcon name="list-dashes" size="16" /></template>详情</NativeButton>
             </div>
           </template>
         </NativeTable>
@@ -600,6 +581,14 @@
       </div>
     </NativeDialog>
 
+    <NativeDrawer v-model="showDetails" title="曲目详情" size="min(440px, 90vw)" :top-offset="72">
+      <div v-if="detailSong" class="song-details">
+        <h2>{{ detailSong.title }}</h2><p>{{ detailSong.artist || '未知艺术家' }}</p>
+        <dl><dt>专辑</dt><dd>{{ detailSong.album || '未填写' }}</dd><dt>时长</dt><dd>{{ formatDuration(detailSong.duration) }}</dd><dt>大小</dt><dd>{{ formatFileSize(detailSong.file_size) }}</dd><dt>元数据</dt><dd>{{ metadataStatusLabel(detailSong.metadataStatus) || '就绪' }}</dd></dl>
+        <div class="detail-actions"><NativeButton theme="primary" @click="playSong(detailSong)">播放</NativeButton><NativeButton v-if="!isGuest" variant="outline" @click="editSong(detailSong)">编辑信息</NativeButton><NativeButton v-if="!isGuest" variant="outline" @click="selectedSongs = [detailSong.id]; addToPlaylist()">添加到歌单</NativeButton></div>
+        <div v-if="!isGuest" class="detail-secondary"><NativeButton variant="text" :loading="metadataReparseLoading[detailSong.id]" @click="reparseSongMetadata(detailSong)">重新解析元数据</NativeButton><NativePopconfirm :content="currentPlaylist ? '仅从歌单移除，原曲目保留。继续吗？' : '移入回收站，保护期内可恢复。继续吗？'" @confirm="deleteSong(detailSong.id)"><template #trigger><NativeButton theme="danger" variant="text">{{ currentPlaylist ? '从歌单移除' : '移入回收站' }}</NativeButton></template></NativePopconfirm></div>
+      </div>
+    </NativeDrawer>
   </div>
 </template>
 
@@ -607,7 +596,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useToast } from '@/composables/useToast'
 import { useRouter } from 'vue-router'
-import { NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeSelect, NativeTable, NativePagination, NativePopconfirm, NativeTag, NativeProgress, NativeForm, NativeFormItem, NativeTextarea, NativeDivider, NativeRadio, NativeRadioGroup } from '@/components/native'
+import { NativeDrawer, NativeButton, NativeInput, NativeCard, NativeDialog, NativeRow, NativeCol, NativeCheckbox, NativeIcon, NativeSelect, NativeTable, NativePagination, NativePopconfirm, NativeTag, NativeProgress, NativeForm, NativeFormItem, NativeTextarea, NativeDivider, NativeRadio, NativeRadioGroup } from '@/components/native'
 import api from '@/api'
 import { initCoverDB, getCoverFromCache, saveCoverToCache } from '@/utils/coverCache'
 import { initUploadDB, saveUploadState, getAllPendingUploads, deleteUploadState, cleanExpiredUploads } from '@/utils/uploadState'
@@ -619,6 +608,12 @@ const { isGuest } = usePermission()
 
 // 状态
 const loading = ref(false)
+const listError = ref('')
+let listRequest = 0
+const selectionMode = ref(false)
+const showDetails = ref(false)
+const detailSong = ref(null)
+function openSongDetails(song) { detailSong.value = song; showDetails.value = true }
 const musicList = ref([])
 const total = ref(0)
 const allMusicTotal = ref(0) // 全部音乐总数（用于显示）
@@ -629,6 +624,7 @@ const searchKeyword = ref('')
 const filterArtist = ref('')
 const filterAlbum = ref('')
 const sortBy = ref('created_at')
+const sortDirection = ref('DESC')
 
 // 排序方向映射（常量）
 const sortOrderMap = {
@@ -781,7 +777,7 @@ const columns = [
   { key: 'artist', dataIndex: 'artist', title: '艺术家', width: 120, align: 'left' },
   { key: 'album', dataIndex: 'album', title: '专辑', width: 120, align: 'left' },
   { key: 'duration', dataIndex: 'duration', title: '时长', width: 70, align: 'left' },
-  { key: 'fileSize', dataIndex: 'fileSize', title: '大小', width: 80, align: 'left' },
+  { key: 'fileSize', dataIndex: 'fileSize', title: '大小', width: 110, align: 'left' },
   { key: 'operation', title: '操作', width: 130, align: 'left' }
 ]
 
@@ -793,35 +789,29 @@ const isAllSelected = computed(() => {
 
 // 加载音乐列表
 async function loadMusic() {
-  loading.value = true
+  const request = ++listRequest
+  loading.value = true; listError.value = ''
   try {
-    // 根据排序字段智能选择排序方向
-    const sortOrder = sortOrderMap[sortBy.value] || 'DESC'
-    
     const response = await api.music.list({
-      keyword: searchKeyword.value,
-      artist: filterArtist.value,
-      album: filterAlbum.value,
-      sortBy: sortBy.value,
-      sortOrder: sortOrder,
-      page: pagination.value.current,
-      pageSize: pagination.value.pageSize,
-      _t: Date.now() // 添加时间戳避免缓存
+      keyword: searchKeyword.value, artist: filterArtist.value, album: filterAlbum.value,
+      sortBy: sortBy.value, sortOrder: sortDirection.value,
+      page: pagination.value.current, pageSize: pagination.value.pageSize
     })
+    if (request !== listRequest) return
     musicList.value = response.data.data || []
     total.value = response.data.total || 0
-    allMusicTotal.value = total.value // 保存全部音乐总数
-  } catch (error) {
-    toast.error('加载音乐失败')
-  } finally {
-    loading.value = false
-  }
+    if (!searchKeyword.value && !filterArtist.value && !filterAlbum.value) allMusicTotal.value = total.value
+  } catch {
+    if (request === listRequest) listError.value = '列表加载失败，已保留上次结果。'
+  } finally { if (request === listRequest) loading.value = false }
 }
 
 // 搜索音乐（重置到第一页）
 async function searchMusic() {
+  selectedSongs.value = []
   pagination.value.current = 1
-  await loadMusic()
+  playlistPagination.value.current = 1
+  await refreshCurrentPage()
 }
 
 // 加载艺术家和专辑列表
@@ -855,6 +845,8 @@ async function loadPlaylists() {
 
 // 选择歌单
 async function selectPlaylist(playlist) {
+  ++listRequest
+  musicList.value = []; selectionMode.value = false; showDetails.value = false
   currentPlaylist.value = playlist
   selectedSongs.value = [] // 清空选择
   
@@ -875,21 +867,18 @@ async function selectPlaylist(playlist) {
 // 加载歌单歌曲（带分页）
 async function loadPlaylistSongs() {
   if (!currentPlaylist.value) return
-  
-  loading.value = true
+  const request = ++listRequest
+  loading.value = true; listError.value = ''
   try {
     const response = await api.music.getPlaylistSongs(currentPlaylist.value.id, {
-      page: playlistPagination.value.current,
-      pageSize: playlistPagination.value.pageSize,
-      _t: Date.now() // 添加时间戳避免缓存
+      page: playlistPagination.value.current, pageSize: playlistPagination.value.pageSize,
+      keyword: searchKeyword.value, artist: filterArtist.value, album: filterAlbum.value
     })
+    if (request !== listRequest) return
     musicList.value = response.data.data || []
-    playlistTotal.value = response.data.total || currentPlaylist.value.song_count || 0
-  } catch (error) {
-    toast.error('加载歌单歌曲失败')
-  } finally {
-    loading.value = false
-  }
+    playlistTotal.value = response.data.total ?? 0
+  } catch { if (request === listRequest) listError.value = '歌单加载失败，已保留上次结果。' }
+  finally { if (request === listRequest) loading.value = false }
 }
 
 // 歌单分页切换
@@ -1500,54 +1489,13 @@ async function cancelUpload() {
 }
 
 // 播放歌曲（将当前显示的所有音乐加入临时歌单）
-async function playSong(song) {
-  // 获取当前显示的所有音乐（可能跨页）
-  let songsToPlay = []
-  
-  if (currentPlaylist.value) {
-    // 如果在歌单中，获取该歌单的全部歌曲
-    try {
-      const response = await api.music.getPlaylistSongs(currentPlaylist.value.id)
-      songsToPlay = response.data.data || []
-    } catch (e) {
-      // 如果获取失败，使用当前页面的音乐
-      songsToPlay = [...musicList.value]
-    }
-  } else {
-    // 不在歌单中，获取当前筛选条件下的所有音乐
-    try {
-      // 使用相同的筛选条件，获取所有音乐
-      const params = {
-        page: 1,
-        pageSize: 10000, // 获取所有音乐
-        sortBy: sortBy.value,
-        sortOrder: sortOrderMap[sortBy.value] || 'DESC'
-      }
-      
-      if (searchKeyword.value) params.keyword = searchKeyword.value
-      if (filterArtist.value) params.artist = filterArtist.value
-      if (filterAlbum.value) params.album = filterAlbum.value
-      
-      const response = await api.music.list(params)
-      songsToPlay = response.data.data || []
-    } catch (e) {
-      // 如果获取失败，使用当前页面的音乐
-      songsToPlay = [...musicList.value]
-    }
-  }
-  
-  window.dispatchEvent(new CustomEvent('play-music', { 
-    detail: { song, list: songsToPlay }
-  }))
+function playSong(song) {
+  window.dispatchEvent(new CustomEvent('play-music', { detail: { song, list: [...musicList.value] } }))
 }
-
 function handleRowClick({ row }) {
-  // 单击播放
+  if (selectionMode.value) toggleSelect(row.id, !selectedSongs.value.includes(row.id))
 }
-
-function handleRowDblClick({ row }) {
-  playSong(row)
-}
+function handleRowDblClick({ row }) { if (!selectionMode.value) playSong(row) }
 
 // 编辑歌曲
 function editSong(song) {
@@ -1560,7 +1508,8 @@ async function saveSong() {
     await api.music.update(editForm.value.id, editForm.value)
     toast.success('保存成功')
     showEditDialog.value = false
-    loadMusic()
+    if (detailSong.value?.id === editForm.value.id) Object.assign(detailSong.value, editForm.value)
+    refreshCurrentPage()
   } catch (error) {
     toast.error('保存失败')
   }
@@ -1568,26 +1517,7 @@ async function saveSong() {
 
 // 刷新当前页（保持页码不变）
 async function refreshCurrentPage() {
-  if (currentPlaylist.value) {
-    // 歌单模式下刷新当前页
-    loading.value = true
-    try {
-      const response = await api.music.getPlaylistSongs(currentPlaylist.value.id, {
-        page: playlistPagination.value.current,
-        pageSize: playlistPagination.value.pageSize,
-        _t: Date.now() // 添加时间戳避免缓存
-      })
-      musicList.value = response.data.data || []
-      playlistTotal.value = response.data.total || currentPlaylist.value.song_count || 0
-    } catch (error) {
-      toast.error('刷新列表失败')
-    } finally {
-      loading.value = false
-    }
-  } else {
-    // 全部音乐模式下刷新当前页
-    await loadMusic()
-  }
+  return currentPlaylist.value ? loadPlaylistSongs() : loadMusic()
 }
 
 // 删除歌曲
@@ -1608,6 +1538,7 @@ async function deleteSong(id) {
       }))
     }
     
+    if (detailSong.value?.id === id) showDetails.value = false
     // 立即从本地列表移除被删除的项，实现即时刷新
     musicList.value = musicList.value.filter(song => song.id !== id)
     
@@ -1635,37 +1566,9 @@ function toggleSelect(id, checked) {
 // 全选所有音乐（不仅是当前页）
 const selectAllLoading = ref(false)
 
-async function toggleSelectAll() {
-  // 如果已全选，取消全选
-  if (isAllSelected.value) {
-    selectedSongs.value = []
-    return
-  }
-
-  // 开始全选
-  selectAllLoading.value = true
-  try {
-    let response
-    if (currentPlaylist.value) {
-      // 歌单模式：获取歌单内所有歌曲ID
-      response = await api.music.getPlaylistAllIds(currentPlaylist.value.id)
-    } else {
-      // 全部音乐模式
-      response = await api.music.getAllIds({
-        keyword: searchKeyword.value,
-        artist: filterArtist.value,
-        album: filterAlbum.value
-      })
-    }
-    selectedSongs.value = response.data.data || []
-    toast.success(`已选择 ${selectedSongs.value.length} 首歌曲`)
-  } catch (error) {
-    toast.error('全选失败')
-    // 降级为当前页全选
-    selectedSongs.value = musicList.value.map(s => s.id)
-  } finally {
-    selectAllLoading.value = false
-  }
+function toggleSelectAll() {
+  if (isAllSelected.value) selectedSongs.value = selectedSongs.value.filter(id => !musicList.value.some(song => song.id === id))
+  else selectedSongs.value = [...new Set([...selectedSongs.value, ...musicList.value.map(song => song.id)])]
 }
 
 function addToPlaylist() {
@@ -2131,6 +2034,8 @@ onMounted(async () => {
 
 // 清理
 onUnmounted(() => {
+  ++listRequest
+  coverObserver?.disconnect()
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   stopProgressPolling()
 })
@@ -2572,4 +2477,16 @@ onUnmounted(() => {
 :deep(.native-table .col-key-artist) {
   padding-left: 20px;
 }
+
+/* Music workbench: align with the document library controls. */
+.music{padding:0}.toolbar-card{padding:0 0 18px;border-bottom:1px solid var(--color-border-subtle);background:transparent}
+.toolbar{flex-wrap:wrap;gap:12px}.toolbar-left{flex-wrap:wrap;gap:8px}.toolbar-right{gap:8px}
+.main-content{gap:24px}.sidebar{background:var(--color-surface-subtle);box-shadow:none;border-radius:8px;width:200px}
+.sidebar-header,.playlist-list{background:transparent}.playlist-item.active{background:var(--color-primary-light,#efefff);color:var(--color-primary)}
+.playlist-item{font-size:14px}.playlist-item>span:first-of-type{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.music-list-container{padding-right:0}.library-heading{display:flex;align-items:center;justify-content:space-between;padding:2px 0 18px;gap:12px}.library-heading h3{font-size:16px;margin:0 0 5px}.library-heading span{font-size:12px;color:var(--color-text-secondary)}
+.song-title-link{border:0;background:transparent;text-align:left;font:inherit;cursor:pointer;color:inherit;padding:0}.song-title-link:hover{color:var(--color-primary)}
+.operation-btns{gap:4px}.operation-btns :deep(svg){width:16px;height:16px}.batch-actions{flex-wrap:wrap;background:var(--color-primary-light,#efefff);border-radius:6px}
+.music-feedback{padding:10px 12px;margin-bottom:12px;font-size:13px;background:var(--color-surface-subtle);border-radius:6px}
+.song-details h2{font-size:20px;line-height:1.5;overflow-wrap:anywhere}.song-details p{color:var(--color-text-secondary);font-size:14px}.song-details dl{display:grid;grid-template-columns:70px 1fr;gap:18px 12px;padding:20px 0;font-size:14px}.song-details dt{color:var(--color-text-secondary)}.song-details dd{margin:0;overflow-wrap:anywhere}.detail-actions,.detail-secondary{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}.detail-secondary{padding-top:16px;border-top:1px solid var(--color-border-subtle)}
 </style>

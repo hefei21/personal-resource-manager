@@ -1,30 +1,13 @@
 <template>
   <div class="mobile-music">
     
-    <!-- 歌单标签栏 -->
-    <div class="playlist-tabs">
-      <div class="tab-scroll">
-        <div class="tab-item" :class="{ active: !currentPlaylist }" @click="selectPlaylist(null)">
-          <span>全部</span>
-        </div>
-        <div v-for="playlist in playlists" :key="playlist.id" 
-             class="tab-item" :class="{ active: currentPlaylist?.id === playlist.id }"
-             @click="selectPlaylist(playlist)">
-          <span>{{ playlist.name }}</span>
-        </div>
-        <div v-if="!isGuest" class="tab-item add-btn" @click="showCreatePlaylist = true">
-          <span>+</span>
-        </div>
-      </div>
-    </div>
-
     <!-- 搜索栏 -->
     <div class="search-section">
       <div class="search-bar">
         <input v-model="searchKeyword" placeholder="搜索音乐..." @keyup.enter="handleSearch" />
         <NativeIcon name="search" class="search-icon" @click="handleSearch" />
       </div>
-      <button class="filter-btn" @click="showFilterDrawer = true">
+      <button class="filter-btn" aria-label="筛选音乐" @click="showFilterDrawer = true">
         <NativeIcon name="filter" />
       </button>
       <button v-if="!isGuest" class="filter-btn" @click="openTrash" title="回收站">
@@ -32,10 +15,15 @@
       </button>
     </div>
 
+    <div class="playlist-picker">
+      <NativeSelect :model-value="currentPlaylist?.id || ''" :options="[{ value: '', label: '全部音乐' }, ...playlists.map(item => ({ value: item.id, label: item.name }))]" @change="selectPlaylist(playlists.find(item => item.id === $event) || null)" />
+      <button v-if="!isGuest" class="filter-btn" aria-label="新建歌单" @click="showCreatePlaylist = true"><NativeIcon name="plus" /></button>
+    </div>
+    <p class="queue-hint">播放所选曲目，以已加载曲目建立队列</p>
     <!-- 音乐列表 -->
     <div class="music-container">
       <ResourceListState
-        v-if="loading || loadError || musicList.length === 0"
+        v-if="!musicList.length && (loading || loadError || !loadingMore)"
         :state="loading ? 'loading' : loadError ? 'error' : 'empty'"
         loading-text="加载音乐中..."
         empty-text="暂无音乐"
@@ -43,9 +31,12 @@
         @retry="loadMusic()"
       />
 
-      <div v-else class="music-list">
+      <div v-if="musicList.length" class="music-list">
+        <div v-if="loadError" class="mobile-list-error" role="alert">{{ loadError }}<button @click="loadMusic()">重试</button></div>
         <div v-for="song in musicList" :key="song.id" 
              class="music-item" 
+             role="button" tabindex="0" :aria-label="'播放 ' + song.title"
+             @keydown.enter.self="handleSongClick(song)" @keydown.space.self.prevent="handleSongClick(song)"
              @click="handleSongClick(song)"
         >
           <!-- 封面 -->
@@ -65,7 +56,7 @@
 
           <!-- 右侧操作 -->
           <div class="song-action" @click.stop>
-            <button v-if="!isGuest" class="more-btn" @click="showActionMenu(song)">
+            <button v-if="!isGuest" :aria-label="song.title + '的更多操作'" class="more-btn" @click="showActionMenu(song)">
               <NativeIcon name="more" size="20" />
             </button>
           </div>
@@ -78,7 +69,7 @@
         </div>
         
         <!-- 无限滚动触发器（IntersectionObserver 目标元素） -->
-        <div ref="loadMoreTriggerRef" class="load-more-trigger"></div>
+        <div class="load-next"><button v-if="hasMore" :disabled="loadingMore" @click="loadMore">{{ moreError ? '加载失败，点击重试' : loadingMore ? '加载中…' : '加载下一批' }}</button><span v-else>已显示全部 {{ musicList.length }} 首</span></div>
       </div>
     </div>
 
@@ -253,6 +244,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import NativeSelect from '@/components/native/NativeSelect.vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/api'
@@ -267,6 +259,8 @@ const isGuest = computed(() => authStore.isGuest())
 // 列表数据
 const musicList = ref([])
 const playlists = ref([])
+const moreError = ref('')
+let listRequest = 0
 const currentPlaylist = ref(null)
 const loading = ref(false)
 const loadError = ref('')
@@ -352,62 +346,34 @@ const loadCover = async (id) => {
 const observeCover = (el, song) => {
   if (!el || !song.has_cover) return
   el.__songId__ = song.id
-  coverObserver.observe(el)
+  coverObserver?.observe(el)
 }
 
 // 计算属性
 // 加载音乐列表
 const loadMusic = async (isLoadMore = false) => {
-  if (isLoadMore) {
-    loadingMore.value = true
-  } else {
-    loading.value = true
-    loadError.value = ''
-    page.value = 1
-  }
-
+  if (isLoadMore && (loading.value || loadingMore.value || !hasMore.value)) return
+  const request = ++listRequest
+  const targetPage = isLoadMore ? page.value + 1 : 1
+  if (isLoadMore) { loadingMore.value = true; moreError.value = '' }
+  else { loading.value = true; loadingMore.value = false; loadError.value = ''; moreError.value = '' }
   try {
-    let list = []
-    
-    if (currentPlaylist.value) {
-      // 在歌单中，使用专门的歌单歌曲接口
-      const res = await api.music.getPlaylistSongs(currentPlaylist.value.id)
-      list = res.data.data || []
-      // 歌单歌曲不支持分页，一次性返回所有
-      hasMore.value = false
-    } else {
-      // 不在歌单中，使用普通列表接口
-      const params = {
-        page: page.value,
-        pageSize,
-        keyword: searchKeyword.value,
-        artist: artistFilter.value,
-        album: albumFilter.value,
-        sortBy: sortBy.value
-      }
-      const res = await api.music.list(params)
-      list = res.data.data || []
-      hasMore.value = list.length === pageSize
-    }
-    
-    if (isLoadMore) {
-      musicList.value.push(...list)
-    } else {
-      musicList.value = list
-    }
-    console.log('[加载完成] hasMore:', hasMore.value, '列表长度:', list.length)
-  } catch (error) {
-    console.error('加载音乐失败:', error)
-    if (!isLoadMore) loadError.value = error.response?.data?.message || '加载音乐失败，请稍后重试'
+    const params = { page: targetPage, pageSize, keyword: searchKeyword.value, artist: artistFilter.value,
+      album: albumFilter.value, sortBy: sortBy.value }
+    const response = currentPlaylist.value
+      ? await api.music.getPlaylistSongs(currentPlaylist.value.id, params)
+      : await api.music.list(params)
+    if (request !== listRequest) return
+    const list = response.data.data || []
+    musicList.value = isLoadMore ? [...musicList.value, ...list.filter(song => !musicList.value.some(item => item.id === song.id))] : list
+    page.value = targetPage
+    hasMore.value = targetPage * pageSize < (response.data.total ?? targetPage * pageSize + (list.length === pageSize ? 1 : 0))
+  } catch {
+    if (request !== listRequest) return
+    if (isLoadMore) moreError.value = '加载失败'
+    else loadError.value = '加载失败，请重试'
   } finally {
-    loading.value = false
-    loadingMore.value = false
-    // 数据加载完成后，重新初始化滚动加载观察器
-    nextTick(() => {
-      setTimeout(() => {
-        initLoadMoreObserver()
-      }, 200)
-    })
+    if (request === listRequest) { loading.value = false; loadingMore.value = false }
   }
 }
 
@@ -455,6 +421,8 @@ const selectItem = (value) => {
 
 // 选择歌单
 const selectPlaylist = (playlist) => {
+  ++listRequest
+  musicList.value = []
   currentPlaylist.value = playlist
   loadMusic()
 }
@@ -466,7 +434,6 @@ const handleSearch = () => {
 
 // 加载更多
 const loadMore = () => {
-  page.value++
   loadMusic(true)
 }
 
@@ -486,35 +453,8 @@ const resetFilter = () => {
 }
 
 // 播放歌曲
-const playSong = async (song) => {
-  let songsToPlay = []
-  
-  if (currentPlaylist.value) {
-    // 如果在歌单中，使用当前歌单的歌曲
-    songsToPlay = [...musicList.value]
-  } else {
-    // 不在歌单中，获取当前筛选条件下的所有音乐
-    try {
-      const params = {
-        page: 1,
-        pageSize: 10000, // 获取所有音乐
-        sortBy: sortBy.value,
-        keyword: searchKeyword.value,
-        artist: artistFilter.value,
-        album: albumFilter.value
-      }
-      
-      const response = await api.music.list(params)
-      songsToPlay = response.data.data || []
-    } catch (e) {
-      // 如果获取失败，使用当前页面的音乐
-      songsToPlay = [...musicList.value]
-    }
-  }
-  
-  window.dispatchEvent(new CustomEvent('play-music', { 
-    detail: { song, list: songsToPlay }
-  }))
+const playSong = (song) => {
+  window.dispatchEvent(new CustomEvent('play-music', { detail: { song, list: [...musicList.value] } }))
   closeActionMenu()
 }
 
@@ -662,70 +602,17 @@ const createPlaylist = async () => {
   }
 }
 
-// 无限滚动：使用 IntersectionObserver，以 scrollable-content 为 root
-const initLoadMoreObserver = () => {
-  // 先断开旧的观察器
-  if (loadMoreObserver) {
-    loadMoreObserver.disconnect()
-    loadMoreObserver = null
-  }
-  
-  // 如果没有更多数据，不创建观察器
-  if (!hasMore.value) {
-    console.log('[无限滚动] 无更多数据')
-    return
-  }
-  
-  // 延迟确保DOM已渲染
-  setTimeout(() => {
-    const triggerEl = loadMoreTriggerRef.value
-    const scrollContainer = document.querySelector('.scrollable-content')
-    
-    if (!triggerEl) {
-      console.log('[无限滚动] 触发器元素不存在')
-      return
-    }
-    
-    if (!scrollContainer) {
-      console.log('[无限滚动] 滚动容器不存在')
-      return
-    }
-    
-    console.log('[无限滚动] 初始化观察器，滚动容器:', scrollContainer)
-    
-    // 创建观察器，以 scrollable-content 为 root
-    loadMoreObserver = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        console.log('[无限滚动] 交叉状态:', entry.isIntersecting)
-        if (entry.isIntersecting && !loadingMore.value && hasMore.value) {
-          console.log('[无限滚动] 触发加载')
-          loadMore()
-        }
-      })
-    }, {
-      root: scrollContainer, // 使用 scrollable-content 作为滚动容器
-      rootMargin: '0px 0px 100px 0px',
-      threshold: 0
-    })
-    
-    loadMoreObserver.observe(triggerEl)
-    console.log('[无限滚动] 开始观察')
-  }, 300)
-}
-
 onMounted(() => {
   initCoverObserver()
   loadMusic()
   loadPlaylists()
   loadFilterOptions()
   
-  // 延迟初始化滚动加载观察器，确保DOM已渲染
-  setTimeout(() => {
-    initLoadMoreObserver()
-  }, 500)
+
 })
 
 onUnmounted(() => {
+  ++listRequest
   if (coverObserver) coverObserver.disconnect()
   if (loadMoreObserver) loadMoreObserver.disconnect()
 })
@@ -1472,4 +1359,10 @@ onUnmounted(() => {
 .metadata-status.is-pending { color: #b26a00; }
 .metadata-status.is-failed { color: #c62828; }
 
+
+.mobile-music{min-height:0;background:transparent;padding-bottom:16px}
+.search-section{padding:0;margin-bottom:10px;background:transparent}.search-bar{border:1px solid var(--color-border-subtle);border-radius:8px;background:var(--color-surface-raised)}.filter-btn{border-radius:8px}.playlist-picker{display:flex;align-items:center;gap:8px}.playlist-picker :deep(.native-select){flex:1;min-width:0}.playlist-picker .filter-btn{flex-shrink:0}
+.queue-hint{font-size:12px;color:var(--color-text-secondary);margin:10px 0 16px}
+.music-container{padding:0;background:var(--color-surface-raised);border-radius:8px}.music-item{padding:14px 12px;gap:12px}.song-title{font-size:14px;line-height:1.5}.song-subtitle{font-size:12px}.song-cover{width:42px;height:42px;border-radius:6px;flex-shrink:0}.more-btn,.filter-btn{min-width:44px;min-height:44px}.music-item:focus-visible{outline:2px solid var(--color-primary);outline-offset:-2px}
+.load-next{text-align:center;padding:16px;font-size:12px;color:var(--color-text-secondary)}.load-next button,.mobile-list-error button{min-height:44px;padding:0 16px;border:1px solid var(--color-border-subtle);border-radius:6px;background:var(--color-surface-raised);color:var(--color-text-primary)}.mobile-list-error{padding:12px;font-size:13px;display:flex;align-items:center;justify-content:space-between}
 </style>

@@ -86,6 +86,14 @@ async function makePage(viewport, mobile = false) {
   await context.route('**/api/**', apiRoute)
   const page = await context.newPage()
   page.on('pageerror', error => errors.push(error.message))
+  page.on('console', async message => {
+    if (message.type() !== 'error') return
+    console.error('browser:', message.text())
+    for (const argument of message.args()) {
+      const details = await argument.evaluate(value => value instanceof Error ? { cause: String(value.cause || ''), fallback: String(value.fallbackError || '') } : null).catch(() => null)
+      if (details?.cause || details?.fallback) console.error('browser error details:', details)
+    }
+  })
   await page.goto(`${base}/books`)
   try { await page.locator(mobile ? '.mobile-book' : '.ebook-card').first().waitFor() }
   catch (error) { await page.screenshot({ path: join(output, 'startup-failure.png') }); console.error(await page.locator('body').innerText(), errors); throw error }

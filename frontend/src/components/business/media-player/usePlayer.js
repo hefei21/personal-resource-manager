@@ -1,344 +1,246 @@
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch } from 'vue'
 import api from '@/api'
+import { useAuthStore } from '@/stores/auth'
 import { authenticatedAssetUrl } from '@/utils/authentication'
-import { getCoverFromCache, saveCoverToCache, initCoverDB } from '@/utils/coverCache'
-import { equalizer } from '@/utils/Equalizer.js'
-import { usePermission } from '@/composables/usePermission'
+import { equalizer } from '@/utils/Equalizer'
+import { normalizeQueue, nextQueueIndex, playbackSnapshot, readPlaybackSnapshot } from '@/utils/musicPlaybackState'
 
-// 创建单例状态
-let globalState = null
-
+let globalState
 export function usePlayer() {
-  const { isGuest } = usePermission()
-  
-  if (globalState) {
-    // 确保事件监听器始终存在（单例模式下组件重新挂载时）
-    window.removeEventListener('play-music', globalState._handlePlayMusic)
-    window.removeEventListener('remove-music', globalState._handleRemoveMusic)
-    window.removeEventListener('open-playlist', globalState._handleOpenPlaylist)
-    window.addEventListener('play-music', globalState._handlePlayMusic)
-    window.addEventListener('remove-music', globalState._handleRemoveMusic)
-    window.addEventListener('open-playlist', globalState._handleOpenPlaylist)
-    return globalState
-  }
-
-  // 状态
-  const audioRef = ref(null)
-  const currentSong = ref(null)
-  const playlist = ref([])
-  const currentIndex = ref(-1)
-  const isPlaying = ref(false)
-  const currentTime = ref(0)
-  const duration = ref(0)
-  const volume = ref(parseInt(localStorage.getItem('playerVolume')) || 80)
-  const isMuted = ref(false)
-  const playMode = ref(localStorage.getItem('playMode') || 'sequence')
-  const showPlaylist = ref(false)
-  const isSidebarMode = ref(false)
-  const coverLoadFailed = ref(false)
-  const playerCoverData = ref(null)
-  const showLyricsWindow = ref(false)
-  const showMobilePlaylist = ref(false)
-  const isMinimized = ref(false)
-  const isDraggingProgress = ref(false)
-  const dragProgress = ref(0)
+  if (globalState) return globalState
+  const auth = useAuthStore()
+  const audioRef = ref(null), currentSong = ref(null), playlist = ref([]), currentIndex = ref(-1)
+  const isPlaying = ref(false), currentTime = ref(0), duration = ref(0), volume = ref(80), isMuted = ref(false)
+  const playMode = ref('sequence'), showPlaylist = ref(false), showMobilePlaylist = ref(false)
+  const showLyricsWindow = ref(false), showNowPlaying = ref(false)
   const showEqualizer = ref(false)
-  const equalizerInitialized = ref(false)
+  const playerCoverData = ref(null), coverLoadFailed = ref(false)
+  const playbackState = ref('idle'), playbackError = ref('')
+  const isDraggingProgress = ref(false), dragProgress = ref(0)
+  const progress = computed(() => duration.value > 0 ? Math.min(100, currentTime.value / duration.value * 100) : 0)
+  const displayProgress = computed(() => isDraggingProgress.value ? dragProgress.value : progress.value)
+  const hasPrev = computed(() => playlist.value.length > 1), hasNext = computed(() => playlist.value.length > 1)
+  const playModeText = computed(() => ({ sequence: '列表循环', loop: '单曲循环', shuffle: '随机播放' })[playMode.value])
+  const statusText = computed(() => playbackError.value || ({ loading: '加载中…', buffering: '缓冲中…', restored: '已恢复，点击播放', paused: '已暂停' })[playbackState.value] || currentSong.value?.artist || '未知艺术家')
+  let generation = 0, coverGeneration = 0, wantsPlayback = false, pendingSeek = null, lastSaved = 0
+  let storageKey = null, stopAuthWatch = null, mounted = false
 
-  // 计算属性
-  const progress = computed(() => {
-    if (!duration.value) return 0
-    return (currentTime.value / duration.value) * 100
-  })
-
-  const displayProgress = computed(() => {
-    return isDraggingProgress.value ? dragProgress.value : progress.value
-  })
-
-  const hasPrev = computed(() => playlist.value.length > 1)
-  const hasNext = computed(() => playlist.value.length > 1)
-  
-  // 移动端检测 - 使用 ref 以便响应窗口变化
-  const isMobile = ref(window.innerWidth <= 768)
-  
-  // 监听窗口大小变化
-  function handleResize() {
-    isMobile.value = window.innerWidth <= 768
+  function persist() {
+    if (!storageKey || !auth.isAuthenticated || auth.isGuest()) return
+    try { localStorage.setItem(storageKey, JSON.stringify(playbackSnapshot(playlist.value, currentSong.value?.id, currentTime.value, volume.value, playMode.value))) } catch { /* storage unavailable: current session still works */ }
+    lastSaved = Date.now()
   }
-  
-  onMounted(() => {
-    window.addEventListener('resize', handleResize)
-  })
-  
-  onUnmounted(() => {
-    window.removeEventListener('resize', handleResize)
-  })
-
-  const shouldScrollTitle = computed(() => {
-    if (!currentSong.value?.title) return false
-    const threshold = isSidebarMode.value ? 11 : 15
-    return currentSong.value.title.length > threshold
-  })
-
-  const playModeText = computed(() => {
-    const texts = { sequence: '列表循环', loop: '单曲循环', shuffle: '随机播放' }
-    return texts[playMode.value] || '列表循环'
-  })
-
-  // 播放控制
-  async function playSong(song, list = null) {
-    if (list) {
-      playlist.value = list
-      currentIndex.value = list.findIndex(s => s.id === song.id)
-    } else if (!playlist.value.find(s => s.id === song.id)) {
-      playlist.value.push(song)
-      currentIndex.value = playlist.value.length - 1
-    } else {
-      currentIndex.value = playlist.value.findIndex(s => s.id === song.id)
-    }
-
-    currentSong.value = song
-    coverLoadFailed.value = false
-    playerCoverData.value = null
-    if (song.duration && song.duration > 0) duration.value = song.duration
-    loadPlayerCover(song)
-    await nextTick()
-    window.dispatchEvent(new CustomEvent('player-appeared'))
-    loadAndPlay()
+  function restore() {
+    const identity = auth.user?.id ?? auth.user?.username
+    const nextKey = auth.isAuthenticated && identity != null && !auth.isGuest() ? 'pr-manager:music:v1:' + encodeURIComponent(identity) : null
+    if (storageKey === nextKey) return
+    if (storageKey && !nextKey) { try { localStorage.removeItem(storageKey) } catch {} }
+    reset(false)
+    storageKey = nextKey
+    if (!storageKey) return
+    let snapshot
+    try { snapshot = readPlaybackSnapshot(localStorage.getItem(storageKey)) } catch {}
+    if (!snapshot) return
+    playlist.value = snapshot.queue
+    currentIndex.value = playlist.value.findIndex(song => song.id === snapshot.songId)
+    currentSong.value = playlist.value[currentIndex.value] || null
+    currentTime.value = snapshot.position
+    volume.value = snapshot.volume
+    playMode.value = snapshot.mode
+    duration.value = currentSong.value?.duration || 0
+    if (currentSong.value) { playbackState.value = 'restored'; loadPlayerCover(currentSong.value) }
   }
-
-  function playSongAtIndex(index) {
-    if (index >= 0 && index < playlist.value.length) {
-      currentIndex.value = index
-      currentSong.value = playlist.value[index]
-      coverLoadFailed.value = false
-      playerCoverData.value = null
-      loadPlayerCover(currentSong.value)
-      loadAndPlay()
-    }
-  }
-
   async function loadPlayerCover(song) {
-    if (!song || !song.has_cover) {
-      playerCoverData.value = null
-      return
-    }
+    const request = ++coverGeneration
+    playerCoverData.value = null; coverLoadFailed.value = false
+    if (!song?.has_cover) return
     try {
-      const cached = await getCoverFromCache(song.id)
-      if (cached) { playerCoverData.value = cached; return }
       const response = await api.music.getCover(song.id)
-      const cover = response.data.cover
-      if (cover) { playerCoverData.value = cover; await saveCoverToCache(song.id, cover) }
-    } catch (e) { coverLoadFailed.value = true }
+      if (request === coverGeneration && song.id === currentSong.value?.id) playerCoverData.value = response.data.cover || null
+    } catch { if (request === coverGeneration) coverLoadFailed.value = true }
   }
-
   function handleCoverError() { coverLoadFailed.value = true }
-
-  async function loadAndPlay() {
-    if (!currentSong.value || !audioRef.value) return
-    audioRef.value.src = authenticatedAssetUrl(`/api/music/play/${currentSong.value.id}`)
-    audioRef.value.volume = volume.value / 100
-    audioRef.value.load()
-    
-    // 移动端需要在用户手势中直接调用 play，不能等 canplay 事件
+  async function requestPlay(request = generation) {
+    const audio = audioRef.value
+    if (!audio) return
+    wantsPlayback = true
     try {
-      await audioRef.value.play()
-      isPlaying.value = true
-    } catch (e) {
-      // 播放失败（如浏览器阻止自动播放），等待用户手动点击
-      isPlaying.value = false
+      await audio.play()
+      if (request !== generation || !wantsPlayback) return
+      isPlaying.value = true; playbackState.value = 'playing'; playbackError.value = ''
+    } catch (error) {
+      if (request !== generation || !wantsPlayback) return
+      wantsPlayback = false; isPlaying.value = false
+      playbackState.value = 'error'
+      playbackError.value = error?.name === 'NotAllowedError' ? '浏览器暂未允许播放，请点击重试' : '无法播放此曲目，请重试或切换下一首'
     }
   }
-
-  async function handleCanPlay() {
-    if (!equalizerInitialized.value && audioRef.value) {
-      try { equalizerInitialized.value = await equalizer.init(audioRef.value) } catch (e) {}
-    }
-    if (audioRef.value && currentSong.value) {
-      audioRef.value.play().then(() => isPlaying.value = true).catch(() => {})
-    }
+  function loadAndPlay(position = 0) {
+    const audio = audioRef.value
+    if (!audio || !currentSong.value) return
+    const request = ++generation
+    audio.pause()
+    wantsPlayback = true; isPlaying.value = false; playbackError.value = ''; playbackState.value = 'loading'
+    pendingSeek = Math.max(0, position)
+    audio.src = authenticatedAssetUrl('/api/music/play/' + currentSong.value.id)
+    audio.volume = volume.value / 100; audio.muted = isMuted.value
+    audio.load()
+    // Invoke play in the originating user gesture; canplay never initiates playback.
+    requestPlay(request)
   }
-
+  function playSong(song, list = null) {
+    const target = normalizeQueue([song])[0]
+    if (!target) return
+    playlist.value = normalizeQueue(list || playlist.value)
+    if (!playlist.value.some(item => item.id === target.id)) playlist.value.push(target)
+    currentIndex.value = playlist.value.findIndex(item => item.id === target.id)
+    currentSong.value = target; currentTime.value = 0; duration.value = target.duration
+    loadPlayerCover(target); loadAndPlay(); persist()
+  }
+  function playSongAtIndex(index) {
+    const song = playlist.value[index]
+    if (song) playSong(song)
+  }
   function togglePlay() {
-    if (!audioRef.value || !currentSong.value) return
-    if (isPlaying.value) { audioRef.value.pause(); isPlaying.value = false }
-    else {
-      if (!audioRef.value.src || audioRef.value.src === window.location.href) loadAndPlay()
-      else audioRef.value.play().then(() => isPlaying.value = true).catch(() => {})
-    }
+    if (!currentSong.value || !audioRef.value) return
+    if (wantsPlayback || isPlaying.value) {
+      wantsPlayback = false; ++generation; audioRef.value.pause()
+      isPlaying.value = false; playbackState.value = 'paused'; persist()
+    } else if (!audioRef.value.getAttribute('src') || playbackState.value === 'error' || playbackState.value === 'restored') {
+      loadAndPlay(currentTime.value)
+    } else { playbackState.value = 'loading'; requestPlay(++generation) }
   }
-
-  function playPrev() {
-    if (playlist.value.length <= 1) return
-    if (playMode.value === 'shuffle') playSongAtIndex(Math.floor(Math.random() * playlist.value.length))
-    else playSongAtIndex(currentIndex.value - 1 < 0 ? playlist.value.length - 1 : currentIndex.value - 1)
-  }
-
-  function playNext() {
-    if (playlist.value.length <= 1) return
-    if (playMode.value === 'shuffle') playSongAtIndex(Math.floor(Math.random() * playlist.value.length))
-    else playSongAtIndex(currentIndex.value + 1 >= playlist.value.length ? 0 : currentIndex.value + 1)
-  }
-
+  function retryPlayback() { loadAndPlay(currentTime.value) }
+  function playPrev() { playSongAtIndex(nextQueueIndex(currentIndex.value, playlist.value.length, -1, playMode.value === 'shuffle')) }
+  function playNext() { playSongAtIndex(nextQueueIndex(currentIndex.value, playlist.value.length, 1, playMode.value === 'shuffle')) }
   function togglePlayMode() {
     const modes = ['sequence', 'loop', 'shuffle']
-    playMode.value = modes[(modes.indexOf(playMode.value) + 1) % modes.length]
-    if (!isGuest.value) localStorage.setItem('playMode', playMode.value)
+    playMode.value = modes[(modes.indexOf(playMode.value) + 1) % modes.length]; persist()
   }
-
-  // 歌词窗口控制
-  function openLyricsWindow() { if (currentSong.value) showLyricsWindow.value = true }
-  function closeLyricsWindow() { showLyricsWindow.value = false }
-  function seekToTime(time) { if (audioRef.value) audioRef.value.currentTime = time }
-
-  // 进度控制
-  function handleTimeUpdate() {
-    if (audioRef.value) {
-      currentTime.value = audioRef.value.currentTime
-      if (isMobile.value && duration.value === 0 && audioRef.value.duration && !isNaN(audioRef.value.duration)) {
-        duration.value = audioRef.value.duration
-      }
+  function seekToTime(value) {
+    const time = Number(value)
+    if (!Number.isFinite(time) || !Number.isFinite(duration.value) || duration.value <= 0) return
+    currentTime.value = Math.max(0, Math.min(time, duration.value))
+    if (audioRef.value?.readyState > 0) audioRef.value.currentTime = currentTime.value
+    else pendingSeek = currentTime.value
+    persist()
+  }
+  function handleLoaded() {
+    const audio = audioRef.value
+    if (!currentSong.value || !audio) return
+    duration.value = Number.isFinite(audio.duration) ? audio.duration : 0
+    if (pendingSeek !== null && duration.value > 0) {
+      audio.currentTime = Math.min(pendingSeek, Math.max(0, duration.value - .1))
+      currentTime.value = audio.currentTime; pendingSeek = null
     }
   }
-
-  function handleLoaded() { if (audioRef.value) duration.value = audioRef.value.duration }
-
+  function handleTimeUpdate() {
+    if (!currentSong.value || !audioRef.value || pendingSeek !== null) return
+    currentTime.value = Number.isFinite(audioRef.value.currentTime) ? audioRef.value.currentTime : 0
+    if (Date.now() - lastSaved > 5000) persist()
+  }
+  function handlePlaying() {
+    if (!wantsPlayback) { audioRef.value?.pause(); return }
+    isPlaying.value = true; playbackState.value = 'playing'; playbackError.value = ''
+  }
+  function handlePause() { isPlaying.value = false; if (!wantsPlayback && currentSong.value) playbackState.value = 'paused' }
+  function handleWaiting() { if (wantsPlayback) playbackState.value = 'buffering' }
   function handleEnded() {
-    if (playMode.value === 'loop') { audioRef.value.currentTime = 0; audioRef.value.play() }
-    else if (playlist.value.length === 1) { audioRef.value.currentTime = 0; audioRef.value.play() }
+    if (!wantsPlayback) return
+    if (playMode.value === 'loop') loadAndPlay()
     else playNext()
   }
-
-  function handleError(e) { console.error('音频加载错误:', e) }
-
-  // 音量控制
-  function changeVolume(vol) {
-    if (vol !== undefined) volume.value = vol
-    if (audioRef.value) {
-      audioRef.value.volume = volume.value / 100
-      if (!isGuest.value) localStorage.setItem('playerVolume', volume.value)
-    }
+  function handleError() {
+    if (!currentSong.value || !audioRef.value?.getAttribute('src')) return
+    wantsPlayback = false; isPlaying.value = false; playbackState.value = 'error'
+    playbackError.value = '音频加载失败，请检查连接后重试；若仍失败，可切换其他曲目'
   }
-
-  function toggleMute() { if (audioRef.value) { isMuted.value = !isMuted.value; audioRef.value.muted = isMuted.value } }
-
-  // 播放列表管理
+  function changeVolume(value) {
+    const number = Number(value ?? volume.value)
+    if (!Number.isFinite(number)) return
+    volume.value = Math.min(100, Math.max(0, number))
+    if (audioRef.value) audioRef.value.volume = volume.value / 100
+    persist()
+  }
+  function toggleMute() { isMuted.value = !isMuted.value; if (audioRef.value) audioRef.value.muted = isMuted.value }
   function removeFromPlaylist(index) {
-    if (index === currentIndex.value) playNext()
+    if (!playlist.value[index]) return
+    const wasCurrent = index === currentIndex.value, wasPlaying = wantsPlayback
     playlist.value.splice(index, 1)
-    if (index < currentIndex.value) currentIndex.value--
+    if (!playlist.value.length) { clearPlaylist(); return }
+    if (wasCurrent) {
+      const next = Math.min(index, playlist.value.length - 1)
+      if (wasPlaying) playSongAtIndex(next)
+      else {
+        ++generation; wantsPlayback = false; audioRef.value?.pause(); audioRef.value?.removeAttribute('src')
+        currentIndex.value = next; currentSong.value = playlist.value[next]
+        currentTime.value = 0; duration.value = currentSong.value.duration; playbackState.value = 'restored'
+        playbackError.value = ''; loadPlayerCover(currentSong.value)
+      }
+    } else currentIndex.value = playlist.value.findIndex(song => song.id === currentSong.value?.id)
+    persist()
   }
-
-  function removeSongById(songId) {
-    const index = playlist.value.findIndex(s => s.id === songId)
-    if (index !== -1) removeFromPlaylist(index)
+  function removeSongsByIds(ids) {
+    const remove = new Set(ids.map(Number))
+    for (let i = playlist.value.length - 1; i >= 0; i--) if (remove.has(playlist.value[i].id)) removeFromPlaylist(i)
   }
-
-  function removeSongsByIds(songIds) {
-    const idSet = new Set(songIds)
-    for (let i = playlist.value.length - 1; i >= 0; i--) {
-      if (idSet.has(playlist.value[i].id)) removeFromPlaylist(i)
+  function reset(save = true) {
+    ++generation; ++coverGeneration; wantsPlayback = false; pendingSeek = null
+    audioRef.value?.pause(); audioRef.value?.removeAttribute('src')
+    currentSong.value = null; currentIndex.value = -1; playlist.value = []; currentTime.value = 0; duration.value = 0
+    isPlaying.value = false; playbackState.value = 'idle'; playbackError.value = ''; playerCoverData.value = null
+    showNowPlaying.value = false; showLyricsWindow.value = false; showPlaylist.value = false; showMobilePlaylist.value = false
+    showEqualizer.value = false
+    if (save) persist()
+  }
+  function clearPlaylist() { reset() }
+  function closePlayer() { reset() }
+  function openLyricsWindow() { if (currentSong.value) showLyricsWindow.value = true }
+  async function openEqualizer() {
+    if (!audioRef.value) return
+    if (!equalizer.isInitialized && !await equalizer.init(audioRef.value)) {
+      playbackError.value = '此浏览器暂不支持均衡器'; return
     }
+    try { await equalizer.audioContext?.resume(); showEqualizer.value = true }
+    catch { playbackError.value = '均衡器暂不可用，请稍后重试' }
   }
-
-  function clearPlaylist() {
-    playlist.value = []
-    currentSong.value = null
-    currentIndex.value = -1
-    isPlaying.value = false
-    if (audioRef.value) { audioRef.value.pause(); audioRef.value.src = '' }
+  function closeLyricsWindow() { showLyricsWindow.value = false }
+  function formatTime(value) {
+    const seconds = Number.isFinite(value) ? Math.max(0, value) : 0
+    return Math.floor(seconds / 60) + ':' + String(Math.floor(seconds % 60)).padStart(2, '0')
   }
-
-  function closePlayer() {
-    currentSong.value = null
-    isPlaying.value = false
-    isMinimized.value = false
-    if (audioRef.value) audioRef.value.pause()
-    window.dispatchEvent(new CustomEvent('player-closed'))
-  }
-
-  // 最小化/恢复（移动端）
-  function minimizePlayer() {
-    isMinimized.value = true
-    window.dispatchEvent(new CustomEvent('player-minimized'))
-    document.documentElement.style.setProperty('--player-height', '0px')
-    document.body.style.paddingBottom = '0px'
-    const mainContent = document.querySelector('.main-content')
-    if (mainContent) mainContent.style.paddingBottom = '0px'
-    const scrollContent = document.querySelector('.scrollable-content')
-    if (scrollContent) scrollContent.style.paddingBottom = '20px'
-  }
-
-  function restorePlayer() {
-    isMinimized.value = false
-    window.dispatchEvent(new CustomEvent('player-restored'))
-    setTimeout(() => {
-      const playerHeight = document.querySelector('.media-player')?.offsetHeight || 70
-      document.body.style.paddingBottom = playerHeight + 'px'
-      const mainContent = document.querySelector('.main-content')
-      if (mainContent) mainContent.style.paddingBottom = playerHeight + 'px'
-      const scrollContent = document.querySelector('.scrollable-content')
-      if (scrollContent) scrollContent.style.paddingBottom = (playerHeight + 20) + 'px'
-    }, 100)
-  }
-
-  // 格式化时间
-  function formatTime(seconds) {
-    if (!seconds || isNaN(seconds)) return '0:00'
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${secs.toString().padStart(2, '0')}`
-  }
-
-  // 事件监听
-  function handlePlayMusic(e) { isSidebarMode.value = false; playSong(e.detail.song, e.detail.list) }
-  function handleRemoveMusic(e) {
-    if (e.detail.songIds) removeSongsByIds(e.detail.songIds)
-    else if (e.detail.songId) removeSongById(e.detail.songId)
-  }
-  function handleOpenPlaylist() { if (isMobile.value) showMobilePlaylist.value = true }
-  function checkRouteChange() {
-    isSidebarMode.value = currentSong.value !== null && window.location.pathname !== '/music' && !isMobile.value
-  }
-
-  onMounted(async () => {
-    try { await initCoverDB() } catch (e) {}
-    if (isGuest.value) { volume.value = 80; playMode.value = 'sequence' }
-    else {
-      volume.value = parseInt(localStorage.getItem('playerVolume')) || 80
-      playMode.value = localStorage.getItem('playMode') || 'sequence'
-    }
+  function handlePlayMusic(event) { playSong(event.detail.song, event.detail.list) }
+  function handleRemoveMusic(event) { removeSongsByIds(event.detail.songIds || [event.detail.songId]) }
+  function handleOpenPlaylist() { showPlaylist.value = true }
+  function attach() {
+    if (mounted) return
+    mounted = true
+    restore()
+    stopAuthWatch = watch(() => [auth.isAuthenticated, auth.user?.id, auth.user?.username, auth.demoMode], restore, { flush: 'sync' })
     window.addEventListener('play-music', handlePlayMusic)
     window.addEventListener('remove-music', handleRemoveMusic)
     window.addEventListener('open-playlist', handleOpenPlaylist)
-    checkRouteChange()
-    window.addEventListener('popstate', checkRouteChange)
-    setInterval(checkRouteChange, 500)
-  })
-
-  onUnmounted(() => {
-    // 单例模式下不移除事件监听器，确保其他组件或重新挂载后仍能接收事件
-    // 只清理均衡器等资源
-    if (equalizerInitialized.value) equalizer.destroy()
-  })
-
-  // 保存全局状态（包含事件处理函数引用，用于单例模式下重新挂载时恢复监听）
-  globalState = {
-    audioRef, currentSong, playlist, currentIndex, isPlaying, currentTime, duration,
-    volume, isMuted, playMode, showPlaylist, isSidebarMode, coverLoadFailed, playerCoverData,
-    showLyricsWindow, showMobilePlaylist, isMinimized, isDraggingProgress, dragProgress,
-    showEqualizer, equalizerInitialized,
-    progress, displayProgress, hasPrev, hasNext, isMobile, shouldScrollTitle, playModeText,
-    playSong, playSongAtIndex, loadPlayerCover, handleCoverError, loadAndPlay, handleCanPlay,
-    togglePlay, playPrev, playNext, togglePlayMode, openLyricsWindow, closeLyricsWindow, seekToTime,
-    handleTimeUpdate, handleLoaded, handleEnded, handleError, changeVolume, toggleMute,
-    removeFromPlaylist, removeSongById, removeSongsByIds, clearPlaylist, closePlayer,
-    minimizePlayer, restorePlayer, formatTime,
-    // 保存处理函数引用
-    _handlePlayMusic: handlePlayMusic,
-    _handleRemoveMusic: handleRemoveMusic,
-    _handleOpenPlaylist: handleOpenPlaylist
+    window.addEventListener('pagehide', persist)
+    document.addEventListener('visibilitychange', persist)
   }
-
+  function detach() {
+    persist(); wantsPlayback = false; ++generation; audioRef.value?.pause(); isPlaying.value = false
+    if (currentSong.value) playbackState.value = 'restored'
+    stopAuthWatch?.(); mounted = false
+    if (equalizer.isInitialized) equalizer.destroy()
+    showEqualizer.value = false
+    window.removeEventListener('play-music', handlePlayMusic)
+    window.removeEventListener('remove-music', handleRemoveMusic)
+    window.removeEventListener('open-playlist', handleOpenPlaylist)
+    window.removeEventListener('pagehide', persist)
+    document.removeEventListener('visibilitychange', persist)
+  }
+  globalState = { audioRef, currentSong, playlist, currentIndex, isPlaying, currentTime, duration, volume, isMuted,
+    playMode, playModeText, progress, displayProgress, isDraggingProgress, dragProgress, hasPrev, hasNext,
+    showPlaylist, showMobilePlaylist, showNowPlaying, showLyricsWindow, showEqualizer, openEqualizer, playerCoverData, coverLoadFailed,
+    playbackState, playbackError, statusText, playSong, playSongAtIndex, togglePlay, retryPlayback, playPrev, playNext,
+    togglePlayMode, seekToTime, changeVolume, toggleMute, clearPlaylist, closePlayer, removeFromPlaylist,
+    removeSongsByIds, handleCoverError, openLyricsWindow, closeLyricsWindow, formatTime, handleLoaded, handleTimeUpdate,
+    handlePlaying, handlePause, handleWaiting, handleEnded, handleError, attach, detach }
   return globalState
 }
