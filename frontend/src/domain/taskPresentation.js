@@ -1,4 +1,5 @@
 export const TASK_TYPE_OPTIONS = Object.freeze([
+  { value: 'bookmark.inspect', label: '书签网站信息检测' },
   { value: 'rag.index.refresh', label: 'RAG 文本索引' },
   { value: 'rag.content.extract', label: 'RAG 内容提取' },
   { value: 'rag.embedding.generate', label: 'RAG 向量化' },

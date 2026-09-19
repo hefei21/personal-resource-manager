@@ -18,7 +18,6 @@ test('resource list state owns loading, empty, error, and retry feedback', () =>
 test('stage 7.4 mobile collections reuse the shared list-state contract', () => {
   for (const page of [
     'MusicMobile.vue',
-    'BookmarksMobile.vue',
     'GamesMobile.vue',
     'AnimeMobile.vue'
   ]) {

@@ -30,6 +30,7 @@ function fixture() {
     CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author TEXT, original_name TEXT);
     CREATE TABLE music (id INTEGER PRIMARY KEY, title TEXT, artist TEXT, original_name TEXT);
     CREATE TABLE blog_posts (id INTEGER PRIMARY KEY, title TEXT);
+    CREATE TABLE bookmarks (id INTEGER PRIMARY KEY, title TEXT, category TEXT);
     CREATE TABLE resource_trash_entries (
       resource_type TEXT NOT NULL,
       resource_id INTEGER NOT NULL,
@@ -62,7 +63,7 @@ test('unified trash lists only supported resource types with public lifecycle st
       filters: { page: 1, pageSize: 20 }
     })
     assert.equal(result.summary.total, 4)
-    assert.deepEqual(result.summary.byType, { document: 1, ebook: 1, music: 2, note: 0 })
+    assert.deepEqual(result.summary.byType, { document: 1, ebook: 1, music: 2, note: 0, bookmark: 0 })
     assert.equal(result.summary.expired, 2)
     assert.equal(result.summary.restorable, 3)
     assert.equal(result.items.some((item) => item.resourceType === 'document_version'), false)

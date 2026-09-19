@@ -1,4 +1,4 @@
-const SUPPORTED_TYPES = Object.freeze(['document', 'ebook', 'music', 'note'])
+const SUPPORTED_TYPES = Object.freeze(['document', 'ebook', 'music', 'note', 'bookmark'])
 const SUPPORTED_TYPE_SET = new Set(SUPPORTED_TYPES)
 const EXPIRY_FILTERS = new Set(['all', 'protected', 'expired'])
 const SORT_ORDERS = new Set(['deleted_desc', 'deleted_asc', 'purge_asc'])
@@ -108,6 +108,7 @@ function allTrashRows(database) {
         WHEN 'ebook' THEN b.title
         WHEN 'music' THEN m.title
         WHEN 'note' THEN n.title
+        WHEN 'bookmark' THEN k.title
       END AS title,
       CASE t.resource_type
         WHEN 'document' THEN d.original_name
@@ -119,12 +120,14 @@ function allTrashRows(database) {
         WHEN 'ebook' THEN b.author
         WHEN 'music' THEN m.artist
         WHEN 'note' THEN '个人笔记'
+        WHEN 'bookmark' THEN k.category
       END AS subtitle,
       CASE t.resource_type
         WHEN 'document' THEN d.id IS NOT NULL
         WHEN 'ebook' THEN b.id IS NOT NULL
         WHEN 'music' THEN m.id IS NOT NULL
         WHEN 'note' THEN n.id IS NOT NULL
+        WHEN 'bookmark' THEN k.id IS NOT NULL
         ELSE 0
       END AS resource_exists
     FROM resource_trash_entries t
@@ -132,7 +135,8 @@ function allTrashRows(database) {
     LEFT JOIN books b ON t.resource_type = 'ebook' AND b.id = t.resource_id
     LEFT JOIN music m ON t.resource_type = 'music' AND m.id = t.resource_id
     LEFT JOIN blog_posts n ON t.resource_type = 'note' AND n.id = t.resource_id
-    WHERE t.resource_type IN ('document', 'ebook', 'music', 'note')
+    LEFT JOIN bookmarks k ON t.resource_type = 'bookmark' AND k.id = t.resource_id
+    WHERE t.resource_type IN ('document', 'ebook', 'music', 'note', 'bookmark')
   `).all()
 }
 

@@ -267,7 +267,7 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
       books: db.prepare('SELECT COUNT(*) as count FROM books').get()?.count || 0,
       games: db.prepare('SELECT COUNT(*) as count FROM games').get()?.count || 0,
       code: db.prepare('SELECT COUNT(*) as count FROM code_repositories').get()?.count || 0,
-      bookmarks: db.prepare('SELECT COUNT(*) as count FROM bookmarks').get()?.count || 0,
+      bookmarks: db.prepare("SELECT COUNT(*) as count FROM bookmarks b WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='bookmark' AND t.resource_id=b.id)").get()?.count || 0,
       blog: {
         total: db.prepare("SELECT COUNT(*) as count FROM blog_posts p WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type = 'note' AND t.resource_id = p.id)").get()?.count || 0
       },

@@ -772,6 +772,13 @@ function createDefinition({
 }
 
 export const TASK_TYPE_CATALOG = Object.freeze({
+  'bookmark.inspect': createDefinition({
+    taskType: 'bookmark.inspect', executionClass: 'network', subjectType: 'bookmark', subjectInputField: 'bookmarkId',
+    projectInput: input => input && safePositiveInteger(input.bookmarkId) && HASH_PATTERN.test(input.sourceHash || '') ? { bookmarkId: input.bookmarkId } : null,
+    cloneInput: input => input && safePositiveInteger(input.bookmarkId) && HASH_PATTERN.test(input.sourceHash || '') ? { bookmarkId: input.bookmarkId, sourceHash: input.sourceHash } : null,
+    projectResult: result => result && ['reachable','unavailable','restricted','blocked','unknown'].includes(result.status) ? { status: result.status } : null,
+    mutexTaskTypes: ['bookmark.inspect']
+  }),
   'code.repository.clone': createDefinition({
     taskType: 'code.repository.clone',
     executionClass: 'network',

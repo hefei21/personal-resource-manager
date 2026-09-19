@@ -77,6 +77,7 @@ const CLEANUP_INPUT_ERROR_CODES = new Set([
 ])
 
 const TASK_RESOURCE_SPECS = Object.freeze({
+  bookmark: Object.freeze({ label: '书签', route: '/bookmarks', table: 'bookmarks', titleSql: 'title' }),
   document: Object.freeze({ label: '文档', route: '/documents', table: 'documents', titleSql: 'title' }),
   ebook: Object.freeze({ label: '电子书', route: '/books', table: 'books', titleSql: 'title' }),
   code_repository: Object.freeze({ label: '代码仓库', route: '/code', table: 'code_repositories', titleSql: 'name' }),

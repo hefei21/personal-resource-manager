@@ -252,6 +252,13 @@ export default {
     getGithubInfo: (url) => api.get('/code/github-info', { params: { url } })
   },
   bookmarks: {
+    get: (id) => api.get(`/bookmarks/${id}`),
+    metadata: () => api.get('/bookmarks/metadata'),
+    export: () => api.get('/bookmarks/export'),
+    previewImport: (data) => api.post('/bookmarks/import-preview', data),
+    import: (items) => api.post('/bookmarks/import', { items }),
+    inspect: (id) => api.post(`/bookmarks/${id}/inspect`),
+    inspection: (id) => api.get(`/bookmarks/${id}/inspection`),
     list: (params) => api.get('/bookmarks', { params }),
     create: (data) => api.post('/bookmarks', data),
     update: (id, data) => api.put(`/bookmarks/${id}`, data),

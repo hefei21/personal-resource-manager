@@ -200,7 +200,7 @@ import {
   NativeTag
 } from '@/components/native'
 
-const SUPPORTED_TYPES = new Set(['all', 'document', 'ebook', 'music', 'note'])
+const SUPPORTED_TYPES = new Set(['all', 'document', 'ebook', 'music', 'note', 'bookmark'])
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
@@ -234,7 +234,8 @@ const typeOptions = computed(() => [
   { value: 'document', label: `文档（${summary.value.byType?.document || 0}）` },
   { value: 'ebook', label: `电子书（${summary.value.byType?.ebook || 0}）` },
   { value: 'music', label: `音频（${summary.value.byType?.music || 0}）` },
-  { value: 'note', label: `个人笔记（${summary.value.byType?.note || 0}）` }
+  { value: 'note', label: `个人笔记（${summary.value.byType?.note || 0}）` },
+  { value: 'bookmark', label: `书签（${summary.value.byType?.bookmark || 0}）` }
 ])
 const expiryOptions = [
   { value: 'all', label: '全部状态' },
@@ -348,11 +349,11 @@ async function handlePageChange({ current, pageSize }) {
 }
 
 function resourceLabel(type) {
-  return ({ document: '文档', ebook: '电子书', music: '音频', note: '个人笔记' })[type] || '资源'
+  return ({ document: '文档', ebook: '电子书', music: '音频', note: '个人笔记', bookmark: '书签' })[type] || '资源'
 }
 
 function resourceIcon(type) {
-  return ({ document: 'files', ebook: 'book-open', music: 'waveform', note: 'notebook' })[type] || 'file'
+  return ({ document: 'files', ebook: 'book-open', music: 'waveform', note: 'notebook', bookmark: 'bookmark' })[type] || 'file'
 }
 
 function statusLabel(item) {

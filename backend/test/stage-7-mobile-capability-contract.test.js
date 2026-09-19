@@ -10,7 +10,7 @@ const mobileSource = (name) => fs.readFileSync(
 const sources = {
   music: mobileSource('MusicMobile.vue'),
   trash: fs.readFileSync(new URL('../../frontend/src/views/Trash.vue', import.meta.url), 'utf8'),
-  bookmarks: mobileSource('BookmarksMobile.vue'),
+  bookmarks: fs.readFileSync(new URL('../../frontend/src/components/business/bookmarks/BookmarkWorkspace.vue', import.meta.url), 'utf8'),
   games: mobileSource('GamesMobile.vue'),
   anime: mobileSource('AnimeMobile.vue'),
   animeDetail: mobileSource('AnimeDetailMobile.vue'),
@@ -36,10 +36,9 @@ test('mobile resource modules omit batch, permanent, credential, and external sy
     'api.music.permanentlyDeleteTrash'
   ])
 
-  assertOmits('bookmarks', [
-    'api.bookmarks.delete',
-    'api.bookmarks.batchDelete'
-  ])
+  assert.match(sources.bookmarks, /v-if="!isMobile"[^>]*class="bookmark-inspection"/u)
+  assert.match(sources.bookmarks, /v-if="!isMobile"[^>]*v-model="importOpen"/u)
+  assert.match(sources.bookmarks, /if\s*\(\s*isMobile\.value\s*\|\|\s*deleting\.value/u)
 
   assertOmits('games', [
     'api.games.getSteamConfig',
