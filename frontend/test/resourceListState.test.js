@@ -20,12 +20,19 @@ test('stage 7.4 mobile collections reuse the shared list-state contract', () => 
     'MusicMobile.vue',
     'BookmarksMobile.vue',
     'GamesMobile.vue',
-    'AnimeMobile.vue',
-    'BlogMobile.vue'
+    'AnimeMobile.vue'
   ]) {
     const source = read(`mobile/pages/${page}`)
     assert.match(source, /ResourceListState/u, `${page} does not use ResourceListState`)
     assert.match(source, /loadError/u, `${page} does not preserve an initial-load error`)
     assert.match(source, /@retry=/u, `${page} does not expose retry`)
   }
+})
+
+test('shared notes workspace retains list errors with explicit retry and matching skeleton rows', () => {
+  const source = read('components/business/notes/NoteWorkspace.vue')
+  assert.match(source, /v-if="listError"/u)
+  assert.match(source, /@click="loadNotes\(page\)"/u)
+  assert.match(source, /note-skeleton/u)
+  assert.match(read('views/Blog.vue'), /NoteWorkspace/u)
 })

@@ -2,7 +2,7 @@
   <div class="trash-page">
     <div class="trash-intro">
       <div>
-        <p>集中管理文档、电子书和音频的删除与恢复；文档历史版本仍在文档详情中管理。</p>
+        <p>集中管理文档、电子书、音频和个人笔记的删除与恢复；文档历史版本仍在文档详情中管理。</p>
         <span>系统不会在此页面自动永久删除资源。到期条目只会标记为可清理。</span>
       </div>
       <NativeButton variant="outline" :loading="loading" @click="loadTrash">
@@ -200,7 +200,7 @@ import {
   NativeTag
 } from '@/components/native'
 
-const SUPPORTED_TYPES = new Set(['all', 'document', 'ebook', 'music'])
+const SUPPORTED_TYPES = new Set(['all', 'document', 'ebook', 'music', 'note'])
 const route = useRoute()
 const router = useRouter()
 const toast = useToast()
@@ -233,7 +233,8 @@ const typeOptions = computed(() => [
   { value: 'all', label: `全部（${summary.value.total || 0}）` },
   { value: 'document', label: `文档（${summary.value.byType?.document || 0}）` },
   { value: 'ebook', label: `电子书（${summary.value.byType?.ebook || 0}）` },
-  { value: 'music', label: `音频（${summary.value.byType?.music || 0}）` }
+  { value: 'music', label: `音频（${summary.value.byType?.music || 0}）` },
+  { value: 'note', label: `个人笔记（${summary.value.byType?.note || 0}）` }
 ])
 const expiryOptions = [
   { value: 'all', label: '全部状态' },
@@ -347,11 +348,11 @@ async function handlePageChange({ current, pageSize }) {
 }
 
 function resourceLabel(type) {
-  return ({ document: '文档', ebook: '电子书', music: '音频' })[type] || '资源'
+  return ({ document: '文档', ebook: '电子书', music: '音频', note: '个人笔记' })[type] || '资源'
 }
 
 function resourceIcon(type) {
-  return ({ document: 'files', ebook: 'book-open', music: 'waveform' })[type] || 'file'
+  return ({ document: 'files', ebook: 'book-open', music: 'waveform', note: 'notebook' })[type] || 'file'
 }
 
 function statusLabel(item) {

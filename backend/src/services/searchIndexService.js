@@ -533,6 +533,10 @@ export class SearchIndexService {
       fail(SEARCH_INDEX_ERROR_CODES.INDEX_MISSING, 'Search index is missing.')
     }
     const clauses = ['search_index_fts MATCH ?']
+    // Source visibility is authoritative even while a full index refresh is pending.
+    if (tableExists(this.database, 'blog_posts') && tableExists(this.database, 'resource_trash_entries')) {
+      clauses.push("(e.resource_type != 'note' OR EXISTS (SELECT 1 FROM blog_posts p WHERE p.id = e.domain_id AND NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type = 'note' AND t.resource_id = p.id)))")
+    }
     const parameters = [query.ftsQuery]
     if (query.repositoryId !== null) {
       clauses.push("((e.resource_type = 'code_file' AND e.parent_domain_id = ?) OR (e.resource_type = 'code_repository' AND e.domain_id = ?))")

@@ -267,13 +267,14 @@ async function collectBooks(database, dependencies, context) {
 
 function collectNotes(database) {
   return database.prepare(`
-    SELECT p.id, p.title, p.content, p.status, p.created_at, p.updated_at,
+    SELECT p.id, p.title, p.content, p.created_at, p.updated_at,
            c.name AS category_name,
            COALESCE(group_concat(t.name, ','), '') AS tags
       FROM blog_posts p
       LEFT JOIN blog_categories c ON c.id = p.category_id
       LEFT JOIN blog_post_tags pt ON pt.post_id = p.id
       LEFT JOIN blog_tags t ON t.id = pt.tag_id
+     WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries x WHERE x.resource_type = 'note' AND x.resource_id = p.id)
      GROUP BY p.id
      ORDER BY p.id
   `).all().map((row) => ({
@@ -284,7 +285,7 @@ function collectNotes(database) {
     subtitle: row.category_name,
     body: stripMarkup(row.content),
     tags: normalizeTags(row.tags),
-    status: row.status || 'draft',
+    status: 'ready',
     sourceKind: 'owner_note',
     sourceLabel: row.category_name || '个人笔记',
     locator: { route: '/blog', postId: row.id },

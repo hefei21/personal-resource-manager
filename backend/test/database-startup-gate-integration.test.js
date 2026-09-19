@@ -598,11 +598,11 @@ const expectedMusicMigrations = [
   }
 ]
 
-test('application registry freezes 54 column migrations and thirty-five registered table transitions', () => {
+test('application registry freezes 57 column migrations and thirty-five registered table transitions', () => {
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 89)
+  assert.equal(applicationMigrationRegistry.migrations.length, 92)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -668,7 +668,10 @@ test('application registry freezes 54 column migrations and thirty-five register
       '0086_rag_query_runs',
       '0087_reading_progress_revision',
       '0088_reading_progress_last_mutation_id',
-      '0089_reading_progress_chapter_fraction'
+      '0089_reading_progress_chapter_fraction',
+      '0090_note_revision',
+      '0091_note_creation_key',
+      '0092_note_last_mutation_id'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -960,7 +963,10 @@ test('application registry freezes 54 column migrations and thirty-five register
     [
       { id: '0087_reading_progress_revision', kind: 'column', table: 'reading_progress', column: 'revision' },
       { id: '0088_reading_progress_last_mutation_id', kind: 'column', table: 'reading_progress', column: 'last_mutation_id' },
-      { id: '0089_reading_progress_chapter_fraction', kind: 'column', table: 'reading_progress', column: 'chapter_fraction' }
+      { id: '0089_reading_progress_chapter_fraction', kind: 'column', table: 'reading_progress', column: 'chapter_fraction' },
+      { id: '0090_note_revision', kind: 'column', table: 'blog_posts', column: 'revision' },
+      { id: '0091_note_creation_key', kind: 'column', table: 'blog_posts', column: 'creation_key' },
+      { id: '0092_note_last_mutation_id', kind: 'column', table: 'blog_posts', column: 'last_mutation_id' }
     ]
   )
 })

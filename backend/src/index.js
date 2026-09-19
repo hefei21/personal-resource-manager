@@ -269,7 +269,7 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
       code: db.prepare('SELECT COUNT(*) as count FROM code_repositories').get()?.count || 0,
       bookmarks: db.prepare('SELECT COUNT(*) as count FROM bookmarks').get()?.count || 0,
       blog: {
-        total: db.prepare('SELECT COUNT(*) as count FROM blog_posts').get()?.count || 0
+        total: db.prepare("SELECT COUNT(*) as count FROM blog_posts p WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type = 'note' AND t.resource_id = p.id)").get()?.count || 0
       },
       anime: isGuest ? {
         // 游客：过滤已隐藏的动漫

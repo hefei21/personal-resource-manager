@@ -1,4 +1,5 @@
 import express from 'express'
+import { restoreNoteFromTrash, permanentlyDeleteNote } from '../services/noteService.js'
 
 import { getDatabase } from '../config/database.js'
 import { authenticateToken, requireWritePermission } from '../middlewares/auth.js'
@@ -25,6 +26,7 @@ const PUBLIC_MESSAGES = Object.freeze({
   DOCUMENT_TRASH_NOT_FOUND: '该文档已不在回收站中',
   EBOOK_TRASH_NOT_FOUND: '该电子书已不在回收站中',
   MUSIC_TRASH_NOT_FOUND: '该音频已不在回收站中',
+  NOTE_TRASH_NOT_FOUND: '该笔记已不在回收站中',
   DOCUMENT_TRASH_PURGE_IN_PROGRESS: '该文档正在执行永久清理，无法恢复',
   EBOOK_TRASH_PURGE_IN_PROGRESS: '该电子书正在执行永久清理，无法恢复',
   MUSIC_TRASH_PURGE_IN_PROGRESS: '该音频正在执行永久清理，无法恢复',
@@ -57,6 +59,7 @@ function sendTrashError(res, error, fallback) {
 }
 
 async function invalidateResourceCaches(resourceType) {
+  if (resourceType === 'note') await cache.delPattern('blog:*')
   if (resourceType === 'document') {
     await Promise.all([
       cache.del(CacheKeys.DOC_CATEGORIES),
@@ -97,6 +100,8 @@ async function restoreItem({ database, resourceType, resourceId }) {
     result = restoreEbookFromTrash({ database, id: resourceId })
   } else if (resourceType === 'music') {
     result = restoreMusicFromTrash({ database, id: resourceId })
+  } else if (resourceType === 'note') {
+    result = restoreNoteFromTrash({ database, id: resourceId })
   } else {
     throw new ResourceTrashError('RESOURCE_TRASH_TYPE_UNSUPPORTED', 'Resource trash type is unsupported.')
   }
@@ -107,6 +112,7 @@ async function restoreItem({ database, resourceType, resourceId }) {
 
 async function permanentlyDeleteItem({ database, resourceType, resourceId }) {
   let result
+  if (resourceType === 'note') return { resourceType, resourceId, result: permanentlyDeleteNote({ database, id: resourceId }) }
   if (resourceType === 'document') {
     result = await permanentlyDeleteDocument({
       database,

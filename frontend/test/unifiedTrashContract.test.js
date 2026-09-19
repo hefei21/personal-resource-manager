@@ -23,7 +23,7 @@ const moduleSources = [
 test('unified trash has one route and one typed API surface', () => {
   assert.match(routerSource, /path: 'trash'[\s\S]*?name: 'Trash'[\s\S]*?views\/Trash\.vue/u)
   assert.match(apiSource, /trash:\s*\{[\s\S]*?list:[\s\S]*?batchRestore:[\s\S]*?permanentlyDelete:/u)
-  assert.match(trashView, /文档、电子书和音频/u)
+  assert.match(trashView, /文档、电子书、音频和个人笔记/u)
   assert.match(trashView, /批量恢复/u)
   assert.match(trashView, /v-if="!isMobile"[\s\S]*?永久删除/u)
   assert.match(trashView, /function localDateBoundary[\s\S]*?date\.toISOString\(\)/u)

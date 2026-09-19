@@ -14,7 +14,7 @@ const sources = {
   games: mobileSource('GamesMobile.vue'),
   anime: mobileSource('AnimeMobile.vue'),
   animeDetail: mobileSource('AnimeDetailMobile.vue'),
-  notes: mobileSource('BlogMobile.vue')
+  notes: fs.readFileSync(new URL('../../frontend/src/components/business/notes/NoteWorkspace.vue', import.meta.url), 'utf8')
 }
 
 function assertOmits(sourceName, forbidden) {
@@ -62,10 +62,9 @@ test('mobile resource modules omit batch, permanent, credential, and external sy
     'api.anime.delete('
   ])
 
-  assertOmits('notes', [
-    'api.blog.deletePost',
-    'api.blog.deleteCategory'
-  ])
+  // Notes now have a reversible trash contract. Shared category management is PC-only.
+  assert.match(sources.notes, /v-if="!isMobile"[^>]*@click="categoryManager = true"/u)
+  assert.match(sources.notes, /api\.blog\.deletePost/u)
 })
 
 test('mobile resource modules retain the approved reversible single-item actions', () => {

@@ -101,6 +101,9 @@ function createFixture() {
       category_id INTEGER,
       status TEXT DEFAULT 'draft',
       is_top INTEGER DEFAULT 0,
+      revision INTEGER NOT NULL DEFAULT 0,
+      creation_key TEXT,
+      last_mutation_id TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (category_id) REFERENCES blog_categories(id) ON DELETE SET NULL
@@ -121,6 +124,8 @@ function createFixture() {
       FOREIGN KEY (tag_id) REFERENCES blog_tags(id) ON DELETE CASCADE
     );
   `)
+
+  database.exec(`CREATE TABLE resource_trash_entries (resource_type TEXT, resource_id INTEGER, deleted_at TEXT, purge_after TEXT, metadata_json TEXT, PRIMARY KEY (resource_type, resource_id))`)
 
   const marker = `blog-status-retirement-${process.pid}`
   const postStmt = database.prepare(`
@@ -295,7 +300,7 @@ test('legacy status values stay in storage but leave the runtime contract', nati
     assert.ok(secondList.data.every((post) => !hasLegacyField(post)))
 
     const listCacheKeys = observedCacheKeys.filter((key) => key.startsWith('blog:posts:'))
-    assert.equal(new Set(listCacheKeys).size, 1)
+    assert.equal(new Set(listCacheKeys).size, 0, 'notes reads are uncached for conflict detection')
 
     const singleResponse = await ownerRequest(
       baseUrl,
@@ -331,6 +336,8 @@ test('legacy status values stay in storage but leave the runtime contract', nati
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           title: `${fixture.marker} updated`,
+          baseRevision: single.data.revision,
+          mutationId: 'status-retirement-update-0001',
           status: 'published',
           is_top: false
         })

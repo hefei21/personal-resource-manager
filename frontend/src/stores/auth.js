@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import api from '@/api'
+import { clearNoteDrafts } from '@/utils/noteDrafts'
 
 export const useAuthStore = defineStore('auth', () => {
   // Authentication credentials live only in HttpOnly cookies.
@@ -63,6 +64,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // Local state must still be cleared when the server is unavailable.
     }
+    try { clearNoteDrafts(localStorage) } catch { /* unavailable storage */ }
     user.value = null
     isAuthenticated.value = false
     demoMode.value = false

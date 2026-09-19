@@ -87,7 +87,8 @@ function focusInput() {
 }
 
 // 添加标签
-function addTag() {
+function addTag(event) {
+  if (event?.isComposing || event?.keyCode === 229) return
   const value = inputValue.value.trim()
   if (!value) return
   

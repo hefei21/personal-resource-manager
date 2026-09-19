@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { NOTE_EDITING_MIGRATIONS } from './noteEditingSchema.js'
 import { createMigrationRegistry } from './migrationPlan.js'
 import {
   CREATE_STORAGE_COMMIT_OPERATIONS_SQL,
@@ -2115,5 +2116,6 @@ export const applicationMigrationRegistry = createMigrationRegistry([
   ...RAG_INDEX_MIGRATIONS,
   ...RAG_EMBEDDING_MIGRATIONS,
   ...RAG_QUERY_RUN_MIGRATIONS,
-  ...EBOOK_READING_PROGRESS_MIGRATIONS
+  ...EBOOK_READING_PROGRESS_MIGRATIONS,
+  ...NOTE_EDITING_MIGRATIONS
 ])

@@ -147,23 +147,27 @@ test('excludes trashed documents, ebooks, and ebook chapters without a caller st
     database.exec(`
       INSERT INTO resource_trash_entries (resource_type, resource_id, deleted_at)
       VALUES ('document', 1, '2026-08-25T01:00:00.000Z'),
-             ('ebook', 2, '2026-08-25T01:00:00.000Z')
+             ('ebook', 2, '2026-08-25T01:00:00.000Z'),
+             ('note', 3, '2026-08-25T01:00:00.000Z')
     `)
 
     const trashed = await collector({ database, includeCodeFiles: false })
     assert.equal(trashed.entries.some((entry) => entry.entryKey === 'document:1'), false)
     assert.equal(trashed.entries.some((entry) => entry.entryKey.startsWith('ebook:2')), false)
     assert.equal(trashed.entries.some((entry) => entry.entryKey.startsWith('ebook-chapter:2:')), false)
+    assert.equal(trashed.entries.some((entry) => entry.entryKey === 'note:3'), false)
 
     database.prepare(`
       DELETE FROM resource_trash_entries
        WHERE (resource_type = 'document' AND resource_id = 1)
           OR (resource_type = 'ebook' AND resource_id = 2)
+          OR (resource_type = 'note' AND resource_id = 3)
     `).run()
     const restored = await collector({ database, includeCodeFiles: false })
     assert.equal(restored.entries.some((entry) => entry.entryKey === 'document:1'), true)
     assert.equal(restored.entries.some((entry) => entry.entryKey === 'ebook:2'), true)
     assert.equal(restored.entries.some((entry) => entry.entryKey === 'ebook-chapter:2:0'), true)
+    assert.equal(restored.entries.some((entry) => entry.entryKey === 'note:3'), true)
   } finally {
     database.close()
   }

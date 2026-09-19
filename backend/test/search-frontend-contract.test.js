@@ -54,8 +54,8 @@ test('resource pages consume public search locators on both layouts', () => {
     ['src/components/books/EbookReaderDialog.vue', /props\.book\.searchChapterIndex/u],
     ['src/pc/pages/CodePC.vue', /route\.query\.repositoryId[\s\S]*loadFileState\(route\.query\.path/u],
     ['src/mobile/pages/CodeMobile.vue', /route\.query\.repositoryId[\s\S]*loadPreview/u],
-    ['src/pc/pages/BlogPC.vue', /route\.query\.postId/u],
-    ['src/mobile/pages/BlogMobile.vue', /route\.query\.postId/u]
+    ['src/views/Blog.vue', /NoteWorkspace/u],
+    ['src/components/business/notes/NoteWorkspace.vue', /route\.query\.postId/u]
   ]
   for (const [relativePath, pattern] of targets) assert.match(readFrontend(relativePath), pattern)
 })

@@ -77,6 +77,22 @@ function fixtures(version = 1) {
   ]
 }
 
+test('stale search snapshots cannot expose trashed or purged notes before refresh', nativeTestOptions, async () => {
+  const database = createDatabase()
+  try {
+    database.exec('CREATE TABLE blog_posts(id INTEGER PRIMARY KEY); CREATE TABLE resource_trash_entries(resource_type TEXT, resource_id INTEGER); INSERT INTO blog_posts VALUES(1)')
+    const service = createSearchIndexService({ database, collectEntries: async () => fixtures() })
+    await service.refresh()
+    assert.equal(service.query({ q: 'NAS', types: 'note' }).total, 1)
+    database.exec("INSERT INTO resource_trash_entries VALUES('note',1)")
+    assert.equal(service.query({ q: 'NAS', types: 'note' }).total, 0)
+    database.exec('DELETE FROM resource_trash_entries')
+    assert.equal(service.query({ q: 'NAS', types: 'note' }).total, 1)
+    database.exec('DELETE FROM blog_posts')
+    assert.equal(service.query({ q: 'NAS', types: 'note' }).total, 0)
+  } finally { database.close() }
+})
+
 test('repository scope filters before totals and pagination and rejects invalid ids', nativeTestOptions, async () => {
   const database = createDatabase()
   try {
