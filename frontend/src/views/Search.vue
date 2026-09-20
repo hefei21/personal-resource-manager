@@ -4,7 +4,7 @@
       <div>
         <p>由 NAS 本机 SQLite FTS5 与 commit 绑定符号索引提供，PC Worker 离线也可搜索。</p>
       </div>
-      <button class="secondary-button" :disabled="refreshing" @click="refreshIndex(false)">
+      <button v-if="!isMobile" class="secondary-button" :disabled="refreshing" @click="refreshIndex(false)">
         {{ refreshing ? '索引任务运行中…' : '刷新索引' }}
       </button>
     </section>
@@ -20,7 +20,7 @@
         PC Worker 离线；关键词检索不受影响。
       </div>
       <button
-        v-if="['missing', 'failed', 'partial'].includes(indexStatus.status)"
+        v-if="!isMobile && ['missing', 'failed', 'partial'].includes(indexStatus.status)"
         class="inline-button"
         :disabled="refreshing"
         @click="refreshIndex(true)"
@@ -79,6 +79,7 @@
           <span v-else>{{ coverageLoading ? '正在读取 RAG 覆盖状态…' : '暂时无法读取 RAG 覆盖状态。' }}</span>
         </div>
         <button
+          v-if="!isMobile || selectedAskSource"
           type="button"
           class="secondary-button rag-refresh-button"
           :class="{ 'desktop-only': !selectedAskSource }"
@@ -160,7 +161,7 @@
 
     <div v-if="mode === 'search' && feedback" class="feedback" role="status">
       <span>{{ feedback }}</span>
-      <button v-if="errorCode === 'SEARCH_INDEX_MISSING'" @click="refreshIndex(true)">建立索引</button>
+      <button v-if="!isMobile && errorCode === 'SEARCH_INDEX_MISSING'" @click="refreshIndex(true)">建立索引</button>
     </div>
 
     <section v-if="mode === 'ask' && askState !== 'idle'" class="answer-panel" aria-live="polite">
@@ -169,14 +170,15 @@
           <strong>资料回答</strong>
           <span>{{ askModeLabel }}</span>
         </div>
-        <button v-if="askLoading" class="inline-button" type="button" @click="cancelAsk">取消</button>
+        <button v-if="askState === 'submitting' || (askQueryId && askCancellable)" class="inline-button" type="button" :disabled="askState === 'cancelling'" @click="cancelAsk">{{ askState === 'cancelling' ? '取消中…' : '取消' }}</button>
       </header>
 
       <div v-if="askLoading" class="answer-loading" role="status">
-        正在检查权限、检索资料并整理引用…
+        {{ askState === 'cancelling' ? '正在确认取消…' : askState === 'submitting' ? '正在检查资料范围并提交问题…' : askPhase === 'queued' ? '问题已进入队列，等待 Worker 处理…' : '正在整理回答和引用…' }}
       </div>
-      <div v-else-if="askState === 'error'" class="answer-feedback" role="alert">
+      <div v-else-if="['error', 'paused'].includes(askState)" class="answer-feedback" role="alert">
         {{ askFeedback }}
+        <button v-if="askState === 'paused'" type="button" class="inline-button" @click="ask.resume">继续查询</button>
       </div>
       <div v-else-if="askState === 'cancelled'" class="answer-feedback" role="status">
         已取消本次提问；原有关键词搜索仍可继续使用。
@@ -215,7 +217,7 @@
     <section v-if="mode === 'search' && searched && !loading" class="results-section">
       <header class="results-heading">
         <div>
-          <strong>{{ total }} 个结果</strong>
+          <strong>{{ errorCode ? '上次成功的搜索结果' : `${total} 个结果` }}</strong>
           <span v-if="result?.index?.status === 'partial'">索引不完整，部分资源仅含元数据。</span>
         </div>
         <span v-if="elapsedMs !== null">{{ elapsedMs }} ms</span>
@@ -225,7 +227,7 @@
         外部发现未配置。阶段 6A 不会自动调用被冻结的外部资源站。
       </div>
 
-      <div v-if="results.length === 0" class="empty-state">
+      <div v-if="!errorCode && results.length === 0" class="empty-state">
         <strong>没有找到匹配资源</strong>
         <span>可以减少筛选条件、尝试完整关键词，或刷新索引后再试。</span>
       </div>
@@ -263,10 +265,14 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
+import { useRagQuery } from '@/composables/useRagQuery'
+import { useViewport } from '@/composables/useViewport'
 
 const router = useRouter()
+const route = useRoute()
+const { isMobile } = useViewport()
 const pageSize = 20
 const mode = ref('search')
 const loading = ref(false)
@@ -285,14 +291,13 @@ const coverageLoading = ref(false)
 const ragRefreshing = ref(false)
 const ragRefreshFeedback = ref('')
 const askSourceKey = ref('')
-const askState = ref('idle')
-const askResult = ref(null)
-const askFeedback = ref('')
-const askQueryId = ref('')
+const ask = useRagQuery({ api: api.rag, errorLabel: askErrorLabel, normalizeResult: normalizeAskResult })
+const { state: askState, result: askResult, feedback: askFeedback, loading: askLoading,
+  queryId: askQueryId, cancellable: askCancellable, phase: askPhase } = ask
 let pollTimer = null
-let ragPollTimer = null
 let ragIndexPollTimer = null
-let askGeneration = 0
+let pageDisposed = false
+let searchGeneration = 0
 
 const filters = reactive({
   q: '', scope: 'owned', type: '', tag: '', author: '', status: '', source: '', dateFrom: '', dateTo: ''
@@ -315,7 +320,6 @@ const typeOptions = [
 const typeLabels = Object.freeze(Object.fromEntries(typeOptions.map((item) => [item.value, item.label])))
 const results = computed(() => result.value?.data || [])
 const total = computed(() => result.value?.total || 0)
-const askLoading = computed(() => ['submitting', 'polling'].includes(askState.value))
 const indexStatusLabel = computed(() => ({
   missing: '尚未建立搜索索引', empty: '搜索索引为空', rebuilding: '正在重建索引',
   ready: '索引可用', partial: '索引部分可用', failed: '索引刷新失败'
@@ -340,6 +344,7 @@ const ragStatusWorkerOffline = computed(() => ragStatus.value?.pcWorker?.status 
 const askModeLabel = computed(() => {
   if (askLoading.value) return '正在检索资料'
   if (askState.value === 'error') return '请求失败'
+  if (askState.value === 'paused') return '查询已暂停'
   if (askState.value === 'cancelled') return '已取消'
   if (askResult.value?.degraded) return '本机检索降级'
   if (askResult.value?.abstained) return '证据不足，已拒答'
@@ -491,14 +496,7 @@ function ragCoverageStatusLabel(status) {
 }
 
 function resetAskForScopeChange() {
-  askGeneration += 1
-  const queryId = askQueryId.value
-  stopRagPolling()
-  askQueryId.value = ''
-  if (queryId) api.rag.cancelQuery(queryId).catch(() => {})
-  askState.value = 'idle'
-  askResult.value = null
-  askFeedback.value = ''
+  ask.reset()
   ragRefreshFeedback.value = ''
 }
 
@@ -507,20 +505,9 @@ function submitForm() {
   else runSearch(true)
 }
 
-function stopRagPolling() {
-  if (ragPollTimer) window.clearTimeout(ragPollTimer)
-  ragPollTimer = null
-}
-
 function setMode(nextMode) {
   if (nextMode === mode.value) return
-  askGeneration += 1
-  if (mode.value === 'ask' && askQueryId.value) {
-    const queryId = askQueryId.value
-    stopRagPolling()
-    askQueryId.value = ''
-    api.rag.cancelQuery(queryId).catch(() => {})
-  }
+  ask.reset()
   mode.value = nextMode
   feedback.value = ''
   if (nextMode === 'ask') {
@@ -539,7 +526,7 @@ function setMode(nextMode) {
 }
 
 async function refreshRagIndex() {
-  if (ragRefreshing.value) return
+  if (ragRefreshing.value || (isMobile.value && !selectedAskSource.value)) return
   ragRefreshing.value = true
   ragRefreshFeedback.value = ''
   const source = selectedAskSource.value
@@ -563,8 +550,10 @@ async function refreshRagIndex() {
 }
 
 async function pollRagIndexTask(taskId) {
+  if (pageDisposed) return
   try {
     const response = await api.tasks.get(taskId)
+    if (pageDisposed) return
     const task = response.data?.data
     if (!task) throw new Error('missing task')
     if (['pending', 'leased', 'running'].includes(task.status)) {
@@ -592,92 +581,16 @@ function askErrorLabel(error) {
   return ASK_ERROR_LABELS[code] || (!error.response ? '问资料服务暂时不可达，可切换到关键词搜索。' : '问资料暂时失败，请稍后重试。')
 }
 
-function finishAsk(value) {
-  stopRagPolling()
-  askQueryId.value = ''
-  askResult.value = normalizeAskResult(value)
-  askState.value = askResult.value.degraded ? 'degraded' : askResult.value.abstained ? 'abstained' : 'answered'
-}
-
-function scheduleRagPoll(generation) {
-  stopRagPolling()
-  ragPollTimer = window.setTimeout(() => pollAsk(generation), 1200)
-}
-
-async function pollAsk(generation = askGeneration) {
-  if (generation !== askGeneration) return
-  const queryId = askQueryId.value
-  if (!queryId) return
-  try {
-    const response = await api.rag.getQuery(queryId)
-    const data = response.data?.data
-    if (!data) throw new Error('missing query result')
-    if (['pending', 'queued', 'leased', 'running'].includes(data.status)) {
-      askState.value = 'polling'
-      scheduleRagPoll(generation)
-      return
-    }
-    if (['cancelled', 'canceled'].includes(data.status)) {
-      stopRagPolling()
-      askQueryId.value = ''
-      askState.value = 'cancelled'
-      askResult.value = null
-      return
-    }
-    if (['failed', 'error'].includes(data.status)) {
-      throw Object.assign(new Error('rag query failed'), { response: { data: { code: data.errorCode || 'RAG_QUERY_FAILED' } } })
-    }
-    finishAsk(data)
-  } catch (error) {
-    if (generation !== askGeneration) return
-    stopRagPolling()
-    askQueryId.value = ''
-    askState.value = 'error'
-    askFeedback.value = askErrorLabel(error)
-  }
-}
-
 async function runAsk() {
   if (!filters.q || askLoading.value) return
-  const generation = ++askGeneration
-  stopRagPolling()
-  askState.value = 'submitting'
-  askResult.value = null
-  askFeedback.value = ''
-  try {
-    const response = await api.rag.createQuery(buildRagPayload())
-    if (generation !== askGeneration) return
-    const data = response.data?.data
-    if (data?.answer !== undefined || data?.abstained !== undefined || data?.citations) {
-      finishAsk(data)
-      return
-    }
-    const queryId = data?.id ?? data?.queryId ?? data?.runId
-    if (queryId === undefined || queryId === null || String(queryId).trim() === '') throw new Error('missing query id')
-    askQueryId.value = String(queryId)
-    askState.value = 'polling'
-    await pollAsk(generation)
-  } catch (error) {
-    if (generation !== askGeneration) return
-    stopRagPolling()
-    askQueryId.value = ''
-    askState.value = 'error'
-    askFeedback.value = askErrorLabel(error)
-  }
+  await ask.submit(buildRagPayload())
 }
 
-async function cancelAsk() {
-  askGeneration += 1
-  const queryId = askQueryId.value
-  stopRagPolling()
-  askQueryId.value = ''
-  askState.value = 'cancelled'
-  askResult.value = null
-  if (queryId) await api.rag.cancelQuery(queryId).catch(() => {})
-}
+async function cancelAsk() { await ask.cancel() }
 
 async function runSearch(resetPage = false) {
-  if (!filters.q) return
+  if (!filters.q || pageDisposed) return
+  const generation = ++searchGeneration
   if (resetPage) offset.value = 0
   loading.value = true
   feedback.value = ''
@@ -685,26 +598,29 @@ async function runSearch(resetPage = false) {
   const started = performance.now()
   try {
     const response = await api.search.global(buildParams())
+    if (pageDisposed || generation !== searchGeneration) return
     result.value = response.data
     indexStatus.value = response.data?.index || indexStatus.value
     searched.value = true
   } catch (error) {
+    if (pageDisposed || generation !== searchGeneration) return
     errorCode.value = error.response?.data?.code || 'SEARCH_INDEX_UNAVAILABLE'
     feedback.value = errorCode.value === 'SEARCH_INDEX_MISSING'
       ? '搜索索引尚未建立，请先执行完整重建。'
       : errorCode.value === 'SEARCH_INPUT_INVALID'
         ? '搜索词或筛选条件无效。'
         : '暂时无法搜索，请稍后重试。'
-    result.value = null
     searched.value = true
   } finally {
-    elapsedMs.value = Math.round(performance.now() - started)
-    loading.value = false
+    if (!pageDisposed && generation === searchGeneration) {
+      elapsedMs.value = Math.round(performance.now() - started)
+      loading.value = false
+    }
   }
 }
 
 async function refreshIndex(rebuild) {
-  if (refreshing.value) return
+  if (refreshing.value || isMobile.value) return
   refreshing.value = true
   feedback.value = ''
   try {
@@ -721,8 +637,10 @@ async function refreshIndex(rebuild) {
 }
 
 async function pollTask(taskId) {
+  if (pageDisposed) return
   try {
     const response = await api.tasks.get(taskId)
+    if (pageDisposed) return
     const task = response.data?.data
     if (!task) throw new Error('missing task')
     if (['pending', 'leased', 'running'].includes(task.status)) {
@@ -778,11 +696,16 @@ function formatTime(value) { return value ? new Date(value).toLocaleString('zh-C
 function previousPage() { offset.value = Math.max(0, offset.value - pageSize); runSearch(false) }
 function nextPage() { offset.value += pageSize; runSearch(false) }
 
-onMounted(loadStatus)
+onMounted(() => {
+  loadStatus()
+  if (route.query.mode === 'ask') setMode('ask')
+})
 onBeforeUnmount(() => {
+  pageDisposed = true
+  searchGeneration += 1
   if (pollTimer) window.clearTimeout(pollTimer)
   if (ragIndexPollTimer) window.clearTimeout(ragIndexPollTimer)
-  stopRagPolling()
+  ask.dispose()
 })
 </script>
 

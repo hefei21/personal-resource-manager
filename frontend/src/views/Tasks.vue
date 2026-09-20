@@ -19,6 +19,8 @@
       </div>
     </div>
 
+    <TaskFocusPanel v-if="focusTaskId" ref="focusPanel" :task-id="focusTaskId" @action="handleAction" />
+
     <NativeCard class="tasks-filter-card">
       <div class="tasks-filter-grid">
         <label class="tasks-filter-item">
@@ -181,6 +183,8 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
+import TaskFocusPanel from '@/components/business/TaskFocusPanel.vue'
 import { TASK_ACTIVE_STATUSES, useTasksStore } from '@/stores/tasks'
 import { useToast } from '@/composables/useToast'
 import {
@@ -210,6 +214,9 @@ import {
 const ACTIVE_STATUS_SET = new Set(TASK_ACTIVE_STATUSES)
 const ACTION_CONFLICT_CODES = new Set(['TASK_CANCEL_CONFLICT', 'TASK_RETRY_CONFLICT', 'TASK_ACTION_CONFLICT'])
 
+const route = useRoute()
+const focusPanel = ref(null)
+const focusTaskId = computed(() => typeof route.query.task === 'string' && /^[1-9]\d{0,14}$/.test(route.query.task) ? route.query.task : '')
 const store = useTasksStore()
 const toast = useToast()
 const cleanupDialogVisible = ref(false)
@@ -295,11 +302,12 @@ function handlePageChange({ current, pageSize }) {
 }
 
 async function handleRefresh() {
-  await store.refresh()
+  await Promise.all([store.refresh(), focusPanel.value?.load()])
 }
 
 async function handleAction(action, taskItem) {
   const result = await store[action](taskItem.id)
+  await focusPanel.value?.load()
   if (result.success) {
     toast.success(action === 'cancel' ? '任务已取消' : '任务已重新提交')
     return

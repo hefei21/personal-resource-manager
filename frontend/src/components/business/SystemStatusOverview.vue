@@ -1,5 +1,10 @@
 <template>
   <section class="system-overview" aria-labelledby="system-overview-title">
+    <nav class="overview-shortcuts" aria-label="常用工作入口">
+      <RouterLink to="/search">搜索资料</RouterLink>
+      <RouterLink to="/search?mode=ask">问资料</RouterLink>
+      <RouterLink to="/tasks">后台任务</RouterLink>
+    </nav>
     <div class="overview-heading">
       <div>
         <p class="eyebrow">运行概览</p>
@@ -47,11 +52,13 @@
         <div v-else-if="recentTasks.length === 0" class="tasks-empty">暂无后台任务</div>
         <ul v-else class="task-list">
           <li v-for="task in recentTasks" :key="task.id">
+            <RouterLink class="task-link" :to="{ path: '/tasks', query: { task: task.id } }">
             <span class="task-copy">
               <strong>{{ taskTypeLabel(task.taskType) }}</strong>
               <small>{{ formatTime(task.timestamps?.createdAt) }}</small>
             </span>
-            <span class="task-status" :class="`task-status--${task.status}`">{{ taskStatusLabel(task.status) }}</span>
+            <span class="task-status" :class="`task-status--${task.status}`">{{ taskStatusLabel(task) }}</span>
+            </RouterLink>
           </li>
         </ul>
       </div>
@@ -62,6 +69,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import api from '@/api'
+import { taskTypeLabel, taskStatusLabel } from '@/domain/taskPresentation'
 import { NativeIcon } from '@/components/native'
 
 const health = ref(null)
@@ -72,25 +80,6 @@ const hasLoaded = ref(false)
 const healthError = ref(false)
 const ragError = ref(false)
 const tasksError = ref(false)
-
-const TASK_TYPE_LABELS = {
-  'code.repository.clone': '代码仓库克隆',
-  'code.repository.sync': '代码仓库同步',
-  'code.repository.reclone': '代码仓库安全重克隆',
-  'music.lyrics.batch': '批量下载歌词',
-  'games.steam.sync': 'Steam 游戏同步',
-  'anime.bangumi.refresh': '动漫信息刷新',
-  'ebook.cover.generate': '电子书封面生成',
-  'ebook.metadata.reparse': '电子书元数据重解析',
-  'music.metadata.reparse': '音频元数据重解析',
-  'search.index.refresh': '统一搜索索引刷新',
-  'content.inspect': '内容检查'
-}
-
-const STATUS_LABELS = {
-  pending: '排队中', leased: '运行中', running: '运行中',
-  succeeded: '已完成', failed: '失败', cancelled: '已取消'
-}
 
 function serviceItem(key, label, value, values) {
   return { key, label, ...(values[value] || values.unknown) }
@@ -158,14 +147,6 @@ const statusItems = computed(() => [
 
 const partialError = computed(() => healthError.value || ragError.value)
 
-function taskTypeLabel(type) {
-  return TASK_TYPE_LABELS[type] || '后台任务'
-}
-
-function taskStatusLabel(status) {
-  return STATUS_LABELS[status] || '未知状态'
-}
-
 function formatTime(value) {
   if (!value) return '时间未知'
   const date = new Date(value)
@@ -200,6 +181,8 @@ onMounted(loadOverview)
 </script>
 
 <style scoped>
+.overview-shortcuts{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:20px;border-bottom:1px solid var(--color-border-subtle);padding-bottom:12px}.overview-shortcuts a{display:inline-flex;align-items:center;min-height:40px;font-size:14px;font-weight:600;color:var(--color-primary);text-decoration:none}.task-link{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;min-height:44px;color:inherit;text-decoration:none}.task-link:hover strong{text-decoration:underline}.task-link:focus-visible{outline:2px solid var(--color-primary);outline-offset:3px}
+
 .system-overview {
   margin-bottom: 18px;
   padding: 22px;

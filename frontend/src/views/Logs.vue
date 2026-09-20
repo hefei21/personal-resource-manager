@@ -49,7 +49,8 @@
             { value: 'delete', label: '删除' },
             { value: 'create', label: '创建' },
             { value: 'update', label: '更新' },
-            { value: 'visit', label: '访问' }
+            { value: 'visit', label: '访问' },
+            { value: 'worker', label: 'Worker 协议' }
           ]"
         />
         <NativeInput v-model="filters.keyword" placeholder="搜索用户/IP/路径" style="width: 200px" />
@@ -204,7 +205,8 @@ function getActionLabel(action) {
     delete: '删除',
     create: '创建',
     update: '更新',
-    visit: '访问'
+    visit: '访问',
+    worker: 'Worker 协议'
   }
   return labels[action] || action
 }

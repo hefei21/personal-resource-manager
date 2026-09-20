@@ -2,11 +2,11 @@
   <section class="group-hub">
     <header class="group-hub-header">
       <p class="eyebrow">{{ mobile ? '快速入口' : '分组概览' }}</p>
-      <h1>{{ heading }}</h1>
+      <h1 v-if="mobile">{{ heading }}</h1>
       <p>{{ description }}</p>
     </header>
 
-    <SystemStatusOverview v-if="group === 'system'" />
+    <SystemStatusOverview v-if="['system', 'workspace'].includes(group)" />
 
     <div v-if="items.length" class="module-grid">
       <RouterLink v-for="item in items" :key="item.routeName" :to="item.path" class="module-card">
@@ -58,7 +58,7 @@ const moduleDescriptions = {
   Books: '电子书资源与阅读信息',
   Code: '仓库、符号和 commit 绑定的代码知识',
   Bookmarks: '网页链接与分类收藏',
-  Anime: '动漫条目与观看进度',
+  Anime: '动漫收藏、观看状态与评分',
   Games: '游戏条目与游玩记录',
   Search: '跨资源全文与语义检索',
   Tasks: '导入、索引等持久任务状态',

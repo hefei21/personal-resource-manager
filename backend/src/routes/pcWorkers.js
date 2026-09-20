@@ -587,7 +587,10 @@ export function createPcWorkerAgentRouter({
         executionClasses: [...new Set(processors.map(({ executionClass }) => executionClass))],
         supportedProcessors: processors
       }))
-      if (!task) return res.status(204).end()
+      if (!task) {
+        res.pcWorkerEmptyClaim = true
+        return res.status(204).end()
+      }
       const data = projectWorkerTask(task)
       if (!data) {
         await Promise.resolve(runtimeStore(runtime).fail({

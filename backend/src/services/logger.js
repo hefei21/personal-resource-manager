@@ -1,6 +1,7 @@
 import { getDatabase } from '../config/database.js'
 import { record404AndCheck } from './ipBlacklist.js'
 import { requestBodyForLog } from './logRedaction.js'
+import { isEmptyWorkerClaim, logActor, logPath } from './requestLogPolicy.js'
 
 // 日志配置
 const LOG_CONFIG = {
@@ -112,6 +113,10 @@ function getAction(method, path) {
 
 // 根据请求路径推断所属模块
 function getModule(path) {
+  if (path.startsWith('/api/pc-worker-agent')) return 'PC Worker'
+  if (path.startsWith('/api/pc-workers')) return 'Worker 管理'
+  if (path.startsWith('/api/rag')) return '问资料'
+  if (path.startsWith('/api/tasks')) return '任务'
   // ===== 1. 认证模块 =====
   if (path.startsWith('/api/auth')) return '认证'
   if (path === '/token-status' || path.startsWith('/token-status')) return '认证'
@@ -365,8 +370,9 @@ function getClientIP(req) {
 
 // Express 中间件：记录访问日志
 export function accessLogger(req, res, next) {
+  const path = logPath(req)
   // 跳过不需要记录的路径
-  if (LOG_CONFIG.excludePaths.some(p => req.path.startsWith(p))) {
+  if (LOG_CONFIG.excludePaths.some(p => path.startsWith(p))) {
     return next()
   }
   
@@ -374,11 +380,11 @@ export function accessLogger(req, res, next) {
   const originalEnd = res.end
   
   res.end = async function(...args) {
+    if (isEmptyWorkerClaim(req, res)) return originalEnd.apply(res, args)
     const duration = Date.now() - startTime
-    const userId = req.user?.id || null
-    const username = req.user?.username || 'guest'
-    const action = getAction(req.method, req.path)
-    const module = getModule(req.path)
+    const { userId, username } = logActor(req)
+    const action = req.pcWorker ? 'worker' : getAction(req.method, path)
+    const module = getModule(path)
     const ipAddress = getClientIP(req)
     const ipLocation = await getIPLocation(ipAddress)
     const details = extractDetails(req)
@@ -388,7 +394,7 @@ export function accessLogger(req, res, next) {
       username,
       action,
       method: req.method,
-      path: req.path,
+      path,
       module,
       ip_address: ipAddress,
       ip_location: ipLocation,

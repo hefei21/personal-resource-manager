@@ -10,21 +10,21 @@
         <span>按资源类型统计</span>
       </div>
       <div class="resource-stat-grid">
-        <article v-for="item in resourceStats" :key="item.key" class="resource-stat-card">
+        <RouterLink v-for="item in resourceStats" :key="item.key" :to="`/${item.key}`" class="resource-stat-card">
           <span class="resource-stat-icon" :class="`resource-stat-icon--${item.tone}`">
             <NativeIcon :name="item.icon" size="19" weight="duotone" />
           </span>
           <span class="resource-stat-label">{{ item.label }}</span>
           <strong>{{ item.value }}</strong>
           <small>{{ item.unit }}</small>
-        </article>
+        </RouterLink>
       </div>
       <article class="anime-summary-card">
         <div class="anime-summary-title">
           <span class="resource-stat-icon resource-stat-icon--cyan">
             <NativeIcon name="video" size="19" weight="duotone" />
           </span>
-          <div><strong>动漫进度</strong><small>收藏状态分布</small></div>
+          <div><strong>动漫收藏</strong><small>收藏状态分布</small></div>
         </div>
         <div class="anime-summary-grid">
           <div v-for="item in animeStats" :key="item.label">
@@ -625,6 +625,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
+a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:focus-visible{outline:2px solid var(--color-primary);outline-offset:3px}a.resource-stat-card:hover{border-color:var(--color-primary)}
+
 .dashboard {
   padding: 0;
 }

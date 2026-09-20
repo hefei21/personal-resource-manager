@@ -78,6 +78,8 @@ import { createPcWorkerAgentRouter, createPcWorkerOwnerRouter } from './routes/p
 import { getDatabase } from './config/database.js'
 import { authenticateToken, requireOwner } from './middlewares/auth.js'
 import { accessLogger, queryLogs, getLogStats, initLogger } from './services/logger.js'
+import { createRequestLogger } from './services/requestLogPolicy.js'
+import { dashboardStats } from './services/dashboardStats.js'
 import { 
   initIpBlacklistTable, 
   ipBlacklistMiddleware, 
@@ -187,10 +189,7 @@ app.use((req, res, next) => {
 })
 
 // 请求日志中间件
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`)
-  next()
-})
+app.use(createRequestLogger())
 
 // 静态文件服务 - 映射 /uploads 到 uploads 目录
 const uploadsPath = process.env.UPLOADS_PATH || '/app/data/uploads'
@@ -260,31 +259,7 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
     // 判断是否为游客：游客不显示已隐藏的动漫
     const isGuest = req.user?.isGuest || false
     
-    // 使用 COUNT 查询，性能远高于加载全部数据
-    const stats = {
-      documents: db.prepare('SELECT COUNT(*) as count FROM documents').get()?.count || 0,
-      music: db.prepare('SELECT COUNT(*) as count FROM music').get()?.count || 0,
-      books: db.prepare('SELECT COUNT(*) as count FROM books').get()?.count || 0,
-      games: db.prepare("SELECT COUNT(*) as count FROM games WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='game' AND t.resource_id=games.id)").get()?.count || 0,
-      code: db.prepare('SELECT COUNT(*) as count FROM code_repositories').get()?.count || 0,
-      bookmarks: db.prepare("SELECT COUNT(*) as count FROM bookmarks b WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='bookmark' AND t.resource_id=b.id)").get()?.count || 0,
-      blog: {
-        total: db.prepare("SELECT COUNT(*) as count FROM blog_posts p WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type = 'note' AND t.resource_id = p.id)").get()?.count || 0
-      },
-      anime: isGuest ? {
-        // 游客：过滤已隐藏的动漫
-        total: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (is_hidden = 0 OR is_hidden IS NULL)").get()?.count || 0,
-        want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'want_to_watch' AND (is_hidden = 0 OR is_hidden IS NULL))").get()?.count || 0,
-        watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'watching' AND (is_hidden = 0 OR is_hidden IS NULL))").get()?.count || 0,
-        watched: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'watched' AND (is_hidden = 0 OR is_hidden IS NULL))").get()?.count || 0
-      } : {
-        // 管理员：显示所有动漫（包括隐藏的）
-        total: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id)").get()?.count || 0,
-        want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'want_to_watch')").get()?.count || 0,
-        watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'watching')").get()?.count || 0,
-        watched: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'watched')").get()?.count || 0
-      }
-    }
+    const stats = dashboardStats(db, { isGuest })
     
     res.json({ data: stats })
   } catch (error) {

@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import test from 'node:test'
+import { createRequestLogger } from '../src/services/requestLogPolicy.js'
 
 process.env.DATA_PATH ??= path.join(os.tmpdir(), 'pc-worker-route-test-data')
 
@@ -981,4 +982,28 @@ test('Worker claim keeps configured reranker when no embedding model is active',
       else process.env[key] = value
     }
   }
+})
+
+test('real Worker router suppresses only its authenticated empty claim response', async () => {
+  const lines = []
+  const app = express()
+  app.use(express.json(), createRequestLogger({ write: line => lines.push(line) }))
+  app.use('/api/pc-worker-agent', createPcWorkerAgentRouter({
+    database: () => fakeDatabase(),
+    runtime: () => ({ getStore: () => ({ leaseNext: () => null }) }),
+    authenticate: () => worker,
+    embeddingModelProvider: () => null,
+    rerankerModelProvider: () => null
+  }))
+  await withServer(app, async base => {
+    const request = (body, authenticated = true) => fetch(base + '/api/pc-worker-agent/tasks/claim', {
+      method: 'POST', headers: { 'content-type': 'application/json', ...(authenticated ? { authorization: 'Bearer synthetic' } : {}) }, body: JSON.stringify(body)
+    })
+    assert.equal((await request({})).status, 204)
+    assert.equal(lines.length, 0)
+    assert.equal((await request({ unexpected: true })).status, 400)
+    assert.match(lines[0], /400 actor=worker:/)
+    assert.equal((await request({}, false)).status, 401)
+    assert.match(lines[1], /401 actor=guest/)
+  })
 })

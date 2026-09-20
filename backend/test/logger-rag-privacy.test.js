@@ -147,7 +147,7 @@ test('classifies the mounted RAG path from originalUrl and keeps non-RAG compati
 
 test('global request console logging uses the path component and never the query', () => {
   const source = fs.readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
-  assert.match(source, /console\.log\(.*req\.method.*req\.path/u)
+  assert.match(source, /app\.use\(createRequestLogger\(\)\)/u)
   assert.doesNotMatch(source, /console\.log\(.*req\.method.*req\.url/u)
 })
 
@@ -174,7 +174,7 @@ test('RAG request bodies and content-shaped nested fields never enter access_log
   const adminQuery = queryLogs({ page: 1, pageSize: 50 })
   assert.equal(rows.length, 10)
   assert.equal(adminQuery.data.length, 10)
-  assert.ok(rows.every((row) => row.path === '/rag/queries'))
+  assert.ok(rows.every((row) => row.path === '/api/rag/queries'))
   assert.ok(rows.every((row) => row.request_body === null))
   assert.doesNotMatch(JSON.stringify(rows), /RAG_PRIVATE_/u)
   assert.doesNotMatch(JSON.stringify(adminQuery), /RAG_PRIVATE_/u)
@@ -204,4 +204,31 @@ test('RAG logs accept only stable server metadata and ignore content fields at a
   })))
   assert.doesNotMatch(JSON.stringify(rows), /RAG_PRIVATE_/u)
   assert.doesNotMatch(JSON.stringify(adminQuery), /RAG_PRIVATE_/u)
+})
+
+test('empty authenticated Worker claims never enter Owner access logs; work and errors remain attributable', nativeTestOptions, async () => {
+  database.exec('DELETE FROM access_logs')
+  const workerRequest = () => ({ ...request({ originalUrl: '/api/pc-worker-agent/tasks/claim' }),
+    path: '/tasks/claim', user: undefined, pcWorker: { id: 'pcw-synthetic' } })
+  for (let index = 0; index < 25; index += 1) {
+    const res = { statusCode: 204, pcWorkerEmptyClaim: true, end() {} }
+    accessLogger(workerRequest(), res, () => {})
+    await res.end()
+  }
+  await writeBatch(workerRequest)
+  const rows = database.prepare('SELECT * FROM access_logs').all()
+  assert.equal(rows.length, 10)
+  assert.ok(rows.every(row => row.username === 'worker:pcw-synthetic' && row.user_id === null &&
+    row.module === 'PC Worker' && row.path === '/api/pc-worker-agent/tasks/claim' && row.response_status === 200))
+  database.exec('DELETE FROM access_logs')
+  for (let index = 0; index < 10; index += 1) {
+    const req = workerRequest()
+    delete req.pcWorker
+    const res = { statusCode: 401, end() {} }
+    accessLogger(req, res, () => {})
+    await res.end()
+  }
+  const errors = database.prepare('SELECT * FROM access_logs').all()
+  assert.equal(errors.length, 10)
+  assert.ok(errors.every(row => row.username === 'guest' && row.response_status === 401))
 })
