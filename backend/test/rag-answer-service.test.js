@@ -104,6 +104,41 @@ test('keeps complete chunks within the total byte budget and abstains before enq
   assert.ok(Array.isArray(result.omitted))
 })
 
+test('preserves citation identity after budget filtering and authorizes original candidates', async () => {
+  const candidates = [
+    evidence({ body: 'A'.repeat(40_000) }),
+    evidence({ citationId: 'internal:2', sourceId: 2, body: 'Small complete evidence.' })
+  ]
+  let visible = true
+  const answer = service({ authoritativeVisibility: (item) => (visible && item.sourceId === 2) || item.sourceId === 1 })
+  const queued = await answer.generate({ query: 'What is supported?', evidence: candidates })
+  assert.deepEqual(queued.task.input.evidence.map((item) => item.citationId), ['C2'])
+  for (const supplied of [undefined, candidates, [...candidates].reverse()]) {
+    const result = await answer.applyResult({ task: queued.task, result: workerResult(queued.task, { citations: ['C2'] }), evidence: supplied })
+    assert.equal(result.status, 'complete')
+    assert.deepEqual(result.citations.map((item) => item.citationId), ['C2'])
+  }
+  const replaced = candidates.map((item) => ({ ...item, snapshotId: 999 }))
+  assert.equal((await answer.applyResult({ task: queued.task, result: workerResult(queued.task, { citations: ['C2'] }), evidence: replaced })).reasonCode, 'evidence_stale')
+  visible = false
+  assert.equal((await answer.applyResult({ task: queued.task, result: workerResult(queued.task, { citations: ['C2'] }) })).reasonCode, 'evidence_stale')
+})
+
+test('reuses a succeeded task with a citation gap without renormalizing stored evidence', async () => {
+  const answer = service({ taskStore: {
+    async enqueueExclusiveRun(request) {
+      const task = { id: 99, status: 'succeeded', ...request }
+      task.result = workerResult(task, { citations: ['C2'] })
+      return { task }
+    }
+  } })
+  const result = await answer.generate({ query: 'What is supported?', evidence: [
+    evidence({ body: 'A'.repeat(40_000) }), evidence({ citationId: 'internal:2' })
+  ] })
+  assert.equal(result.status, 'complete')
+  assert.deepEqual(result.citations.map((item) => item.citationId), ['C2'])
+})
+
 test('wraps evidence as untrusted text, keeps locator/title outside the task input, and preserves language', async () => {
   const tasks = taskStoreFake()
   const answer = service({ taskStore: tasks })

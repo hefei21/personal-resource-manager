@@ -367,7 +367,7 @@ export class RagAnswerService {
         omitted: budget.omitted
       })
       if (task?.status === 'succeeded' && isPlainObject(task.result)) {
-        return await this.applyResult({ task, result: task.result, evidence: budget.selected })
+        return await this.applyResult({ task, result: task.result })
       }
       return freezeResult({
         status: outcome?.activeConflict ? 'active' : 'queued',
@@ -399,7 +399,25 @@ export class RagAnswerService {
     if (!sourceEvidence) return this.#fallback('', detectLanguage(projectedInput.query), [], 'evidence_context_missing')
     let normalizedEvidence
     try {
-      normalizedEvidence = normalizeEvidence(sourceEvidence, this.config.maxEvidenceItems)
+      // Stored evidence is already normalized and carries the original candidate
+      // for authorization. Budget/visibility filtering can leave citation holes;
+      // normalizing it again would renumber C2 to C1 and wrap the candidate twice.
+      if (context && evidence === undefined) {
+        normalizedEvidence = context.evidence
+      } else {
+        normalizedEvidence = normalizeEvidence(sourceEvidence, this.config.maxEvidenceItems)
+        if (context) {
+          const originals = new Map(context.evidence.map((item) => [item.internalId, item]))
+          normalizedEvidence = normalizedEvidence.flatMap((item) => {
+            const original = originals.get(item.internalId)
+            if (!original || original.text !== item.text ||
+                JSON.stringify(original.locator) !== JSON.stringify(item.locator) ||
+                ['sourceType', 'sourceId', 'sourceVersionId', 'snapshotId', 'sourceContentSha256']
+                  .some((key) => original.candidate[key] !== item.candidate[key])) return []
+            return [{ ...item, citationId: original.citationId }]
+          })
+        }
+      }
     } catch {
       return this.#fallback('', detectLanguage(projectedInput.query), [], 'evidence_context_missing')
     }
