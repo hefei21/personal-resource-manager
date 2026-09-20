@@ -1,3 +1,5 @@
+import { getSyncProposal, applySyncProposal } from '../services/collectionSyncProposal.js'
+import { getCollectionItem, listCollection, saveCollectionPersonal, trashCollectionItem, CollectionError } from '../services/collectionService.js'
 import express from 'express'
 import { randomUUID } from 'node:crypto'
 import axios from 'axios'
@@ -7,7 +9,7 @@ import { authenticateToken, requireWritePermission } from '../middlewares/auth.j
 import { cache, CacheTTL } from '../utils/cache.js'
 import { compressBase64Image } from '../utils/imageCompress.js'
 import { convertToUTC8 } from '../utils/time.js'
-import { PAGINATION, TIMEOUT } from '../config/constants.js'
+import { TIMEOUT } from '../config/constants.js'
 import { safeAxiosGet } from '../services/outboundRequest.js'
 import { enqueueExclusiveRun, getTaskById } from '../services/taskStore.js'
 import {
@@ -20,6 +22,33 @@ import {
 } from '../services/steamSyncTaskProcessor.js'
 
 const router = express.Router()
+function collectionError(res, error) {
+  return res.status(error instanceof CollectionError ? error.status : 500).json({ message: error instanceof CollectionError ? error.message : '操作失败，请稍后重试' })
+}
+// All per-item routes, including cached covers/achievements, obey the same lifecycle boundary.
+router.use('/:id', (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return next()
+  authenticateToken(req, res, () => {
+    try { getCollectionItem(getDatabase(), 'game', req.params.id); next() }
+    catch (error) { collectionError(res, error) }
+  })
+})
+
+
+router.get('/steam/proposals/latest', authenticateToken, (req, res) => {
+  try {
+    const task = getDatabase().prepare('SELECT id,status,progress,error_summary,result_json FROM tasks WHERE task_type=? AND subject_id=? ORDER BY id DESC LIMIT 1').get('games.steam.sync', 'owner')
+    res.json({ data: task ? { id: task.id, status: task.status, progress: task.progress, error: task.status === 'failed' ? '候选获取失败，请在任务中心查看原因或重试' : null, hasProposal: JSON.parse(task.result_json || '{}').proposalVersion === 1, applied: Boolean(JSON.parse(task.result_json || '{}').appliedAt) } : null })
+  } catch (error) { collectionError(res, error) }
+})
+router.get('/steam/proposals/:taskId', authenticateToken, (req, res) => {
+  try { res.json({ data: getSyncProposal(getDatabase(), 'game', req.params.taskId, req.params.id) }) }
+  catch (error) { collectionError(res, error) }
+})
+router.post('/steam/proposals/:taskId/apply', authenticateToken, requireWritePermission, (req, res) => {
+  try { res.json({ data: applySyncProposal(getDatabase(), 'game', req.params.taskId, req.params.id), message: '已应用候选，个人状态与评分保持不变' }) }
+  catch (error) { collectionError(res, error) }
+})
 
 // 创建代理 agent（用于访问被墙网站）
 const httpsAgent = process.env.HTTP_PROXY
@@ -196,6 +225,8 @@ router.get('/steam/config', authenticateToken, (req, res) => {
     const config = db.prepare('SELECT steam_id, api_key, last_sync, auto_sync FROM steam_config WHERE id = 1').get()
     if (config) {
       config.last_sync = convertToUTC8(config.last_sync)
+      config.hasApiKey = Boolean(config.api_key)
+      delete config.api_key
     }
     res.json({ data: config || null })
   } catch (error) {
@@ -206,8 +237,11 @@ router.get('/steam/config', authenticateToken, (req, res) => {
 // 保存 Steam 配置
 router.post('/steam/config', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { steamId, apiKey } = req.body
+    const { steamId } = req.body
     const db = getDatabase()
+    const stored = db.prepare('SELECT steam_id,api_key FROM steam_config WHERE id=1').get()
+    const apiKey = req.body.apiKey || (stored?.steam_id === steamId ? stored?.api_key : '')
+    if (!/^[0-9]{17}$/.test(steamId || '') || !/^[a-f0-9]{32}$/i.test(apiKey || '')) return res.status(400).json({ message: '请输入 17 位 Steam ID 和有效 API Key' })
 
     // 验证配置
     if (!steamId || !apiKey) {
@@ -216,8 +250,8 @@ router.post('/steam/config', authenticateToken, requireWritePermission, async (r
 
     // 测试 API 是否有效（Steam API 不需要代理）
     try {
-      const testUrl = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${apiKey}&steamid=${steamId}&include_appinfo=0&include_played_free_games=1`
-      const response = await axios.get(testUrl, { httpsAgent: steamAgent, timeout: 10000 })
+      const testUrl = 'https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/'
+      const response = await axios.get(testUrl, { params: { key: apiKey, steamid: steamId, include_appinfo: 0, include_played_free_games: 1 }, httpsAgent: steamAgent, timeout: 10000 })
       
       if (response.data.response) {
         // 保存配置
@@ -232,7 +266,7 @@ router.post('/steam/config', authenticateToken, requireWritePermission, async (r
         res.status(400).json({ message: 'Steam API 验证失败，请检查配置' })
       }
     } catch (error) {
-      console.error('验证 Steam API 失败:', error.message)
+      console.error('验证 Steam API 失败:', error.code || 'REQUEST_FAILED')
       res.status(400).json({ message: 'Steam API 验证失败，请检查配置是否正确' })
     }
   } catch (error) {
@@ -321,7 +355,7 @@ export function publicSteamSyncTaskStatus(task) {
   const message = active
     ? '正在获取游戏列表...'
     : status === 'completed'
-      ? `同步完成！新增 ${result?.inserted ?? 0} 个游戏，更新 ${result?.updated ?? 0} 个游戏`
+      ? task.result?.proposalVersion === 1 ? (task.result.appliedAt ? '候选已确认应用' : '候选已获取，请返回游戏库核对并确认') : `同步完成！新增 ${result?.inserted ?? 0} 个游戏，更新 ${result?.updated ?? 0} 个游戏`
       : task.status === 'cancelled'
         ? '任务已取消'
         : task.errorSummary || '同步失败'
@@ -417,60 +451,8 @@ router.get('/steam/sync/:taskId', authenticateToken, (req, res) => {
 // 获取游戏列表
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { status, favorite, genre, platform, keyword, sortBy = 'playtime_2weeks', sortOrder = 'DESC', page = PAGINATION.DEFAULT_PAGE, pageSize = PAGINATION.DEFAULT_PAGE_SIZE } = req.query
-    const db = getDatabase()
-
-    let sql = 'SELECT id, steam_appid, title, name_original, cover_image, cover_image_data, header_cover_image, header_cover_image_data, description, developers, publishers, release_date, genres, tags, platforms, metacritic_score, metacritic_url, playtime_forever, playtime_2weeks, last_played, status, user_rating, is_favorite, notes, achievements_total, achievements_completed, created_at, updated_at FROM games WHERE 1=1'
-    const params = []
-
-    if (status) {
-      sql += ' AND status = ?'
-      params.push(status)
-    }
-
-    if (favorite === 'true') {
-      sql += ' AND is_favorite = 1'
-    }
-
-    if (genre) {
-      sql += ' AND genres LIKE ?'
-      params.push(`%${genre}%`)
-    }
-
-    if (platform) {
-      sql += ' AND platforms LIKE ?'
-      params.push(`%${platform}%`)
-    }
-
-    if (keyword) {
-      sql += ' AND (title LIKE ? OR name_original LIKE ?)'
-      params.push(`%${keyword}%`, `%${keyword}%`)
-    }
-
-    // 排序：默认按两周内游玩时长，相等则按总游玩时长
-    const validSortOrders = ['ASC', 'DESC']
-    const order = validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC'
-
-    sql += ` ORDER BY playtime_2weeks ${order}, playtime_forever ${order}`
-
-    // 获取总数
-    const countStmt = db.prepare(`SELECT COUNT(*) as total FROM (${sql})`)
-    const countResult = countStmt.get(params)
-    const total = countResult.total
-
-    // 分页
-    const offset = (parseInt(page) - 1) * parseInt(pageSize)
-    sql += ` LIMIT ? OFFSET ?`
-    params.push(parseInt(pageSize), offset)
-
-    const stmt = db.prepare(sql)
-    const rows = stmt.all(params)
-
-    res.json({ data: rows, total })
-  } catch (error) {
-    console.error('获取游戏列表失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json(listCollection(getDatabase(), 'game', req.query))
+  } catch (error) { collectionError(res, error) }
 })
 
 // 代理获取 Steam 封面图片（生产模块在挂载层统一要求 Owner）
@@ -526,20 +508,19 @@ router.get('/cover-proxy', async (req, res) => {
 })
 
 // 获取单个游戏详情
-router.get('/:id', authenticateToken, async (req, res) => {
+router.get('/stats', authenticateToken, (req, res) => {
   try {
     const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM games WHERE id = ?')
-    const row = stmt.get(req.params.id)
+    const active = "NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='game' AND t.resource_id=games.id)"
+    const stats = db.prepare(`SELECT COUNT(*) totalGames, COALESCE(SUM(playtime_forever),0) totalPlaytime, COALESCE(SUM(status IN ('playing','played','dropped')),0) playedGames, COALESCE(SUM(is_favorite=1),0) favoriteGames FROM games WHERE ${active}`).get()
+    res.json({ data: stats })
+  } catch (error) { collectionError(res, error) }
+})
 
-    if (!row) {
-      return res.status(404).json({ message: '游戏不存在' })
-    }
-
-    res.json({ data: row })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+router.get('/:id', authenticateToken, async (req, res) => {
+  try {
+    res.json({ data: getCollectionItem(getDatabase(), 'game', req.params.id) })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 获取游戏成就详情
@@ -752,90 +733,36 @@ router.post('/:id/fetch-achievements', authenticateToken, requireWritePermission
 // 更新游戏信息
 router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { status, isFavorite, userRating, notes } = req.body
-    const db = getDatabase()
-
-    const stmt = db.prepare(`
-      UPDATE games SET 
-        status = ?, 
-        is_favorite = ?, 
-        user_rating = ?, 
-        notes = ?,
-        updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ?
-    `)
-    stmt.run(status, isFavorite ? 1 : 0, userRating || 0, notes, req.params.id)
-    res.json({ message: '更新成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'game', req.params.id, req.body), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 删除游戏
 router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const stmt = db.prepare('DELETE FROM games WHERE id = ?')
-    stmt.run(req.params.id)
-    res.json({ message: '删除成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: trashCollectionItem(getDatabase(), 'game', req.params.id, req.body), message: '已移入回收站' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 切换收藏状态
 router.post('/:id/favorite', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const stmt = db.prepare(`
-      UPDATE games SET is_favorite = NOT is_favorite, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `)
-    stmt.run(req.params.id)
-    res.json({ message: '操作成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'game', req.params.id, { baseVersion: req.body.baseVersion, isFavorite: !getCollectionItem(getDatabase(), 'game', req.params.id).is_favorite }), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 更新游戏状态
 router.post('/:id/status', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { status } = req.body
-    const validStatuses = ['unplayed', 'playing', 'played', 'dropped', 'wishlist']
-
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ message: '无效的状态' })
-    }
-
-    const db = getDatabase()
-    const stmt = db.prepare(`
-      UPDATE games SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `)
-    stmt.run(status, req.params.id)
-    res.json({ message: '更新成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'game', req.params.id, { baseVersion: req.body.baseVersion, status: req.body.status }), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 更新评分
 router.post('/:id/rating', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { rating } = req.body
-    const db = getDatabase()
-
-    if (typeof rating !== 'number' || rating < 0 || rating > 10) {
-      return res.status(400).json({ message: '评分必须在 0-10 之间' })
-    }
-
-    const stmt = db.prepare(`
-      UPDATE games SET user_rating = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `)
-    stmt.run(rating, req.params.id)
-    res.json({ message: '评分成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'game', req.params.id, { baseVersion: req.body.baseVersion, userRating: req.body.rating }), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 批量下载封面（已有封面则跳过）
@@ -1006,31 +933,6 @@ router.post('/:id/refresh-cover', authenticateToken, requireWritePermission, asy
 })
 
 // 获取统计数据
-router.get('/stats', authenticateToken, async (req, res) => {
-  try {
-    // 尝试从缓存获取
-    const cacheKey = 'game:stats'
-    const cached = await cache.get(cacheKey)
-    if (cached) {
-      return res.json({ data: cached })
-    }
 
-    const db = getDatabase()
-
-    const stats = {
-      totalGames: db.prepare('SELECT COUNT(*) as count FROM games').get().count,
-      totalPlaytime: db.prepare('SELECT SUM(playtime_forever) as total FROM games').get().total || 0,
-      playedGames: db.prepare('SELECT COUNT(*) as count FROM games WHERE status IN (?, ?, ?)').get('playing', 'played', 'dropped').count,
-      favoriteGames: db.prepare('SELECT COUNT(*) as count FROM games WHERE is_favorite = 1').get().count
-    }
-
-    // 缓存结果（2分钟）
-    await cache.set(cacheKey, stats, CacheTTL.SHORT * 2)
-
-    res.json({ data: stats })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
-})
 
 export default router

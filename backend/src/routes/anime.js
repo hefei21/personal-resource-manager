@@ -1,3 +1,5 @@
+import { getSyncProposal, applySyncProposal } from '../services/collectionSyncProposal.js'
+import { getCollectionItem, listCollection, saveCollectionPersonal, trashCollectionItem, CollectionError } from '../services/collectionService.js'
 import express from 'express'
 import { randomUUID } from 'node:crypto'
 import axios from 'axios'
@@ -20,6 +22,33 @@ import {
 } from '../services/bangumiRefreshTaskProcessor.js'
 
 const router = express.Router()
+function collectionError(res, error) {
+  return res.status(error instanceof CollectionError ? error.status : 500).json({ message: error instanceof CollectionError ? error.message : '操作失败，请稍后重试' })
+}
+// All per-item routes, including cached covers/achievements, obey the same lifecycle boundary.
+router.use('/:id', (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return next()
+  authenticateToken(req, res, () => {
+    try { getCollectionItem(getDatabase(), 'anime', req.params.id); next() }
+    catch (error) { collectionError(res, error) }
+  })
+})
+
+router.get('/:id/proposals/latest', authenticateToken, (req, res) => {
+  try {
+    const task = getDatabase().prepare('SELECT id,status,progress,error_summary,result_json FROM tasks WHERE task_type=? AND subject_id=? ORDER BY id DESC LIMIT 1').get('anime.bangumi.refresh', String(req.params.id))
+    res.json({ data: task ? { id: task.id, status: task.status, progress: task.progress, error: task.status === 'failed' ? '候选获取失败，请在任务中心查看原因或重试' : null, hasProposal: JSON.parse(task.result_json || '{}').proposalVersion === 1, applied: Boolean(JSON.parse(task.result_json || '{}').appliedAt) } : null })
+  } catch (error) { collectionError(res, error) }
+})
+router.get('/:id/proposals/:taskId', authenticateToken, (req, res) => {
+  try { res.json({ data: getSyncProposal(getDatabase(), 'anime', req.params.taskId, req.params.id) }) }
+  catch (error) { collectionError(res, error) }
+})
+router.post('/:id/proposals/:taskId/apply', authenticateToken, requireWritePermission, (req, res) => {
+  try { res.json({ data: applySyncProposal(getDatabase(), 'anime', req.params.taskId, req.params.id), message: '已应用候选，个人状态与评分保持不变' }) }
+  catch (error) { collectionError(res, error) }
+})
+
 const BANGUMI_API_BASE = process.env.BANGUMI_API_BASE || 'https://api.bgm.tv'
 const BANGUMI_API_V0 = 'https://api.bgm.tv/v0'
 
@@ -31,6 +60,22 @@ const BANGUMI_HEADERS = {
     'Authorization': `Bearer ${process.env.BANGUMI_ACCESS_TOKEN}`
   })
 }
+
+
+router.get('/:id/proposals/latest', authenticateToken, (req, res) => {
+  try {
+    const task = getDatabase().prepare('SELECT id,status,progress,error_summary,result_json FROM tasks WHERE task_type=? AND subject_id=? ORDER BY id DESC LIMIT 1').get('anime.bangumi.refresh', String(req.params.id))
+    res.json({ data: task ? { id: task.id, status: task.status, progress: task.progress, error: task.error_summary, hasProposal: JSON.parse(task.result_json || '{}').proposalVersion === 1, applied: Boolean(JSON.parse(task.result_json || '{}').appliedAt) } : null })
+  } catch (error) { collectionError(res, error) }
+})
+router.get('/:id/proposals/:taskId', authenticateToken, (req, res) => {
+  try { res.json({ data: getSyncProposal(getDatabase(), 'anime', req.params.taskId, req.params.id) }) }
+  catch (error) { collectionError(res, error) }
+})
+router.post('/:id/proposals/:taskId/apply', authenticateToken, requireWritePermission, (req, res) => {
+  try { res.json({ data: applySyncProposal(getDatabase(), 'anime', req.params.taskId, req.params.id), message: '已应用候选，个人状态与评分保持不变' }) }
+  catch (error) { collectionError(res, error) }
+})
 
 // 创建代理 agent
 const httpsAgent = process.env.HTTP_PROXY
@@ -186,7 +231,7 @@ function isBangumiRefreshTask(task, animeId) {
 
 function refreshTaskMessage(taskStatus, errorCode) {
   if (ACTIVE_TASK_STATUSES.has(taskStatus)) return '正在刷新动漫信息…'
-  if (taskStatus === 'succeeded') return '动漫信息刷新完成'
+  if (taskStatus === 'succeeded') return '候选已获取，请返回动漫详情核对并确认'
   if (taskStatus === 'cancelled') return '动漫刷新任务已取消'
   return {
     ANIME_NOT_FOUND: '动漫不存在，刷新未执行。',
@@ -351,7 +396,7 @@ router.get('/search', authenticateToken, bangumiLimiter, async (req, res) => {
 
     console.log('[Bangumi搜索] 请求参数:', JSON.stringify(searchBody, null, 2))
     console.log('[Bangumi搜索] 是否使用Access Token:', !!process.env.BANGUMI_ACCESS_TOKEN)
-    console.log('[Bangumi搜索] Token值长度:', process.env.BANGUMI_ACCESS_TOKEN?.length || 0)
+    // Never log credential material or its length.
 
     // Bangumi API 限制：每次请求最多返回 20 条数据
     // 前端分页请求：每次只请求一页
@@ -379,7 +424,7 @@ router.get('/search', authenticateToken, bangumiLimiter, async (req, res) => {
       console.error('[Bangumi搜索] Token已失效（401响应）')
       // 清除Token缓存
       await cache.del('anime:token_status')
-      return res.status(401).json({ message: 'Bangumi Token已失效，请重新配置' })
+      return res.status(502).json({ message: 'Bangumi Token已失效，请重新配置' })
     }
 
     const pageData = response.data.data || []
@@ -423,7 +468,7 @@ router.get('/search', authenticateToken, bangumiLimiter, async (req, res) => {
 
     // 如果是401错误，返回特定消息
     if (error.response?.status === 401) {
-      return res.status(401).json({
+      return res.status(502).json({
         message: 'Bangumi Token已失效，请重新配置',
         tokenExpired: true
       })
@@ -509,7 +554,7 @@ router.post('/import', authenticateToken, requireWritePermission, async (req, re
       res.json({ id: result.lastInsertRowid, message: '导入成功' })
     } catch (err) {
       if (err.message.includes('UNIQUE')) {
-        return res.status(400).json({ message: '该动漫已存在' })
+        return res.status(409).json({ message: '该动漫已存在于本地收藏或回收站，请勿重复导入' })
       }
       return res.status(500).json({ message: '导入失败' })
     }
@@ -538,30 +583,13 @@ router.get('/detail/:bangumiId', authenticateToken, async (req, res) => {
 })
 
 // 从数据库获取动漫详情（通过 bangumi_id）
-router.get('/bangumi/:bangumiId', authenticateToken, async (req, res) => {
+router.get('/bangumi/:bangumiId', authenticateToken, (req, res) => {
   try {
     const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM anime WHERE bangumi_id = ?')
-    const row = stmt.get(req.params.bangumiId)
-    
-    if (!row) {
-      return res.status(404).json({ message: '动漫不存在' })
-    }
-    
-    // 解析 JSON 字段
-    const result = {
-      ...row,
-      tags: row.tags ? row.tags.split(',') : [],
-      infobox: row.infobox ? JSON.parse(row.infobox) : null,
-      characters: row.characters ? JSON.parse(row.characters) : [],
-      staff: row.staff ? JSON.parse(row.staff) : []
-    }
-    
-    res.json({ data: result })
-  } catch (error) {
-    console.error('获取动漫详情失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
+    const row = db.prepare('SELECT id FROM anime WHERE bangumi_id=?').get(req.params.bangumiId)
+    if (!row) return res.status(404).json({ message: '动漫不存在' })
+    res.json({ data: getCollectionItem(db, 'anime', row.id) })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 获取关联作品（前作、续作等）
@@ -604,68 +632,8 @@ router.get('/relations/:bangumiId', authenticateToken, async (req, res) => {
 // 获取动漫列表
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const { status, favorite, sortBy = 'updated_at', sortOrder = 'DESC', page = 1, pageSize = 15, hideHidden } = req.query
-    const db = getDatabase()
-
-    let sql = 'SELECT * FROM anime WHERE 1=1'
-    const params = []
-
-    if (status) {
-      sql += ' AND status = ?'
-      params.push(status)
-    }
-
-    if (favorite === 'true') {
-      sql += ' AND is_favorite = 1'
-    }
-
-    // 游客模式下隐藏已标记为隐藏的动漫
-    if (hideHidden === 'true') {
-      sql += ' AND (is_hidden = 0 OR is_hidden IS NULL)'
-    }
-
-    // 排序支持
-    const validSortFields = ['updated_at', 'air_date', 'rating', 'user_rating', 'status']
-    const validSortOrders = ['ASC', 'DESC']
-    const sortField = validSortFields.includes(sortBy) ? sortBy : 'updated_at'
-    const order = validSortOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC'
-
-    // 处理 NULL 值排序
-    if (sortField === 'air_date') {
-      sql += ` ORDER BY ${sortField} IS NULL, ${sortField} ${order}`
-    } else if (sortField === 'rating' || sortField === 'user_rating') {
-      sql += ` ORDER BY ${sortField} ${order}`
-    } else {
-      sql += ` ORDER BY ${sortField} ${order}`
-    }
-
-    // 获取总数
-    const countStmt = db.prepare(`SELECT COUNT(*) as total FROM (${sql})`)
-    const countResult = countStmt.get(params)
-    const total = countResult.total
-
-    // 分页
-    const offset = (parseInt(page) - 1) * parseInt(pageSize)
-    sql += ` LIMIT ? OFFSET ?`
-    params.push(parseInt(pageSize), offset)
-
-    const stmt = db.prepare(sql)
-    const rows = stmt.all(params)
-
-    // 解析 JSON 字段（列表不返回 cover_image_data，减少响应体）
-    const parsedRows = rows.map(row => ({
-      ...row,
-      cover_image_data: undefined, // 不返回封面数据，前端按需加载
-      tags: row.tags ? row.tags.split(',') : [],
-      infobox: row.infobox ? JSON.parse(row.infobox) : null,
-      characters: row.characters ? JSON.parse(row.characters) : [],
-      staff: row.staff ? JSON.parse(row.staff) : []
-    }))
-
-    res.json({ data: parsedRows, total })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json(listCollection(getDatabase(), 'anime', req.query))
+  } catch (error) { collectionError(res, error) }
 })
 
 // 获取所有Bangumi ID（用于搜索结果判断是否已在库中）
@@ -684,27 +652,19 @@ router.get('/all-ids', authenticateToken, async (req, res) => {
 // 获取单个动漫详情
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
-    const db = getDatabase()
-    const stmt = db.prepare('SELECT * FROM anime WHERE id = ?')
-    const row = stmt.get(req.params.id)
-    
-    if (!row) {
-      return res.status(404).json({ message: '动漫不存在' })
-    }
-    
-    // 解析 JSON 字段
-    const result = {
-      ...row,
-      tags: row.tags ? row.tags.split(',') : [],
-      infobox: row.infobox ? JSON.parse(row.infobox) : null,
-      characters: row.characters ? JSON.parse(row.characters) : [],
-      staff: row.staff ? JSON.parse(row.staff) : []
-    }
-    
-    res.json({ data: result })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: getCollectionItem(getDatabase(), 'anime', req.params.id) })
+  } catch (error) { collectionError(res, error) }
+})
+
+// Cached cover bytes are served locally; opening the collection never fetches Bangumi.
+router.get('/:id/cover-image', authenticateToken, (req, res) => {
+  try {
+    const row = getCollectionItem(getDatabase(), 'anime', req.params.id)
+    const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z0-9+/=]+)$/i.exec(row.cover_image_data || '')
+    if (!match) return res.sendStatus(404)
+    res.setHeader('Cache-Control', 'private, no-cache')
+    res.type(match[1]).send(Buffer.from(match[2], 'base64'))
+  } catch (error) { collectionError(res, error) }
 })
 
 // 获取动漫封面（按需加载）
@@ -730,75 +690,29 @@ router.get('/:id/cover', authenticateToken, async (req, res) => {
 // 更新动漫信息
 router.put('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { status, isFavorite } = req.body
-    const db = getDatabase()
-
-    const stmt = db.prepare(
-      `UPDATE anime SET status = ?, is_favorite = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
-    stmt.run(status, isFavorite ? 1 : 0, req.params.id)
-    res.json({ message: '更新成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'anime', req.params.id, req.body), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 切换收藏状态
 router.post('/:id/favorite', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-
-    const stmt = db.prepare(
-      `UPDATE anime SET is_favorite = NOT is_favorite, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
-    stmt.run(req.params.id)
-    res.json({ message: '操作成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'anime', req.params.id, { baseVersion: req.body.baseVersion, isFavorite: !getCollectionItem(getDatabase(), 'anime', req.params.id).is_favorite }), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 更新观看状态
 router.post('/:id/status', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { status } = req.body
-    const validStatuses = ['none', 'want_to_watch', 'watching', 'watched']
-
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ message: '无效的状态' })
-    }
-
-    const db = getDatabase()
-    const stmt = db.prepare(
-      `UPDATE anime SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
-    stmt.run(status, req.params.id)
-    res.json({ message: '更新成功' })
-  } catch (error) {
-    console.error('更新状态失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'anime', req.params.id, { baseVersion: req.body.baseVersion, status: req.body.status }), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 更新用户评分 (0-10, 0表示未评分, 1-10表示0.5-5星)
-router.post('/:id/rating', authenticateToken, async (req, res) => {
+router.post('/:id/rating', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const { rating } = req.body
-    const db = getDatabase()
-
-    // 验证评分范围 (0-10)
-    if (typeof rating !== 'number' || rating < 0 || rating > 10) {
-      return res.status(400).json({ message: '评分必须在 0-10 之间' })
-    }
-
-    const stmt = db.prepare(
-      `UPDATE anime SET user_rating = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    )
-    stmt.run(rating, req.params.id)
-    res.json({ message: '评分成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'anime', req.params.id, { baseVersion: req.body.baseVersion, userRating: req.body.rating }), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 查询单条动漫刷新任务状态。只返回稳定的兼容字段，不透传任务内部内容。
@@ -867,41 +781,16 @@ router.post('/:id/refresh', authenticateToken, requireWritePermission, async (re
 // 切换动漫隐藏状态
 router.put('/:id/toggle-hidden', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-    const { id } = req.params
-
-    // 获取当前状态
-    const anime = db.prepare('SELECT is_hidden FROM anime WHERE id = ?').get(id)
-    if (!anime) {
-      return res.status(404).json({ message: '动漫不存在' })
-    }
-
-    // 切换状态
-    const newHiddenStatus = anime.is_hidden === 1 ? 0 : 1
-    const stmt = db.prepare('UPDATE anime SET is_hidden = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-    stmt.run(newHiddenStatus, id)
-
-    res.json({ 
-      message: newHiddenStatus === 1 ? '已隐藏' : '已取消隐藏',
-      is_hidden: newHiddenStatus 
-    })
-  } catch (error) {
-    console.error('切换隐藏状态失败:', error)
-    res.status(500).json({ message: '服务器错误' })
-  }
+    const row = getCollectionItem(getDatabase(), 'anime', req.params.id)
+    res.json({ data: saveCollectionPersonal(getDatabase(), 'anime', req.params.id, { baseVersion: req.body.baseVersion, isHidden: !row.is_hidden }), message: '已保存' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 删除动漫
 router.delete('/:id', authenticateToken, requireWritePermission, async (req, res) => {
   try {
-    const db = getDatabase()
-
-    const stmt = db.prepare('DELETE FROM anime WHERE id = ?')
-    stmt.run(req.params.id)
-    res.json({ message: '删除成功' })
-  } catch (error) {
-    res.status(500).json({ message: '服务器错误' })
-  }
+    res.json({ data: trashCollectionItem(getDatabase(), 'anime', req.params.id, req.body), message: '已移入回收站' })
+  } catch (error) { collectionError(res, error) }
 })
 
 // 批量下载动漫封面

@@ -50,12 +50,12 @@ test('frequent native controls use tokens, mobile touch density and keyboard sem
 })
 
 test('complex status selection uses the headless-backed NativeSelect and icons are route-loaded', () => {
-  const anime = read('views/Anime.vue')
+  const anime = read('components/business/collections/CollectionWorkspace.vue')
   const main = read('main.js')
   const layout = read('pc/layout/Layout.vue')
 
   assert.doesNotMatch(anime, /<NativeDropdown/)
-  assert.match(anime, /<NativeSelect[\s\S]*aria-label="更新观看状态"/)
+  assert.match(anime, /<NativeSelect[\s\S]*aria-label="更新个人状态"/)
   assert.doesNotMatch(main, /app\.component\('NativeIcon'/)
   assert.match(layout, /NativeDialog, NativeIcon, NativeInput/)
 })
@@ -94,4 +94,9 @@ test('demo workspace exposes four guided journeys and all three evidence layers'
   for (const text of ['合成演示', '生产契约', '历史验收证据', '确定性模板不是实时模型输出']) {
     assert.match(demo, new RegExp(text))
   }
+})
+
+test('responsive shell keeps a stable route-transition root during breakpoint changes', () => {
+  const source = read('views/Layout.vue')
+  assert.match(source, /<div class="responsive-layout">[\s\S]*<LayoutPC[\s\S]*<LayoutMobile[\s\S]*<\/div>/)
 })

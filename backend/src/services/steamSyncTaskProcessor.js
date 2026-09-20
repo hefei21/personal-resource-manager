@@ -1,3 +1,4 @@
+import { steamSourceSnapshot } from './collectionSyncProposal.js'
 import axios from 'axios'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 
@@ -95,7 +96,7 @@ function readSteamConfig(database) {
 function normalizeGame(game) {
   if (!isPlainObject(game)) return null
   const steamAppId = Number(game.appid)
-  if (!Number.isSafeInteger(steamAppId) || steamAppId < 1 || typeof game.name !== 'string') {
+  if (!Number.isSafeInteger(steamAppId) || steamAppId < 1 || typeof game.name !== 'string' || !game.name.trim() || game.name.length > 1000) {
     return null
   }
 
@@ -112,10 +113,10 @@ function normalizeGame(game) {
     appid: steamAppId,
     name: game.name,
     playtime_forever: Number.isFinite(Number(game.playtime_forever))
-      ? Number(game.playtime_forever)
+      ? Math.max(0, Number(game.playtime_forever))
       : 0,
     playtime_2weeks: Number.isFinite(Number(game.playtime_2weeks))
-      ? Number(game.playtime_2weeks)
+      ? Math.max(0, Number(game.playtime_2weeks))
       : 0,
     last_played: lastPlayed
   }
@@ -127,88 +128,14 @@ function normalizeGames(response) {
     throw taskError('STEAM_RESPONSE_INVALID', 'Steam 游戏列表响应无效。', true)
   }
   const games = payload.games === undefined ? [] : payload.games
-  if (!Array.isArray(games)) {
+  if (!Array.isArray(games) || games.length > 20000) {
     throw taskError('STEAM_RESPONSE_INVALID', 'Steam 游戏列表响应无效。', true)
   }
   const normalized = games.map(normalizeGame)
   if (normalized.some((game) => game === null)) {
     throw taskError('STEAM_RESPONSE_INVALID', 'Steam 游戏列表响应无效。', true)
   }
-  return normalized
-}
-
-function upsertGames(database, games) {
-  let inserted = 0
-  let updated = 0
-  const insertGame = database.prepare(`
-    INSERT INTO games (steam_appid, title, cover_image, playtime_forever, playtime_2weeks, last_played)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `)
-  const updateGame = database.prepare(`
-    UPDATE games SET
-      playtime_forever = ?,
-      playtime_2weeks = ?,
-      last_played = ?,
-      cover_image = ?,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE steam_appid = ?
-  `)
-  const findGame = database.prepare(
-    'SELECT id, cover_image, cover_image_data FROM games WHERE steam_appid = ?'
-  )
-
-  const transaction = database.transaction((gamesList) => {
-    for (const game of gamesList) {
-      const coverUrl = `https://steamcdn-a.akamaihd.net/steam/apps/${game.appid}/library_600x900.jpg`
-      const existing = findGame.get(game.appid)
-
-      if (existing) {
-        if (existing.cover_image_data) {
-          updateGame.run(
-            game.playtime_forever,
-            game.playtime_2weeks,
-            game.last_played,
-            existing.cover_image,
-            game.appid
-          )
-        } else {
-          const shouldUpdateCover = !existing.cover_image ||
-            existing.cover_image.includes('steamcommunity/public/images/apps')
-          const newCoverUrl = shouldUpdateCover ? coverUrl : existing.cover_image
-          updateGame.run(
-            game.playtime_forever,
-            game.playtime_2weeks,
-            game.last_played,
-            newCoverUrl,
-            game.appid
-          )
-        }
-        updated += 1
-      } else {
-        insertGame.run(
-          game.appid,
-          game.name,
-          coverUrl,
-          game.playtime_forever,
-          game.playtime_2weeks,
-          game.last_played
-        )
-        inserted += 1
-      }
-    }
-
-    database.prepare(
-      'UPDATE steam_config SET last_sync = CURRENT_TIMESTAMP WHERE id = 1'
-    ).run()
-  })
-
-  try {
-    transaction(games)
-  } catch {
-    throw taskError('STEAM_SYNC_DATABASE_FAILED', 'Steam 游戏数据写入失败。', true)
-  }
-
-  return { total: games.length, inserted, updated }
+  return [...new Map(normalized.map(game => [game.appid, game])).values()]
 }
 
 export function createSteamSyncTaskProcessor({
@@ -255,6 +182,7 @@ export function createSteamSyncTaskProcessor({
     }
 
     const { steamId, apiKey } = readSteamConfig(databaseConnection)
+    const baseSnapshot = steamSourceSnapshot(databaseConnection)
     await progress(10)
     throwIfAborted(signal)
 
@@ -301,7 +229,7 @@ export function createSteamSyncTaskProcessor({
     const games = normalizeGames(response)
     await progress(50)
     throwIfAborted(signal)
-    const result = upsertGames(databaseConnection, games)
+    const result = { total: games.length, games, proposalVersion: 1, baseSnapshot }
     await progress(100)
     return result
   }

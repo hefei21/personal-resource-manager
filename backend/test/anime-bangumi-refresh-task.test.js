@@ -43,7 +43,7 @@ const ANIME_API_SOURCE = readFileSync(
   'utf8'
 )
 const ANIME_DIALOG_SOURCE = readFileSync(
-  path.join(TEST_DIRECTORY, '..', '..', 'frontend', 'src', 'components', 'AnimeDetailDialog.vue'),
+  path.join(TEST_DIRECTORY, '..', '..', 'frontend', 'src', 'components', 'business', 'collections', 'CollectionProviderPanel.vue'),
   'utf8'
 )
 
@@ -105,6 +105,7 @@ function createFakeDatabase(bangumiId = 123) {
       if (normalized.startsWith('SELECT bangumi_id FROM anime')) {
         return { get: () => state.anime }
       }
+      if (normalized.startsWith('SELECT c.* FROM anime')) return { get: () => state.anime }
       if (normalized.startsWith('UPDATE anime SET')) {
         return {
           run: (...args) => {
@@ -205,7 +206,7 @@ test('refresh enqueue uses one per-anime persistent mutex and idempotency', DATA
   }
 })
 
-test('processor passes bypassCache and AbortSignal, performs one atomic update, and returns bounded result', async () => {
+test('processor passes bypassCache and AbortSignal, produces a durable candidate without writing source data', async () => {
   const database = createFakeDatabase()
   const requests = []
   const imageRequests = []
@@ -228,23 +229,24 @@ test('processor passes bypassCache and AbortSignal, performs one atomic update, 
     progress: async (value) => progress.push(value)
   })
 
-  assert.deepEqual(result, { animeId: 1, bangumiId: 123, message: '动漫刷新成功。' })
+  assert.equal(result.proposalVersion, 1)
+  assert.equal(result.animeId, 1)
+  assert.equal(result.bangumiId, 123)
+  assert.match(result.baseSnapshot, /^[a-f0-9]{64}$/)
   assert.deepEqual(requests, [{ bangumiId: 123, options: { bypassCache: true, signal: controller.signal } }])
   assert.deepEqual(imageRequests, [{
     url: 'https://img.example/cover.jpg',
     options: { signal: controller.signal }
   }])
   assert.deepEqual(progress, [0, 70, 100])
-  assert.equal(database.state.transactionCalls, 1)
-  assert.equal(database.state.updates.length, 1)
-  assert.equal(database.state.updates[0][0], '新标题')
-  assert.equal(database.state.updates[0][1], '新中文标题')
-  assert.equal(database.state.updates[0][8], '动作,奇幻')
-  assert.equal(database.state.updates[0][15], JSON.stringify(detailFixture().subject.infobox))
-  assert.equal(database.state.updates[0][16], JSON.stringify(detailFixture().characters))
-  assert.equal(database.state.updates[0][17], JSON.stringify(detailFixture().persons))
-  assert.deepEqual(Object.keys(result).sort(), ['animeId', 'bangumiId', 'message'])
-  assert.doesNotMatch(JSON.stringify(result), /characters|staff|infobox|base64|cover/iu)
+  assert.equal(database.state.transactionCalls, 0)
+  assert.equal(database.state.updates.length, 0)
+  assert.equal(result.values.title, '新标题')
+  assert.equal(result.values.nameCn, '新中文标题')
+  assert.equal(result.values.tags, '动作,奇幻')
+  assert.equal(result.values.infobox, JSON.stringify(detailFixture().subject.infobox))
+  assert.equal(result.values.characters, JSON.stringify(detailFixture().characters))
+  assert.equal(result.values.staff, JSON.stringify(detailFixture().persons))
 })
 
 test('processor rejects credential-bearing input without persisting it', async () => {
@@ -388,11 +390,10 @@ test('route and frontend source keep cache, signal, status polling, and compatib
   assert.match(ANIME_ROUTE_SOURCE, /safeAxiosGet\(imageUrl, \{[\s\S]*signal/u)
   assert.match(ANIME_ROUTE_SOURCE, /if \(isAbortError\(error, signal\)\) throw error/u)
   assert.match(ANIME_API_SOURCE, /getRefreshStatus: \(id, taskId\) => api\.get\(`/u)
-  assert.match(ANIME_DIALOG_SOURCE, /api\.anime\.getRefreshStatus\(animeId, taskId\)/u)
-  assert.match(ANIME_DIALOG_SOURCE, /REFRESH_POLL_INTERVAL_MS = 1000/u)
-  assert.match(ANIME_DIALOG_SOURCE, /REFRESH_POLL_TIMEOUT_MS/u)
-  assert.match(ANIME_DIALOG_SOURCE, /onUnmounted\(/u)
-  assert.match(ANIME_DIALOG_SOURCE, /clearTimeout\(refreshPollTimer\)/u)
-  assert.match(ANIME_DIALOG_SOURCE, /const detailResponse = await api\.anime\.get\(animeId\)/u)
-  assert.match(ANIME_DIALOG_SOURCE, /if \(!localAnime\.value \|\| refreshing\.value\) return/u)
+  assert.match(ANIME_DIALOG_SOURCE, /client\.latestProposal/u)
+  assert.match(ANIME_DIALOG_SOURCE, /setTimeout\(resume, 1800\)/u)
+  assert.match(ANIME_DIALOG_SOURCE, /onBeforeUnmount\(/u)
+  assert.match(ANIME_DIALOG_SOURCE, /clearTimeout\(timer\)/u)
+  assert.match(ANIME_DIALOG_SOURCE, /pollPaused\.value = true/u)
+  assert.match(ANIME_DIALOG_SOURCE, /client\.applyProposal/u)
 })

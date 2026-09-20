@@ -1,3 +1,4 @@
+import { animeSourceSnapshot } from './collectionSyncProposal.js'
 import { getDatabase } from '../config/database.js'
 import { TaskProcessorError } from './taskProcessorError.js'
 import { taskNetworkError } from './networkTaskError.js'
@@ -193,62 +194,6 @@ function readAnime(database, animeId) {
   }
 }
 
-function updateAnime(database, animeId, values) {
-  let result
-  try {
-    const update = database.prepare(`
-      UPDATE anime SET
-        title = ?,
-        name_cn = ?,
-        name_original = ?,
-        summary = ?,
-        cover_image = ?,
-        cover_image_data = ?,
-        rating = ?,
-        rating_count = ?,
-        tags = ?,
-        air_date = ?,
-        eps = ?,
-        eps_total = ?,
-        author = ?,
-        director = ?,
-        studio = ?,
-        infobox = ?,
-        characters = ?,
-        staff = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `)
-    result = database.transaction(() => update.run(
-      values.title,
-      values.nameCn,
-      values.nameOriginal,
-      values.summary,
-      values.coverImageUrl,
-      values.coverImageData,
-      values.rating,
-      values.ratingCount,
-      values.tags,
-      values.airDate,
-      values.eps,
-      values.epsTotal,
-      values.author,
-      values.director,
-      values.studio,
-      values.infobox,
-      values.characters,
-      values.staff,
-      animeId
-    ))()
-  } catch (error) {
-    if (error instanceof TaskProcessorError) throw error
-    throw taskError('ANIME_DATABASE_WRITE_FAILED', '动漫数据库写入失败。', true)
-  }
-  if (result && result.changes === 0) {
-    throw taskError('ANIME_NOT_FOUND', '动漫不存在。')
-  }
-}
-
 export function createBangumiRefreshTaskProcessor({
   database,
   databaseProvider = getDatabase,
@@ -291,6 +236,7 @@ export function createBangumiRefreshTaskProcessor({
     }
 
     const row = readAnime(databaseConnection, animeId)
+    const baseSnapshot = animeSourceSnapshot(databaseConnection, animeId)
     const bangumiId = normalizeBangumiId(row.bangumi_id)
 
     let detail
@@ -349,13 +295,15 @@ export function createBangumiRefreshTaskProcessor({
       staff: toJson(normalizedDetail.persons)
     }
 
-    updateAnime(databaseConnection, animeId, values)
     await progress(100)
 
     return {
       animeId,
       bangumiId,
-      message: '动漫刷新成功。'
+      proposalVersion: 1,
+      baseSnapshot,
+      values,
+      message: '候选已获取，确认后更新资料。'
     }
   }
 }

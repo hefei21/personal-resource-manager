@@ -1,4 +1,5 @@
 import express from 'express'
+import { restoreCollectionItem } from '../services/collectionService.js'
 import { restoreNoteFromTrash, permanentlyDeleteNote } from '../services/noteService.js'
 import { restoreBookmarkFromTrash, permanentlyDeleteBookmark } from '../services/bookmarkService.js'
 
@@ -28,6 +29,8 @@ const PUBLIC_MESSAGES = Object.freeze({
   EBOOK_TRASH_NOT_FOUND: '该电子书已不在回收站中',
   MUSIC_TRASH_NOT_FOUND: '该音频已不在回收站中',
   NOTE_TRASH_NOT_FOUND: '该笔记已不在回收站中',
+  COLLECTION_TRASH_NOT_FOUND: '条目已不在回收站中',
+  COLLECTION_TRASH_PURGE_IN_PROGRESS: '条目正在清理，暂时无法恢复',
   BOOKMARK_TRASH_NOT_FOUND: '该书签已不在回收站中',
   DOCUMENT_TRASH_PURGE_IN_PROGRESS: '该文档正在执行永久清理，无法恢复',
   EBOOK_TRASH_PURGE_IN_PROGRESS: '该电子书正在执行永久清理，无法恢复',
@@ -96,7 +99,9 @@ async function scheduleRestoreIndex(database, resourceType, resourceId) {
 
 async function restoreItem({ database, resourceType, resourceId }) {
   let result
-  if (resourceType === 'document') {
+  if (resourceType === 'game' || resourceType === 'anime') {
+    result = restoreCollectionItem({ database, resourceType, id: resourceId })
+  } else if (resourceType === 'document') {
     result = restoreDocumentFromTrash({ database, id: resourceId })
   } else if (resourceType === 'ebook') {
     result = restoreEbookFromTrash({ database, id: resourceId })
@@ -116,6 +121,7 @@ async function restoreItem({ database, resourceType, resourceId }) {
 
 async function permanentlyDeleteItem({ database, resourceType, resourceId }) {
   let result
+  if (resourceType === 'game' || resourceType === 'anime') return { resourceType, resourceId, result: restoreCollectionItem({ database, resourceType, id: resourceId, purge: true }) }
   if (resourceType === 'note') return { resourceType, resourceId, result: permanentlyDeleteNote({ database, id: resourceId }) }
   if (resourceType === 'bookmark') return { resourceType, resourceId, result: permanentlyDeleteBookmark({ database, id: resourceId }) }
   if (resourceType === 'document') {

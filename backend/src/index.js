@@ -265,7 +265,7 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
       documents: db.prepare('SELECT COUNT(*) as count FROM documents').get()?.count || 0,
       music: db.prepare('SELECT COUNT(*) as count FROM music').get()?.count || 0,
       books: db.prepare('SELECT COUNT(*) as count FROM books').get()?.count || 0,
-      games: db.prepare('SELECT COUNT(*) as count FROM games').get()?.count || 0,
+      games: db.prepare("SELECT COUNT(*) as count FROM games WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='game' AND t.resource_id=games.id)").get()?.count || 0,
       code: db.prepare('SELECT COUNT(*) as count FROM code_repositories').get()?.count || 0,
       bookmarks: db.prepare("SELECT COUNT(*) as count FROM bookmarks b WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='bookmark' AND t.resource_id=b.id)").get()?.count || 0,
       blog: {
@@ -273,16 +273,16 @@ app.get('/api/stats', authenticateToken, readLimiter, (req, res) => {
       },
       anime: isGuest ? {
         // 游客：过滤已隐藏的动漫
-        total: db.prepare('SELECT COUNT(*) as count FROM anime WHERE is_hidden = 0 OR is_hidden IS NULL').get()?.count || 0,
-        want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'want_to_watch' AND (is_hidden = 0 OR is_hidden IS NULL)").get()?.count || 0,
-        watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watching' AND (is_hidden = 0 OR is_hidden IS NULL)").get()?.count || 0,
-        watched: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watched' AND (is_hidden = 0 OR is_hidden IS NULL)").get()?.count || 0
+        total: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (is_hidden = 0 OR is_hidden IS NULL)").get()?.count || 0,
+        want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'want_to_watch' AND (is_hidden = 0 OR is_hidden IS NULL))").get()?.count || 0,
+        watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'watching' AND (is_hidden = 0 OR is_hidden IS NULL))").get()?.count || 0,
+        watched: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'watched' AND (is_hidden = 0 OR is_hidden IS NULL))").get()?.count || 0
       } : {
         // 管理员：显示所有动漫（包括隐藏的）
-        total: db.prepare('SELECT COUNT(*) as count FROM anime').get()?.count || 0,
-        want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'want_to_watch'").get()?.count || 0,
-        watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watching'").get()?.count || 0,
-        watched: db.prepare("SELECT COUNT(*) as count FROM anime WHERE status = 'watched'").get()?.count || 0
+        total: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id)").get()?.count || 0,
+        want_to_watch: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'want_to_watch')").get()?.count || 0,
+        watching: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'watching')").get()?.count || 0,
+        watched: db.prepare("SELECT COUNT(*) as count FROM anime WHERE NOT EXISTS (SELECT 1 FROM resource_trash_entries t WHERE t.resource_type='anime' AND t.resource_id=anime.id) AND (status = 'watched')").get()?.count || 0
       }
     }
     

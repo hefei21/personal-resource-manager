@@ -1,6 +1,9 @@
 <template>
-  <LayoutPC v-if="!isMobile" />
-  <LayoutMobile v-else />
+  <!-- Keep the route transition on a stable root when the responsive async shell changes. -->
+  <div class="responsive-layout">
+    <LayoutPC v-if="!isMobile" />
+    <LayoutMobile v-else />
+  </div>
 </template>
 
 <script setup>

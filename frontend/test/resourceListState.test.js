@@ -17,9 +17,7 @@ test('resource list state owns loading, empty, error, and retry feedback', () =>
 
 test('stage 7.4 mobile collections reuse the shared list-state contract', () => {
   for (const page of [
-    'MusicMobile.vue',
-    'GamesMobile.vue',
-    'AnimeMobile.vue'
+    'MusicMobile.vue'
   ]) {
     const source = read(`mobile/pages/${page}`)
     assert.match(source, /ResourceListState/u, `${page} does not use ResourceListState`)
@@ -34,4 +32,13 @@ test('shared notes workspace retains list errors with explicit retry and matchin
   assert.match(source, /@click="loadNotes\(page\)"/u)
   assert.match(source, /note-skeleton/u)
   assert.match(read('views/Blog.vue'), /NoteWorkspace/u)
+})
+
+test('game/anime collections share loading, failure, and retry without discarding rows', () => {
+  const source = read('components/business/collections/CollectionWorkspace.vue')
+  assert.match(source, /v-if="error"/u)
+  assert.match(source, /@click="retryList"/u)
+  assert.match(source, /collection-skeleton/u)
+  assert.match(read('views/Games.vue'), /CollectionWorkspace/u)
+  assert.match(read('views/Anime.vue'), /CollectionWorkspace/u)
 })

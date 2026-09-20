@@ -61,6 +61,8 @@ function createFakeDatabase({ config = { steam_id: 'steam-id', api_key: 'api-key
       if (normalized.startsWith('SELECT steam_id, api_key FROM steam_config')) {
         return { get: () => state.config }
       }
+      if (normalized.startsWith('SELECT id,steam_appid')) return { all: () => [...state.games.values()] }
+      if (normalized.startsWith('SELECT resource_id,deleted_at')) return { all: () => [] }
       if (normalized.startsWith('SELECT id, cover_image, cover_image_data FROM games')) {
         return { get: (steamAppId) => state.games.get(steamAppId) ?? undefined }
       }
@@ -182,7 +184,9 @@ test('Steam processor reads credentials at execution time and passes params plus
     progress: async (value) => progress.push(value)
   })
 
-  assert.deepEqual(result, { total: 0, inserted: 0, updated: 0 })
+  assert.equal(result.proposalVersion, 1)
+  assert.deepEqual(result.games, [])
+  assert.match(result.baseSnapshot, /^[a-f0-9]{64}$/)
   assert.equal(requests.length, 1)
   assert.equal(requests[0].url.includes('?'), false)
   assert.deepEqual(requests[0].options.params, {
@@ -193,7 +197,7 @@ test('Steam processor reads credentials at execution time and passes params plus
   })
   assert.equal(requests[0].options.signal, controller.signal)
   assert.deepEqual(progress, [10, 50, 100])
-  assert.equal(database.state.transactionCalls, 1)
+  assert.equal(database.state.transactionCalls, 0)
 })
 
 test('Steam processor classifies 403 as stable and network failures as retryable without leaking request data', async () => {
@@ -261,7 +265,7 @@ test('Steam processor classifies 403 as stable and network failures as retryable
   )
 })
 
-test('Steam processor passes cancellation through, performs one request per attempt, and keeps upserts idempotent', async () => {
+test('Steam processor passes cancellation through, performs one request per attempt, and keeps candidate retries read-only', async () => {
   const database = createFakeDatabase({
     games: [{
       steam_appid: 10,
@@ -290,12 +294,13 @@ test('Steam processor passes cancellation through, performs one request per atte
   const first = await processor({ task: task({ id: 11 }), signal: new AbortController().signal })
   const second = await processor({ task: task({ id: 11 }), signal: new AbortController().signal })
 
-  assert.deepEqual(first, { total: 2, inserted: 1, updated: 1 })
-  assert.deepEqual(second, { total: 2, inserted: 0, updated: 2 })
+  assert.equal(first.total, 2)
+  assert.equal(first.proposalVersion, 1)
+  assert.deepEqual(second, first)
   assert.equal(requests.length, 2)
-  assert.equal(database.state.games.size, 2)
+  assert.equal(database.state.games.size, 1)
   assert.equal(database.state.games.get(10).cover_image, 'https://example.test/cover.jpg')
-  assert.equal(database.state.lastSync, 'updated')
+  assert.equal(database.state.lastSync, null)
 
   const cancelled = new AbortController()
   cancelled.abort()

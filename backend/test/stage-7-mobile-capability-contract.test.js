@@ -11,9 +11,7 @@ const sources = {
   music: mobileSource('MusicMobile.vue'),
   trash: fs.readFileSync(new URL('../../frontend/src/views/Trash.vue', import.meta.url), 'utf8'),
   bookmarks: fs.readFileSync(new URL('../../frontend/src/components/business/bookmarks/BookmarkWorkspace.vue', import.meta.url), 'utf8'),
-  games: mobileSource('GamesMobile.vue'),
-  anime: mobileSource('AnimeMobile.vue'),
-  animeDetail: mobileSource('AnimeDetailMobile.vue'),
+  collections: fs.readFileSync(new URL('../../frontend/src/components/business/collections/CollectionWorkspace.vue', import.meta.url), 'utf8'),
   notes: fs.readFileSync(new URL('../../frontend/src/components/business/notes/NoteWorkspace.vue', import.meta.url), 'utf8')
 }
 
@@ -40,26 +38,9 @@ test('mobile resource modules omit batch, permanent, credential, and external sy
   assert.match(sources.bookmarks, /v-if="!isMobile"[^>]*v-model="importOpen"/u)
   assert.match(sources.bookmarks, /if\s*\(\s*isMobile\.value\s*\|\|\s*deleting\.value/u)
 
-  assertOmits('games', [
-    'api.games.getSteamConfig',
-    'api.games.saveSteamConfig',
-    'api.games.syncSteam',
-    'api.games.fetchAchievements',
-    'api.games.refreshCover',
-    'api.games.batchDownloadCovers'
-  ])
-
-  assertOmits('anime', [
-    'api.anime.search(',
-    'api.anime.import(',
-    'api.anime.delete(',
-    'api.anime.getTokenStatus'
-  ])
-  assertOmits('animeDetail', [
-    'api.anime.import(',
-    'api.anime.refresh(',
-    'api.anime.delete('
-  ])
+  assert.match(sources.collections, /v-if="!isMobile && \(toolsOpen \|\| refreshOpen\)"/u)
+  assert.match(sources.collections, /refresh && isMobile.value/u)
+  assert.match(sources.collections, /v-if="!isMobile"[^>]*@click="toolsOpen = true"/u)
 
   // Notes now have a reversible trash contract. Shared category management is PC-only.
   assert.match(sources.notes, /v-if="!isMobile"[^>]*@click="categoryManager = true"/u)
@@ -72,7 +53,8 @@ test('mobile resource modules retain the approved reversible single-item actions
   assert.match(sources.trash, /v-if="!isMobile"[\s\S]*?永久删除/u)
   assert.match(sources.music, /api\.music\.update\(/u)
   assert.match(sources.bookmarks, /api\.bookmarks\.(?:create|update)\(/u)
-  assert.match(sources.animeDetail, /api\.anime\.updateStatus\(/u)
-  assert.match(sources.animeDetail, /api\.anime\.updateRating\(/u)
+  assert.match(sources.collections, /client\.update\(/u)
+  assert.match(sources.collections, /client\.delete\(/u)
+  assert.match(sources.collections, /baseVersion/u)
   assert.match(sources.notes, /api\.blog\.(?:createPost|updatePost)\(/u)
 })
