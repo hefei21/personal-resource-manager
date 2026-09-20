@@ -183,6 +183,31 @@ test('deferred mode respects UTF-8 byte ceilings without splitting invalid code 
   assert.ok(report.chunks.every((chunk) => !chunk.body.includes('\uFFFD')))
 })
 
+test('default NAS prose chunks fit an evidence window without pretending to count model tokens', () => {
+  for (const body of ['中文段落用于默认无分词器索引。'.repeat(1800), 'A sentence about the archive. '.repeat(2000)]) {
+    const report = chunkRagSource({ format: 'txt', body, locator: documentLocator })
+    assert.ok(report.chunks.length > 10)
+    assert.ok(report.chunks.every(chunk => bytes(chunk.body) <= 1536 && chunk.tokenCount === null))
+    assert.equal(report.chunks.map(chunk => chunk.body).join('').replace(/\s/gu, ''), body.replace(/\s/gu, ''))
+    assert.ok(report.chunks.every(chunk => chunk.locatorPatch.documentId === undefined && chunk.startLine >= 1))
+  }
+  const explicit = chunkRagSource({ format: 'txt', body: '中'.repeat(1000), locator: documentLocator }, { maxChunkBytes: 128 })
+  assert.ok(explicit.chunks.every(chunk => bytes(chunk.body) <= 128))
+})
+
+test('Chinese ebook chapter boundaries work without ASCII word boundaries', () => {
+  const report = chunkRagSource({ format: 'ebook', body: '第一章 起点\n\nAlpha\n\n第二則　故事\n\nBeta\n\n第三节终点\n\nGamma', locator: { route: '/books', bookId: 1, chapterIndex: 0 } })
+  assert.equal(report.chunks.length, 3)
+  assert.deepEqual(report.chunks.map(c => c.sectionPath.at(-1)), ['第一章 起点', '第二則　故事', '第三节终点'])
+})
+
+test('English prose beginning with book or part is not treated as a chapter heading', () => {
+  const report = chunkRagSource({ format: 'ebook', body: 'I. A NEW JOURNEY\n\npart of the city was quiet.\n\nbook that she left was open.\n\nChapter II: Arrival\n\nThe end.', locator: { route: '/books', bookId: 1, chapterIndex: 0 } })
+  assert.equal(report.chunks.length, 2)
+  assert.deepEqual(report.chunks.map(c => c.sectionPath.at(-1)), ['I. A NEW JOURNEY', 'Chapter II: Arrival'])
+  assert.match(report.chunks[0].body, /book that she left/u)
+})
+
 test('chunker and locator inputs reject unsafe, oversized, and unknown values', () => {
   assert.throws(() => chunkRagSource({ format: 'pdf', body: 'x', locator: documentLocator }), { code: 'RAG_CHUNKER_FORMAT_UNSUPPORTED' })
   assert.throws(() => chunkRagSource({ format: 'txt', body: 'x', locator: { ...documentLocator, route: '/books' } }), { code: 'RAG_CHUNKER_LOCATOR_INVALID' })

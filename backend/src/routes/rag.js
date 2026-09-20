@@ -10,6 +10,8 @@ import {
 } from '../services/ragAnswerService.js'
 import { createRagRerankService, RAG_RERANK_TASK_TYPE } from '../services/ragRerankService.js'
 import { createRagHybridRetriever } from '../services/ragHybridRetriever.js'
+import { expandRagEvidenceContext } from '../services/ragEvidenceContext.js'
+import { ragRetrievalPolicy } from '../services/ragRetrievalPolicy.js'
 import {
   createRagQueryRuntime,
   RAG_QUERY_EMBED_TASK_TYPE,
@@ -1721,7 +1723,7 @@ export function createRagRouter({
         database,
         req,
         checks,
-        retrievalConfig,
+        retrievalConfig: ragRetrievalPolicy({ source: querySource, limit: input.limit, overrides: retrievalConfig }),
         candidateResolver: typeof providerOutput.candidateResolver === 'function'
           ? providerOutput.candidateResolver
           : null
@@ -1796,7 +1798,9 @@ export function createRagRouter({
         req
       })
 
-      const evidence = rankedRetrieval.data
+      const evidence = await expandRagEvidenceContext({ database, evidence: rankedRetrieval.data, checks,
+        context: { query: input.query, req } })
+      rankedRetrieval = Object.freeze({ ...rankedRetrieval, data: Object.freeze(evidence), total: evidence.length })
       let answer
       let resolvedAnswerService = null
       let runStore = null

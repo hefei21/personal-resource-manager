@@ -67,14 +67,15 @@ function validSnapshot(database, overrides = {}) {
   `).run(values).lastInsertRowid)
 }
 
-test('creates the four RAG migrations, compatibility shapes, and repeats safely', nativeTestOptions, () => {
+test('creates RAG migrations and versioned search projection and repeats safely', nativeTestOptions, () => {
   const database = new Database(':memory:')
   try {
     assert.deepEqual(RAG_INDEX_MIGRATIONS.map(({ id }) => id), [
       '0079_rag_source_snapshots',
       '0080_rag_source_state',
       '0081_rag_chunks',
-      '0082_rag_chunks_fts'
+      '0082_rag_chunks_fts',
+      '0093_rag_search_projection'
     ])
 
     const summary = migrate(database)
@@ -98,10 +99,11 @@ test('creates the four RAG migrations, compatibility shapes, and repeats safely'
     )
     assert.deepEqual(database.prepare(`SELECT id, schema_version FROM ${RAG_CHUNK_FTS_META_TABLE}`).get(), {
       id: 1,
-      schema_version: 1
+      schema_version: 2
     })
 
     for (const migration of RAG_INDEX_MIGRATIONS) {
+      if (!migration.compatibility || migration.id === '0081_rag_chunks') continue
       assert.deepEqual(checkMigrationCompatibility(database, migration.compatibility), {
         status: 'satisfied',
         kind: 'table-transition',
@@ -115,6 +117,35 @@ test('creates the four RAG migrations, compatibility shapes, and repeats safely'
     assert.equal(repeated.skipped.length, RAG_INDEX_MIGRATIONS.length)
   } finally {
     database.close()
+  }
+})
+
+test('upgrades populated old FTS without changing evidence, and rolls back a failed projection migration', nativeTestOptions, () => {
+  for (const injectFailure of [false, true]) {
+    const database = new Database(':memory:')
+    try {
+      migrate(database, createMigrationRegistry(RAG_INDEX_MIGRATIONS.slice(0, 4)))
+      const snapshotId = validSnapshot(database)
+      database.prepare(`INSERT INTO rag_chunks(snapshot_id, ordinal, chunk_sha256, body, token_count_mode,
+        title, section_path_json, locator_json) VALUES (?,0,?,'legacy searchable','deferred','Title','[]','{}')`)
+        .run(snapshotId, 'c'.repeat(64))
+      database.exec("INSERT INTO rag_chunks_fts(rag_chunks_fts) VALUES ('rebuild')")
+      const before = database.prepare('SELECT id, body, chunk_sha256, snapshot_id FROM rag_chunks').get()
+      if (injectFailure) {
+        const migrations = RAG_INDEX_MIGRATIONS.map(m => m.id === '0093_rag_search_projection'
+          ? { ...m, source: m.source + '; INSERT INTO missing_failure_injection VALUES (1);' } : m)
+        assert.throws(() => migrate(database, createMigrationRegistry(migrations)))
+        assert.equal(database.prepare('SELECT schema_version FROM rag_chunks_fts_meta').get().schema_version, 1)
+        assert.equal(database.pragma('table_info(rag_chunks)').some(c => c.name === 'search_body'), false)
+      } else {
+        migrate(database)
+        assert.equal(database.prepare('SELECT search_body FROM rag_chunks').get().search_body, before.body)
+        database.exec("INSERT INTO rag_chunks_fts(rag_chunks_fts, rank) VALUES ('integrity-check', 1)")
+        assert.equal(migrate(database).executed.length, 0)
+      }
+      assert.deepEqual(database.prepare('SELECT id, body, chunk_sha256, snapshot_id FROM rag_chunks').get(), before)
+      assert.equal(database.prepare("SELECT count(*) AS n FROM rag_chunks_fts WHERE rag_chunks_fts MATCH 'searchable'").get().n, 1)
+    } finally { database.close() }
   }
 })
 
@@ -148,7 +179,7 @@ test('enforces snapshot/state/chunk identities, statuses, JSON locators, and FTS
       '{"route":"/documents","documentId":1,"versionId":1,"startLine":1,"endLine":2}'
     )
     database.prepare(`
-      INSERT INTO ${RAG_CHUNK_FTS_TABLE}(rowid, title, section_path_json, body)
+      INSERT INTO ${RAG_CHUNK_FTS_TABLE}(rowid, title, section_path_json, search_body)
       VALUES (?, ?, ?, ?)
     `).run(chunk.lastInsertRowid, '统一检索', '["安装","检索"]', 'NAS FTS 正文')
 

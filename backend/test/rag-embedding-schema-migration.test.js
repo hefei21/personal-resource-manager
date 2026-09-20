@@ -96,7 +96,7 @@ test('registers 0083-0085 with frozen compatibility shapes and restart-safe migr
       '0085_rag_snapshot_embedding_state'
     ])
     const first = migrate(database)
-    assert.deepEqual(first.executed.map(({ id }) => id), allMigrations.map(({ id }) => id))
+    assert.deepEqual(first.executed.map(({ id }) => id), allMigrations.map(({ id }) => id).sort())
     for (const migration of RAG_EMBEDDING_MIGRATIONS) {
       assert.deepEqual(checkMigrationCompatibility(database, migration.compatibility), {
         status: 'satisfied',

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { buildRagSearchText, ragQueryTerms } from './ragLexicalText.js'
 
 import {
   RAG_CHUNK_FTS_TABLE,
@@ -30,8 +31,6 @@ const PUBLIC_LOCATOR_KEYS = new Set([
   'route', 'documentId', 'bookId', 'chapterIndex', 'repositoryId', 'path', 'line',
   'commit', 'versionId', 'sourceVersionId', 'page', 'spineIndex', 'paragraphStart', 'paragraphEnd'
 ])
-const SEARCH_TOKEN = /[\p{L}\p{N}_-]+/gu
-const CJK_SEQUENCE = /\p{Script=Han}+/gu
 
 export const RAG_TEXT_INDEX_ERROR_CODES = Object.freeze({
   INPUT_INVALID: 'RAG_TEXT_INDEX_INPUT_INVALID',
@@ -414,8 +413,8 @@ function buildChunks(source, chunker, chunkerOptions, identity) {
 
 function ftsDeleteForSnapshot(database, snapshotId) {
   database.prepare(`
-    INSERT INTO ${RAG_CHUNK_FTS_TABLE}( ${RAG_CHUNK_FTS_TABLE}, rowid, title, section_path_json, body )
-    SELECT 'delete', id, title, section_path_json, body
+    INSERT INTO ${RAG_CHUNK_FTS_TABLE}( ${RAG_CHUNK_FTS_TABLE}, rowid, title, section_path_json, search_body )
+    SELECT 'delete', id, title, section_path_json, search_body
       FROM ${RAG_CHUNK_TABLE}
      WHERE snapshot_id = ?
   `).run(snapshotId)
@@ -529,11 +528,11 @@ function writeAttempt(database, source, snapshotId, identity, built, sourceError
     const insertChunk = database.prepare(`
       INSERT INTO ${RAG_CHUNK_TABLE} (
         snapshot_id, ordinal, chunk_sha256, body, token_count, token_count_mode,
-        title, section_path_json, locator_json, previous_chunk_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        title, section_path_json, locator_json, previous_chunk_id, search_body
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     const insertFts = database.prepare(`
-      INSERT INTO ${RAG_CHUNK_FTS_TABLE}(rowid, title, section_path_json, body)
+      INSERT INTO ${RAG_CHUNK_FTS_TABLE}(rowid, title, section_path_json, search_body)
       VALUES (?, ?, ?, ?)
     `)
     const updateNext = database.prepare(`UPDATE ${RAG_CHUNK_TABLE} SET next_chunk_id = ? WHERE id = ?`)
@@ -541,6 +540,7 @@ function writeAttempt(database, source, snapshotId, identity, built, sourceError
     for (const chunk of built.chunks) {
       const sectionPathJson = JSON.stringify(chunk.sectionPath)
       const locatorJson = JSON.stringify(chunk.locator)
+      const searchBody = buildRagSearchText(chunk.body)
       const currentChunkId = Number(insertChunk.run(
         snapshotId,
         chunk.ordinal,
@@ -551,9 +551,10 @@ function writeAttempt(database, source, snapshotId, identity, built, sourceError
         chunk.title,
         sectionPathJson,
         locatorJson,
-        previousChunkId
+        previousChunkId,
+        searchBody
       ).lastInsertRowid)
-      insertFts.run(currentChunkId, chunk.title, sectionPathJson, chunk.body)
+      insertFts.run(currentChunkId, chunk.title, sectionPathJson, searchBody)
       if (previousChunkId !== null) updateNext.run(currentChunkId, previousChunkId)
       previousChunkId = currentChunkId
     }
@@ -647,17 +648,7 @@ function normalizeQuery(input) {
   if (typeof raw !== 'string') fail(RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID, 'query is required.')
   const keyword = raw.normalize('NFKC').trim()
   if (!keyword || keyword.length > MAX_QUERY_LENGTH) fail(RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID, 'query is invalid.')
-  const tokens = keyword.match(SEARCH_TOKEN) ?? []
-  const expanded = []
-  for (const token of tokens) {
-    const cjk = token.match(CJK_SEQUENCE)
-    if (cjk?.length === 1 && cjk[0] === token) {
-      const characters = [...token]
-      expanded.push(...characters)
-      for (let index = 0; index + 1 < characters.length; index += 1) expanded.push(`${characters[index]}${characters[index + 1]}`)
-    } else expanded.push(token)
-  }
-  const unique = [...new Set(expanded)].slice(0, 32)
+  const unique = ragQueryTerms(keyword)
   if (unique.length === 0) fail(RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID, 'query has no searchable terms.')
   const sourceType = typeof input === 'object' && input?.sourceType !== undefined ? input.sourceType : null
   if (sourceType !== null && !SOURCE_TYPES.has(sourceType)) fail(RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID, 'sourceType is invalid.')

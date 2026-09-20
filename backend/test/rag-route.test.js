@@ -974,6 +974,7 @@ test('Owner coverage is bounded, authenticated, and returns only projected sourc
 
 test('exact source scope is forwarded and unrelated retrieval evidence is rejected', async () => {
   const calls = []
+  const policies = []
   let answerCalls = 0
   const router = createRagRouter({
     databaseProvider: () => ({ database: true }),
@@ -989,7 +990,10 @@ test('exact source scope is forwarded and unrelated retrieval evidence is reject
       calls.push(input.source)
       return { ftsCandidates: [] }
     },
-    hybridRetrieverFactory: () => ({ retrieve: async () => retrieval() }),
+    hybridRetrieverFactory: ({ retrievalConfig }) => {
+      policies.push(retrievalConfig)
+      return { retrieve: async () => retrieval() }
+    },
     answerServiceFactory: () => ({ generate: async () => { answerCalls += 1 } })
   })
   await withServer(router, async (baseUrl) => {
@@ -1003,6 +1007,10 @@ test('exact source scope is forwarded and unrelated retrieval evidence is reject
     assert.equal(body.data.abstained, true)
     assert.equal(body.data.reasonCode, 'no_evidence')
     assert.deepEqual(calls, [{ sourceType: 'ebook', sourceId: 23 }])
+    assert.equal(policies[0].maxPerSource, 6)
+    assert.equal(policies[0].minDistinctSources, 1)
+    assert.equal(policies[0].ftsWeight, 0.75)
+    assert.equal(policies[0].vectorWeight, 0.25)
     assert.equal(answerCalls, 0)
   })
 })

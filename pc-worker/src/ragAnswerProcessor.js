@@ -14,7 +14,7 @@ const PROHIBITED_ACTION_REQUESTS = [
   /\bread\b.{0,60}\b(?:arbitrary|private)\b.{0,40}\b(?:file|filesystem)\b/iu,
   /\bfetch\b.{0,80}\b(?:arbitrary|external)\b.{0,40}\b(?:url|https?)\b/iu,
   /\bcite\s+C\d+\b/iu,
-  /执行.{0,40}(?:shell|命令)|读取.{0,60}(?:任意|私有).{0,40}文件|抓取.{0,60}(?:外部|任意).{0,40}(?:URL|链接)|引用\s*C\d+/iu
+  /执行(?!\s*(?:什么|哪[个条种]|何种)).{0,40}(?:shell|命令)|读取.{0,60}(?:任意|私有).{0,40}文件|抓取.{0,60}(?:外部|任意).{0,40}(?:URL|链接)|引用\s*C\d+/iu
 ]
 const MAX_QUERY_BYTES = 64 * 1024
 const MAX_EVIDENCE_ITEMS = 64
@@ -28,6 +28,8 @@ const SYSTEM_PROMPT = [
   'Do not call tools, access files or shells, fetch URLs, or create external links.',
   'Answer only from the supplied evidence and cite only its citation IDs.',
   'First decide whether the evidence directly addresses the question; unrelated evidence means you must abstain even if you know an answer.',
+  'Match the exact entity and relationship asked about. Facts about a different person, product or event cannot answer the question; never equate them through similarity, association or outside knowledge.',
+  'If the requested fact is absent, abstain instead of substituting related background. For a factual name, number or command, identify direct supporting evidence before giving it.',
   'Cite only evidence that directly supports the final answer; omit stale, contradictory, or merely related evidence unless the question explicitly asks for a comparison.',
   'When active or current evidence conflicts with stale or historical evidence, use and cite only the active or current evidence unless the question explicitly requests history.',
   'When an answer combines facts from multiple evidence items, cite every item that materially supports the combined answer.',

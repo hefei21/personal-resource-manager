@@ -9,6 +9,8 @@ import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
 import { chunkRagSource, normalizeRagChunkerOptions, RAG_CHUNKER_VERSION } from '../src/services/ragChunker.js'
 import { createRagTextIndexService, RAG_TEXT_INDEX_ERROR_CODES } from '../src/services/ragTextIndexService.js'
+import { ragQueryTerms } from '../src/services/ragLexicalText.js'
+import { expandRagEvidenceContext } from '../src/services/ragEvidenceContext.js'
 
 const require = createRequire(import.meta.url)
 let Database
@@ -160,6 +162,52 @@ test('falls back to bounded OR recall when a natural-language CJK question has n
   } finally {
     database.close()
   }
+})
+
+test('CJK projection finds mid-sentence words without leaking tokens into evidence or corrupting rebuilds', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const service = createService(database)
+    const body = '我们需要先完成设备巡检再准备交接工作。Redis的TLS配置保持独立。'
+    await service.index({ sources: [source({ text: body })], errors: [] })
+    assert.equal(service.query({ q: '设备巡检' }).data[0].body, body)
+    assert.equal(service.query({ q: 'Redis的TLS配置' }).data[0].body, body)
+    assert.deepEqual(ragQueryTerms('设备巡检'), ['设备', '备巡', '巡检'])
+    assert.deepEqual(ragQueryTerms('Redis的TLS配置'), ['Redis', '的', 'TLS', '配置'])
+    assert.deepEqual(ragQueryTerms('Москва Αθήνα'), ['Москва', 'Αθήνα'])
+    database.prepare("INSERT INTO rag_chunks_fts(rag_chunks_fts, rank) VALUES ('integrity-check', 1)").run()
+    database.prepare("INSERT INTO rag_chunks_fts(rag_chunks_fts) VALUES ('rebuild')").run()
+    assert.equal(service.query({ q: '设备巡检' }).total, 1)
+    await service.refresh({ collected: { sources: [source({ text: body })], errors: [] }, rebuild: true })
+    database.prepare("INSERT INTO rag_chunks_fts(rag_chunks_fts, rank) VALUES ('integrity-check', 1)").run()
+    assert.equal(service.query({ q: '设备巡检' }).total, 1)
+  } finally { database.close() }
+})
+
+test('evidence expansion keeps individual authorized citations within the same section and snapshot', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const service = createService(database, { chunkerOptions: { maxChunkBytes: 128 } })
+    await service.index({ sources: [source({ text: '# Same\n\n'+['alpha','seedword','omega'].map(w => (w+' ').repeat(18)).join('\n\n')+'\n\n# Boundary\n\nsecret boundary' })], errors: [] })
+    const seed = service.query({ q: 'seedword' }).data[0]
+    const checks = { authoritativeVisibility: () => true, authoritativeActiveSnapshot: () => true }
+    const expanded = await expandRagEvidenceContext({ database, evidence: [seed], checks })
+    assert.equal(expanded[0].chunkId, seed.chunkId)
+    assert.ok(expanded.length > 1)
+    assert.equal(new Set(expanded.map(c => c.chunkId)).size, expanded.length)
+    for (const item of expanded) {
+      assert.equal(item.body, database.prepare('SELECT body FROM rag_chunks WHERE id=?').get(item.chunkId).body)
+      assert.deepEqual(item.locator.sectionPath, seed.locator.sectionPath)
+      assert.equal(item.snapshotId, seed.snapshotId)
+    }
+    const onlySeed = await expandRagEvidenceContext({ database, evidence: [seed], checks: { ...checks, authoritativeVisibility: c => c.chunkId === seed.chunkId } })
+    assert.deepEqual(onlySeed.map(c => c.chunkId), [seed.chunkId])
+    assert.deepEqual(await expandRagEvidenceContext({ database, evidence: [seed], checks: { ...checks, authoritativeActiveSnapshot: () => false } }), [])
+    const large = { ...seed, body: 'X'.repeat(25 * 1024) }
+    assert.deepEqual(await expandRagEvidenceContext({ database, evidence: [large], checks }), [])
+  } finally { database.close() }
 })
 
 test('replaces active snapshot atomically and excludes stale FTS rows through the active join', nativeTestOptions, async () => {

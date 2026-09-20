@@ -602,7 +602,7 @@ test('application registry freezes 57 column migrations and thirty-five register
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 92)
+  assert.equal(applicationMigrationRegistry.migrations.length, 93)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -671,7 +671,8 @@ test('application registry freezes 57 column migrations and thirty-five register
       '0089_reading_progress_chapter_fraction',
       '0090_note_revision',
       '0091_note_creation_key',
-      '0092_note_last_mutation_id'
+      '0092_note_last_mutation_id',
+      '0093_rag_search_projection'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({
@@ -954,7 +955,7 @@ test('application registry freezes 57 column migrations and thirty-five register
     }))
   )
   assert.deepEqual(
-    applicationMigrationRegistry.migrations.slice(86).map(({ id, compatibility }) => ({
+    applicationMigrationRegistry.migrations.slice(86, 92).map(({ id, compatibility }) => ({
       id,
       kind: compatibility.kind,
       table: compatibility.table,

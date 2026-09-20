@@ -158,6 +158,20 @@ test('wraps evidence as untrusted text, keeps locator/title outside the task inp
   assert.equal('storageKey' in result.citations[0].locator, false)
 })
 
+test('canonical Unicode evidence stays valid and full-width secrets are redacted before projection', async () => {
+  const answer = service()
+  const queued = await answer.generate({ query: 'What is supported?', evidence: [evidence({
+    body: '第一則　故事，ＡＢＣ。 Ｃ：＼fixture＼hidden.txt ｐａｓｓｗｏｒｄ：example-value'
+  })] })
+  const text = queued.task.input.evidence[0].text
+  assert.match(text, /第一則 故事,ABC/u)
+  assert.doesNotMatch(text, /hidden|example-value/u)
+  assert.equal((await answer.applyResult({ task: queued.task, result: workerResult(queued.task) })).status, 'complete')
+  const forged = structuredClone(queued.task)
+  forged.input.evidence[0].text = 'A different body'
+  assert.equal((await answer.applyResult({ task: forged, result: workerResult(forged) })).reasonCode, 'evidence_stale')
+})
+
 test('rejects forged citations and returns a stable schema degradation', async () => {
   const tasks = taskStoreFake()
   const answer = service({ taskStore: tasks })

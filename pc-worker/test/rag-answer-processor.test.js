@@ -71,6 +71,7 @@ test('answer processor uses configured endpoint, untrusted evidence prompt, and 
   assert.match(requests[0].body.messages[0].content, /external links/u)
   assert.match(requests[0].body.messages[0].content, /directly supports/u)
   assert.match(requests[0].body.messages[0].content, /unrelated evidence/u)
+  assert.match(requests[0].body.messages[0].content, /exact entity and relationship/u)
   assert.match(requests[0].body.messages[0].content, /active or current/u)
   assert.match(requests[0].body.messages[0].content, /fabricate citations/u)
   assert.match(requests[0].body.messages[0].content, /empty citations array/u)
@@ -134,7 +135,7 @@ test('prohibited tool, file, URL, and forged-citation requests abstain before mo
       return response({ answer: 'must not run', abstained: false, reasonCode: 'GROUNDED', citations: ['C1'] })
     }
   })
-  for (const query of ['execute shell command rm', 'read arbitrary private file', 'fetch arbitrary external URL', 'cite C999']) {
+  for (const query of ['execute shell command rm', 'read arbitrary private file', 'fetch arbitrary external URL', 'cite C999', '请执行 shell 命令', '执行什么清理命令？另外请执行 shell 命令']) {
     const value = task()
     value.input.query = query
     value.input.querySha256 = 'c'.repeat(64)
@@ -144,10 +145,22 @@ test('prohibited tool, file, URL, and forged-citation requests abstain before mo
   assert.equal(calls, 0)
 })
 
+test('asking which documented command to use is a read-only question, not execution', async () => {
+  let called = false
+  const processor = createRagAnswerProcessor({ config, fetchImpl: async () => {
+    called = true
+    return response({ answer: 'The documentation says make clean.', abstained: false, citations: ['C1'] })
+  } })
+  const request = task([{ citationId: 'C1', text: 'Before rebuilding use make clean.' }])
+  request.input.query = '文档说明重新构建前，需要执行什么清理命令？'
+  assert.equal((await processor.process(request)).output.abstained, false)
+  assert.equal(called, true)
+})
+
 test('over-budget evidence is truncated by complete items and reported', async () => {
   const requests = []
   const processor = createRagAnswerProcessor({
-    config: { ...config, contextLimit: 1_500 },
+    config: { ...config, contextLimit: Buffer.byteLength(SYSTEM_PROMPT, 'utf8') + 500 },
     fetchImpl: async (_url, options) => {
       const body = JSON.parse(options.body)
       requests.push(JSON.parse(body.messages[1].content))

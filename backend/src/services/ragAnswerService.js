@@ -89,7 +89,9 @@ function opaqueCitationId(index) {
 }
 
 function redactSensitiveText(value) {
-  return value
+  // Normalize before redaction, just as the task projector does: full-width
+  // punctuation must neither bypass redaction nor cause false stale evidence.
+  return value.normalize('NFKC')
     .replace(/[A-Za-z]:[\\/][^\s<>]+/gu, '[REDACTED_PATH]')
     .replace(/\\\\[^\s<>]+/gu, '[REDACTED_PATH]')
     .replace(/(?:storage[ _-]?key|api[ _-]?key|password|secret|lease[ _-]?token)\s*[:=]\s*[^\s,;]+/giu, '[REDACTED_SECRET]')
@@ -424,9 +426,10 @@ export class RagAnswerService {
     const before = await this.#authorize(normalizedEvidence, { phase: 'before_result', task })
     const byCitation = new Map((context?.evidence ?? normalizedEvidence).map((item) => [item.citationId, item]))
     const allowed = projectedInput.evidence.map((item) => byCitation.get(item.citationId)).filter(Boolean)
+    const expectedInput = new Map((context?.projectedInput.evidence ?? []).map(item => [item.citationId, item]))
     if (context && projectedInput.evidence.some((item) => {
-      const expected = byCitation.get(item.citationId)
-      return !expected || expected.taskText !== item.text
+      const expected = expectedInput.get(item.citationId)
+      return !expected || expected.text !== item.text
     })) {
       return this.#fallback(context.query, context.language, before, 'evidence_stale')
     }

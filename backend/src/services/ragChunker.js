@@ -8,6 +8,11 @@ const DEFAULT_MAX_TOKENS = 768
 const DEFAULT_OVERLAP_TOKENS = 96
 const DEFAULT_MAX_SOURCE_BYTES = 16 * 1024 * 1024
 const DEFAULT_MAX_CHUNK_BYTES = 64 * 1024
+// NAS indexing has no model tokenizer. Do not treat the transport ceiling as
+// a prose chunk target: 64 KiB chunks exceed the entire answer evidence budget.
+// This conservative byte bound is not a claimed token count. Atomic fenced
+// blocks retain their separate explicit size validation.
+const DEFERRED_PROSE_BYTES = 1536
 const MAX_SOURCE_BYTES = 64 * 1024 * 1024
 const MAX_CHUNK_BYTES = 1024 * 1024
 const MIN_CHUNK_BYTES = 128
@@ -31,7 +36,7 @@ const ROUTES = Object.freeze({
   ebook: '/books',
   repository_document: '/code'
 })
-const STRUCTURE_RULES_VERSION = 'headings-v1|html-blocks-v1|paragraphs-v1|fence-atomic-v1|line-locators-v1'
+const STRUCTURE_RULES_VERSION = 'headings-v2|html-blocks-v1|paragraphs-v1|fence-atomic-v1|line-locators-v1'
 
 export const RAG_CHUNKER_DEFAULTS = Object.freeze({
   modelId: RAG_CHUNKER_MODEL_ID,
@@ -40,6 +45,7 @@ export const RAG_CHUNKER_DEFAULTS = Object.freeze({
   overlapTokens: DEFAULT_OVERLAP_TOKENS,
   maxSourceBytes: DEFAULT_MAX_SOURCE_BYTES,
   maxChunkBytes: DEFAULT_MAX_CHUNK_BYTES,
+  deferredProseBytes: DEFERRED_PROSE_BYTES,
   structureRulesVersion: STRUCTURE_RULES_VERSION
 })
 
@@ -382,8 +388,14 @@ function parseMarkdown(body, basePath) {
 
 function ebookHeading(line) {
   const trimmed = line.trim()
-  if (/^(?:chapter|part|book|prologue|epilogue)\b/iu.test(trimmed)) return trimmed
-  if (/^第\s*[\d一二三四五六七八九十百千万]+\s*(?:章|节|卷)\b/u.test(trimmed)) return trimmed
+  if (trimmed.length <= 160 && (
+    /^(?:chapter|part|book)\s+(?:\d+|[ivxlcdm]+)(?:\b|[.:])/iu.test(trimmed) ||
+    /^(?:prologue|epilogue)(?:\s*[:.—-].*)?$/iu.test(trimmed) ||
+    /^[IVXLCDM]+\.\s+[A-Z][A-Z\s',’—-]+$/u.test(trimmed)
+  )) return trimmed
+  // JS word boundaries are ASCII-oriented; \b after a Chinese chapter marker
+  // rejects both a following Chinese title and a normal whitespace separator.
+  if (trimmed.length <= 160 && /^第\s*[\d零〇一二三四五六七八九十百千万萬两兩]+\s*[章节節卷回则則篇部]/u.test(trimmed)) return trimmed
   return null
 }
 
@@ -669,6 +681,7 @@ function lineSpanForOffset(unit, text, startOffset, endOffset) {
 
 function chunkDeferredRun(units, config, ordinalRef) {
   const chunks = []
+  const proseBytes = Math.min(config.maxChunkBytes, config.deferredProseBytes)
   let current = []
   let currentBytes = 0
   const flush = () => {
@@ -692,13 +705,13 @@ function chunkDeferredRun(units, config, ordinalRef) {
       chunks.push(chunkAtomicUnit(unit, config, ordinalRef))
       continue
     }
-    const pieces = byteLength(unit.text) > config.maxChunkBytes
-      ? splitUtf8(unit.text, config.maxChunkBytes)
+    const pieces = byteLength(unit.text) > proseBytes
+      ? splitUtf8(unit.text, proseBytes)
       : [{ text: unit.text, startOffset: 0, endOffset: unit.text.length }]
     for (const piece of pieces) {
       const separatorBytes = current.length === 0 ? 0 : byteLength('\n\n')
-      if (current.length > 0 && currentBytes + separatorBytes + byteLength(piece.text) > config.maxChunkBytes) flush()
-      if (current.length === 0 && byteLength(piece.text) <= config.maxChunkBytes) {
+      if (current.length > 0 && currentBytes + separatorBytes + byteLength(piece.text) > proseBytes) flush()
+      if (current.length === 0 && byteLength(piece.text) <= proseBytes) {
         if (pieces.length === 1) {
           current.push(unit)
           currentBytes = byteLength(unit.text)
@@ -716,7 +729,7 @@ function chunkDeferredRun(units, config, ordinalRef) {
             maxChunkBytes: config.maxChunkBytes
           }))
         }
-      } else if (byteLength(piece.text) > config.maxChunkBytes) {
+      } else if (byteLength(piece.text) > proseBytes) {
         fail('RAG_CHUNKER_OUTPUT_INVALID', 'a UTF-8 chunk cannot fit the byte ceiling')
       } else {
         current.push(unit)

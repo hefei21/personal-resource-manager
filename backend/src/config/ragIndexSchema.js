@@ -1,3 +1,5 @@
+import { RAG_SEARCH_PROJECTION_MIGRATIONS } from './ragSearchProjectionSchema.js'
+
 const column = (name, type, notNull = false, defaultValue = null, primaryKeyPosition = 0) => ({
   name,
   type,
@@ -293,5 +295,6 @@ export const RAG_INDEX_MIGRATIONS = Object.freeze([
       missingTable: 'create',
       legacy: []
     }
-  }
+  },
+  ...RAG_SEARCH_PROJECTION_MIGRATIONS
 ])
