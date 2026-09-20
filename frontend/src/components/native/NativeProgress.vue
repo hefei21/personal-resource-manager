@@ -118,7 +118,7 @@ const circleStyle = computed(() => {
   overflow: hidden;
 }
 
-.native-progress__bar--primary { background: var(--color-primary); }
+.native-progress__bar--primary { background: var(--color-primary-solid); }
 .native-progress__bar--success { background: var(--color-success); }
 .native-progress__bar--warning { background: var(--color-warning); }
 .native-progress__bar--error { background: var(--color-danger); }

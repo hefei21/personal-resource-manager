@@ -429,7 +429,7 @@ onBeforeUnmount(() => {
 
 .tasks-subtitle {
   margin: 0;
-  color: #777;
+  color: var(--color-text-secondary);
   font-size: 14px;
 }
 
@@ -450,7 +450,7 @@ onBeforeUnmount(() => {
 .tasks-filter-item {
   display: grid;
   gap: 6px;
-  color: #555;
+  color: var(--color-text-secondary);
   font-size: 13px;
 }
 
@@ -464,7 +464,7 @@ onBeforeUnmount(() => {
   border: 1px solid #f2c7c7;
   border-radius: 6px;
   background: #fff7f7;
-  color: #b42318;
+  color: var(--color-danger-text);
   font-size: 14px;
 }
 
@@ -494,14 +494,14 @@ onBeforeUnmount(() => {
 
 .tasks-table-head {
   border-bottom: 1px solid var(--color-border-subtle);
-  background: #fafafa;
-  color: #777;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
   font-size: 13px;
 }
 
 .task-row {
   min-height: 82px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border-subtle);
   color: var(--color-text-primary);
   font-size: 14px;
 }
@@ -562,12 +562,12 @@ onBeforeUnmount(() => {
 .task-error-text {
   display: grid;
   gap: 4px;
-  color: #b42318;
+  color: var(--color-danger-text);
   line-height: 1.5;
 }
 
 .task-error-text small {
-  color: #c2410c;
+  color: var(--color-warning-text);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 11px;
   font-weight: 500;
@@ -585,7 +585,7 @@ onBeforeUnmount(() => {
 
 .tasks-pagination {
   padding: 0 20px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 @media (max-width: 768px) {
@@ -645,7 +645,7 @@ onBeforeUnmount(() => {
 
   .task-cell::before {
     content: attr(data-label);
-    color: #888;
+    color: var(--color-text-muted);
     font-size: 12px;
   }
 

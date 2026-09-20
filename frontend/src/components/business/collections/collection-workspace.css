@@ -157,7 +157,7 @@
   left: 0;
   right: 0;
   padding: 12px;
-  color: #fff;
+  color: var(--color-text-inverse);
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
   font-size: 12px;
   opacity: 0;

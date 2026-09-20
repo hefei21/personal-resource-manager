@@ -290,7 +290,7 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.1);
   border: none;
   border-radius: 50%;
-  color: #fff;
+  color: var(--color-text-inverse);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -319,7 +319,7 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.1);
   border: none;
   border-radius: 8px;
-  color: #fff;
+  color: var(--color-text-inverse);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -335,7 +335,7 @@ onUnmounted(() => {
   position: absolute;
   top: 24px;
   left: 24px;
-  color: #fff;
+  color: var(--color-text-inverse);
   font-size: 14px;
   z-index: 1;
 }

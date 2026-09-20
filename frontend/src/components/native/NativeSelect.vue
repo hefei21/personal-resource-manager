@@ -869,7 +869,7 @@ onUnmounted(() => {
 }
 
 .native-select__option--selected .native-select__checkbox {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
   color: var(--color-text-inverse);
 }

@@ -95,8 +95,8 @@ function select(item, index) {
   font-size: 14px;
   line-height: 1;
   color: var(--color-text-primary);
-  background: #fff;
-  border: 1px solid #dcdcdc;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-default);
   cursor: pointer;
   transition: all 0.2s;
   white-space: nowrap;
@@ -121,20 +121,20 @@ function select(item, index) {
 }
 
 .native-button-group__item--active {
-  color: #fff;
-  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
   z-index: 2;
 }
 
 .native-button-group__item--active:hover:not(:disabled) {
-  color: #fff;
-  background: #0043b5;
-  border-color: #0043b5;
+  color: var(--color-text-inverse);
+  background: var(--color-primary-solid);
+  border-color: var(--color-primary);
 }
 
 .native-button-group__item:disabled {
-  color: #ccc;
+  color: var(--color-text-muted);
   background: var(--color-surface-subtle);
   cursor: not-allowed;
 }
@@ -172,6 +172,6 @@ function select(item, index) {
 }
 
 .native-button-group--outline .native-button-group__item--active {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
 }
 </style>

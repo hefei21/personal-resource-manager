@@ -61,7 +61,7 @@ function toggle() {
   position: relative;
   width: 44px;
   height: 24px;
-  background: #dcdcdc;
+  background: var(--color-border-default);
   border-radius: 12px;
   transition: background 0.3s;
   flex-shrink: 0;
@@ -74,14 +74,14 @@ function toggle() {
   left: 2px;
   width: 20px;
   height: 20px;
-  background: #fff;
+  background: var(--color-text-inverse);
   border-radius: 50%;
   transition: transform 0.3s;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 .native-switch--checked .native-switch__handle {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
 }
 
 .native-switch--checked .native-switch__handle::before {

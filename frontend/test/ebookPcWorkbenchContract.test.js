@@ -45,7 +45,7 @@ test('reader streams PDFs, loads EPUB chapters lazily, and uses the shared progr
   assert.match(reader, /strict:\s*true/u)
   assert.match(reader, /handleContentClick/u)
   assert.match(reader, /scrollCurrentTocItemIntoView/u)
-  assert.match(reader, /background:#fffdfb;box-shadow/u)
+  assert.match(reader, /background:var\(--color-surface-raised\);box-shadow/u)
 })
 
 test('reading position is shared across PC and mobile while appearance remains device-local', () => {

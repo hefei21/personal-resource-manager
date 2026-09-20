@@ -228,7 +228,7 @@ defineExpose({
 }
 
 .native-dropdown__menu {
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 6px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   overflow: hidden;
@@ -258,7 +258,7 @@ defineExpose({
 }
 
 .native-dropdown__item--disabled {
-  color: #ccc;
+  color: var(--color-text-muted);
   cursor: not-allowed;
 }
 
@@ -269,7 +269,7 @@ defineExpose({
 }
 
 .native-dropdown__item--active {
-  background: #e6f7ff;
+  background: var(--color-primary-surface);
   color: var(--color-primary);
 }
 
@@ -285,7 +285,7 @@ defineExpose({
   top: -12px;
   left: 50%;
   transform: translateX(-50%);
-  border-bottom-color: #fff;
+  border-bottom-color: var(--color-surface-raised);
   border-top: 0;
 }
 
@@ -293,7 +293,7 @@ defineExpose({
   bottom: -12px;
   left: 50%;
   transform: translateX(-50%);
-  border-top-color: #fff;
+  border-top-color: var(--color-surface-raised);
   border-bottom: 0;
 }
 
@@ -301,7 +301,7 @@ defineExpose({
   right: -12px;
   top: 50%;
   transform: translateY(-50%);
-  border-left-color: #fff;
+  border-left-color: var(--color-surface-raised);
   border-right: 0;
 }
 
@@ -309,7 +309,7 @@ defineExpose({
   left: -12px;
   top: 50%;
   transform: translateY(-50%);
-  border-right-color: #fff;
+  border-right-color: var(--color-surface-raised);
   border-left: 0;
 }
 

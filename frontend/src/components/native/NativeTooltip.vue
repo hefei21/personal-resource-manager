@@ -257,7 +257,7 @@ onUnmounted(() => {
 }
 
 .native-tooltip--light .native-tooltip__inner {
-  background: #fff;
+  background: var(--color-surface-raised);
   color: var(--color-text-primary);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   border: 1px solid var(--color-border-subtle);
@@ -285,7 +285,7 @@ onUnmounted(() => {
 .native-tooltip--light.native-tooltip--top .native-tooltip__arrow,
 .native-tooltip--light.native-tooltip--top-left .native-tooltip__arrow,
 .native-tooltip--light.native-tooltip--top-right .native-tooltip__arrow {
-  border-top-color: #fff;
+  border-top-color: var(--color-surface-raised);
 }
 
 /* 下方箭头 */
@@ -302,7 +302,7 @@ onUnmounted(() => {
 .native-tooltip--light.native-tooltip--bottom .native-tooltip__arrow,
 .native-tooltip--light.native-tooltip--bottom-left .native-tooltip__arrow,
 .native-tooltip--light.native-tooltip--bottom-right .native-tooltip__arrow {
-  border-bottom-color: #fff;
+  border-bottom-color: var(--color-surface-raised);
 }
 
 /* 左方箭头 */
@@ -315,7 +315,7 @@ onUnmounted(() => {
 }
 
 .native-tooltip--light.native-tooltip--left .native-tooltip__arrow {
-  border-left-color: #fff;
+  border-left-color: var(--color-surface-raised);
 }
 
 /* 右方箭头 */
@@ -328,7 +328,7 @@ onUnmounted(() => {
 }
 
 .native-tooltip--light.native-tooltip--right .native-tooltip__arrow {
-  border-right-color: #fff;
+  border-right-color: var(--color-surface-raised);
 }
 
 /* 动画 */

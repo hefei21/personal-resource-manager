@@ -109,13 +109,13 @@ function toggle() {
 .native-checkbox__box {
   width: 16px;
   height: 16px;
-  border: 2px solid #dcdcdc;
+  border: 2px solid var(--color-border-default);
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
-  color: #fff;
+  color: var(--color-text-inverse);
   flex-shrink: 0;
 }
 
@@ -124,12 +124,12 @@ function toggle() {
 }
 
 .native-checkbox--checked .native-checkbox__box {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
 }
 
 .native-checkbox--indeterminate .native-checkbox__box {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
 }
 

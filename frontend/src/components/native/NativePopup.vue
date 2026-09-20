@@ -71,7 +71,7 @@ function handleOverlayClick() {
 
 .native-popup {
   position: relative;
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   max-width: 90vw;

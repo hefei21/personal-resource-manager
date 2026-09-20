@@ -341,6 +341,7 @@ import {
   NativeForm, NativeFormItem, NativeRadio, NativeRadioGroup, NativeTextarea 
 } from '@/components/native'
 import { useToast } from '@/composables/useToast'
+import { useAppTheme } from '@/composables/useAppTheme'
 import {
   escapeHtml,
   sanitizeHighlightHtml,
@@ -354,7 +355,7 @@ const toast = useToast()
 const { isGuest } = usePermission()
 
 // Markdown预览主题配置
-const editorTheme = ref('light')
+const { resolved: editorTheme } = useAppTheme()
 const previewTheme = ref('default')
 const codeTheme = ref('atom')
 
@@ -1147,7 +1148,7 @@ onBeforeUnmount(() => {
 
 .lang-tag {
   padding: 2px 8px;
-  background: #e8f4ff;
+  background: var(--color-primary-surface);
   border-radius: 4px;
   color: var(--color-primary);
   font-size: 11px;
@@ -1156,7 +1157,7 @@ onBeforeUnmount(() => {
 .clone-progress-bar {
   width: 200px;
   height: 4px;
-  background: #f0f0f0;
+  background: var(--color-surface-subtle);
   border-radius: 2px;
   margin: 6px 0;
   overflow: hidden;
@@ -1190,7 +1191,7 @@ onBeforeUnmount(() => {
   gap: 16px;
   margin-bottom: 16px;
   padding: 12px 16px;
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 8px;
 }
 
@@ -1219,7 +1220,7 @@ onBeforeUnmount(() => {
 }
 
 .browser-layout {
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 8px;
   height: calc(100% - 60px);
   overflow: hidden;
@@ -1229,7 +1230,7 @@ onBeforeUnmount(() => {
 .file-sidebar {
   width: 280px;
   min-width: 280px;  /* 防止被挤压 */
-  border-right: 1px solid #e7e7e7;
+  border-right: 1px solid var(--color-border-subtle);
   overflow-y: auto;
   flex-shrink: 0;  /* 不允许收缩 */
 }
@@ -1237,7 +1238,7 @@ onBeforeUnmount(() => {
 .sidebar-header {
   padding: 12px 16px;
   font-weight: 600;
-  border-bottom: 1px solid #e7e7e7;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .sidebar-empty {
@@ -1278,13 +1279,13 @@ onBeforeUnmount(() => {
 
 .markdown-content :deep(h1) {
   font-size: 2em;
-  border-bottom: 1px solid #e7e7e7;
+  border-bottom: 1px solid var(--color-border-subtle);
   padding-bottom: 0.3em;
 }
 
 .markdown-content :deep(h2) {
   font-size: 1.5em;
-  border-bottom: 1px solid #e7e7e7;
+  border-bottom: 1px solid var(--color-border-subtle);
   padding-bottom: 0.3em;
 }
 
@@ -1343,7 +1344,7 @@ onBeforeUnmount(() => {
 
 .markdown-content :deep(th),
 .markdown-content :deep(td) {
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   padding: 8px 12px;
   text-align: left;
 }
@@ -1354,11 +1355,11 @@ onBeforeUnmount(() => {
 }
 
 .markdown-content :deep(tr:nth-child(even)) {
-  background: #fafafa;
+  background: var(--color-surface-subtle);
 }
 
 .markdown-content :deep(blockquote) {
-  border-left: 4px solid #ddd;
+  border-left: 4px solid var(--color-border-default);
   padding-left: 16px;
   margin-left: 0;
   color: var(--color-text-secondary);
@@ -1366,7 +1367,7 @@ onBeforeUnmount(() => {
 
 .markdown-content :deep(hr) {
   border: none;
-  border-top: 1px solid #e7e7e7;
+  border-top: 1px solid var(--color-border-subtle);
   margin: 24px 0;
 }
 
@@ -1400,7 +1401,7 @@ onBeforeUnmount(() => {
   padding: 12px 16px;
   background: var(--color-surface-subtle);
   border-radius: 6px 6px 0 0;
-  border-bottom: 1px solid #e7e7e7;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .file-title {
@@ -1415,8 +1416,8 @@ onBeforeUnmount(() => {
 .search-line-badge {
   padding: 2px 7px;
   border-radius: 999px;
-  background: #eef2ff;
-  color: #4338ca;
+  background: var(--color-primary-surface);
+  color: var(--color-primary);
   font-size: 12px;
   font-weight: 500;
 }
@@ -1425,7 +1426,7 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow: auto;
   padding: 0;
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 0 0 6px 6px;
 }
 
@@ -1464,13 +1465,13 @@ onBeforeUnmount(() => {
 
 :deep(.markdown-preview) :deep(h1) {
   font-size: 2em;
-  border-bottom: 1px solid #e7e7e7;
+  border-bottom: 1px solid var(--color-border-subtle);
   padding-bottom: 0.3em;
 }
 
 :deep(.markdown-preview) :deep(h2) {
   font-size: 1.5em;
-  border-bottom: 1px solid #e7e7e7;
+  border-bottom: 1px solid var(--color-border-subtle);
   padding-bottom: 0.3em;
 }
 
@@ -1492,7 +1493,7 @@ onBeforeUnmount(() => {
 }
 
 :deep(.markdown-preview) :deep(pre) {
-  background: #f6f8fa;
+  background: var(--color-surface-subtle);
   padding: 16px;
   border-radius: 6px;
   overflow-x: auto;
@@ -1531,7 +1532,7 @@ onBeforeUnmount(() => {
 
 :deep(.markdown-preview) :deep(th),
 :deep(.markdown-preview) :deep(td) {
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   padding: 8px 12px;
   text-align: left;
 }
@@ -1542,11 +1543,11 @@ onBeforeUnmount(() => {
 }
 
 :deep(.markdown-preview) :deep(tr:nth-child(even)) {
-  background: #fafafa;
+  background: var(--color-surface-subtle);
 }
 
 :deep(.markdown-preview) :deep(blockquote) {
-  border-left: 4px solid #ddd;
+  border-left: 4px solid var(--color-border-default);
   padding-left: 16px;
   margin-left: 0;
   color: var(--color-text-secondary);
@@ -1555,7 +1556,7 @@ onBeforeUnmount(() => {
 
 :deep(.markdown-preview) :deep(hr) {
   border: none;
-  border-top: 1px solid #e7e7e7;
+  border-top: 1px solid var(--color-border-subtle);
   margin: 24px 0;
 }
 
@@ -1622,7 +1623,7 @@ onBeforeUnmount(() => {
   font-family: monospace;
   font-size: 12px;
   color: var(--color-primary);
-  background: #e8f4ff;
+  background: var(--color-primary-surface);
   display: inline-block;
   padding: 2px 8px;
   border-radius: 4px;
@@ -1696,7 +1697,7 @@ onBeforeUnmount(() => {
 }
 
 .file-item {
-  background: #e8f4ff;
+  background: var(--color-primary-surface);
   color: var(--color-primary);
   padding: 4px 8px;
   border-radius: 4px;
@@ -1706,7 +1707,7 @@ onBeforeUnmount(() => {
 
 /* Diff 显示样式 */
 .diff-container {
-  background: #f6f8fa;
+  background: var(--color-surface-subtle);
   border-radius: 6px;
   overflow: auto;
   max-height: 400px;
@@ -1744,29 +1745,29 @@ onBeforeUnmount(() => {
 }
 
 .diff-line.header {
-  background: #e8f4ff;
+  background: var(--color-primary-surface);
   color: var(--color-primary);
 }
 
 .diff-line.info {
-  background: #f0f0f0;
+  background: var(--color-surface-subtle);
   color: var(--color-text-secondary);
 }
 
 .diff-line.removed {
-  background: #ffe6e6;
+  background: var(--color-danger-surface);
 }
 
 .diff-line.removed .line-prefix {
-  color: #d32f2f;
+  color: var(--color-danger-text);
 }
 
 .diff-line.added {
-  background: #e6f7e6;
+  background: var(--color-success-surface);
 }
 
 .diff-line.added .line-prefix {
-  color: #388e3c;
+  color: var(--color-success-text);
 }
 
 .diff-line.context {
@@ -1789,7 +1790,7 @@ onBeforeUnmount(() => {
 
 /* 删除按钮样式 - 白底红边红图标 */
 .btn-delete {
-  background-color: #fff !important;
+  background-color: var(--color-surface-raised) !important;
   border-color: var(--color-danger) !important;
   color: var(--color-danger) !important;
 }

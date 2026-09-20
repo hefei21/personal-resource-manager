@@ -202,13 +202,13 @@ onMounted(loadOverview)
 
 .eyebrow {
   margin: 0 0 4px;
-  color: #4f46e5;
+  color: var(--color-primary);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
 }
 
-h2, h3 { margin: 0; color: #172033; }
+h2, h3 { margin: 0; color: var(--color-text-primary); }
 h2 { font-size: 20px; }
 h3 { font-size: 15px; }
 
@@ -218,10 +218,10 @@ h3 { font-size: 15px; }
   align-items: center;
   gap: 6px;
   padding: 0 12px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--color-border-default);
   border-radius: 8px;
-  background: #fff;
-  color: #475569;
+  background: var(--color-surface-raised);
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
@@ -268,25 +268,25 @@ h3 { font-size: 15px; }
 .status-label--ok { background: var(--color-success-surface); }
 .status-label--warning { background: var(--color-warning-surface); }
 .status-label--error { background: var(--color-danger-surface); }
-.status-label--ok { color: #047857; }
-.status-label--warning { color: #b45309; }
-.status-label--error { color: #b91c1c; }
+.status-label--ok { color: var(--color-success-text); }
+.status-label--warning { color: var(--color-warning-text); }
+.status-label--error { color: var(--color-danger-text); }
 
 .recent-tasks { margin-top: 20px; }
-.section-heading a { color: #4f46e5; font-size: 13px; text-decoration: none; }
-.task-list { margin: 10px 0 0; padding: 0; list-style: none; border-top: 1px solid #e2e8f0; }
-.task-list li { min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #f1f5f9; }
+.section-heading a { color: var(--color-primary); font-size: 13px; text-decoration: none; }
+.task-list { margin: 10px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--color-border-subtle); }
+.task-list li { min-height: 50px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border-subtle); }
 .task-copy { min-width: 0; display: grid; gap: 3px; }
-.task-copy strong { overflow: hidden; color: #334155; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.task-copy small { color: #94a3b8; font-size: 11px; }
-.task-status { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; background: #f1f5f9; color: #64748b; font-size: 11px; font-weight: 700; }
-.task-status--running, .task-status--leased { background: #eef2ff; color: #4f46e5; }
-.task-status--pending { background: #fffbeb; color: #b45309; }
-.task-status--succeeded { background: #ecfdf5; color: #047857; }
-.task-status--failed { background: #fef2f2; color: #b91c1c; }
-.tasks-empty, .overview-feedback { margin-top: 12px; padding: 12px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 13px; }
+.task-copy strong { overflow: hidden; color: var(--color-text-primary); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.task-copy small { color: var(--color-text-muted); font-size: 11px; }
+.task-status { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; background: var(--color-surface-subtle); color: var(--color-text-secondary); font-size: 11px; font-weight: 700; }
+.task-status--running, .task-status--leased { background: var(--color-primary-surface); color: var(--color-primary); }
+.task-status--pending { background: var(--color-warning-surface); color: var(--color-warning-text); }
+.task-status--succeeded { background: var(--color-success-surface); color: var(--color-success-text); }
+.task-status--failed { background: var(--color-danger-surface); color: var(--color-danger-text); }
+.tasks-empty, .overview-feedback { margin-top: 12px; padding: 12px; border-radius: 8px; background: var(--color-surface-subtle); color: var(--color-text-secondary); font-size: 13px; }
 .overview-feedback { display: flex; align-items: center; gap: 8px; }
-.overview-feedback--warning { background: #fffbeb; color: #92400e; }
+.overview-feedback--warning { background: var(--color-warning-surface); color: var(--color-warning-text); }
 .spin { animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

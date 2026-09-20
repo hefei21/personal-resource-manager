@@ -46,7 +46,7 @@ const headerStyle = computed(() => {
   display: flex;
   align-items: center;
   padding: 0 20px;
-  background: #fff;
+  background: var(--color-surface-raised);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
   flex-shrink: 0;
 }

@@ -161,9 +161,9 @@ function handlePageSizeChange() {
   min-width: 32px;
   height: 32px;
   padding: 0 8px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   border-radius: 4px;
-  background: #fff;
+  background: var(--color-surface-raised);
   color: var(--color-text-secondary);
   font-size: 14px;
   cursor: pointer;
@@ -181,9 +181,9 @@ function handlePageSizeChange() {
 }
 
 .native-pagination__btn--active {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
-  color: #fff;
+  color: var(--color-text-inverse);
 }
 
 .native-pagination__btn--ellipsis {
@@ -205,9 +205,9 @@ function handlePageSizeChange() {
 .native-pagination__select {
   height: 32px;
   padding: 0 8px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   border-radius: 4px;
-  background: #fff;
+  background: var(--color-surface-raised);
   color: var(--color-text-secondary);
   font-size: 14px;
   cursor: pointer;

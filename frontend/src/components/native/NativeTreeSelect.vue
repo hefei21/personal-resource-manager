@@ -328,7 +328,7 @@ const vClickOutside = {
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  background: #e8f4ff;
+  background: var(--color-primary-surface);
   color: var(--color-primary);
   border-radius: 4px;
   font-size: 12px;
@@ -347,7 +347,7 @@ const vClickOutside = {
 }
 
 .native-tree-select__tag--more {
-  background: #f0f0f0;
+  background: var(--color-surface-subtle);
   color: var(--color-text-secondary);
 }
 

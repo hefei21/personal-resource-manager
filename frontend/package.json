@@ -11,6 +11,7 @@
     "build": "vite build",
     "report:build-entry": "node scripts/report-build-entry.js",
     "test:unit": "node --test",
+    "test:theme-browser": "node scripts/theme-browser-check.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

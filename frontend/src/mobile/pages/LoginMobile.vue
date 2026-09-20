@@ -129,7 +129,7 @@ async function handleGuestLogin() {
 }
 
 .login-box {
-  background: white;
+  background: var(--color-surface-raised);
   padding: 28px 20px;
   border-radius: 16px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);

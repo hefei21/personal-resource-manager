@@ -168,7 +168,7 @@ onMounted(() => {
 }
 
 .native-tabs__tab--disabled {
-  color: #ccc;
+  color: var(--color-text-muted);
   cursor: not-allowed;
 }
 
@@ -180,8 +180,8 @@ onMounted(() => {
   height: 18px;
   padding: 0 5px;
   font-size: 11px;
-  color: #fff;
-  background: #ff4d4f;
+  color: var(--color-text-inverse);
+  background: var(--color-danger-solid);
   border-radius: 9px;
 }
 
@@ -191,7 +191,7 @@ onMounted(() => {
   bottom: -1px;
   left: 0;
   height: 2px;
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   transition: all 0.3s;
 }
 
@@ -214,11 +214,11 @@ onMounted(() => {
 }
 
 .native-tabs--card .native-tabs__tab--active {
-  background: #fff;
+  background: var(--color-surface-raised);
 }
 
 .native-tabs--card .native-tabs__content {
-  background: #fff;
+  background: var(--color-surface-raised);
   border: 1px solid var(--color-border-subtle);
   border-top: none;
   border-radius: 0 0 6px 6px;

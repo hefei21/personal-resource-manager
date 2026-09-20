@@ -6,6 +6,7 @@
       <p>{{ description }}</p>
     </header>
 
+    <ThemeControl v-if="group === 'system'" />
     <SystemStatusOverview v-if="['system', 'workspace'].includes(group)" />
 
     <div v-if="items.length" class="module-grid">
@@ -37,6 +38,7 @@ import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useViewport } from '@/composables/useViewport'
 import { navigationItemsForGroup, pageTitleForRoute } from '@/router/navigation'
+import ThemeControl from '@/components/business/ThemeControl.vue'
 import SystemStatusOverview from '@/components/business/SystemStatusOverview.vue'
 import { NativeIcon } from '@/components/native'
 
@@ -86,7 +88,7 @@ const items = computed(() => navigationItemsForGroup(group.value, {
 
 .eyebrow {
   margin: 0 0 8px;
-  color: #4f46e5;
+  color: var(--color-primary);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -94,7 +96,7 @@ const items = computed(() => navigationItemsForGroup(group.value, {
 
 h1 {
   margin: 0;
-  color: #172033;
+  color: var(--color-text-primary);
   font-size: clamp(24px, 4vw, 32px);
   letter-spacing: -0.03em;
 }
@@ -102,7 +104,7 @@ h1 {
 .group-hub-header > p:last-child {
   max-width: 680px;
   margin: 10px 0 0;
-  color: #64748b;
+  color: var(--color-text-secondary);
   line-height: 1.7;
 }
 
@@ -118,17 +120,17 @@ h1 {
   align-items: center;
   gap: 14px;
   padding: 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 12px;
-  background: #fff;
-  color: #172033;
+  background: var(--color-surface-raised);
+  color: var(--color-text-primary);
   text-decoration: none;
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .module-card:hover,
 .module-card:focus-visible {
-  border-color: #a5b4fc;
+  border-color: var(--color-primary-border);
   box-shadow: 0 8px 24px rgba(30, 41, 59, 0.08);
   outline: none;
 }
@@ -140,8 +142,8 @@ h1 {
   place-items: center;
   flex: 0 0 auto;
   border-radius: 10px;
-  background: #eef2ff;
-  color: #4f46e5;
+  background: var(--color-primary-surface);
+  color: var(--color-primary);
 }
 
 .module-copy {
@@ -155,27 +157,27 @@ h1 {
 }
 
 .module-copy small {
-  color: #64748b;
+  color: var(--color-text-secondary);
   line-height: 1.45;
 }
 
 .module-arrow {
   margin-left: auto;
-  color: #94a3b8;
+  color: var(--color-text-muted);
 }
 
 .empty-panel {
   display: flex;
   gap: 12px;
   padding: 18px;
-  border: 1px solid #dbeafe;
+  border: 1px solid var(--color-primary-border);
   border-radius: 12px;
-  background: #f8fafc;
-  color: #475569;
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
 }
 
 .empty-panel strong {
-  color: #1e293b;
+  color: var(--color-text-primary);
 }
 
 .empty-panel p {

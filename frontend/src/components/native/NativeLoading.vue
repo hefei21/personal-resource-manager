@@ -33,7 +33,7 @@ const sizeMap = {
 }
 
 .native-loading__spinner {
-  border: 2px solid #e0e0e0;
+  border: 2px solid var(--color-border-default);
   border-top-color: var(--color-primary, #5967d9);
   border-radius: 50%;
   animation: spin var(--motion-duration-spinner, 800ms) linear infinite;

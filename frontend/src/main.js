@@ -4,6 +4,9 @@ import App from './App.vue'
 import router from './router'
 import './styles/global.css'
 import { useToast } from './composables/useToast'
+import { initializeAppTheme } from './composables/useAppTheme'
+
+initializeAppTheme()
 
 const app = createApp(App)
 

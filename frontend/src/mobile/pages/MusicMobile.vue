@@ -622,13 +622,13 @@ onUnmounted(() => {
 /* ========== 基础布局 ========== */
 .mobile-music {
   min-height: 100vh;
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
 }
 
 /* ========== 歌单标签栏 ========== */
 .playlist-tabs {
-  background: #fff;
-  border-bottom: 1px solid #f0f0f0;
+  background: var(--color-surface-raised);
+  border-bottom: 1px solid var(--color-border-subtle);
   padding: 12px 0;
 }
 
@@ -647,7 +647,7 @@ onUnmounted(() => {
 .tab-item {
   flex-shrink: 0;
   padding: 8px 16px;
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
   border-radius: 16px;
   font-size: 13px;
   color: var(--color-text-secondary);
@@ -659,13 +659,13 @@ onUnmounted(() => {
 }
 
 .tab-item.active {
-  background: var(--color-primary);
-  color: #fff;
+  background: var(--color-primary-solid);
+  color: var(--color-text-inverse);
 }
 
 .tab-item.add-btn {
   padding: 8px 12px;
-  background: #e6f7ff;
+  background: var(--color-primary-surface);
   color: var(--color-primary);
 }
 
@@ -674,15 +674,15 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   padding: 12px;
-  background: #fff;
-  border-bottom: 1px solid #f0f0f0;
+  background: var(--color-surface-raised);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .search-bar {
   flex: 1;
   display: flex;
   align-items: center;
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
   border-radius: 20px;
   padding: 0 14px;
 }
@@ -706,7 +706,7 @@ onUnmounted(() => {
   height: 40px;
   border-radius: 50%;
   border: none;
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -725,9 +725,9 @@ onUnmounted(() => {
   left: 56px;
   right: 0;
   z-index: 100;
-  background: #fff;
+  background: var(--color-surface-raised);
   padding: 10px 12px 10px 8px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border-subtle);
   box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   display: flex;
   justify-content: space-between;
@@ -794,7 +794,7 @@ onUnmounted(() => {
 .spinner {
   width: 32px;
   height: 32px;
-  border: 3px solid #f0f0f0;
+  border: 3px solid var(--color-border-subtle);
   border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -804,7 +804,7 @@ onUnmounted(() => {
 .spinner-small {
   width: 20px;
   height: 20px;
-  border: 2px solid #f0f0f0;
+  border: 2px solid var(--color-border-subtle);
   border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
@@ -815,7 +815,7 @@ onUnmounted(() => {
 }
 
 .music-list {
-  background: #fff;
+  background: var(--color-surface-raised);
 }
 
 .music-item {
@@ -823,18 +823,18 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid #f8f8f8;
+  border-bottom: 1px solid var(--color-border-subtle);
   cursor: pointer;
   transition: background 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
 
 .music-item:active {
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
 }
 
 .music-item.selected {
-  background: #e6f7ff;
+  background: var(--color-primary-surface);
 }
 
 /* 封面 */
@@ -842,7 +842,7 @@ onUnmounted(() => {
   width: 48px;
   height: 48px;
   border-radius: 6px;
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -857,7 +857,7 @@ onUnmounted(() => {
 }
 
 .song-cover :deep(.t-icon) {
-  color: #ccc;
+  color: var(--color-text-muted);
 }
 
 /* 歌曲信息 */
@@ -927,14 +927,14 @@ onUnmounted(() => {
   left: 0;
   width: 22px;
   height: 22px;
-  background: #fff;
+  background: var(--color-surface-raised);
   border: 2px solid #d9d9d9;
   border-radius: 50%;
   transition: all 0.2s;
 }
 
 .checkbox-wrap input:checked ~ .checkmark {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
 }
 
@@ -946,7 +946,7 @@ onUnmounted(() => {
   top: 2px;
   width: 5px;
   height: 10px;
-  border: solid white;
+  border: solid var(--color-surface-raised);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
@@ -993,7 +993,7 @@ onUnmounted(() => {
   left: 50%;
   transform: translate(-50%, -50%);
   background: rgba(0, 0, 0, 0.7);
-  color: #fff;
+  color: var(--color-text-inverse);
   padding: 12px 24px;
   border-radius: 20px;
   font-size: 14px;
@@ -1026,7 +1026,7 @@ onUnmounted(() => {
 
 /* ========== 筛选抽屉 ========== */
 .filter-drawer {
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 16px 16px 0 0;
   max-height: 70vh;
   display: flex;
@@ -1044,7 +1044,7 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .drawer-header span {
@@ -1057,7 +1057,7 @@ onUnmounted(() => {
   height: 32px;
   border-radius: 50%;
   border: none;
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1075,7 +1075,7 @@ onUnmounted(() => {
   display: flex;
   gap: 12px;
   padding: 16px 20px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .drawer-footer button {
@@ -1088,18 +1088,18 @@ onUnmounted(() => {
 }
 
 .btn-secondary {
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
   color: var(--color-text-secondary);
 }
 
 .btn-primary {
-  background: var(--color-primary);
-  color: #fff;
+  background: var(--color-primary-solid);
+  color: var(--color-text-inverse);
 }
 
 .btn-danger {
   background: var(--color-danger);
-  color: #fff;
+  color: var(--color-text-inverse);
 }
 
 /* 筛选选项 */
@@ -1123,7 +1123,7 @@ onUnmounted(() => {
 
 .filter-chip {
   padding: 8px 14px;
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
   border-radius: 16px;
   font-size: 13px;
   color: var(--color-text-secondary);
@@ -1132,8 +1132,8 @@ onUnmounted(() => {
 }
 
 .filter-chip.active {
-  background: var(--color-primary);
-  color: #fff;
+  background: var(--color-primary-solid);
+  color: var(--color-text-inverse);
 }
 
 /* 筛选选择按钮 */
@@ -1142,7 +1142,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
   border-radius: 8px;
   font-size: 14px;
   color: var(--color-text-primary);
@@ -1151,7 +1151,7 @@ onUnmounted(() => {
 }
 
 .filter-select-btn.active {
-  background: #e6f7ff;
+  background: var(--color-primary-surface);
   color: var(--color-primary);
 }
 
@@ -1161,7 +1161,7 @@ onUnmounted(() => {
 
 /* 选择列表抽屉 */
 .select-list-drawer {
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 16px 16px 0 0;
   max-height: 70vh;
   display: flex;
@@ -1183,12 +1183,12 @@ onUnmounted(() => {
   font-size: 15px;
   color: var(--color-text-primary);
   cursor: pointer;
-  border-bottom: 1px solid #f8f8f8;
+  border-bottom: 1px solid var(--color-border-subtle);
   transition: background 0.15s;
 }
 
 .select-list-item:active {
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
 }
 
 .select-list-item.active {
@@ -1202,7 +1202,7 @@ onUnmounted(() => {
 
 /* ========== 底部操作菜单 ========== */
 .action-sheet {
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 16px 16px 0 0;
   animation: slideUp 0.3s ease;
 }
@@ -1212,7 +1212,7 @@ onUnmounted(() => {
   padding: 16px;
   font-size: 13px;
   color: var(--color-text-muted);
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1231,11 +1231,11 @@ onUnmounted(() => {
   font-size: 15px;
   color: var(--color-text-primary);
   cursor: pointer;
-  border-bottom: 1px solid #f8f8f8;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .sheet-item:active {
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
 }
 
 .sheet-item.delete {
@@ -1247,12 +1247,12 @@ onUnmounted(() => {
   padding: 16px;
   font-size: 15px;
   color: var(--color-text-secondary);
-  border-top: 8px solid #f5f7fa;
+  border-top: 8px solid var(--color-border-subtle);
   cursor: pointer;
 }
 
 .sheet-cancel:active {
-  background: #f5f7fa;
+  background: var(--color-surface-subtle);
 }
 
 /* ========== 弹窗 ========== */
@@ -1273,7 +1273,7 @@ onUnmounted(() => {
 }
 
 .modal-container {
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 12px;
   width: 100%;
   max-width: 400px;
@@ -1295,7 +1295,7 @@ onUnmounted(() => {
   padding: 16px 20px;
   font-size: 16px;
   font-weight: 600;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .modal-body {
@@ -1306,7 +1306,7 @@ onUnmounted(() => {
   display: flex;
   gap: 12px;
   padding: 16px 20px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .modal-footer button {

@@ -48,6 +48,7 @@ import RepositorySearch from '@/components/RepositorySearch.vue'
 import RepositoryTaskStatus from '@/components/RepositoryTaskStatus.vue'
 import CodeSourcePreview from '@/components/CodeSourcePreview.vue'
 import { useRepositoryTasks } from '@/composables/useRepositoryTasks'
+import { useAppTheme } from '@/composables/useAppTheme'
 import { isReadOnlyRepository, repositorySourceLabel } from '@/utils/codeRepositoryCapabilities'
 import { resolveRepositoryLink, scrollRepositoryAnchor } from '@/utils/repositoryNavigation'
 import { sanitizeRichHtml, escapeHtml } from '@/utils/sanitizeHtml'
@@ -64,7 +65,7 @@ const directory = computed(() => typeof route.query.dir === 'string' ? route.que
 const filePath = computed(() => typeof route.query.path === 'string' ? route.query.path : '')
 const searchLine = computed(() => { const value = Number(route.query.line); return Number.isSafeInteger(value) && value > 0 ? value : null })
 const isMarkdown = computed(() => /\.(md|markdown)$/i.test(filePath.value))
-const theme = ref(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light')
+const { resolved: theme } = useAppTheme()
 let disposed = false, listSequence = 0, navigation = 0, previewSequence = 0
 const sequences = { readme: 0, files: 0, commits: 0 }
 function navigate(patch) {

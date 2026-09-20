@@ -460,6 +460,7 @@
           :modelValue="previewContent"
           :sanitize="sanitizeRichHtml"
           :previewTheme="'default'"
+          :theme="appTheme"
           class="mobile-md-preview"
         />
 
@@ -514,6 +515,8 @@ import hljs from 'highlight.js'
 import 'highlight.js/styles/atom-one-dark.css'
 import mammoth from 'mammoth'
 import api from '@/api'
+import { useAppTheme } from '@/composables/useAppTheme'
+const { resolved: appTheme } = useAppTheme()
 import { authenticatedAssetUrl } from '@/utils/authentication'
 import { normalizeDocumentTags } from '@/utils/documentTags'
 import {
@@ -1759,12 +1762,12 @@ onBeforeUnmount(() => {
 }
 
 .document-type-icon--pdf { color: var(--color-danger-text); background: var(--color-danger-surface); }
-.document-type-icon--word { color: #3564b8; background: #edf4ff; }
+.document-type-icon--word { color: var(--color-info-text); background: var(--color-primary-surface); }
 .document-type-icon--sheet { color: var(--color-success-text); background: var(--color-success-surface); }
 .document-type-icon--slides { color: var(--color-warning-text); background: var(--color-warning-surface); }
-.document-type-icon--markdown { color: #6a4fb0; background: #f2efff; }
-.document-type-icon--image { color: #087c8f; background: #e9f7f8; }
-.document-type-icon--code { color: #4f6078; background: #edf0f5; }
+.document-type-icon--markdown { color: var(--color-violet-text); background: var(--color-violet-surface); }
+.document-type-icon--image { color: var(--color-cyan-text); background: var(--color-cyan-surface); }
+.document-type-icon--code { color: var(--color-text-secondary); background: var(--color-surface-subtle); }
 .document-type-icon--text { color: var(--color-text-secondary); background: var(--color-surface-subtle); }
 
 .file-info {
@@ -1793,7 +1796,7 @@ onBeforeUnmount(() => {
 }
 
 .file-meta .divider {
-  color: #ddd;
+  color: var(--color-text-muted);
 }
 
 .file-tags {
@@ -1907,7 +1910,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .popup-header h3 {
@@ -1935,7 +1938,7 @@ onBeforeUnmount(() => {
 
 .popup-footer-btns {
   padding-top: 12px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .preview-body {
@@ -1974,7 +1977,7 @@ onBeforeUnmount(() => {
 }
 .pdf-preview canvas {
   max-width: 100%;
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   border-radius: 4px;
 }
 .pdf-controls {
@@ -2017,7 +2020,7 @@ onBeforeUnmount(() => {
 }
 .office-content table td,
 .office-content table th {
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   padding: 4px 6px;
 }
 .office-preview, .unsupported-preview {
@@ -2170,7 +2173,7 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 10px;
     padding: 10px 0;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--color-border-subtle);
   }
 
   .upload-conflict-suggestion {
@@ -2189,13 +2192,13 @@ onBeforeUnmount(() => {
     display: flex;
     gap: 8px;
     padding: 8px;
-    border: 1px solid #e7e7e7;
+    border: 1px solid var(--color-border-subtle);
     border-radius: 6px;
   }
 
   .upload-conflict-candidate.hash-match {
     border-color: var(--color-warning);
-    background: #fff7ed;
+    background: var(--color-warning-surface);
   }
 
   .upload-conflict-candidate-body {
@@ -2323,7 +2326,7 @@ onBeforeUnmount(() => {
   display: block;
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-sm);
-  background: white;
+  background: var(--color-surface-raised);
   box-shadow: var(--shadow-md);
 }
 .native-preview-body .pdf-controls {
@@ -2411,7 +2414,7 @@ onBeforeUnmount(() => {
 }
 .native-preview-body .office-content table td,
 .native-preview-body .office-content table th {
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   padding: 6px 8px;
   color: var(--color-text-primary);
 }

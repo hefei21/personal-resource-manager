@@ -2068,7 +2068,7 @@ onUnmounted(() => {
 
 .drag-content {
   text-align: center;
-  color: white;
+  color: var(--color-text-inverse);
 }
 
 .drag-content p {
@@ -2126,7 +2126,7 @@ onUnmounted(() => {
 .sidebar {
   width: 200px;
   flex-shrink: 0;
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   overflow: hidden;
@@ -2140,8 +2140,8 @@ onUnmounted(() => {
   align-items: center;
   padding: 12px 16px;
   font-weight: 500;
-  border-bottom: 1px solid #f0f0f0;
-  background: #fafafa;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-subtle);
 }
 
 .sidebar-actions {
@@ -2150,7 +2150,7 @@ onUnmounted(() => {
 }
 
 .playlist-list {
-  background: white;
+  background: var(--color-surface-raised);
   padding: 8px 4px;
   min-height: auto;
 }
@@ -2172,8 +2172,8 @@ onUnmounted(() => {
 }
 
 .playlist-item.active {
-  background: linear-gradient(135deg, #e6f7ff 0%, #f0f7ff 100%);
-  color: #1890ff;
+  background: linear-gradient(135deg, var(--color-primary-surface) 0%, #f0f7ff 100%);
+  color: var(--color-primary);
   font-weight: 500;
 }
 
@@ -2214,7 +2214,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
-  background: #e6f7ff;
+  background: var(--color-primary-surface);
   border-radius: 4px;
   margin-bottom: 12px;
 }
@@ -2326,7 +2326,7 @@ onUnmounted(() => {
 
 .upload-dropzone:hover,
 .upload-dropzone.is-dragging {
-  border-color: #1890ff;
+  border-color: var(--color-primary);
   background: #f0f7ff;
 }
 
@@ -2342,7 +2342,7 @@ onUnmounted(() => {
 
 .upload-queue {
   margin-top: 16px;
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--color-border-subtle);
   padding-top: 16px;
 }
 
@@ -2362,7 +2362,7 @@ onUnmounted(() => {
   flex-direction: column;
   padding: 8px 0;
   gap: 4px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .file-info {
@@ -2482,11 +2482,11 @@ onUnmounted(() => {
 .music{padding:0}.toolbar-card{padding:0 0 18px;border-bottom:1px solid var(--color-border-subtle);background:transparent}
 .toolbar{flex-wrap:wrap;gap:12px}.toolbar-left{flex-wrap:wrap;gap:8px}.toolbar-right{gap:8px}
 .main-content{gap:24px}.sidebar{background:var(--color-surface-subtle);box-shadow:none;border-radius:8px;width:200px}
-.sidebar-header,.playlist-list{background:transparent}.playlist-item.active{background:var(--color-primary-light,#efefff);color:var(--color-primary)}
+.sidebar-header,.playlist-list{background:transparent}.playlist-item.active{background:var(--color-primary-surface);color:var(--color-primary)}
 .playlist-item{font-size:14px}.playlist-item>span:first-of-type{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .music-list-container{padding-right:0}.library-heading{display:flex;align-items:center;justify-content:space-between;padding:2px 0 18px;gap:12px}.library-heading h3{font-size:16px;margin:0 0 5px}.library-heading span{font-size:12px;color:var(--color-text-secondary)}
 .song-title-link{border:0;background:transparent;text-align:left;font:inherit;cursor:pointer;color:inherit;padding:0}.song-title-link:hover{color:var(--color-primary)}
-.operation-btns{gap:4px}.operation-btns :deep(svg){width:16px;height:16px}.batch-actions{flex-wrap:wrap;background:var(--color-primary-light,#efefff);border-radius:6px}
+.operation-btns{gap:4px}.operation-btns :deep(svg){width:16px;height:16px}.batch-actions{flex-wrap:wrap;background:var(--color-primary-surface);border-radius:6px}
 .music-feedback{padding:10px 12px;margin-bottom:12px;font-size:13px;background:var(--color-surface-subtle);border-radius:6px}
 .song-details h2{font-size:20px;line-height:1.5;overflow-wrap:anywhere}.song-details p{color:var(--color-text-secondary);font-size:14px}.song-details dl{display:grid;grid-template-columns:70px 1fr;gap:18px 12px;padding:20px 0;font-size:14px}.song-details dt{color:var(--color-text-secondary)}.song-details dd{margin:0;overflow-wrap:anywhere}.detail-actions,.detail-secondary{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}.detail-secondary{padding-top:16px;border-top:1px solid var(--color-border-subtle)}
 </style>

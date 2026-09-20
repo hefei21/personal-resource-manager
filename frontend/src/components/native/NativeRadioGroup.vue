@@ -127,7 +127,7 @@ provide('radioName', 'radio-' + Math.random().toString(36).substr(2, 9))
 
 .native-radio-group--filled {
   gap: 0;
-  border: 1px solid #dcdcdc;
+  border: 1px solid var(--color-border-default);
   border-radius: 6px;
   overflow: hidden;
 }

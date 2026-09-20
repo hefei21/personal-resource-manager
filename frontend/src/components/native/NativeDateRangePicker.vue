@@ -546,35 +546,35 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__day--selected {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   color: var(--color-text-inverse);
   font-weight: 500;
 }
 
 .native-date-range-picker__day--selected:hover {
-  background: var(--color-primary-hover);
+  background: var(--color-primary-solid-hover);
 }
 
 /* 开始日期 - 蓝色背景白字 */
 .native-date-range-picker__day--start {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   color: var(--color-text-inverse);
   font-weight: 500;
 }
 
 .native-date-range-picker__day--start:hover {
-  background: var(--color-primary-hover);
+  background: var(--color-primary-solid-hover);
 }
 
 /* 结束日期 - 蓝色背景白字 */
 .native-date-range-picker__day--end {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   color: var(--color-text-inverse);
   font-weight: 500;
 }
 
 .native-date-range-picker__day--end:hover {
-  background: var(--color-primary-hover);
+  background: var(--color-primary-solid-hover);
 }
 
 /* 范围内日期 - 浅蓝色背景，深色文字 */
@@ -640,12 +640,12 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__btn--primary {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border: none;
   color: var(--color-text-inverse);
 }
 
 .native-date-range-picker__btn--primary:hover {
-  background: var(--color-primary-hover);
+  background: var(--color-primary-solid-hover);
 }
 </style>

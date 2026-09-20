@@ -380,9 +380,9 @@ async function handleMobilePasswordChange() {
 /* 退出按钮 */
 .logout-btn {
   padding: 6px 12px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid var(--color-border-default);
   border-radius: 4px;
-  background: white;
+  background: var(--color-surface-raised);
   color: var(--color-text-secondary);
   font-size: 13px;
   cursor: pointer;
@@ -419,8 +419,8 @@ async function handleMobilePasswordChange() {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   padding: 5px max(4px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
-  border-top: 1px solid #e2e8f0;
-  background: rgba(255, 255, 255, 0.96);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-raised);
   backdrop-filter: blur(16px);
   box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.06);
 }
@@ -436,7 +436,7 @@ async function handleMobilePasswordChange() {
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: #64748b;
+  color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 600;
   overflow: hidden;
@@ -445,8 +445,8 @@ async function handleMobilePasswordChange() {
 }
 
 .bottom-navigation-item.active {
-  color: #4f46e5;
-  background: #eef2ff;
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
 }
 
 .bottom-navigation-item:focus-visible {
@@ -456,7 +456,7 @@ async function handleMobilePasswordChange() {
 
 @media (hover: none) and (pointer: coarse) {
   .username-link:hover { color: var(--color-primary); background: transparent; }
-  .logout-btn:hover { border-color: #e0e0e0; color: var(--color-text-secondary); box-shadow: none; }
+  .logout-btn:hover { border-color: var(--color-border-default); color: var(--color-text-secondary); box-shadow: none; }
 }
 
 /* 全局loading覆盖层 */
@@ -466,7 +466,7 @@ async function handleMobilePasswordChange() {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--color-surface-raised);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -484,7 +484,7 @@ async function handleMobilePasswordChange() {
 .native-loading .spinner {
   width: 24px;
   height: 24px;
-  border: 2px solid #e0e0e0;
+  border: 2px solid var(--color-border-default);
   border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
@@ -511,7 +511,7 @@ async function handleMobilePasswordChange() {
   font-size: 13px;
   margin-top: 8px;
   padding: 8px 12px;
-  background: #fff2f0;
+  background: var(--color-danger-surface);
   border-radius: 4px;
 }
 

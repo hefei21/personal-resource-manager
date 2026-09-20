@@ -72,6 +72,7 @@
           <h2>{{ pageTitle }}</h2>
         </div>
         <div class="user-info">
+          <ThemeControl compact />
           <span 
             v-if="!authStore.isGuest()" 
             class="username-link" 
@@ -129,6 +130,7 @@
 </template>
 
 <script setup>
+import ThemeControl from '@/components/business/ThemeControl.vue'
 import { ref, computed, onUnmounted, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
@@ -482,7 +484,7 @@ async function handlePasswordChange() {
 
 .menu-group:hover,
 .menu-group.active {
-  color: #a5b4fc;
+  color: var(--color-sidebar-accent);
 }
 
 .menu-item {
@@ -508,17 +510,17 @@ async function handlePasswordChange() {
 
 .menu-item:hover {
   background: rgba(148, 163, 184, 0.12);
-  color: white;
+  color: var(--color-text-inverse);
 }
 
 .menu-item.active {
   background: rgba(89, 103, 217, 0.22);
-  color: white;
+  color: var(--color-text-inverse);
   box-shadow: inset 0 0 0 1px rgba(165, 180, 252, 0.12);
 }
 
 .menu-item.active .menu-icon-shell {
-  color: #c7d2fe;
+  color: var(--color-sidebar-accent);
   background: rgba(199, 210, 254, 0.12);
 }
 
@@ -640,7 +642,7 @@ async function handlePasswordChange() {
   left: 256px;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--color-surface-raised);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -658,7 +660,7 @@ async function handlePasswordChange() {
 .native-loading .spinner {
   width: 32px;
   height: 32px;
-  border: 3px solid #e0e0e0;
+  border: 3px solid var(--color-border-default);
   border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
@@ -685,7 +687,7 @@ async function handlePasswordChange() {
   font-size: 13px;
   margin-top: 8px;
   padding: 8px 12px;
-  background: #fff2f0;
+  background: var(--color-danger-surface);
   border-radius: 4px;
 }
 

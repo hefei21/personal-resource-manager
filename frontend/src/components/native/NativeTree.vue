@@ -346,7 +346,7 @@ defineExpose({
 }
 
 .native-tree-node--selected {
-  background: #e6f7ff;
+  background: var(--color-primary-surface);
 }
 
 .native-tree-node--disabled {
@@ -402,7 +402,7 @@ defineExpose({
 .native-tree-node__checkbox-inner {
   width: 16px;
   height: 16px;
-  border: 2px solid #dcdcdc;
+  border: 2px solid var(--color-border-default);
   border-radius: 3px;
   display: flex;
   align-items: center;
@@ -411,13 +411,13 @@ defineExpose({
 }
 
 .native-tree-node__checkbox--checked {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
-  color: #fff;
+  color: var(--color-text-inverse);
 }
 
 .native-tree-node__checkbox--indeterminate {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
 }
 
@@ -425,7 +425,7 @@ defineExpose({
   content: '';
   width: 8px;
   height: 2px;
-  background: #fff;
+  background: var(--color-surface-raised);
 }
 
 .native-tree-node__label {

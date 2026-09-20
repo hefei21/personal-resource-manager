@@ -41,11 +41,11 @@ defineEmits(['close'])
 .native-tag--light.native-tag--warning { background: var(--color-warning-surface); color: var(--color-warning-text); }
 .native-tag--light.native-tag--danger { background: var(--color-danger-surface); color: var(--color-danger-text); }
 
-.native-tag--solid.native-tag--default { background: var(--color-text-secondary); color: var(--color-text-inverse); }
-.native-tag--solid.native-tag--primary { background: var(--color-primary); color: var(--color-text-inverse); }
-.native-tag--solid.native-tag--success { background: var(--color-success); color: var(--color-text-inverse); }
-.native-tag--solid.native-tag--warning { background: var(--color-warning); color: var(--color-text-inverse); }
-.native-tag--solid.native-tag--danger { background: var(--color-danger); color: var(--color-text-inverse); }
+.native-tag--solid.native-tag--default { background: var(--color-neutral-solid); color: var(--color-text-inverse); }
+.native-tag--solid.native-tag--primary { background: var(--color-primary-solid); color: var(--color-text-inverse); }
+.native-tag--solid.native-tag--success { background: var(--color-success-solid); color: var(--color-text-inverse); }
+.native-tag--solid.native-tag--warning { background: var(--color-warning-solid); color: var(--color-text-inverse); }
+.native-tag--solid.native-tag--danger { background: var(--color-danger-solid); color: var(--color-text-inverse); }
 
 .native-tag--outline.native-tag--default { background: transparent; border: 1px solid var(--color-border-default); color: var(--color-text-secondary); }
 .native-tag--outline.native-tag--primary { background: transparent; border: 1px solid var(--color-primary-border); color: var(--color-primary); }

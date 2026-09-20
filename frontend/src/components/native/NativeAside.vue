@@ -47,7 +47,7 @@ onMounted(() => {
 <style scoped>
 .native-aside {
   flex-shrink: 0;
-  background: #fff;
+  background: var(--color-surface-raised);
   border-right: 1px solid var(--color-border-subtle);
   overflow-y: auto;
 }

@@ -1,4 +1,4 @@
-/* 阶段 7.1 语义化设计变量：先作为稳定基线，旧页面可继续使用历史值。 */
+/* Shared application palette. Solid fills stay separate from theme-aware text accents. */
 :root {
   color-scheme: light;
 
@@ -8,6 +8,7 @@
   --color-sidebar-active: #2d3b5c;
   --color-sidebar-text: #e4e9f3;
   --color-sidebar-text-muted: #98a5bd;
+  --color-sidebar-accent: #cbd0ff;
   --color-surface-page: #f5f6f8;
   --color-surface-raised: #fffdfa;
   --color-surface-subtle: #eef1f5;
@@ -16,7 +17,7 @@
   /* Text hierarchy. */
   --color-text-primary: #202938;
   --color-text-secondary: #5b6678;
-  --color-text-muted: #8993a4;
+  --color-text-muted: #606d80;
   --color-text-disabled: #aeb6c3;
   --color-text-inverse: #ffffff;
 
@@ -25,9 +26,17 @@
   --color-border-default: #d9dee7;
   --color-border-strong: #c5ccd8;
   --color-focus-ring: #5967d9;
-  --color-primary: #5967d9;
+  --color-primary: #505dc4;
   --color-primary-hover: #4b58c6;
   --color-primary-active: #414cae;
+  --color-primary-solid: #5967d9;
+  --color-primary-solid-hover: #4b58c6;
+  --color-success-solid: #087663;
+  --color-warning-solid: #8c4f10;
+  --color-danger-solid: #b53b4b;
+  --color-neutral-solid: #5b6678;
+  --color-interaction-hover: rgba(23, 32, 51, 0.05);
+  --color-overlay: rgba(12, 18, 30, 0.48);
   --color-primary-surface: #eef0ff;
   --color-primary-border: #cbd0ff;
   --color-primary-alpha-05: rgba(89, 103, 217, 0.05);
@@ -42,21 +51,25 @@
   --color-info-text: #4252bb;
   --color-info-surface: #eef0ff;
   --color-info-border: #cbd0ff;
-  --color-success: #0f9f86;
+  --color-success: #087663;
   --color-success-hover: #0b866f;
   --color-success-text: #087663;
   --color-success-surface: #e9f8f4;
   --color-success-border: #bce8dc;
-  --color-warning: #b76a18;
+  --color-warning: #8c4f10;
   --color-warning-hover: #985613;
   --color-warning-text: #8c4f10;
   --color-warning-surface: #fff6e8;
   --color-warning-border: #f0d3a7;
-  --color-danger: #c94d5a;
+  --color-danger: #b53b4b;
   --color-danger-hover: #b43f4b;
   --color-danger-text: #a33b47;
   --color-danger-surface: #fff0f2;
   --color-danger-border: #f2cbd0;
+  --color-violet-text: #6a4fb0;
+  --color-violet-surface: #f2efff;
+  --color-cyan-text: #087c8f;
+  --color-cyan-surface: #e9f7f8;
 
   /* Radius and elevation. */
   --radius-xs: 4px;
@@ -101,6 +114,68 @@
   --motion-easing-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
   --opacity-disabled: 0.52;
 }
+
+:root[data-theme='dark'], .ebook-reader--dark {
+  color-scheme: dark;
+  --color-sidebar: #101827;
+  --color-sidebar-hover: #1d2a40;
+  --color-sidebar-active: #293854;
+  --color-sidebar-text: #e7edf6;
+  --color-sidebar-text-muted: #aab7cb;
+  --color-surface-page: #101722;
+  --color-surface-raised: #192230;
+  --color-surface-subtle: #141d2a;
+  --color-surface-inverse: #101827;
+  --color-text-primary: #e7edf6;
+  --color-text-secondary: #b2bfd1;
+  --color-text-muted: #99a8be;
+  --color-text-disabled: #8290a5;
+  --color-border-subtle: #303d50;
+  --color-border-default: #596b83;
+  --color-border-strong: #73859f;
+  --color-focus-ring: #aab5ff;
+  --color-primary: #abb6ff;
+  --color-primary-hover: #c3cbff;
+  --color-primary-active: #95a4ff;
+  --color-primary-surface: #263253;
+  --color-primary-border: #6477bd;
+  --color-info-text: #b7c3ff;
+  --color-info-surface: #263253;
+  --color-info-border: #6477bd;
+  --color-success: #6adbbd;
+  --color-success-hover: #8de6cd;
+  --color-success-text: #86dfc6;
+  --color-success-surface: #173d38;
+  --color-success-border: #347866;
+  --color-warning: #e9ba72;
+  --color-warning-hover: #f3cf98;
+  --color-warning-text: #f3cb8d;
+  --color-warning-surface: #44331e;
+  --color-warning-border: #917344;
+  --color-danger: #f298a2;
+  --color-danger-hover: #ffc0c7;
+  --color-danger-text: #ffadb7;
+  --color-danger-surface: #442735;
+  --color-danger-border: #945665;
+  --color-violet-text: #cbb7ff;
+  --color-violet-surface: #342b4c;
+  --color-cyan-text: #7ed6e2;
+  --color-cyan-surface: #173b44;
+  --color-interaction-hover: rgba(231, 237, 246, 0.07);
+  --color-overlay: rgba(3, 7, 14, 0.65);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.22);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+/* Native controls inherit the application theme; image/content renderers keep
+   their own colors. Focus is visible without a persistent click glow. */
+:where(button, input, textarea, select) { font: inherit; }
+:where(button, a, input, textarea, select, summary):focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+::selection { background: var(--color-primary-surface); color: var(--color-text-primary); }
 
 /* 滚动条美化 - 简洁细窄 */
 ::-webkit-scrollbar {

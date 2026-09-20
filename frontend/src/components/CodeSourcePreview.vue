@@ -34,4 +34,13 @@ watch(() => [props.content, props.line], async () => {
 .code-source__text code{font:inherit;line-height:inherit}
 .code-source__text.has-target{background:linear-gradient(to bottom,transparent var(--target-top),var(--color-primary-surface) var(--target-top),var(--color-primary-surface) calc(var(--target-top) + 22px),transparent calc(var(--target-top) + 22px))}
 .code-source__notice{margin:0;padding:10px 16px;font-size:13px;background:var(--color-surface-subtle);color:var(--color-text-secondary)}
+/* Keep source syntax tied to this surface, independent of preview CSS load order. */
+.code-source :deep(.hljs-comment), .code-source :deep(.hljs-quote) { color: var(--color-text-muted); }
+.code-source :deep(.hljs-keyword), .code-source :deep(.hljs-selector-tag), .code-source :deep(.hljs-literal) { color: var(--color-danger-text); }
+.code-source :deep(.hljs-string), .code-source :deep(.hljs-regexp), .code-source :deep(.hljs-attr) { color: var(--color-info-text); }
+.code-source :deep(.hljs-number), .code-source :deep(.hljs-symbol), .code-source :deep(.hljs-built_in) { color: var(--color-success-text); }
+.code-source :deep(.hljs-title), .code-source :deep(.hljs-type), .code-source :deep(.hljs-section) { color: var(--color-violet-text); }
+.code-source :deep(.hljs-variable), .code-source :deep(.hljs-name), .code-source :deep(.hljs-params), .code-source :deep(.hljs-punctuation) { color: inherit; }
+.code-source :deep(.hljs-addition) { color: var(--color-success-text); background: var(--color-success-surface); }
+.code-source :deep(.hljs-deletion) { color: var(--color-danger-text); background: var(--color-danger-surface); }
 </style>

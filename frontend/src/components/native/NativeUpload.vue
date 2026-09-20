@@ -662,7 +662,7 @@ defineExpose({
 
 .native-upload__progress-bar {
   height: 100%;
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   transition: width 0.3s;
 }
 
@@ -682,7 +682,7 @@ defineExpose({
 }
 
 .native-upload__status-icon--cancelled {
-  color: #8c8c8c;
+  color: var(--color-text-muted);
 }
 
 .native-upload__remove {
@@ -696,6 +696,6 @@ defineExpose({
 }
 
 .native-upload__remove:hover {
-  color: #ff4d4f;
+  color: var(--color-danger-text);
 }
 </style>

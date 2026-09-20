@@ -124,12 +124,12 @@ function toggleSelect() {
 }
 
 .native-tree-node__content--selected {
-  background: #e8f4ff;
+  background: var(--color-primary-surface);
   color: var(--color-primary);
 }
 
 .native-tree-node__content--disabled {
-  color: #ccc;
+  color: var(--color-text-muted);
   cursor: not-allowed;
 }
 
@@ -167,7 +167,7 @@ function toggleSelect() {
 .native-tree-node__checkbox-inner {
   width: 16px;
   height: 16px;
-  border: 2px solid #dcdcdc;
+  border: 2px solid var(--color-border-default);
   border-radius: 3px;
   display: flex;
   align-items: center;
@@ -176,13 +176,13 @@ function toggleSelect() {
 }
 
 .native-tree-node__checkbox--checked {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
-  color: #fff;
+  color: var(--color-text-inverse);
 }
 
 .native-tree-node__checkbox--indeterminate {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
 }
 
@@ -190,7 +190,7 @@ function toggleSelect() {
   content: '';
   width: 8px;
   height: 2px;
-  background: #fff;
+  background: var(--color-surface-raised);
 }
 
 .native-tree-node__label {

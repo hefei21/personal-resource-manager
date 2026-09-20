@@ -578,10 +578,10 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
 }
 
 .resource-stat-icon--cyan { color: #0f766e; background: #e6f7f5; }
-.resource-stat-icon--amber { color: #a16207; background: #fef3c7; }
-.resource-stat-icon--emerald { color: #047857; background: #dff7ec; }
+.resource-stat-icon--amber { color: var(--color-warning-text); background: var(--color-warning-surface); }
+.resource-stat-icon--emerald { color: var(--color-success-text); background: #dff7ec; }
 .resource-stat-icon--rose { color: #be4166; background: #fff0f4; }
-.resource-stat-icon--slate { color: #475569; background: #e9edf3; }
+.resource-stat-icon--slate { color: var(--color-text-secondary); background: #e9edf3; }
 .resource-stat-icon--violet { color: #7357b5; background: #f2edff; }
 
 .stat-value {
@@ -695,7 +695,7 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
 .btn-outline {
   padding: 6px 12px;
   background: transparent;
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   border-radius: 6px;
   font-size: 13px;
   color: var(--color-text-secondary);
@@ -715,10 +715,10 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border: none;
   border-radius: 6px;
-  color: #fff;
+  color: var(--color-text-inverse);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -817,12 +817,12 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
 }
 
 .calendar-day.other-month {
-  color: #ccc;
+  color: var(--color-text-muted);
 }
 
 .calendar-day.today {
   background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
-  color: white;
+  color: var(--color-text-inverse);
   box-shadow: 0 4px 12px var(--color-primary-alpha-40);
 }
 
@@ -847,11 +847,11 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
   width: 16px;
   height: 2px;
   border-radius: 1px;
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
 }
 
 .calendar-day.today .todo-dot {
-  background: white;
+  background: var(--color-surface-raised);
 }
 
 /* Todo List 样式 */
@@ -860,7 +860,7 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
   width: 100%;
   margin-top: 24px;
   padding: 16px;
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--color-border-subtle);
   clear: both;
 }
 
@@ -888,13 +888,13 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
   align-items: center;
   gap: 6px;
   padding: 8px 6px;
-  background: #f9f9f9;
+  background: var(--color-surface-subtle);
   border-radius: 8px;
   transition: all 0.2s ease;
 }
 
 .todo-item:hover {
-  background: #f0f0f0;
+  background: var(--color-surface-subtle);
 }
 
 .todo-item.completed .todo-input {
@@ -929,14 +929,14 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
 .checkbox-custom {
   width: 18px;
   height: 18px;
-  border: 2px solid #ccc;
+  border: 2px solid var(--color-border-default);
   border-radius: 4px;
   transition: all 0.2s;
   position: relative;
 }
 
 .checkbox-wrapper input[type="checkbox"]:checked + .checkbox-custom {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
 }
 
@@ -947,7 +947,7 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
   top: 1px;
   width: 4px;
   height: 9px;
-  border: solid white;
+  border: solid var(--color-surface-raised);
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
@@ -987,7 +987,7 @@ a.resource-stat-card{color:inherit;text-decoration:none}a.resource-stat-card:foc
 }
 
 .todo-input::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--color-interaction-hover);
   border-radius: 2px;
 }
 

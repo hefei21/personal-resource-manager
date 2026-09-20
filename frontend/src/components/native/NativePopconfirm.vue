@@ -228,7 +228,7 @@ onUnmounted(() => {
 }
 
 .native-popconfirm__popup {
-  background: #fff;
+  background: var(--color-surface-raised);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
   padding: 12px 16px;
@@ -244,7 +244,7 @@ onUnmounted(() => {
 
 .native-popconfirm__icon {
   flex-shrink: 0;
-  color: var(--color-warning);
+  color: var(--color-warning-solid);
 }
 
 .native-popconfirm__message {
@@ -265,8 +265,8 @@ onUnmounted(() => {
   font-size: 14px;
   cursor: pointer;
   transition: all 0.2s;
-  border: 1px solid #dcdcdc;
-  background: #fff;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-raised);
   outline: none;
 }
 
@@ -285,34 +285,34 @@ onUnmounted(() => {
 }
 
 .native-popconfirm__btn--confirm {
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   border-color: var(--color-primary);
-  color: #fff;
+  color: var(--color-text-inverse);
 }
 
 .native-popconfirm__btn--confirm:hover {
-  background: #003bb3;
-  border-color: #003bb3;
+  background: var(--color-primary-solid);
+  border-color: var(--color-primary);
 }
 
 .native-popconfirm__btn--warning {
-  background: var(--color-warning);
-  border-color: var(--color-warning);
+  background: var(--color-warning-solid);
+  border-color: var(--color-warning-solid);
 }
 
 .native-popconfirm__btn--warning:hover {
-  background: #d9661a;
-  border-color: #d9661a;
+  background: var(--color-warning-solid);
+  border-color: var(--color-warning-solid);
 }
 
 .native-popconfirm__btn--danger {
-  background: var(--color-danger);
-  border-color: var(--color-danger);
+  background: var(--color-danger-solid);
+  border-color: var(--color-danger-solid);
 }
 
 .native-popconfirm__btn--danger:hover {
-  background: #d13b47;
-  border-color: #d13b47;
+  background: var(--color-danger-solid);
+  border-color: var(--color-danger-solid);
 }
 
 /* 箭头 */
@@ -320,7 +320,7 @@ onUnmounted(() => {
   position: absolute;
   width: 8px;
   height: 8px;
-  background: #fff;
+  background: var(--color-surface-raised);
   transform: rotate(45deg);
 }
 

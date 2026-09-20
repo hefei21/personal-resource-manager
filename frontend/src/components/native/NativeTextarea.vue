@@ -32,7 +32,7 @@ defineEmits(['update:modelValue', 'blur', 'focus'])
 .native-textarea {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #ddd;
+  border: 1px solid var(--color-border-default);
   border-radius: 6px;
   font-size: 14px;
   line-height: 1.5;
