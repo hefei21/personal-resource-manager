@@ -112,6 +112,23 @@ test('answer processor refuses forged citations and unknown result fields', asyn
   assert.doesNotMatch(JSON.stringify(abstainedResult), /UNSUPPORTED_SECRET_CONTENT/u)
 })
 
+test('incomplete or filtered completions cannot become grounded answers even with valid JSON', async () => {
+  for (const finishReason of ['length', 'content_filter', 'tool_calls', null]) {
+    const processor = createRagAnswerProcessor({ config, fetchImpl: async () => ({
+      ok: true, json: async () => ({ choices: [{ finish_reason: finishReason,
+        message: { content: JSON.stringify({ answer: 'Partial claim', abstained: false, reasonCode: 'GROUNDED', citations: ['C1'] }) }
+      }] })
+    }) })
+    await assert.rejects(processor.process(task()), error => error.code === 'WORKER_ANSWER_RESPONSE_INVALID')
+  }
+  const processor = createRagAnswerProcessor({ config, fetchImpl: async () => ({
+    ok: true, json: async () => ({ choices: [{ finish_reason: 'stop',
+      message: { content: JSON.stringify({ answer: 'Complete claim', abstained: false, reasonCode: 'GROUNDED', citations: ['C1'] }) }
+    }] })
+  }) })
+  assert.equal((await processor.process(task())).output.answer, 'Complete claim')
+})
+
 test('no evidence abstains without calling the model', async () => {
   let called = false
   const processor = createRagAnswerProcessor({

@@ -300,7 +300,13 @@ async function requestAnswer(config, query, evidence, signal, fetchImpl) {
       if (timeout.signal.aborted) fail('WORKER_ANSWER_TIMEOUT', 'Answer request timed out.')
       fail('WORKER_ANSWER_RESPONSE_INVALID', 'Answer response is invalid.')
     }
-    const content = payload?.choices?.[0]?.message?.content
+    const choice = payload?.choices?.[0]
+    // A syntactically valid JSON object can still be a truncated or filtered
+    // completion. Never promote it to a grounded answer merely because it parses.
+    if (choice?.finish_reason !== undefined && choice.finish_reason !== 'stop') {
+      fail('WORKER_ANSWER_RESPONSE_INVALID', 'Answer completion did not finish normally.')
+    }
+    const content = choice?.message?.content
     if (payload?.model !== undefined && payload.model !== config.modelId) {
       fail('WORKER_ANSWER_RESPONSE_INVALID', 'Answer response model identity is invalid.')
     }
