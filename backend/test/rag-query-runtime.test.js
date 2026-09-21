@@ -203,8 +203,10 @@ test('query runtime narrows active vector snapshots to the exact source scope', 
   const result = await scoped.runtime.query({
     query: scoped.query,
     sourceType: 'document',
-    sourceId: 7
+    sourceId: 7,
+    chunkIds: [11]
   })
+  assert.deepEqual(searchOptions.chunkIds, [11])
   assert.equal(result.vectorCandidates.length, 1)
   assert.deepEqual(searchOptions.activeSnapshotSources, [{
     snapshotId: 9,
@@ -220,6 +222,9 @@ test('query runtime narrows active vector snapshots to the exact source scope', 
   })
   assert.equal(missing.vectorCandidates.length, 0)
   assert.equal(missing.vectorError.code, RAG_QUERY_RUNTIME_ERROR_CODES.STALE)
+  const outside = await scoped.runtime.query({ query: scoped.query, sourceType: 'document', sourceId: 7, chunkIds: [12] })
+  assert.deepEqual(searchOptions.chunkIds, [12])
+  assert.equal(outside.vectorCandidates.length, 0)
 })
 
 test('query runtime preserves ordinary multiline query whitespace across task identity', async () => {

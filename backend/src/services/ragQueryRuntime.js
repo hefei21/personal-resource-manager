@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { normalizeRagChunkScope } from './ragChapterScope.js'
 
 import {
   RAG_CHUNK_TABLE,
@@ -773,7 +774,8 @@ export class RagQueryRuntime {
     return resolvedModel ? this.#readCandidate(candidate, resolvedModel) : null
   }
 
-  async query({ query, limit = 10, sourceType, sourceId, signal, retryTerminal = this.retryTerminal } = {}) {
+  async query({ query, limit = 10, sourceType, sourceId, chunkIds, signal, retryTerminal = this.retryTerminal } = {}) {
+    const chapterIds = normalizeRagChunkScope(chunkIds)
     const normalizedQuery = normalizeQueryText(query)
     const normalizedLimit = boundedInteger(limit, 'limit', 1, 100, 10)
     const sourceScope = normalizeSourceScope(sourceType, sourceId)
@@ -796,6 +798,7 @@ export class RagQueryRuntime {
     try {
       const result = await availability.vectorStore.search(embedding.embedding, {
         activeSnapshotSources: activeSources,
+        ...(chapterIds ? { chunkIds: chapterIds } : {}),
         limit: normalizedLimit,
         overfetch: this.vectorOverfetch,
         signal
@@ -804,6 +807,7 @@ export class RagQueryRuntime {
       const candidates = []
       for (const point of result.points) {
         const payload = point?.payload
+        if (chapterIds && !chapterIds.includes(payload?.chunkId)) continue
         const resolved = this.#readCandidate(payload, modelAfter)
         if (!resolved) continue
         candidates.push(Object.freeze({

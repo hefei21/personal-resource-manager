@@ -15,6 +15,9 @@
             <span>{{ positionLabel }}</span>
           </div>
           <div class="ebook-reader__header-actions">
+            <NativeButton v-if="!isGuest" variant="text" class="ebook-reader__tool" aria-label="询问这本书的资料" @click="askAboutBook">
+              <NativeIcon name="magnifying-glass" size="20" /><span>问资料</span>
+            </NativeButton>
             <NativeButton variant="text" class="ebook-reader__tool" aria-label="阅读设置" :aria-expanded="settingsOpen" @click="tocOpen = false; settingsOpen = !settingsOpen">
               <NativeIcon name="gear" size="20" /><span>排版</span>
             </NativeButton>
@@ -165,6 +168,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '@/api'
 import { NativeButton, NativeIcon } from '@/components/native'
 import { findEbookChapterIndex, resolveEbookLink } from '@/domain/ebookReaderNavigation'
@@ -182,6 +186,7 @@ const props = defineProps({
   isGuest: Boolean
 })
 const emit = defineEmits(['update:modelValue', 'closed'])
+const router = useRouter()
 const { isMobile } = useViewport()
 const readerRoot = ref(null)
 useModalFocus(readerRoot, () => props.modelValue)
@@ -690,6 +695,13 @@ async function disposePdf() {
   if (previousDocument) {
     try { await disposePdfDocument(previousDocument) } catch {}
   }
+}
+
+async function askAboutBook() {
+  const query = { mode: 'ask', bookId: String(props.book.id) }
+  if (fileType.value === 'epub' && !loading.value && !loadError.value) query.readerChapter = String(chapterIndex.value)
+  await closeReader()
+  await router.push({ name: 'Search', query })
 }
 
 async function closeReader() {

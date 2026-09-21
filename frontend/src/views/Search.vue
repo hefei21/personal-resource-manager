@@ -56,8 +56,9 @@
       <div v-if="mode === 'ask'" class="ask-scope-panel">
         <label class="ask-source-field">
           <span>回答范围</span>
-          <select v-model="askSourceKey" :disabled="coverageLoading || askLoading" @change="resetAskForScopeChange">
+          <select v-model="askSourceKey" aria-label="回答范围" :disabled="coverageLoading || askLoading" @change="resetAskForScopeChange">
             <option value="">全部已索引资料</option>
+            <option v-if="askSourceKey && !selectedAskSource" :value="askSourceKey" disabled>所选资料正在读取或已不可用</option>
             <optgroup v-for="group in askSourceGroups" :key="group.type" :label="group.label">
               <option v-for="item in group.items" :key="item.key" :value="item.key">
                 {{ item.title }} · {{ ragCoverageStatusLabel(item.status) }}
@@ -88,6 +89,22 @@
         >
           {{ ragRefreshing ? 'RAG 索引任务运行中…' : (selectedAskSource ? '更新此资源索引' : '刷新全部 RAG') }}
         </button>
+      </div>
+      <div v-if="mode === 'ask' && selectedAskSource?.type === 'ebook'" class="ask-chapter-panel">
+        <label class="ask-source-field">
+          <span>书内范围</span>
+          <select v-model="selectedSection" aria-label="书内范围" :disabled="sectionsLoading || askLoading" @change="resetAskForScopeChange">
+            <option value="">整本书（默认）</option>
+            <option v-if="selectedSection && !sectionOptions.some(item => item.key === selectedSection)" :value="selectedSection" disabled>已选章节失效，请重新选择</option>
+            <option v-for="item in sectionOptions" :key="item.key" :value="item.key">限定章节 · {{ item.label }}</option>
+          </select>
+        </label>
+        <button v-if="currentReaderSection" type="button" class="secondary-button" :disabled="askLoading || sectionsLoading" @click="selectedSection = currentReaderSection.key; resetAskForScopeChange()">限定当前章节</button>
+        <button type="button" class="secondary-button" :disabled="askLoading || sectionsLoading" @click="resetAskForScopeChange(); sections.retry()">刷新章节</button>
+        <span class="chapter-scope-hint">{{ selectedSection ? '仅从所选章节查找证据。跨章比较请切回整本书。' : '问题提到章节名不会自动缩小范围。' }}</span>
+        <span v-if="sectionsLoading" role="status">正在读取章节…</span>
+        <span v-else-if="sectionsError" role="alert">{{ sectionsError }}</span>
+        <span v-else-if="!sectionOptions.length" class="chapter-scope-hint">当前索引没有可选择的章节，仍可检索整本书。</span>
       </div>
       <p v-if="mode === 'ask' && ragRefreshFeedback" class="rag-refresh-feedback" role="status">
         {{ ragRefreshFeedback }}
@@ -264,10 +281,11 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { useRagQuery } from '@/composables/useRagQuery'
+import { useRagSections } from '@/composables/useRagSections'
 import { useViewport } from '@/composables/useViewport'
 
 const router = useRouter()
@@ -290,7 +308,19 @@ const ragCoverage = ref(null)
 const coverageLoading = ref(false)
 const ragRefreshing = ref(false)
 const ragRefreshFeedback = ref('')
-const askSourceKey = ref('')
+const readerBookId = /^\d+$/u.test(String(route.query.bookId || '')) && Number(route.query.bookId) > 0 ? Number(route.query.bookId) : null
+const askSourceKey = ref(readerBookId ? `ebook:${readerBookId}` : '')
+const readerSource = ref(null)
+const sections = useRagSections({ api: api.rag })
+const { options: sectionOptions, selected: selectedSection, loading: sectionsLoading, error: sectionsError } = sections
+const currentReaderSection = computed(() => {
+  if (askSourceKey.value !== `ebook:${readerBookId}` || !/^\d+$/u.test(String(route.query.readerChapter ?? ''))) return null
+  return sectionOptions.value.find(item => item.chapterIndex === Number(route.query.readerChapter)) || null
+})
+watch(askSourceKey, key => {
+  resetAskForScopeChange()
+  void sections.load(key.startsWith('ebook:') ? Number(key.slice(6)) : null)
+})
 const ask = useRagQuery({ api: api.rag, errorLabel: askErrorLabel, normalizeResult: normalizeAskResult })
 const { state: askState, result: askResult, feedback: askFeedback, loading: askLoading,
   queryId: askQueryId, cancellable: askCancellable, phase: askPhase } = ask
@@ -351,7 +381,10 @@ const askModeLabel = computed(() => {
   return '引用式回答'
 })
 const askCitations = computed(() => askResult.value?.citations || [])
-const askSourceItems = computed(() => (ragCoverage.value?.data || []).map((item) => ({
+const askSourceItems = computed(() => {
+  const items = [...(ragCoverage.value?.data || [])]
+  if (readerSource.value && !items.some(item => item.source.type === 'ebook' && item.source.id === readerBookId)) items.push(readerSource.value)
+  return items.map((item) => ({
   key: `${item.source.type}:${item.source.id}`,
   type: item.source.type,
   id: item.source.id,
@@ -359,7 +392,8 @@ const askSourceItems = computed(() => (ragCoverage.value?.data || []).map((item)
   status: item.status,
   chunkCount: item.chunkCount || 0,
   embeddingStatus: item.embeddingStatus || 'missing'
-})))
+  }))
+})
 const askSourceGroups = computed(() => [
   { type: 'document', label: '文档', items: askSourceItems.value.filter((item) => item.type === 'document') },
   { type: 'ebook', label: '电子书', items: askSourceItems.value.filter((item) => item.type === 'ebook') },
@@ -401,6 +435,7 @@ function buildRagPayload() {
   if (selectedAskSource.value) {
     payload.source = { type: selectedAskSource.value.type, id: selectedAskSource.value.id }
   }
+  if (selectedSection.value) payload.section = selectedSection.value
   return payload
 }
 
@@ -478,8 +513,15 @@ async function loadRagCoverage() {
   try {
     const response = await api.rag.coverage({ limit: 200 })
     ragCoverage.value = response.data?.data || null
-    if (askSourceKey.value && !askSourceItems.value.some((item) => item.key === askSourceKey.value)) {
-      askSourceKey.value = ''
+    // A missing/failed source list must not silently turn a bound question global.
+    // Coverage is paged: a reader-bound book may be outside the first page.
+    if (readerBookId && !askSourceItems.value.some(item => item.key === `ebook:${readerBookId}`)) {
+      const [detail, status] = await Promise.all([api.books.getDetail(readerBookId), api.rag.sourceStatus('ebook', readerBookId)])
+      const book = detail.data?.data
+      if (!pageDisposed && Number(book?.id) === readerBookId) readerSource.value = {
+        source: { type: 'ebook', id: readerBookId, title: book.title },
+        status: status.data?.data?.sourceState?.status || 'missing', chunkCount: status.data?.data?.chunks?.count || 0
+      }
     }
   } catch {
     ragCoverage.value = null
@@ -575,14 +617,24 @@ async function pollRagIndexTask(taskId) {
 
 function askErrorLabel(error) {
   const status = error.response?.status
+  const code = safeText(error.response?.data?.code, 80)
+  if (code === 'RAG_SOURCE_NOT_FOUND') return '所选资料已不可用，请重新选择回答范围。'
   if (status === 401 || status === 403) return '当前账号没有问资料权限。'
   if (status === 404) return '问资料接口尚未启用，仍可使用关键词搜索。'
-  const code = safeText(error.response?.data?.code, 80)
+  if (code === 'RAG_SECTION_STALE') return '章节索引已有变化，请重新读取目录并选择范围；本次没有扩大为整本书。'
   return ASK_ERROR_LABELS[code] || (!error.response ? '问资料服务暂时不可达，可切换到关键词搜索。' : '问资料暂时失败，请稍后重试。')
 }
 
 async function runAsk() {
   if (!filters.q || askLoading.value) return
+  if (askSourceKey.value && !selectedAskSource.value) {
+    askFeedback.value = '所选资料不可用，请重新选择回答范围。'
+    return
+  }
+  if (selectedSection.value && (sectionsLoading.value || !sectionOptions.value.some(item => item.key === selectedSection.value))) {
+    askFeedback.value = '请先重新读取目录并确认章节范围。'
+    return
+  }
   await ask.submit(buildRagPayload())
 }
 
@@ -699,6 +751,7 @@ function nextPage() { offset.value += pageSize; runSearch(false) }
 onMounted(() => {
   loadStatus()
   if (route.query.mode === 'ask') setMode('ask')
+  if (readerBookId) void sections.load(readerBookId)
 })
 onBeforeUnmount(() => {
   pageDisposed = true
@@ -706,11 +759,16 @@ onBeforeUnmount(() => {
   if (pollTimer) window.clearTimeout(pollTimer)
   if (ragIndexPollTimer) window.clearTimeout(ragIndexPollTimer)
   ask.dispose()
+  sections.dispose()
 })
 </script>
 
 <style scoped>
 .search-page { max-width: 1120px; margin: 0 auto; padding: 24px; color: var(--color-text-primary); }
+.ask-chapter-panel { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 14px; margin-bottom: 16px; }
+.ask-chapter-panel .ask-source-field { flex: 1 1 260px; min-width: 0; }
+.ask-chapter-panel select { max-width: 100%; }
+.chapter-scope-hint { flex: 1 1 100%; color: var(--color-text-secondary); font-size: 13px; }
 .search-hero, .results-heading, .status-strip, .search-row, .result-title-row, .result-meta, .pagination-row { display: flex; align-items: center; }
 .search-hero { justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .search-hero p { margin: 0; color: var(--color-text-secondary); }

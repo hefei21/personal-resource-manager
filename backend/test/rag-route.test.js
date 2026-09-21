@@ -91,6 +91,72 @@ function rejectingChecks() {
   }
 }
 
+test('chapter contract requires explicit ebook binding; question wording never adds a chapter filter', () => {
+  const section = 'a'.repeat(64)
+  for (const query of ['第一章以外的章节', 'not limited to chapter one', '比较第一章与第十三章']) {
+    assert.equal(normalizeQueryBody({ query, source: { type: 'ebook', id: 1 } }).section, undefined)
+  }
+  assert.equal(normalizeQueryBody({ query: 'why', source: { type: 'ebook', id: 1 }, section }).section, section)
+  for (const body of [
+    { query: 'why', section },
+    { query: 'why', source: { type: 'document', id: 1 }, section },
+    { query: 'why', source: { type: 'ebook', id: 1 }, section: 'chapter 1' },
+    { query: 'why', chunkIds: [1] }
+  ]) assert.throws(() => normalizeQueryBody(body))
+})
+
+test('explicit chapter reaches both retrievers and final authorization; stale selections do not widen', async () => {
+  const section = 'a'.repeat(64)
+  const calls = []
+  const router = createRagRouter({
+    databaseProvider: () => ({}), authoritativeChecksFactory: checks,
+    sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 2 } }),
+    chapterScopeProvider: ({ sourceId, section: key }) => {
+      if (sourceId !== 23 || key && key !== section) throw Object.assign(new Error('stale'), { code: 'RAG_SECTION_STALE' })
+      return key ? { chunkIds: [41] } : { sections: [{ key: section, label: 'Chapter 1', chapterIndex: 0 }] }
+    },
+    structuredAnswerProvider: () => { throw new Error('chapter must not bypass retrieval') },
+    textIndexServiceFactory: () => ({ query: input => { calls.push(['fts', input.chunkIds]); return { data: [] } } }),
+    taskStoreProvider: () => null,
+    queryRuntimeFactory: () => ({ query: input => { calls.push(['vector', input.chunkIds]); return { vectorCandidates: [] } } }),
+    hybridRetrieverFactory: ({ checks: scoped }) => ({ retrieve: () => {
+      assert.equal(scoped.authoritativeVisibility({ chunkId: 42 }), false)
+      assert.equal(scoped.authoritativeVisibility({ chunkId: 41 }), true)
+      return { ...retrieval(), data: [{ ...retrieval().data[0], sourceType: 'ebook', sourceId: 23, chunkId: 42 }] }
+    } })
+  })
+  await withServer(router, async base => {
+    const headers = { 'content-type': 'application/json', 'x-test-principal': 'owner' }
+    const catalog = await fetch(`${base}/api/rag/sources/ebook/23/sections`, { headers })
+    assert.equal(catalog.status, 200)
+    assert.equal((await catalog.json()).data.sections[0].key, section)
+    assert.equal((await fetch(`${base}/api/rag/sources/ebook/23/sections`)).status, 401)
+    for (const [id, key, expected] of [[23, section, 200], [24, section, 409], [23, 'b'.repeat(64), 409]]) {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers,
+        body: JSON.stringify({ query: 'why', source: { type: 'ebook', id }, section: key }) })
+      assert.equal(response.status, expected)
+      const body = await response.json()
+      if (expected === 200) assert.equal(body.data.reasonCode, 'no_evidence')
+      else assert.equal(body.code, 'RAG_SECTION_STALE')
+    }
+    assert.deepEqual(calls, [['fts', [41]], ['vector', [41]]])
+  })
+})
+
+test('chapter catalog and scoped query deny invisible books before resolving their sections', async () => {
+  let resolutions = 0
+  const router = createRagRouter({ databaseProvider: () => ({}), authoritativeChecksFactory: rejectingChecks,
+    sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 2 } }),
+    chapterScopeProvider: () => { resolutions++; return { sections: [] } } })
+  await withServer(router, async base => {
+    const headers = { 'content-type': 'application/json', 'x-test-principal': 'owner' }
+    assert.equal((await fetch(`${base}/api/rag/sources/ebook/23/sections`, { headers })).status, 404)
+    assert.equal((await fetch(`${base}/api/rag/queries`, { method: 'POST', headers,
+      body: JSON.stringify({ query: 'why', source: { type: 'ebook', id: 23 }, section: 'a'.repeat(64) }) })).status, 404)
+    assert.equal(resolutions, 0)
+  })
+})
+
 function retrieval() {
   return {
     query: 'RAG query',

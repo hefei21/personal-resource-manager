@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { normalizeRagChunkScope } from './ragChapterScope.js'
 import { buildRagSearchText, ragQueryTerms } from './ragLexicalText.js'
 
 import {
@@ -666,6 +667,7 @@ function normalizeQuery(input) {
   }
   return Object.freeze({
     keyword,
+    chunkIds: normalizeRagChunkScope(input?.chunkIds),
     sourceType,
     sourceId,
     limit,
@@ -903,6 +905,7 @@ export class RagTextIndexService {
     if (query.sourceId) {
       clauses.push('snapshot.source_id = ?')
     }
+    if (query.chunkIds) clauses.push('chunks.id IN (SELECT value FROM json_each(?))')
     const statement = this.database.prepare(`
       SELECT chunks.id AS chunk_id, chunks.snapshot_id, chunks.ordinal,
              chunks.body, chunks.token_count, chunks.token_count_mode,
@@ -922,6 +925,7 @@ export class RagTextIndexService {
       ftsQuery,
       ...(query.sourceType ? [query.sourceType] : []),
       ...(query.sourceId ? [query.sourceId] : []),
+      ...(query.chunkIds ? [JSON.stringify(query.chunkIds)] : []),
       candidateLimit
     )
     let rows = readCandidates(query.ftsQuery)

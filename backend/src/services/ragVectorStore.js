@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { normalizeRagChunkScope } from './ragChapterScope.js'
 
 export const RAG_VECTOR_STORE_VERSION = 'rag-vector-store.v1'
 export const RAG_VECTOR_MAX_BATCH_ITEMS = 256
@@ -373,7 +374,8 @@ function normalizeSearchOptions(options = {}) {
     snapshotId: activeSnapshotId,
     ...source
   }))
-  return Object.freeze({ activeSnapshotId, sourceAllowlist, activeSources, limit, overfetch, signal: options.signal })
+  return Object.freeze({ activeSnapshotId, sourceAllowlist, activeSources, limit, overfetch, signal: options.signal,
+    chunkIds: normalizeRagChunkScope(options.chunkIds) })
 }
 
 function sourceFilter(source) {
@@ -387,10 +389,12 @@ function sourceFilter(source) {
   return { must }
 }
 
-function buildServerFilter({ activeSnapshotId, sourceAllowlist, activeSources }, modelConfig) {
+function buildServerFilter({ activeSnapshotId, sourceAllowlist, activeSources, chunkIds }, modelConfig) {
+  const chapterFilter = chunkIds ? [{ key: 'chunkId', match: { any: chunkIds } }] : []
   if (activeSnapshotId === null) {
     return {
       must: [
+        ...chapterFilter,
         { key: 'lifecycle', match: { value: 'active' } },
         { key: 'modelId', match: { value: modelConfig.modelId } },
         { key: 'modelConfigHash', match: { value: modelConfig.configHash } },
@@ -405,6 +409,7 @@ function buildServerFilter({ activeSnapshotId, sourceAllowlist, activeSources },
   }
   return {
     must: [
+      ...chapterFilter,
       { key: 'snapshotId', match: { value: activeSnapshotId } },
       { key: 'lifecycle', match: { value: 'active' } },
       { key: 'modelId', match: { value: modelConfig.modelId } },
@@ -488,6 +493,7 @@ function normalizeSearchResponse(payload, options, modelConfig) {
     ids.add(point.id)
     const normalizedPayload = normalizePayload(point.payload, modelConfig, `search.points[${index}].payload`)
     if (normalizedPayload.chunkId !== point.id ||
+        (options.chunkIds && !options.chunkIds.includes(point.id)) ||
         !options.activeSources.some((source) => source.snapshotId === normalizedPayload.snapshotId &&
           sourceMatchesAllowlist(normalizedPayload, [source]))) {
       fail(RAG_VECTOR_ERROR_CODES.RESPONSE_FILTER_VIOLATION, { operation: `search.points[${index}]` })

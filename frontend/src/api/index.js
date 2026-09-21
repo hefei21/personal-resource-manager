@@ -300,6 +300,7 @@ export default {
     refreshIndex: (options = {}) => api.post('/search/index/refresh', options)
   },
   rag: {
+    sections: id => api.get(`/rag/sources/ebook/${encodeURIComponent(String(id))}/sections`),
     status: () => api.get('/rag/status'),
     coverage: (params = {}) => api.get('/rag/coverage', { params }),
     sourceStatus: (type, id) => api.get(`/rag/sources/${encodeURIComponent(String(type))}/${encodeURIComponent(String(id))}/status`),

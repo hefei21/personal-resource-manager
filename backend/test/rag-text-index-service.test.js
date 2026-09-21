@@ -11,6 +11,7 @@ import { chunkRagSource, normalizeRagChunkerOptions, RAG_CHUNKER_VERSION } from 
 import { createRagTextIndexService, RAG_TEXT_INDEX_ERROR_CODES } from '../src/services/ragTextIndexService.js'
 import { ragQueryTerms } from '../src/services/ragLexicalText.js'
 import { expandRagEvidenceContext } from '../src/services/ragEvidenceContext.js'
+import { readRagChapterScope, normalizeRagChunkScope } from '../src/services/ragChapterScope.js'
 
 const require = createRequire(import.meta.url)
 let Database
@@ -29,6 +30,47 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   : { skip: 'better-sqlite3 native binding is unavailable locally; Linux CI must run this test' }
 
 const registry = createMigrationRegistry(RAG_INDEX_MIGRATIONS)
+
+test('chapter scope never accepts empty or client-shaped chunk filters', () => {
+  assert.equal(normalizeRagChunkScope(undefined), undefined)
+  assert.deepEqual(normalizeRagChunkScope([2, 2, 3]), [2, 3])
+  for (const value of [null, [], ['2'], [0], {}, [-1]]) assert.throws(() => normalizeRagChunkScope(value))
+})
+
+test('indexed ebook chapters scope FTS before limit, isolate books and expire with snapshots', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    database.exec("CREATE TABLE books (id INTEGER PRIMARY KEY, file_type TEXT); INSERT INTO books VALUES (1, 'epub'), (2, 'txt')")
+    const ebook = id => ({ ...source({ id }), sourceType: 'ebook', sourceVersionId: 'book-v1',
+      baseLocator: { route: '/books', bookId: id },
+      sections: [0, 1].map(index => ({ format: 'ebook', title: `Chapter ${index + 1}`,
+        sectionPath: [`Chapter ${index + 1}`],
+        locator: { route: '/books', bookId: id, chapterIndex: id === 1 ? index : 0 },
+        text: `# Detail\n\nshared keyword ${index === 0 ? 'shared keyword shared keyword' : 'target'}` })) })
+    const sources = [ebook(1), ebook(2)]
+    const service = createService(database, { collectSources: async () => ({ sources, errors: [] }) })
+    await service.refresh()
+    const catalog = readRagChapterScope({ database, sourceId: 1 }).sections
+    assert.equal(catalog.length, 2)
+    assert.deepEqual(catalog.map(item => item.chapterIndex), [0, 1])
+    assert.ok(catalog.every(item => /^[a-f0-9]{64}$/u.test(item.key) && !('chunkIds' in item)))
+    const scope = readRagChapterScope({ database, sourceId: 1, section: catalog[1].key })
+    const result = service.query({ q: 'shared keyword', sourceType: 'ebook', sourceId: 1, limit: 1, ...scope })
+    assert.equal(result.data.length, 1)
+    assert.match(result.data[0].body, /target/u)
+    assert.equal(result.data[0].locator.chapterIndex, 1)
+    assert.throws(() => readRagChapterScope({ database, sourceId: 2, section: catalog[1].key }), { code: 'RAG_SECTION_STALE' })
+    const txt = readRagChapterScope({ database, sourceId: 2 }).sections
+    assert.equal(txt.length, 2)
+    assert.ok(txt.every(item => item.chapterIndex === null))
+    sources[0].sourceContentSha256 = sha256('updated immutable input')
+    sources[0].sourceVersionId = 'book-v2'
+    await service.refresh()
+    assert.throws(() => readRagChapterScope({ database, sourceId: 1, section: catalog[1].key }), { code: 'RAG_SECTION_STALE' })
+    assert.notEqual(readRagChapterScope({ database, sourceId: 1 }).sections[1].key, catalog[1].key)
+  } finally { database.close() }
+})
 
 function migrate(database) {
   database.pragma('foreign_keys = ON')

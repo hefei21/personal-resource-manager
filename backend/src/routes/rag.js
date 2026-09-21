@@ -12,6 +12,7 @@ import { createRagRerankService, RAG_RERANK_TASK_TYPE } from '../services/ragRer
 import { createRagHybridRetriever } from '../services/ragHybridRetriever.js'
 import { expandRagEvidenceContext } from '../services/ragEvidenceContext.js'
 import { ragRetrievalPolicy } from '../services/ragRetrievalPolicy.js'
+import { normalizeRagChunkScope, readRagChapterScope } from '../services/ragChapterScope.js'
 import {
   createRagQueryRuntime,
   RAG_QUERY_EMBED_TASK_TYPE,
@@ -47,7 +48,7 @@ const SOURCE_TABLES = Object.freeze({
   ebook: 'books',
   code_repository: 'code_repositories'
 })
-const ALLOWED_QUERY_KEYS = new Set(['query', 'q', 'limit', 'source'])
+const ALLOWED_QUERY_KEYS = new Set(['query', 'q', 'limit', 'source', 'section'])
 const PUBLIC_LOCATOR_KEYS = new Set([
   'route',
   'sectionPath',
@@ -317,7 +318,10 @@ function normalizeQueryBody(body) {
     source = normalizeRagSourceParams(body.source.type, body.source.id)
     if (source === null) failInput()
   }
-  return Object.freeze({ query, limit, ...(source ? { source } : {}) })
+  if (body.section !== undefined && (source?.sourceType !== 'ebook' ||
+      typeof body.section !== 'string' || !/^[a-f0-9]{64}$/u.test(body.section))) failInput()
+  return Object.freeze({ query, limit, ...(source ? { source } : {}),
+    ...(body.section === undefined ? {} : { section: body.section }) })
 }
 
 function normalizeRagIndexRefreshBody(body) {
@@ -786,6 +790,7 @@ async function defaultCandidateProvider({
   query,
   limit,
   source,
+  chunkIds,
   authoritativeVisibility,
   authoritativeActiveSnapshot,
   textIndexServiceFactory,
@@ -806,6 +811,7 @@ async function defaultCandidateProvider({
     q: query,
     limit,
     offset: 0,
+    ...(chunkIds ? { chunkIds } : {}),
     ...(source ? { sourceType: source.sourceType, sourceId: source.sourceId } : {})
   }))
   if (!isPlainObject(result) || !Array.isArray(result.data)) {
@@ -830,6 +836,7 @@ async function defaultCandidateProvider({
       vectorOutput = await runtime.query({
         query,
         limit,
+        ...(chunkIds ? { chunkIds } : {}),
         ...(source ? { sourceType: source.sourceType, sourceId: source.sourceId } : {})
       })
     }
@@ -1415,6 +1422,7 @@ async function cancelTrackedTask(store, task) {
 
 function queryError(res, error) {
   const code = error?.code
+  if (code === 'RAG_SECTION_STALE') return sendCode(res, 409, code)
   if (code === RAG_ROUTE_ERROR_CODES.INPUT_INVALID) return sendCode(res, 400, code)
   if (code === RAG_ROUTE_ERROR_CODES.CANDIDATES_INVALID) return sendCode(res, 503, RAG_ROUTE_ERROR_CODES.UNAVAILABLE)
   if (code === RAG_ROUTE_ERROR_CODES.NOT_FOUND) return sendCode(res, 404, code)
@@ -1449,6 +1457,7 @@ function scopedAbstention(query, reasonCode) {
 }
 
 export function createRagRouter({
+  chapterScopeProvider = readRagChapterScope,
   databaseProvider = defaultDatabaseProvider,
   authoritativeChecksFactory = ({ database }) => createAuthoritativeChecks(database),
   textIndexServiceFactory = defaultTextIndexServiceFactory,
@@ -1649,6 +1658,23 @@ export function createRagRouter({
     }
   })
 
+  router.get('/sources/ebook/:id/sections', async (req, res) => {
+    const source = normalizeRagSourceParams('ebook', req.params.id)
+    if (!source) return sendCode(res, 400, RAG_ROUTE_ERROR_CODES.INPUT_INVALID)
+    try {
+      const database = await Promise.resolve(databaseProvider(req))
+      const checks = await Promise.resolve(authoritativeChecksFactory({ database, req }))
+      if (await checks?.authoritativeVisibility?.(source) !== true) {
+        return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND)
+      }
+      const status = await sourceStatusProvider({ database, req, checks, ...source })
+      if (!status) return sendCode(res, 404, RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND)
+      if (scopedIndexReason(status)) return res.json({ data: { sections: [] } })
+      const data = await chapterScopeProvider({ database, sourceId: source.sourceId })
+      return res.json({ data })
+    } catch (error) { return queryError(res, error) }
+  })
+
   router.post('/queries', async (req, res) => {
     let input
     try {
@@ -1659,7 +1685,7 @@ export function createRagRouter({
 
     try {
       const database = await Promise.resolve(databaseProvider(req))
-      const checks = await Promise.resolve(authoritativeChecksFactory({ database, req }))
+      let checks = await Promise.resolve(authoritativeChecksFactory({ database, req }))
       if (!checks || typeof checks.authoritativeVisibility !== 'function' ||
           typeof checks.authoritativeActiveSnapshot !== 'function') {
         const error = new Error('Authoritative RAG checks are unavailable.')
@@ -1667,6 +1693,7 @@ export function createRagRouter({
         throw error
       }
       let querySource = input.source ?? null
+      let chunkIds
       if (!querySource && typeof querySourceResolver === 'function') {
         const resolved = await Promise.resolve(querySourceResolver({
           database,
@@ -1694,7 +1721,21 @@ export function createRagRouter({
           error.code = RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND
           throw error
         }
-        const structured = await Promise.resolve(structuredAnswerProvider({
+        if (input.section !== undefined) {
+          if (await checks.authoritativeVisibility(querySource) !== true) {
+            throw Object.assign(new Error('Source unavailable.'), { code: RAG_ROUTE_ERROR_CODES.SOURCE_NOT_FOUND })
+          }
+          if (scopedIndexReason(sourceStatus)) {
+            throw Object.assign(new Error('Chapter selection is stale.'), { code: 'RAG_SECTION_STALE' })
+          }
+          const scope = await chapterScopeProvider({ database, sourceId: querySource.sourceId, section: input.section })
+          chunkIds = normalizeRagChunkScope(scope?.chunkIds ?? [])
+          const ids = new Set(chunkIds)
+          const originalVisibility = checks.authoritativeVisibility
+          checks = { ...checks, authoritativeVisibility: (candidate, context) =>
+            ids.has(candidate.chunkId) && originalVisibility(candidate, context) }
+        }
+        const structured = input.section === undefined && await Promise.resolve(structuredAnswerProvider({
           database,
           req,
           query: input.query,
@@ -1710,6 +1751,7 @@ export function createRagRouter({
         query: input.query,
         limit: input.limit,
         source: querySource,
+        ...(chunkIds ? { chunkIds } : {}),
         authoritativeVisibility: checks.authoritativeVisibility,
         authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot
       }))

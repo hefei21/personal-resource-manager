@@ -11,6 +11,25 @@ import {
 
 const BASE_URL = 'http://qdrant.test:6333'
 const COLLECTION = 'rag_vectors'
+
+test('chapter IDs constrain vector top-K and reject out-of-scope results even from a faulty store', async () => {
+  const input = pointInput()
+  const fake = fakeFetch(() => jsonResponse(200, { result: { points: [
+    { id: input.chunkId, score: .9, payload: pointPayload(input) }
+  ] } }))
+  const store = createStore(fake.fetch)
+  for (const sourceScope of [
+    { activeSnapshotId: 7, sourceAllowlist: [{ sourceType: 'document', sourceId: 1, sourceVersionId: 'v1' }] },
+    { activeSnapshotSources: [{ snapshotId: 7, sourceType: 'document', sourceId: 1, sourceVersionId: 'v1' }] }
+  ]) {
+    await store.search(vector(), { ...sourceScope, chunkIds: [11], limit: 1 })
+    assert.deepEqual(fake.calls.at(-1).body.filter.must.find(item => item.key === 'chunkId'),
+      { key: 'chunkId', match: { any: [11] } })
+    await assert.rejects(store.search(vector(), { ...sourceScope, chunkIds: [12] }),
+      { code: RAG_VECTOR_ERROR_CODES.RESPONSE_FILTER_VIOLATION })
+    await assert.rejects(store.search(vector(), { ...sourceScope, chunkIds: [] }))
+  }
+})
 const QWEN_CONFIG = QWEN3_EMBEDDING_06B_CANDIDATE_CONFIG
 
 function configWithHash(config) {
