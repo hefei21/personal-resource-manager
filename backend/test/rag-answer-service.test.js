@@ -172,6 +172,28 @@ test('canonical Unicode evidence stays valid and full-width secrets are redacted
   assert.equal((await answer.applyResult({ task: forged, result: workerResult(forged) })).reasonCode, 'evidence_stale')
 })
 
+test('preserves URI scheme text in evidence and does not mistake a generic URI for a drive path', async () => {
+  const answer = service()
+  const text = 'http://example.invalid/robots.txt https://example.invalid/a scheme://authority/robots.txt git+ssh://example.invalid/repo'
+  const queued = await answer.generate({ query: 'Explain the URI syntax.', evidence: [evidence({ body: text })] })
+  assert.ok(queued.task.input.evidence[0].text.includes(text))
+  assert.doesNotMatch(queued.task.input.evidence[0].text, /REDACTED_PATH/u)
+  // The Worker separately forbids generated external HTTP links; this generic syntax is not one.
+  const result = await answer.applyResult({ task: queued.task, result: workerResult(queued.task, { answer: 'URI syntax is scheme://authority/robots.txt (C1).' }) })
+  assert.equal(result.status, 'complete')
+})
+
+for (const path of ['C:\\fixture\\memo.txt', 'D:/fixture/memo.txt', '路径C:\\fixture\\memo.txt', '(C:/fixture/memo.txt)', 'Ｃ：＼fixture＼memo.txt', 'file:///C:/fixture/memo.txt', '\\\\fixture-host\\share\\memo.txt']) {
+  test(`still redacts and blocks actual local path: ${path}`, async () => {
+    const answer = service()
+    const queued = await answer.generate({ query: 'Explain the source.', evidence: [evidence({ body: `Example ${path}` })] })
+    assert.doesNotMatch(queued.task.input.evidence[0].text, /memo\.txt/u)
+    const result = await answer.applyResult({ task: queued.task, result: workerResult(queued.task, { answer: path.normalize('NFKC') }) })
+    assert.equal(result.status, 'degraded')
+    assert.equal(result.reasonCode, 'unsafe_output')
+  })
+}
+
 test('rejects forged citations and returns a stable schema degradation', async () => {
   const tasks = taskStoreFake()
   const answer = service({ taskStore: tasks })

@@ -27,7 +27,8 @@ const FORBIDDEN_TASK_FIELDS = new Set(['locator', 'title', 'sourceId', 'sourceVe
 const TASK_SUBJECT_TYPE = 'rag.answer.query'
 const MAX_QUERY_BYTES = 16_384
 const MAX_CITATION_ID_BYTES = 128
-const SENSITIVE_OUTPUT_PATTERN = /(?:[A-Za-z]:[\\/]|\\\\|\/(?:home|root|mnt|var|tmp|etc|opt|srv|data)\/|storage[ _-]?key|(?:sha|sha256)[ _-]?hash|api[ _-]?key|password|secret|lease[ _-]?token)/iu
+// A drive letter cannot be the tail of a multi-character URI scheme (https:, scheme:).
+const SENSITIVE_OUTPUT_PATTERN = /(?:(?<![A-Za-z0-9+.-])[A-Za-z]:[\\/]|\\\\|\/(?:home|root|mnt|var|tmp|etc|opt|srv|data)\/|storage[ _-]?key|(?:sha|sha256)[ _-]?hash|api[ _-]?key|password|secret|lease[ _-]?token)/iu
 
 export class RagAnswerServiceError extends Error {
   constructor(code, message = code, details = {}) {
@@ -92,7 +93,7 @@ function redactSensitiveText(value) {
   // Normalize before redaction, just as the task projector does: full-width
   // punctuation must neither bypass redaction nor cause false stale evidence.
   return value.normalize('NFKC')
-    .replace(/[A-Za-z]:[\\/][^\s<>]+/gu, '[REDACTED_PATH]')
+    .replace(/(?<![A-Za-z0-9+.-])[A-Za-z]:[\\/][^\s<>]+/gu, '[REDACTED_PATH]')
     .replace(/\\\\[^\s<>]+/gu, '[REDACTED_PATH]')
     .replace(/(?:storage[ _-]?key|api[ _-]?key|password|secret|lease[ _-]?token)\s*[:=]\s*[^\s,;]+/giu, '[REDACTED_SECRET]')
     .replace(/(?:sha256?|content[ _-]?hash)\s*[:=]\s*[a-f0-9]{32,128}/giu, '[REDACTED_HASH]')
