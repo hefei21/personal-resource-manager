@@ -1162,3 +1162,44 @@ test('a uniquely inferred title scope reaches structured facts without unrelated
     assert.equal(candidateCalls, 0)
   })
 })
+
+test('default title resolution uses the full SQLite catalog while public coverage remains paginated', async () => {
+  const { default: Database } = await import('better-sqlite3')
+  const database = new Database(':memory:')
+  database.exec('CREATE TABLE documents (id INTEGER PRIMARY KEY, title TEXT); CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT)')
+  const insert = database.prepare('INSERT INTO documents (title) VALUES (?)')
+  for (let i = 0; i < 205; i++) insert.run(`合成目录其他条目${i}`)
+  database.prepare('INSERT INTO books VALUES (?, ?)').run(1, '跨页目录测试书籍')
+  let structuredCalls = 0
+  const router = createRagRouter({
+    databaseProvider: () => database,
+    authoritativeChecksFactory: () => checks(),
+    sourceStatusProvider: () => ({ sourceState: { status: 'missing' }, chunks: { count: 0 } }),
+    structuredAnswerProvider: ({ source }) => {
+      structuredCalls++
+      assert.deepEqual(source, { sourceType: 'ebook', sourceId: 1 })
+      return { status: 'complete', language: 'zh', answer: '合成结构化答案', abstained: false,
+        reasonCode: 'structured_fact', degraded: false, citations: [] }
+    },
+    candidateProvider: () => { throw new Error('should not retrieve') }
+  })
+  try {
+    await withServer(router, async baseUrl => {
+      const headers = { 'content-type': 'application/json', 'x-test-principal': 'owner' }
+      const query = () => fetch(`${baseUrl}/api/rag/queries`, {
+        method: 'POST', headers, body: JSON.stringify({ query: '跨页目录测试书籍多少章？' })
+      })
+      const first = await query()
+      assert.equal(first.status, 200)
+      assert.equal((await first.json()).data.reasonCode, 'structured_fact')
+      insert.run('跨页目录测试书籍')
+      assert.equal((await (await query()).json()).data.reasonCode, 'source_ambiguous')
+      assert.equal(structuredCalls, 1)
+      const page = await (await fetch(`${baseUrl}/api/rag/coverage?limit=20`, { headers })).json()
+      assert.equal(page.data.total, 207)
+      assert.equal(page.data.data.length, 20)
+      assert.equal(page.data.complete, undefined)
+      assert.equal((await fetch(`${baseUrl}/api/rag/coverage?forResolution=true`, { headers })).status, 400)
+    })
+  } finally { database.close() }
+})

@@ -100,6 +100,7 @@ export async function readRagCoverage({
   type = null,
   limit = 100,
   offset = 0,
+  forResolution = false,
   req
 } = {}) {
   if (!database?.prepare || typeof sourceStatusProvider !== 'function') {
@@ -117,6 +118,9 @@ export async function readRagCoverage({
         sourceId: row.sourceId
       }))
     } catch (error) {
+      // Partial visibility/status reads cannot establish a unique source.
+      // Public coverage still reports per-source failures as before.
+      if (forResolution) throw error
       status = {
         sourceState: {
           status: 'failed',
@@ -132,6 +136,11 @@ export async function readRagCoverage({
     items.push(projectCoverageItem(row, status))
   }
   const summary = summarize(items)
+  // Internal resolution needs the complete visible catalog, not a public page.
+  // Scan statuses once; never loop through pages that each rescan all sources.
+  if (forResolution) return Object.freeze({
+    data: Object.freeze(items), total: items.length, offset: 0, complete: true
+  })
   return Object.freeze({
     summary,
     data: Object.freeze(items.slice(offset, offset + limit)),

@@ -55,7 +55,25 @@ test('coverage summarizes active supported resources without exposing storage in
   assert.equal(coverage.data[0].source.title, 'Owner document')
   assert.equal(coverage.data[1].source.title, 'Owner ebook')
   assert.equal(coverage.data[1].chunkCount, 12)
+  assert.equal(coverage.complete, undefined)
   assert.doesNotMatch(JSON.stringify(coverage), /storage|path|sha256|secret|token/iu)
+})
+
+test('internal complete catalogs preserve visibility but never swallow status errors', async () => {
+  const coverage = await readRagCoverage({
+    database: coverageDatabase(), forResolution: true, limit: 1, offset: 1,
+    sourceStatusProvider: ({ sourceType }) => sourceType === 'code_repository' ? null : {
+      sourceState: { status: 'missing' }, chunks: { count: 0 }
+    }
+  })
+  assert.equal(coverage.complete, true)
+  assert.equal(coverage.total, 2)
+  assert.equal(coverage.offset, 0)
+  assert.equal(coverage.data.length, 2)
+  await assert.rejects(readRagCoverage({
+    database: coverageDatabase(), forResolution: true,
+    sourceStatusProvider: () => { throw new Error('incomplete status read') }
+  }), /incomplete status read/u)
 })
 
 test('coverage isolates per-source status failures and supports type pagination', async () => {

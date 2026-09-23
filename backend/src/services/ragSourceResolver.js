@@ -42,6 +42,7 @@ export async function resolveRagSourceFromQuery({
       req,
       checks,
       sourceStatusProvider,
+      forResolution: true,
       type: null,
       limit: 200,
       offset: 0
@@ -49,12 +50,14 @@ export async function resolveRagSourceFromQuery({
   } catch {
     return Object.freeze({ source: null })
   }
-  if (!Array.isArray(coverage?.data)) return Object.freeze({ source: null })
+  if (!Array.isArray(coverage?.data) || coverage.complete !== true ||
+      coverage.offset !== 0 || coverage.total !== coverage.data.length) return Object.freeze({ source: null })
   const matches = []
   for (const item of coverage.data) {
     const type = item?.source?.type
     const id = Number(item?.source?.id)
-    if (!['document', 'ebook', 'code_repository'].includes(type) || !Number.isSafeInteger(id) || id <= 0) continue
+    if (!['document', 'ebook', 'code_repository'].includes(type) || !Number.isSafeInteger(id) || id <= 0 ||
+        typeof item.source.title !== 'string') return Object.freeze({ source: null })
     const alias = titleAliases(item.source.title).find((candidate) => compactQuery.includes(candidate))
     if (!alias) continue
     matches.push({ sourceType: type, sourceId: id })
