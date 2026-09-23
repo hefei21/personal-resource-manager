@@ -259,6 +259,49 @@ test('default final visibility binds document candidates to sourceVersionId and 
   assert.equal(checks.authoritativeVisibility({ ...candidate, sourceVersionId: 'current:2:hash' }), false)
 })
 
+test('SQLite authoritative checks reject stale snapshots, foreign chunks and recycled books', async () => {
+  const { default: Database } = await import('better-sqlite3')
+  const database = new Database(':memory:')
+  try {
+    database.exec(`
+      CREATE TABLE books (id INTEGER PRIMARY KEY);
+      CREATE TABLE rag_source_snapshots (id INTEGER PRIMARY KEY, source_type TEXT, source_id INTEGER,
+        source_version_id TEXT, source_content_sha256 TEXT, status TEXT);
+      CREATE TABLE rag_source_state (source_type TEXT, source_id INTEGER, active_snapshot_id INTEGER);
+      CREATE TABLE rag_chunks (id INTEGER PRIMARY KEY, snapshot_id INTEGER);
+      CREATE TABLE resource_trash_entries (resource_type TEXT, resource_id INTEGER);
+      INSERT INTO books VALUES (1), (2);
+      INSERT INTO rag_source_snapshots VALUES (10, 'ebook', 1, 'v1', 'hash-one', 'ready'),
+        (11, 'ebook', 1, 'v2', 'hash-two', 'ready'), (20, 'ebook', 2, 'v1', 'hash-other', 'ready');
+      INSERT INTO rag_source_state VALUES ('ebook', 1, 10), ('ebook', 2, 20);
+      INSERT INTO rag_chunks VALUES (100, 10), (110, 11), (200, 20);
+    `)
+    const checks = createAuthoritativeChecks(database)
+    const candidate = { sourceType: 'ebook', sourceId: 1, snapshotId: 10,
+      chunkId: 100, sourceVersionId: 'v1', sourceContentSha256: 'hash-one' }
+    const accepted = c => checks.authoritativeVisibility(c) && checks.authoritativeActiveSnapshot(c)
+    assert.equal(accepted(candidate), true)
+    for (const mismatch of [
+      { sourceId: 2 }, { sourceVersionId: 'v2' }, { sourceContentSha256: 'hash-other' },
+      { chunkId: 200 }, { chunkId: 999 }, { snapshotId: 20 }, { snapshotId: null }
+    ]) assert.equal(accepted({ ...candidate, ...mismatch }), false)
+    // Reuse the same checks object and captured candidate after a snapshot switch.
+    database.exec("UPDATE rag_source_state SET active_snapshot_id = 11 WHERE source_id = 1")
+    assert.equal(accepted(candidate), false)
+    const current = { ...candidate, snapshotId: 11, chunkId: 110,
+      sourceVersionId: 'v2', sourceContentSha256: 'hash-two' }
+    assert.equal(accepted(current), true)
+    database.exec("UPDATE rag_source_snapshots SET status = 'failed' WHERE id = 11")
+    assert.equal(accepted(current), false)
+    database.exec("UPDATE rag_source_snapshots SET status = 'ready' WHERE id = 11")
+    database.exec("INSERT INTO resource_trash_entries VALUES ('ebook', 1)")
+    assert.equal(checks.authoritativeActiveSnapshot(current), true)
+    assert.equal(accepted(current), false)
+    database.exec('DELETE FROM resource_trash_entries; DELETE FROM books WHERE id = 1')
+    assert.equal(accepted(current), false)
+  } finally { database.close() }
+})
+
 test('RAG query is Owner-only, uses server evidence, strips internal fields, and returns an opaque run id', async () => {
   const calls = { candidates: [], answers: [] }
   const router = createRagRouter({
