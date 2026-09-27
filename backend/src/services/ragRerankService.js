@@ -12,10 +12,10 @@ export const RAG_RERANK_PROCESSOR_VERSION = 'v1'
 export const RAG_RERANK_EXECUTION_CLASS = 'gpu'
 // The query route remains responsive: a cold Reranker task is allowed to finish
 // asynchronously and can be reused by a later identical query.
-// Real TEI cold calls on the target RTX 5080 measured ~571 ms. Keep a bounded
-// one-second budget so enabled reranking can succeed without turning model
-// startup into an unbounded query stall.
-export const RAG_RERANK_WAIT_MS = 1_000
+// Public 50-passage GPU calls plus a simulated one-second Worker claim delay
+// exceeded the previous one-second budget. Share one bounded wait across retries;
+// this is the task-result wait budget, not an HTTP end-to-end latency guarantee.
+export const RAG_RERANK_WAIT_MS = 3_000
 export const RAG_RERANK_POLL_MS = 25
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled'])
@@ -148,13 +148,12 @@ export class RagRerankService {
     this.terminalRetryBudget = boundedInteger(terminalRetryBudget, 'terminalRetryBudget', 0, 3, 1)
   }
 
-  async #wait(task) {
+  async #wait(task, deadline) {
     let current = task
     if (!current || typeof current !== 'object') return null
     if (TERMINAL.has(status(current)) || (status(current) === null && current.result)) return current
     const id = taskId(current)
     if (id === null || typeof this.taskStore?.getById !== 'function') return null
-    const deadline = this.now() + this.waitMs
     while (this.now() < deadline) {
       await this.sleep(Math.min(this.pollMs, Math.max(0, deadline - this.now())))
       current = await Promise.resolve(this.taskStore.getById(id)).catch(() => null)
@@ -223,13 +222,14 @@ export class RagRerankService {
         ? await this.taskStore.enqueueExclusiveRun(request, { taskTypes: [RAG_RERANK_TASK_TYPE] })
         : await this.taskStore.enqueue(request)
       task = outcome?.task ?? outcome
-      let completed = await this.#wait(task)
+      const deadline = this.now() + this.waitMs
+      let completed = await this.#wait(task, deadline)
       const completedId = taskId(completed)
       if (completedId !== null && ['failed', 'cancelled'].includes(status(completed)) &&
-          this.terminalRetryBudget > 0 && typeof this.taskStore.retryTerminalTask === 'function') {
+          this.now() < deadline && this.terminalRetryBudget > 0 && typeof this.taskStore.retryTerminalTask === 'function') {
         const retried = await this.taskStore.retryTerminalTask({ id: completedId, maxRetries: this.terminalRetryBudget })
         task = retried?.task ?? retried
-        completed = await this.#wait(task)
+        completed = await this.#wait(task, deadline)
       }
       if (!completed || status(completed) !== 'succeeded' || !completed.result) {
         return unchanged(sourceCandidates, completed ? 'reranker_failed' : 'reranker_timeout', task)

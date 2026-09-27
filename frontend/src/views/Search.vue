@@ -193,7 +193,7 @@
       </header>
 
       <div v-if="askLoading" class="answer-loading" role="status">
-        {{ askState === 'cancelling' ? '正在确认取消…' : askState === 'submitting' ? '正在检查资料范围并提交问题…' : askPhase === 'queued' ? '问题已进入队列，等待 Worker 处理…' : '正在整理回答和引用…' }}
+        {{ askState === 'cancelling' ? '正在确认取消…' : askState === 'submitting' ? '正在检索并筛选证据…' : askPhase === 'queued' ? '问题已进入队列，等待 Worker 处理…' : '正在整理回答和引用…' }}
       </div>
       <div v-else-if="['error', 'paused'].includes(askState)" class="answer-feedback" role="alert">
         {{ askFeedback }}

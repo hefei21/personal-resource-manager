@@ -161,7 +161,7 @@ test('cold reranker work is queued but the synchronous query budget stays bounde
   assert.equal(result.applied, false)
   assert.equal(result.reason, 'reranker_timeout')
   assert.equal(elapsed, RAG_RERANK_WAIT_MS)
-  assert.ok(elapsed <= 1_000)
+  assert.equal(elapsed, 3_000)
   assert.equal(pending.status, 'pending')
 
   pending.status = 'succeeded'
@@ -179,4 +179,42 @@ test('cold reranker work is queued but the synchronous query budget stays bounde
   assert.equal(warmed.applied, true)
   assert.deepEqual(warmed.candidates.map((item) => item.citationId), ['C2', 'C1'])
   assert.equal(warmed.task, pending)
+})
+
+test('first query can consume a result after the former one-second deadline', async () => {
+  let elapsed = 0
+  let completed
+  const store = successfulStore()
+  const service = createRagRerankService({ model, workerAvailable: async () => true,
+    now: () => elapsed, sleep: async ms => { elapsed += ms },
+    taskStore: {
+      async enqueueExclusiveRun(request) {
+        completed = (await store.enqueueExclusiveRun(request)).task
+        return { task: { id: 7, status: 'pending' } }
+      },
+      getById: () => elapsed >= 1900 ? completed : { id: 7, status: 'running' }
+    }
+  })
+  const result = await service.rerank({ query: 'query', candidates: candidates() })
+  assert.equal(result.applied, true)
+  assert.equal(elapsed, 1900)
+})
+
+test('terminal retry shares the original wait budget and preserves baseline on timeout', async () => {
+  let elapsed = 0
+  let retried = false
+  const input = candidates()
+  const service = createRagRerankService({ model, workerAvailable: async () => true,
+    now: () => elapsed, sleep: async ms => { elapsed += ms },
+    taskStore: {
+      enqueueExclusiveRun: async () => ({ task: { id: 7, status: 'pending' } }),
+      getById: () => ({ id: 7, status: !retried && elapsed >= 2700 ? 'failed' : 'pending' }),
+      retryTerminalTask: async () => { retried = true; return { task: { id: 7, status: 'pending' } } }
+    }
+  })
+  const result = await service.rerank({ query: 'query', candidates: input })
+  assert.equal(retried, true)
+  assert.equal(elapsed, 3000)
+  assert.equal(result.reason, 'reranker_timeout')
+  assert.deepEqual(result.candidates, input)
 })
