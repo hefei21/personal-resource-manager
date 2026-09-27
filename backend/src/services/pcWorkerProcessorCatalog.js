@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { matchesQwenReranker } from '../config/qwenReranker.js'
 
 import { normalizeContentInspectionResult } from './pcWorkerContract.js'
 
@@ -351,7 +352,7 @@ function projectRerankInput(input) {
   if (input.schemaVersion !== 1) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
   const query = boundedContentText(input.query, 'task.input.query', MAX_QUERY_BYTES)
   const model = modelIdentity(input.model, 'task.input.model')
-  if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > LIMITS.rerank.maxBatchItems) {
+  if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > (matchesQwenReranker(model) ? 50 : LIMITS.rerank.maxBatchItems)) {
     fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.candidates exceeds its batch limit.')
   }
   const candidates = input.candidates.map((candidate, index) => {
@@ -574,7 +575,7 @@ function normalizeRerankResult(value, expected) {
   if (input && candidateSetSha256 !== input.candidateSetSha256) {
     fail('PC_WORKER_PROCESSOR_RESULT_STALE', 'result candidate set is stale.')
   }
-  if (!Array.isArray(value.candidates) || value.candidates.length > LIMITS.rerank.maxBatchItems) {
+  if (!Array.isArray(value.candidates) || value.candidates.length > (matchesQwenReranker(value.model) ? 50 : LIMITS.rerank.maxBatchItems)) {
     fail('PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID', 'result candidates exceed the batch limit.')
   }
   const allowedIds = new Set(input?.candidates?.map((candidate) => candidate.candidateId) ?? [])

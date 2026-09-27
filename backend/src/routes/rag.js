@@ -3,6 +3,7 @@ import express from 'express'
 
 import { getDatabase } from '../config/database.js'
 import { loadRagRerankerModel } from '../config/ragReranker.js'
+import { matchesQwenReranker } from '../config/qwenReranker.js'
 import { requireOwner, requireWritePermission } from '../middlewares/auth.js'
 import {
   createRagAnswerService,
@@ -1805,19 +1806,53 @@ export function createRagRouter({
       let rankedRetrieval = scopedRetrieval
       if (scopedRetrieval.data.length > 0) {
         try {
+          const rerankerModel = resolveConfiguredRerankerModel()
+          // Isolated candidate only. Keep the normal retrieval intact for exact
+          // fail-open; global queries and BGE retain their established policy.
+          const expanded = rerankerConfig.expandedCandidatePool === true &&
+            querySource && matchesQwenReranker(rerankerModel)
           const resolvedReranker = await resolveComponent(resolvedRerankerServiceFactory, {
             database,
             req,
             taskStore,
             workerAvailable: (context) => workerAvailable({ ...context, database, req }),
-            model: resolveConfiguredRerankerModel(),
-            rerankerConfig
+            model: rerankerModel,
+            rerankerConfig: expanded ? { ...rerankerConfig, maxCandidates: 50 } : rerankerConfig
           })
           if (resolvedReranker && typeof resolvedReranker.rerank === 'function') {
-            const window = scopedRetrieval.data.slice(0, 10)
+            let window = scopedRetrieval.data.slice(0, 10)
+            if (expanded) {
+              const pool = await resolvedCandidateProvider({ database, req, query: input.query, limit: 50,
+                source: querySource, ...(chunkIds ? { chunkIds } : {}),
+                authoritativeVisibility: checks.authoritativeVisibility,
+                authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot })
+              if (!Array.isArray(pool?.ftsCandidates)) throw new Error('Invalid candidate pool')
+              const poolRetriever = await resolveComponent(resolvedHybridRetrieverFactory, {
+                database, req, checks,
+                retrievalConfig: { ...ragRetrievalPolicy({ source: querySource, limit: 50, overrides: retrievalConfig }), maxPerSource: 50 },
+                candidateResolver: typeof pool.candidateResolver === 'function' ? pool.candidateResolver : null
+              })
+              const poolResult = await poolRetriever.retrieve({ query: input.query,
+                ftsCandidates: pool.ftsCandidates,
+                ...(pool.vectorCandidates === undefined ? {} : { vectorCandidates: pool.vectorCandidates }),
+                ...(pool.vectorError === undefined ? {} : { vectorError: pool.vectorError }), limit: 50, offset: 0 })
+              const authorizedPool = await authorizeReturnedEvidence(poolResult, checks, {
+                phase: 'route_rerank_pool', query: input.query, req })
+              window = authorizedPool.data.filter(candidate => candidate.sourceType === querySource.sourceType &&
+                candidate.sourceId === querySource.sourceId).slice(0, 50)
+              if (!window.length) throw new Error('Empty candidate pool')
+            }
             const reranked = await resolvedReranker.rerank({ query: input.query, candidates: window })
             if (Array.isArray(reranked?.candidates) && reranked.candidates.length === window.length) {
-              const combined = [...reranked.candidates, ...scopedRetrieval.data.slice(window.length)]
+              let combined = [...reranked.candidates, ...scopedRetrieval.data.slice(window.length)]
+              if (expanded) {
+                const originals = new Map(window.map(candidate => [candidate.citationId, candidate]))
+                const ids = reranked.candidates.map(candidate => candidate.citationId)
+                if (originals.size !== window.length || new Set(ids).size !== window.length || ids.some(id => !originals.has(id))) throw new Error('Invalid rerank permutation')
+                combined = reranked.applied === true
+                  ? ids.slice(0, Math.min(input.limit, 6)).map(id => originals.get(id))
+                  : scopedRetrieval.data
+              }
               rankedRetrieval = Object.freeze({
                 ...scopedRetrieval,
                 data: Object.freeze(combined),

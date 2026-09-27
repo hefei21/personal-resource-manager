@@ -47,3 +47,11 @@ jobs:
 
       - name: Run Worker tests
         run: npm test
+
+      - name: Set up Python for protocol tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run isolated reranker protocol tests (no models)
+        run: python -B -m unittest discover -s reranker -p "test_*.py"

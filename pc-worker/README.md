@@ -49,6 +49,9 @@ Owner 在 NAS 端吊销 Worker 后，现有凭据立即失效；已领取任务�
 
 ## 模型能力与自动上下线
 
+另有默认关闭的 [Qwen3-Reranker-0.6B 独立候选运行时](reranker/README.md)，不经 LM Studio，
+使用固定身份、认证 loopback 和显式启停；协议容量不等于生产检索质量已验收。
+
 Worker 使用 `nvidia-smi` 上报 GPU/显存，并用 `lms ps --json` 上报当前已加载模型。两个命令
 失败时均降级为空能力快照，不影响 CPU 提取任务。`rag.content.extract@v1` 始终可用，并在
 Worker 内校验授权流的字节数与 SHA-256；PDF/DOCX/EPUB 派生制品以大小受限、哈希绑定的章节

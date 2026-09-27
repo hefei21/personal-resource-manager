@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { QWEN_RERANKER_MODEL, matchesQwenReranker, validQwenEndpoint } from './qwenReranker.js'
 
 export const RAG_RERANK_PROCESSOR_VERSION = 'v1'
 export const RAG_RERANK_EXECUTION_CLASS = 'gpu'
@@ -141,6 +142,15 @@ function normalizeEndpoint(raw, fieldName) {
 function normalizeConfig(raw) {
   if (!isPlainObject(raw)) fail('WORKER_RERANK_NOT_CONFIGURED', 'Reranker processor is not configured.')
   const endpoint = normalizeEndpoint(raw.endpoint ?? raw.baseUrl, 'reranker.endpoint')
+  if (matchesQwenReranker(raw)) {
+    if (!validQwenEndpoint(endpoint, raw.apiKey)) fail('WORKER_RERANK_NOT_CONFIGURED')
+    const timeoutMs = raw.timeoutMs ?? 30_000
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 300_000) fail('WORKER_RERANK_NOT_CONFIGURED')
+    const baseUrl = endpoint.endsWith('/rerank') ? endpoint.slice(0, -7) : endpoint
+    return freeze({ ...QWEN_RERANKER_MODEL, baseUrl, endpoint: `${baseUrl}/rerank`,
+      maxLength: 2048, scoreType: SCORE_TYPE, maxBatchItems: 50, maxInputBytes: MAX_INPUT_BYTES,
+      maxOutputBytes: MAX_OUTPUT_BYTES, timeoutMs, apiKey: raw.apiKey })
+  }
   const provider = raw.provider ?? RAG_RERANK_PROVIDER
   const modelId = raw.modelId ?? RAG_RERANK_MODEL_ID
   const modelRevision = raw.modelRevision ?? RAG_RERANK_MODEL_REVISION
@@ -301,6 +311,7 @@ async function requestRerank(config, input, signal, fetchImpl) {
       texts: input.candidates.map((candidate) => candidate.text),
       raw_scores: config.scoreType === 'raw_logit'
     }
+    if (matchesQwenReranker(config)) body.model = localModelIdentity(config)
     let response
     try {
       response = await awaitAbortable(Promise.resolve().then(() => fetchImpl(config.endpoint, {

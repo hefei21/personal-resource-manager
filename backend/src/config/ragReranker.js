@@ -1,3 +1,4 @@
+import { QWEN_RERANKER_MODEL, matchesQwenReranker } from './qwenReranker.js'
 export const RAG_RERANKER_MODEL = Object.freeze({
   provider: 'hugging-face-tei',
   modelId: 'BAAI/bge-reranker-v2-m3',
@@ -26,6 +27,7 @@ export function loadRagRerankerModel(env = process.env) {
     inputLimit: Number(env[ENV_FIELDS.inputLimit]),
     configHash: env[ENV_FIELDS.configHash]
   }
+  if (matchesQwenReranker(candidate)) return QWEN_RERANKER_MODEL
   return Object.entries(RAG_RERANKER_MODEL).every(([key, value]) => candidate[key] === value)
     ? RAG_RERANKER_MODEL
     : null

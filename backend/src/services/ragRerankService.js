@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 
 import { RAG_RERANKER_MODEL } from '../config/ragReranker.js'
+import { matchesQwenReranker } from '../config/qwenReranker.js'
 import {
   lookupPcWorkerProcessor,
   rerankCandidateSetSha256
@@ -60,7 +61,7 @@ function modelIdentity(value) {
       !Number.isSafeInteger(model.dimensions) || model.dimensions < 1 ||
       !Number.isSafeInteger(model.inputLimit) || model.inputLimit < 1 ||
       typeof model.configHash !== 'string' || !HASH_PATTERN.test(model.configHash)) return null
-  return Object.entries(RAG_RERANKER_MODEL).every(([key, expected]) => model[key] === expected)
+  return (matchesQwenReranker(model) || Object.entries(RAG_RERANKER_MODEL).every(([key, expected]) => model[key] === expected))
     ? Object.freeze(model)
     : null
 }
@@ -142,7 +143,7 @@ export class RagRerankService {
     this.sleep = sleep
     this.waitMs = boundedInteger(waitMs, 'waitMs', 0, 60_000, RAG_RERANK_WAIT_MS)
     this.pollMs = boundedInteger(pollMs, 'pollMs', 1, 5_000, RAG_RERANK_POLL_MS)
-    this.maxCandidates = boundedInteger(maxCandidates, 'maxCandidates', 1, 10, 10)
+    this.maxCandidates = boundedInteger(maxCandidates, 'maxCandidates', 1, matchesQwenReranker(this.model) ? 50 : 10, 10)
     this.maxAttempts = boundedInteger(maxAttempts, 'maxAttempts', 1, 10, 1)
     this.terminalRetryBudget = boundedInteger(terminalRetryBudget, 'terminalRetryBudget', 0, 3, 1)
   }

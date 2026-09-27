@@ -1,0 +1,3 @@
+# Install the CUDA build from the official PyTorch cu130 index first.
+torch==2.13.0+cu130
+transformers==5.14.1

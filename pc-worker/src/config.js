@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
+import { QWEN_RERANKER_MODEL, validQwenEndpoint } from './qwenReranker.js'
 
 export class WorkerConfigError extends Error {
   constructor(code, message) {
@@ -150,6 +151,19 @@ function optionalAnswerConfig(env, requestTimeoutMs) {
 }
 
 function optionalRerankerConfig(env, requestTimeoutMs) {
+  if (env.PC_WORKER_RERANKER_MODEL_ID === QWEN_RERANKER_MODEL.modelId) {
+    const endpoint = env.PC_WORKER_RERANKER_BASE_URL || env.PC_WORKER_RERANKER_URL
+    if (!validQwenEndpoint(endpoint, env.PC_WORKER_RERANKER_API_KEY)) fail('WORKER_CONFIG_INVALID', 'Qwen reranker requires loopback and a local token.')
+    for (const [key, suffix] of Object.entries({ provider: 'PROVIDER', modelRevision: 'MODEL_REVISION', dimensions: 'DIMENSIONS', inputLimit: 'INPUT_LIMIT', configHash: 'CONFIG_HASH' })) {
+      const value = env[`PC_WORKER_RERANKER_${suffix}`]
+      if (value !== undefined && value !== '' && String(value) !== String(QWEN_RERANKER_MODEL[key])) fail('WORKER_CONFIG_INVALID', 'Qwen reranker identity mismatch.')
+    }
+    const baseUrl = endpoint.replace(/\/$/u, '').replace(/\/rerank$/u, '')
+    return Object.freeze({ ...QWEN_RERANKER_MODEL, baseUrl, endpoint: `${baseUrl}/rerank`,
+      infoEndpoint: `${baseUrl}/info`, healthEndpoint: `${baseUrl}/health`,
+      apiKey: env.PC_WORKER_RERANKER_API_KEY, maxLength: 2048, scoreType: 'raw_logit', maxBatchItems: 50,
+      timeoutMs: integer(env.PC_WORKER_RERANKER_TIMEOUT_MS, requestTimeoutMs, 1000, 300_000, 'PC_WORKER_RERANKER_TIMEOUT_MS') })
+  }
   const endpoint = env.PC_WORKER_RERANKER_BASE_URL || env.PC_WORKER_RERANKER_URL
   const identityValues = [
     env.PC_WORKER_RERANKER_PROVIDER,

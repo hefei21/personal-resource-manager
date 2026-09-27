@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import express from 'express'
 import test from 'node:test'
+import { QWEN_RERANKER_MODEL } from '../src/config/qwenReranker.js'
 
 process.env.DATA_PATH ??= path.join(os.tmpdir(), 'rag-route-test-data')
 
@@ -464,6 +465,57 @@ test('optional reranker reorders only authorized evidence and the route rechecks
     assert.equal(body.data.retrieval.reranker.status, 'applied')
     assert.equal(phases.includes('route_post_rerank'), true)
   })
+})
+
+test('isolated Qwen pool preserves authorization, seed budget and exact fail-open', async () => {
+  for (const mode of ['applied', 'offline', 'throws', 'duplicate', 'disabled', 'global', 'chapter']) {
+    const calls = [], phases = []
+    let evidence = []
+    const seed = retrieval().data[0]
+    const pool = Array.from({ length: 12 }, (_, i) => ({ ...seed, citationId: `C${i}`, chunkId: i + 1,
+      body: `Evidence ${i}`, sourceType: 'ebook', sourceId: i === 11 ? 99 : 23 }))
+    const baseline = pool.slice(0, 2)
+    const router = createRagRouter({
+      databaseProvider: () => ({}),
+      authoritativeChecksFactory: () => ({
+        authoritativeVisibility: (candidate, context) => { phases.push(context?.phase); return candidate.chunkId !== 10 },
+        authoritativeActiveSnapshot: candidate => candidate.chunkId !== 11
+      }),
+      querySourceResolver: () => null,
+      sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 12 } }),
+      structuredAnswerProvider: () => null,
+      chapterScopeProvider: () => ({ chunkIds: [1, 2, 3] }),
+      candidateProvider: input => { calls.push(input); return { ftsCandidates: [] } },
+      hybridRetrieverFactory: ({ retrievalConfig }) => ({ retrieve: () => ({ ...retrieval(),
+        data: retrievalConfig.maxPerSource === 50 ? pool : baseline }) }),
+      rerankerModel: QWEN_RERANKER_MODEL,
+      rerankerConfig: { expandedCandidatePool: mode !== 'disabled' },
+      rerankerService: { rerank: async ({ candidates }) => {
+        if (mode === 'throws') throw new Error('offline')
+        assert.ok(candidates.every(c => c.chunkId !== 10 && c.chunkId !== 11))
+        if (mode !== 'global') assert.ok(candidates.every(c => c.sourceId === 23))
+        return { applied: mode !== 'offline', candidates: mode === 'duplicate'
+          ? candidates.map(() => candidates[0]) : [...candidates].reverse() }
+      } },
+      answerService: { generate: async input => { evidence = input.evidence; return {
+        status: 'degraded', query: input.query, language: 'en', answer: null, abstained: true,
+        reasonCode: 'test', degraded: true, degradedReason: 'test', citations: [] } } },
+      taskStoreProvider: () => null
+    })
+    await withServer(router, async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+        body: JSON.stringify({ query: 'explain', ...(mode === 'global' ? {} : { source: { type: 'ebook', id: 23 } }),
+          ...(mode === 'chapter' ? { section: 'a'.repeat(64) } : {}) }) })
+      assert.equal(response.status, 200, mode)
+      const expected = mode === 'applied' ? [9, 8, 7, 6, 5, 4] : mode === 'chapter' ? [3, 2, 1]
+        : ['offline', 'throws', 'duplicate'].includes(mode) ? [1, 2] : [2, 1]
+      assert.deepEqual(evidence.map(c => c.chunkId), expected, mode)
+      assert.deepEqual(calls.map(call => call.limit), ['disabled', 'global'].includes(mode) ? [10] : [10, 50], mode)
+      if (mode === 'chapter') assert.deepEqual(calls[1].chunkIds, [1, 2, 3])
+      assert.ok(phases.includes('route_post_rerank'))
+    })
+  }
 })
 
 test('RAG status is Owner-only and exposes only aggregate capability/degradation state', async () => {

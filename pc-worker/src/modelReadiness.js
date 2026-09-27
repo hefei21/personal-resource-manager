@@ -1,5 +1,6 @@
 import { collectLoadedModels } from './telemetry.js'
 import { readFile } from 'node:fs/promises'
+import { matchesQwenReranker, validQwenEndpoint } from './qwenReranker.js'
 
 export const RAG_RERANKER_MODEL_ID = 'BAAI/bge-reranker-v2-m3'
 export const RAG_RERANKER_MODEL_REVISION = '953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e'
@@ -35,6 +36,7 @@ function configuredModel(config) {
 }
 
 function configuredReranker(config) {
+  if (matchesQwenReranker(config)) return validQwenEndpoint(config.endpoint ?? config.baseUrl, config.apiKey)
   return config && typeof config === 'object' && typeof (config.endpoint ?? config.baseUrl) === 'string' &&
     (config.endpoint ?? config.baseUrl) !== '' && config.modelId === RAG_RERANKER_MODEL_ID &&
     config.modelRevision === RAG_RERANKER_MODEL_REVISION && config.provider === RAG_RERANKER_PROVIDER &&
@@ -170,12 +172,12 @@ function rerankerReadinessEndpoints(config) {
   }
 }
 
-async function readReadinessResponse(fetchImpl, endpoint, timeoutMs) {
+async function readReadinessResponse(fetchImpl, endpoint, timeoutMs, apiKey = null) {
   let response
   try {
     response = await fetchImpl(endpoint, {
       method: 'GET',
-      headers: { accept: 'application/json' },
+      headers: { accept: 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
       signal: AbortSignal.timeout(timeoutMs)
     })
   } catch {
@@ -194,6 +196,14 @@ async function probeReranker(config, fetchImpl, manifestProvider = readRerankerM
   const timeoutMs = Number.isSafeInteger(config.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : 30_000
   const endpoints = rerankerReadinessEndpoints(config)
   if (!endpoints.infoEndpoint || !endpoints.healthEndpoint) return { ready: false, reason: 'endpoint_invalid' }
+  if (matchesQwenReranker(config)) {
+    // Authenticate only to the checked loopback service, never arbitrary probe URLs.
+    const root = (config.endpoint ?? config.baseUrl).replace(/\/$/u, '').replace(/\/rerank$/u, '')
+    if (!validQwenEndpoint(root, config.apiKey) || endpoints.infoEndpoint !== `${root}/info` || endpoints.healthEndpoint !== `${root}/health`) return { ready: false, reason: 'endpoint_invalid' }
+    const response = await readReadinessResponse(fetchImpl, endpoints.infoEndpoint, timeoutMs, config.apiKey)
+    return response.ok && response.payload?.model_type === 'reranker' && matchesQwenReranker(response.payload?.model)
+      ? { ready: true, reason: null } : { ready: false, reason: 'model_identity_unverified' }
+  }
   const info = await readReadinessResponse(fetchImpl, endpoints.infoEndpoint, timeoutMs)
   if (!info.ok) {
     // /health is diagnostic only. It can never establish model identity, so a
