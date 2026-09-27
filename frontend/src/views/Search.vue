@@ -436,7 +436,7 @@ function normalizeCitation(value, index) {
   if (!value || typeof value !== 'object') return null
   const title = safeText(value.title || value.sourceLabel, 160) || `资料来源 ${index + 1}`
   return Object.freeze({
-    label: `C${index + 1}`,
+    label: /^C[1-9]\d{0,3}$/u.test(value.citationId || '') ? value.citationId : `C${index + 1}`,
     title,
     section: safeText(value.section || value.chapter || value.chapterTitle || value.locationLabel || [value.locator?.path, value.locator?.sectionPath?.join(' / '), Number.isInteger(value.locator?.startLine) ? `第 ${value.locator.startLine}–${value.locator.endLine || value.locator.startLine} 行` : ''].filter(Boolean).join(' · '), 240),
     version: safeText(value.versionLabel || value.version, 100),

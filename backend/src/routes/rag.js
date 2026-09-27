@@ -1062,7 +1062,7 @@ function publicLocator(locator, citationId) {
 }
 
 function publicCitation(item, index) {
-  const citationId = `C${index + 1}`
+  const citationId = /^C[1-9]\d{0,3}$/u.test(item?.citationId ?? '') ? item.citationId : `C${index + 1}`
   const citation = { citationId }
   if (isPlainObject(item)) {
     if (typeof item.title === 'string' && !/[A-Za-z]:[\\/]|^\\\\|(?:sha|sha256)[ _-]?hash|storage[ _-]?key|password|secret|(?:source|document|book|repository|snapshot|chunk|database)[ _-]?id\s*[:=]?\s*\d+/iu.test(item.title)) {

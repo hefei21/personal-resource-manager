@@ -196,7 +196,7 @@ test('evidence-first response uses authorized source text, bounds excerpts and r
       hybridRetrieverFactory: () => ({ retrieve: async () => ({ ...retrieval(), data: [{ ...retrieval().data[0], body }] }) }),
       answerServiceFactory: () => ({ generate: async () => {
         if (mode === 'revoked') visible = false
-        return {status:'complete',answer:'Model paraphrase.',abstained:false,citations:[]}
+        return {status:'complete',answer:'Model paraphrase [C3].',abstained:false,citations:[{citationId:'C3',title:'Source'}]}
       } })
     })
     await withServer(router, async base => {
@@ -210,6 +210,7 @@ test('evidence-first response uses authorized source text, bounds excerpts and r
         return
       }
       assert.equal(result.evidence.length, 1)
+      assert.equal(result.citations[0].citationId, 'C3')
       assert.equal(result.evidence[0].label, 'E1')
       assert.equal(result.evidence[0].excerpt, mode === 'sensitive' ? '' : body.slice(0,800))
       assert.equal(result.evidence[0].excerptTruncated, mode === 'long')

@@ -16,7 +16,7 @@ try {
       if (p === '/api/rag/coverage') body = { data: { data: [1, 2].map(id => ({ source: { type: 'document', id, title: `合成资料${id}` }, status: 'ready', chunkCount: 2 })) } }
       if (p === '/api/rag/queries') {
         sent.push(route.request().postDataJSON())
-        body = { data: { status: 'complete', answer: `分项回答 ${sent.length} [C1]`, citations: [{ title: '合成依据' }], evidence: [{ title: '合成依据', excerpt: '明确依据 <script>不可执行</script>', locator: { sectionPath: ['第二节'], startLine: 12, endLine: 18 }, excerptTruncated: true }] } }
+        body = { data: { status: 'complete', answer: `分项回答 ${sent.length} [C3]`, citations: [{ citationId: 'C3', title: '合成依据' }], evidence: [{ title: '合成依据', excerpt: '明确依据 <script>不可执行</script>', locator: { sectionPath: ['第二节'], startLine: 12, endLine: 18 }, excerptTruncated: true }] } }
         if (scenario === 'structured') body = { data: { status: 'complete', reasonCode: 'structured_fact', answer: '当前正文共 12 章。', citations: [] } }
         if (scenario === 'empty') body = { data: { status: 'degraded', abstained: true, degraded: true, reasonCode: 'no_evidence', evidence: [], citations: [] } }
       }
@@ -46,6 +46,7 @@ try {
     await plan.locator('summary').first().focus()
     await page.keyboard.press('Enter')
     assert.equal(await plan.locator('details[open]').count(), 1)
+    assert.match(await plan.locator('.ai-citations').first().innerText(), /C3/)
     assert.match(await plan.locator('.metadata').first().innerText(), /第二节.*12–18/)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false)
     await page.locator('.search-input').fill('修改后的问题')
