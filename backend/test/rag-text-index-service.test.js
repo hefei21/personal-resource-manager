@@ -120,6 +120,30 @@ function rows(database, table, where = '') {
   return database.prepare(`SELECT * FROM ${table}${where ? ` WHERE ${where}` : ''} ORDER BY id`).all()
 }
 
+test('internal rerank lexical fallback requires body support without changing ordinary search', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const item = source({ title: 'alpha beta', text: 'fixture' })
+    item.sections = ['unrelated flowers', 'rare meaningful evidence', 'rare hidden evidence'].map((text, index) => ({
+      ...item.sections[0], text, locator: { ...item.baseLocator, startLine: index * 10 + 1 }
+    }))
+    const service = createService(database, { collectSources: async () => ({ sources: [item, source({id:2,title:'alpha beta',text:'rare other source'})], errors: [] }),
+      authoritativeVisibility: c => !c.body.includes('hidden') })
+    await service.refresh()
+    const query = { q: 'alpha beta rare missing', sourceType: 'document', sourceId: 1, limit: 50 }
+    const before = service.query(query)
+    assert.ok(before.data.some(c => c.body.includes('flowers')))
+    const result = service.queryRerankPool(query)
+    assert.equal(result.data.length, 1)
+    assert.equal(result.data[0].body, 'rare meaningful evidence')
+    assert.deepEqual(service.query({...query,bodyOnly:true,expandedRerankPool:true}), before)
+    assert.equal(service.queryRerankPool({...query,chunkIds:[result.data[0].chunkId]}).total, 1)
+    for (const patch of [{sourceId:undefined},{limit:51},{offset:1}]) assert.throws(() => service.queryRerankPool({...query,...patch}))
+    assert.deepEqual(service.queryRerankPool({...query,q:'rare meaningful'}).data, service.query({...query,q:'rare meaningful'}).data)
+  } finally { database.close() }
+})
+
 test('indexes collector sources in a transaction and returns exact public locators', nativeTestOptions, async () => {
   const database = new Database(':memory:')
   try {

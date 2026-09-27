@@ -792,6 +792,7 @@ async function defaultCandidateProvider({
   limit,
   source,
   chunkIds,
+  expandedRerankPool = false,
   authoritativeVisibility,
   authoritativeActiveSnapshot,
   textIndexServiceFactory,
@@ -808,7 +809,8 @@ async function defaultCandidateProvider({
     error.code = RAG_ROUTE_ERROR_CODES.CANDIDATES_INVALID
     throw error
   }
-  const result = await Promise.resolve(service.query({
+  const search = expandedRerankPool && typeof service.queryRerankPool === 'function' ? service.queryRerankPool : service.query
+  const result = await Promise.resolve(search.call(service, {
     q: query,
     limit,
     offset: 0,
@@ -1823,6 +1825,7 @@ export function createRagRouter({
             let window = scopedRetrieval.data.slice(0, 10)
             if (expanded) {
               const pool = await resolvedCandidateProvider({ database, req, query: input.query, limit: 50,
+                expandedRerankPool: true,
                 source: querySource, ...(chunkIds ? { chunkIds } : {}),
                 authoritativeVisibility: checks.authoritativeVisibility,
                 authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot })

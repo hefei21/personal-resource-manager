@@ -678,10 +678,10 @@ function normalizeQuery(input) {
   })
 }
 
-function hasRelaxedLexicalSupport(row, tokens) {
+function hasRelaxedLexicalSupport(row, tokens, bodyOnly = false) {
   if (!Array.isArray(tokens) || tokens.length === 0) return false
-  const haystack = `${row?.title ?? ''}\n${row?.body ?? ''}`.normalize('NFKC').toLocaleLowerCase('und')
-  const required = Math.min(2, tokens.length)
+  const haystack = (bodyOnly ? row?.body ?? '' : `${row?.title ?? ''}\n${row?.body ?? ''}`).normalize('NFKC').toLocaleLowerCase('und')
+  const required = bodyOnly ? 1 : Math.min(2, tokens.length)
   let matches = 0
   for (const token of tokens) {
     if (!haystack.includes(token.toLocaleLowerCase('und'))) continue
@@ -892,6 +892,20 @@ export class RagTextIndexService {
   }
 
   query(input = {}) {
+    return this.#query(input, false)
+  }
+
+  // Internal bound rerank pool only. A repeated source title is not evidence;
+  // one body term remains sufficient for rare names and partial lexical overlap.
+  queryRerankPool(input = {}) {
+    const query = normalizeQuery(input)
+    if (!query.sourceId || query.limit > 50 || query.offset !== 0) {
+      fail(RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID, 'Rerank pool requires a bounded source.')
+    }
+    return this.#query(input, true)
+  }
+
+  #query(input, bodyOnly) {
     const query = normalizeQuery(input)
     const candidateLimit = Math.min(MAX_QUERY_CANDIDATES, Math.max(query.limit + query.offset, (query.limit + query.offset) * 10))
     const clauses = [
@@ -935,7 +949,7 @@ export class RagTextIndexService {
       // then use a bounded BM25-ranked OR pass so FTS remains useful while the
       // optional vector Worker is offline or still indexing.
       rows = readCandidates(query.relaxedFtsQuery)
-        .filter((row) => hasRelaxedLexicalSupport(row, query.relaxedTokens))
+        .filter((row) => hasRelaxedLexicalSupport(row, query.relaxedTokens, bodyOnly))
     }
     const visible = []
     for (const row of rows) {
