@@ -51,7 +51,7 @@
         </button>
       </div>
       <p v-if="mode === 'ask'" class="mode-hint">
-        只使用当前 Owner 可见资料回答；证据不足时会明确拒答，PC Worker 离线时保留可打开的引用式结果。
+        优先展示当前 Owner 可见的原文片段；AI 总结需另行核对。PC Worker 离线时仍可查看本机检索结果。
       </p>
       <div v-if="mode === 'ask'" class="ask-scope-panel">
         <label class="ask-source-field">
@@ -186,7 +186,7 @@
     <section v-if="mode === 'ask' && askState !== 'idle'" class="answer-panel" aria-live="polite">
       <header class="answer-heading">
         <div>
-          <strong>资料回答</strong>
+          <strong>原文与总结</strong>
           <span>{{ askModeLabel }}</span>
         </div>
         <button v-if="askState === 'submitting' || (askQueryId && askCancellable)" class="inline-button" type="button" :disabled="askState === 'cancelling'" @click="cancelAsk">{{ askState === 'cancelling' ? '取消中…' : '取消' }}</button>
@@ -202,35 +202,7 @@
       <div v-else-if="askState === 'cancelled'" class="answer-feedback" role="status">
         已取消本次提问；原有关键词搜索仍可继续使用。
       </div>
-      <template v-else>
-        <div v-if="askResult?.degraded" class="answer-degraded" role="status">
-          {{ askResult.degradedLabel }}
-        </div>
-        <div v-if="askResult?.answer" class="answer-text">
-          {{ askResult.answer }}
-        </div>
-        <div v-else class="answer-abstained" role="status">
-          <strong>暂不回答</strong>
-          <span>{{ askResult?.reasonLabel || '当前证据不足，未生成未经支持的结论。' }}</span>
-        </div>
-
-        <section v-if="askCitations.length" class="citation-section" aria-label="回答引用">
-          <h3>引用资料</h3>
-          <article v-for="citation in askCitations" :key="citation.label" class="citation-card">
-            <div class="citation-title-row">
-              <span class="citation-label">{{ citation.label }}</span>
-              <strong>{{ citation.title }}</strong>
-              <button v-if="citation.openUrl" type="button" class="citation-link" @click="openCitation(citation)">打开来源</button>
-            </div>
-            <div class="citation-meta">
-              <span v-if="citation.section">章节：{{ citation.section }}</span>
-              <span v-if="citation.version">版本：{{ citation.version }}</span>
-            </div>
-            <blockquote v-if="citation.excerpt">{{ citation.excerpt }}</blockquote>
-          </article>
-        </section>
-        <div v-else class="citation-empty">本次回答没有返回可展示的引用。</div>
-      </template>
+      <RagEvidenceResult v-else-if="askResult" :result="askResult" @open-citation="openCitation" />
     </section>
 
     <section v-if="mode === 'search' && searched && !loading" class="results-section">
@@ -284,6 +256,7 @@
 
 <script setup>
 import RagPlan from '@/components/RagPlan.vue'
+import RagEvidenceResult from '@/components/RagEvidenceResult.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
@@ -383,9 +356,8 @@ const askModeLabel = computed(() => {
   if (askState.value === 'cancelled') return '已取消'
   if (askResult.value?.degraded) return '本机检索降级'
   if (askResult.value?.abstained) return '证据不足，已拒答'
-  return '引用式回答'
+  return '相关片段 · 总结未核验'
 })
-const askCitations = computed(() => askResult.value?.citations || [])
 const askSourceItems = computed(() => {
   const items = [...(ragCoverage.value?.data || [])]
   if (readerSource.value && !items.some(item => item.source.type === 'ebook' && item.source.id === readerBookId)) items.push(readerSource.value)
@@ -466,9 +438,10 @@ function normalizeCitation(value, index) {
   return Object.freeze({
     label: `C${index + 1}`,
     title,
-    section: safeText(value.section || value.chapter || value.chapterTitle || value.locationLabel, 160),
+    section: safeText(value.section || value.chapter || value.chapterTitle || value.locationLabel || [value.locator?.path, value.locator?.sectionPath?.join(' / '), Number.isInteger(value.locator?.startLine) ? `第 ${value.locator.startLine}–${value.locator.endLine || value.locator.startLine} 行` : ''].filter(Boolean).join(' · '), 240),
     version: safeText(value.versionLabel || value.version, 100),
-    excerpt: safeText(value.excerpt || value.snippet, 480),
+    excerpt: safeText(value.excerpt || value.snippet, 800),
+    excerptTruncated: value.excerptTruncated === true,
     openUrl: safeCitationUrl(value.openUrl || value.href)
   })
 }
@@ -478,17 +451,20 @@ function normalizeAskResult(value) {
   const answer = safeText(source.answer, 12000)
   const reasonCode = safeText(source.reasonCode, 80).toLowerCase()
   const citations = Array.isArray(source.citations)
-    ? source.citations.map(normalizeCitation).filter(Boolean).slice(0, 8)
+    ? source.citations.map(normalizeCitation).filter(Boolean).slice(0, 16)
     : []
   const abstained = Boolean(source.abstained) || !answer
   const degraded = Boolean(source.degraded || source.fallback || source.mode === 'fts')
   return Object.freeze({
     answer,
+    structured: reasonCode === 'structured_fact',
     abstained,
     degraded,
     degradedLabel: degraded ? '当前使用本机检索降级；生成模型或向量能力不可用，以下引用仍受权限过滤。' : '',
     reasonLabel: ASK_REASON_LABELS[reasonCode] || (abstained ? '当前证据不足，未生成未经支持的结论。' : ''),
-    citations: Object.freeze(citations)
+    citations: Object.freeze(citations),
+    evidence: Object.freeze((Array.isArray(source.evidence) ? source.evidence : []).slice(0, 16)
+      .map(normalizeCitation).filter(Boolean).map((item, index) => Object.freeze({ ...item, label: `E${index + 1}` })))
   })
 }
 
@@ -821,27 +797,13 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .rag-status-degraded { border-color: var(--color-warning-border); background: var(--color-warning-surface); }
 .rag-status-unavailable { border-color: var(--color-danger-border); background: var(--color-danger-surface); }
 .answer-panel { margin-top: 20px; padding: 18px; border: 1px solid var(--color-primary-border); border-radius: 14px; background: var(--color-surface-raised); box-shadow: 0 6px 24px rgba(15, 23, 42, .05); }
-.answer-heading, .citation-title-row { display: flex; align-items: center; gap: 10px; }
+.answer-heading { display: flex; align-items: center; gap: 10px; }
 .answer-heading { justify-content: space-between; margin-bottom: 16px; color: var(--color-text-primary); }
 .answer-heading > div { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
 .answer-heading > div span { color: var(--color-text-secondary); font-size: 13px; }
-.answer-loading, .answer-feedback, .answer-degraded, .answer-abstained, .citation-empty { padding: 14px; border-radius: 10px; }
+.answer-loading, .answer-feedback { padding: 14px; border-radius: 10px; }
 .answer-loading { background: var(--color-primary-surface); color: var(--color-info-text); }
 .answer-feedback { background: var(--color-warning-surface); color: var(--color-warning-text); }
-.answer-degraded { margin-bottom: 14px; background: var(--color-warning-surface); color: var(--color-warning-text); }
-.answer-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.75; color: var(--color-text-primary); }
-.answer-abstained { display: flex; flex-direction: column; gap: 6px; background: var(--color-surface-subtle); color: var(--color-text-secondary); }
-.answer-abstained strong { color: var(--color-text-primary); }
-.citation-section { margin-top: 20px; }
-.citation-section h3 { margin: 0 0 10px; font-size: 16px; color: var(--color-text-primary); }
-.citation-card { margin-top: 10px; padding: 13px 14px; border: 1px solid var(--color-border-subtle); border-radius: 10px; background: var(--color-surface-subtle); }
-.citation-title-row { flex-wrap: wrap; }
-.citation-label { display: inline-flex; min-width: 28px; justify-content: center; border-radius: 999px; padding: 3px 7px; background: var(--color-primary-surface); color: var(--color-primary); font-size: 12px; font-weight: 700; }
-.citation-title-row strong { flex: 1; min-width: 180px; color: var(--color-text-primary); }
-.citation-link { border: 0; padding: 4px 0; background: transparent; color: var(--color-primary); font-size: 13px; cursor: pointer; }
-.citation-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 7px; color: var(--color-text-secondary); font-size: 13px; }
-.citation-card blockquote { margin: 10px 0 0; padding-left: 12px; border-left: 3px solid var(--color-primary-border); color: var(--color-text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
-.citation-empty { margin-top: 16px; background: var(--color-surface-subtle); color: var(--color-text-secondary); }
 .results-section { margin-top: 20px; }
 .results-heading { justify-content: space-between; margin-bottom: 12px; color: var(--color-text-secondary); }
 .results-heading div { display: flex; gap: 12px; }
@@ -879,6 +841,5 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .mode-tabs { display: flex; width: 100%; }
   .mode-tabs button { flex: 1; }
   .answer-panel { padding: 14px; }
-  .citation-title-row strong { min-width: 0; }
 }
 </style>

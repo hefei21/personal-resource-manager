@@ -20,12 +20,7 @@
       <article v-for="(item, index) in items" :key="index">
         <h3>{{ index + 1 }}. {{ item.q }}</h3><p>{{ item.title }} · {{ statusLabel(item.status) }}</p>
         <p v-if="item.feedback" role="alert">{{ item.feedback }}</p>
-        <template v-if="item.result">
-          <p v-if="item.result.degraded">{{ item.result.degradedLabel }}</p>
-          <p v-if="item.result.abstained">{{ item.result.reasonLabel || '证据不足，无法回答。' }}</p>
-          <p class="answer">{{ item.result.answer }}</p>
-          <details v-for="citation in item.result.citations" :key="citation.label"><summary>{{ citation.label }} · {{ citation.title }}</summary><p>{{ citation.section }} {{ citation.version }}</p><p>{{ citation.excerpt }}</p><button v-if="citation.openUrl" type="button" @click="$emit('open-citation', citation)">打开引用</button></details>
-        </template>
+        <RagEvidenceResult v-if="item.result" :result="item.result" @open-citation="$emit('open-citation', $event)" />
       </article>
     </template>
   </section>
@@ -33,6 +28,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useRagPlan, validateRagPlan, draftRagQuestions } from '@/composables/useRagPlan'
+import RagEvidenceResult from '@/components/RagEvidenceResult.vue'
 const props = defineProps({ question: String, sources: { type: Array, required: true }, api: Object, normalizeResult: Function, errorLabel: Function })
 defineEmits(['close', 'open-citation'])
 let nextId = 0
@@ -50,10 +46,9 @@ onBeforeUnmount(plan.dispose)
 .rag-plan { margin-top: 20px; padding: 18px; border: 1px solid var(--color-border-default); border-radius: 12px; background: var(--color-surface-raised); color: var(--color-text-primary); }
 header, footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 h2 { margin: 0; font-size: 18px; } h3 { font-size: 16px; }
-p { line-height: 1.6; overflow-wrap: anywhere; } .answer { white-space: pre-wrap; }
+p { line-height: 1.6; overflow-wrap: anywhere; }
 fieldset, article { min-width: 0; margin: 16px 0; padding: 14px; border: 1px solid var(--color-border-subtle); border-radius: 8px; }
 label { display: grid; gap: 6px; margin-bottom: 12px; }
 textarea, select, button { font: inherit; color: var(--color-text-primary); background: var(--color-surface-raised); border: 1px solid var(--color-border-default); border-radius: 7px; padding: 10px; min-height: 44px; }
 textarea, select { width: 100%; box-sizing: border-box; } button { cursor: pointer; } button:disabled { opacity: .5; cursor: not-allowed; }
-summary { cursor: pointer; padding: 12px 0; } details { border-top: 1px solid var(--color-border-subtle); }
 </style>

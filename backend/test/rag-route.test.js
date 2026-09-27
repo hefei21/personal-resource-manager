@@ -186,6 +186,39 @@ function retrieval() {
   }
 }
 
+test('evidence-first response uses authorized source text, bounds excerpts and rechecks after generation', async () => {
+  for (const mode of ['plain', 'long', 'sensitive', 'revoked']) {
+    let visible = true
+    const body = mode === 'long' ? '原文'.repeat(600) : mode === 'sensitive' ? 'password=do-not-expose' : 'Original source, not a model paraphrase.'
+    const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+      authoritativeChecksFactory: () => ({ authoritativeVisibility: () => visible, authoritativeActiveSnapshot: () => true }),
+      candidateProvider: async () => ({ ftsCandidates: [] }),
+      hybridRetrieverFactory: () => ({ retrieve: async () => ({ ...retrieval(), data: [{ ...retrieval().data[0], body }] }) }),
+      answerServiceFactory: () => ({ generate: async () => {
+        if (mode === 'revoked') visible = false
+        return {status:'complete',answer:'Model paraphrase.',abstained:false,citations:[]}
+      } })
+    })
+    await withServer(router, async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method:'POST', headers:{'content-type':'application/json','x-test-principal':'owner'}, body:JSON.stringify({query:'find evidence'}) })
+      assert.equal(response.status, 200)
+      const result = (await response.json()).data
+      if (mode === 'revoked') {
+        assert.deepEqual(result.evidence, [])
+        assert.equal(result.answer, null)
+        assert.equal(result.reasonCode, 'evidence_stale')
+        return
+      }
+      assert.equal(result.evidence.length, 1)
+      assert.equal(result.evidence[0].label, 'E1')
+      assert.equal(result.evidence[0].excerpt, mode === 'sensitive' ? '' : body.slice(0,800))
+      assert.equal(result.evidence[0].excerptTruncated, mode === 'long')
+      assert.equal(result.evidence[0].excerptUnavailable, mode === 'sensitive')
+      assert.doesNotMatch(JSON.stringify(result.evidence), /password|do-not-expose|documentId|sourceId|snapshotId|private/u)
+    })
+  }
+})
+
 function queryRunStore() {
   const rows = new Map()
   return {

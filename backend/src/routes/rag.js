@@ -1147,7 +1147,7 @@ async function authorizeReturnedEvidence(retrieval, checks, context) {
   })
 }
 
-function projectAnswer(answer, retrieval, runId) {
+function projectAnswer(answer, retrieval, runId, authorizedEvidence = []) {
   const result = isPlainObject(answer) ? answer : {}
   const safeAnswer = safeAnswerText(result.answer)
   const unsafeAnswer = typeof result.answer === 'string' && safeAnswer === null
@@ -1164,7 +1164,14 @@ function projectAnswer(answer, retrieval, runId) {
     ...(unsafeAnswer
       ? { degradedReason: 'unsafe_output' }
       : (typeof result.degradedReason === 'string' ? { degradedReason: result.degradedReason } : {})),
-    citations: Array.isArray(result.citations) ? result.citations.map(publicCitation) : []
+    citations: Array.isArray(result.citations) ? result.citations.map(publicCitation) : [],
+    evidence: authorizedEvidence.slice(0, 16).map((item, index) => {
+      const text = safeAnswerText(item.body)
+      const { title, locator } = publicCitation(item, index)
+      return { label: `E${index + 1}`, ...(title ? { title } : {}), locator,
+        excerpt: text?.slice(0, 800) ?? '', excerptTruncated: Boolean(text && text.length > 800),
+        excerptUnavailable: !text }
+    })
   }
   if (Array.isArray(result.omitted)) {
     projected.omitted = result.omitted.map((item, index) => ({
@@ -1391,7 +1398,7 @@ async function projectTrackedQuery(entry, task, req) {
   if (isPlainObject(answer) && (typeof answer.query !== 'string' || answer.query.length === 0)) {
     answer = { ...answer, query: entry.query }
   }
-  return projectAnswer(answer, retrieval, entry.runId)
+  return projectAnswer(answer, retrieval, entry.runId, retrieval.data)
 }
 
 async function cancelTrackedTask(store, task) {
@@ -1957,7 +1964,10 @@ export function createRagRouter({
           }
         }
       }
-      const response = projectAnswer(answer, rankedRetrieval, runId)
+      const visibleEvidence = await authorizeReturnedEvidence(rankedRetrieval, checks, { phase: 'evidence_display', query: input.query, req })
+      const displayAnswer = visibleEvidence.data.length < rankedRetrieval.data.length
+        ? referenceFallback(input.query, visibleEvidence.data, 'evidence_stale') : answer
+      const response = projectAnswer(displayAnswer, visibleEvidence, runId, visibleEvidence.data)
       if (requiresRunId && response.cancellable === true) {
         response.cancellable = typeof taskStore?.cancel === 'function'
       }
