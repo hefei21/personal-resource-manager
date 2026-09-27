@@ -118,7 +118,7 @@
           :placeholder="mode === 'ask' ? '例如：如何恢复搜索索引？' : '搜索标题、正文、章节、代码、作者或标签'"
           autocomplete="off"
         />
-        <button class="primary-button" type="submit" :disabled="loading || askLoading || !filters.q">
+        <button class="primary-button" type="submit" :disabled="loading || askLoading || planOpen || !filters.q">
           {{ mode === 'ask' ? (askLoading ? '准备回答…' : '提问') : (loading ? '搜索中…' : '搜索') }}
         </button>
       </div>
@@ -166,7 +166,9 @@
         <label><span>更新时间止</span><input v-model="filters.dateTo" type="date" /></label>
         <button type="button" class="reset-button" @click="resetAdvancedFilters">清除筛选</button>
       </div>
+      <button v-if="mode === 'ask' && !askSourceKey" type="button" class="secondary-button" :disabled="askLoading || planOpen || !filters.q" @click="ask.reset(); planOpen = true">拆分提问</button>
     </form>
+    <RagPlan v-if="mode === 'ask' && planOpen && !askSourceKey" :question="filters.q" :sources="askSourceItems" :api="api.rag" :normalize-result="normalizeAskResult" :error-label="askErrorLabel" @close="planOpen = false" @open-citation="openCitation" />
 
     <div v-if="mode === 'ask' && ragStatus" class="rag-status-strip" :class="`rag-status-${ragStatusKind}`" role="status">
       <div>
@@ -281,6 +283,7 @@
 </template>
 
 <script setup>
+import RagPlan from '@/components/RagPlan.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
@@ -293,6 +296,7 @@ const route = useRoute()
 const { isMobile } = useViewport()
 const pageSize = 20
 const mode = ref('search')
+const planOpen = ref(false)
 const loading = ref(false)
 const refreshing = ref(false)
 const searched = ref(false)
@@ -332,6 +336,7 @@ let searchGeneration = 0
 const filters = reactive({
   q: '', scope: 'owned', type: '', tag: '', author: '', status: '', source: '', dateFrom: '', dateTo: ''
 })
+watch(() => filters.q, () => { planOpen.value = false })
 
 const scopeOptions = [
   { value: 'owned', label: '我的资源' },
@@ -538,6 +543,7 @@ function ragCoverageStatusLabel(status) {
 }
 
 function resetAskForScopeChange() {
+  planOpen.value = false
   ask.reset()
   ragRefreshFeedback.value = ''
 }
@@ -548,6 +554,7 @@ function submitForm() {
 }
 
 function setMode(nextMode) {
+  planOpen.value = false
   if (nextMode === mode.value) return
   ask.reset()
   mode.value = nextMode
@@ -626,6 +633,7 @@ function askErrorLabel(error) {
 }
 
 async function runAsk() {
+  if (planOpen.value) return
   if (!filters.q || askLoading.value) return
   if (askSourceKey.value && !selectedAskSource.value) {
     askFeedback.value = '所选资料不可用，请重新选择回答范围。'
