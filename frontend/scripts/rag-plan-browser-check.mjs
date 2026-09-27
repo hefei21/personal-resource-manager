@@ -16,7 +16,7 @@ try {
       if (p === '/api/rag/coverage') body = { data: { data: [1, 2].map(id => ({ source: { type: 'document', id, title: `合成资料${id}` }, status: 'ready', chunkCount: 2 })) } }
       if (p === '/api/rag/queries') {
         sent.push(route.request().postDataJSON())
-        body = { data: { status: 'complete', answer: `分项回答 ${sent.length} [C3]`, citations: [{ citationId: 'C3', title: '合成依据' }], evidence: [{ title: '合成依据', excerpt: '明确依据 <script>不可执行</script>', locator: { sectionPath: ['第二节'], startLine: 12, endLine: 18 }, excerptTruncated: true }] } }
+        body = { data: { status: 'complete', answer: `分项回答 ${sent.length} [C3]`, citations: [{ citationId: 'C3', title: '合成依据' }], evidence: [{ title: '合成依据', excerpt: '明确依据 <script>不可执行</script>', locator: { sectionPath: ['第二节'], startLine: 12, endLine: 18 }, excerptTruncated: true, openUrl: '/documents' }] } }
         if (scenario === 'structured') body = { data: { status: 'complete', reasonCode: 'structured_fact', answer: '当前正文共 12 章。', citations: [] } }
         if (scenario === 'empty') body = { data: { status: 'degraded', abstained: true, degraded: true, reasonCode: 'no_evidence', evidence: [], citations: [] } }
       }
@@ -48,6 +48,17 @@ try {
     assert.equal(await plan.locator('details[open]').count(), 1)
     assert.match(await plan.locator('.ai-citations').first().innerText(), /C3/)
     assert.match(await plan.locator('.metadata').first().innerText(), /第二节.*12–18/)
+    const sourceButton = plan.getByRole('button', { name: '打开来源', exact: true }).first()
+    await sourceButton.scrollIntoViewIfNeeded()
+    const beforeScroll = await page.locator('.scrollable-content').evaluate(e => e.scrollTop)
+    await sourceButton.click()
+    await page.waitForURL('**/documents')
+    assert.equal(context.pages().length, 1)
+    await page.goBack()
+    await plan.locator('details[open]').waitFor()
+    assert.equal(sent.length, 2, 'back must not submit again')
+    assert.equal(await plan.locator('article').count(), 2)
+    await page.waitForFunction(top => Math.abs(document.querySelector('.scrollable-content').scrollTop - top) < 3, beforeScroll)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 2), false)
     await page.locator('.search-input').fill('修改后的问题')
     assert.equal(await plan.count(), 0)
@@ -56,6 +67,13 @@ try {
     await result.locator('blockquote').waitFor()
     assert.equal(await result.locator('details[open]').count(), 0)
     assert.match(await result.innerText(), /相关片段，不代表证据已足以回答/)
+    await result.locator('summary').click()
+    await result.getByRole('button', { name: '打开来源', exact: true }).click()
+    await page.waitForURL('**/documents')
+    await page.goBack()
+    await result.locator('details[open]').waitFor()
+    assert.equal(sent.length, 3)
+    assert.equal(await page.locator('.search-input').inputValue(), '修改后的问题')
     if (process.env.THEME_TEST_OUTPUT) {
       await mkdir(process.env.THEME_TEST_OUTPUT, { recursive: true })
       await page.screenshot({ path: `${process.env.THEME_TEST_OUTPUT}/${width}-${theme}-evidence.png`, fullPage: true })
@@ -70,6 +88,11 @@ try {
     await page.locator('.search-form').evaluate(form => form.requestSubmit())
     await result.getByText(/本次未返回可展示的原文片段/).waitFor()
     assert.equal(await result.locator('details').count(), 0)
+    await page.getByRole('button', { name: '退出', exact: true }).click()
+    await page.waitForURL('**/login')
+    await page.goBack()
+    await page.waitForURL('**/login')
+    assert.equal(await page.locator('.rag-evidence-result').count(), 0, 'logout must destroy cached results')
     assert.deepEqual(errors, [])
     await context.close()
   }

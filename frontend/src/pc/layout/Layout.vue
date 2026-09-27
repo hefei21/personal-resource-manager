@@ -94,7 +94,7 @@
 
     <!-- 可滚动的内容区域 -->
     <main class="scrollable-content">
-      <router-view />
+      <WorkspaceRouteView />
     </main>
 
     <!-- 音乐播放器 -->
@@ -135,6 +135,7 @@ import { ref, computed, onUnmounted, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import MediaPlayer from '@/components/business/media-player/index.vue'
+import WorkspaceRouteView from '@/components/WorkspaceRouteView.vue'
 import { NativeDialog, NativeIcon, NativeInput } from '@/components/native'
 import api from '@/api'
 import { useToast } from '@/composables/useToast'

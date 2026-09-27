@@ -1,5 +1,5 @@
 <template>
-  <div class="search-page">
+  <div ref="pageRoot" class="search-page">
     <section class="search-hero">
       <div>
         <p>由 NAS 本机 SQLite FTS5 与 commit 绑定符号索引提供，PC Worker 离线也可搜索。</p>
@@ -257,14 +257,32 @@
 <script setup>
 import RagPlan from '@/components/RagPlan.vue'
 import RagEvidenceResult from '@/components/RagEvidenceResult.vue'
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, nextTick, onActivated, onDeactivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { useRagQuery } from '@/composables/useRagQuery'
 import { useRagSections } from '@/composables/useRagSections'
 import { useViewport } from '@/composables/useViewport'
 
 const router = useRouter()
+const pageRoot = ref(null)
+let savedScroll = 0
+let scrollFrame = null
+onBeforeRouteLeave(() => {
+  savedScroll = pageRoot.value?.closest('.scrollable-content')?.scrollTop || 0
+})
+onActivated(async () => {
+  await nextTick()
+  scrollFrame = requestAnimationFrame(() => {
+    pageRoot.value?.closest('.scrollable-content')?.scrollTo({ top: savedScroll, behavior: 'instant' })
+  })
+})
+onDeactivated(() => {
+  if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
+  if (askLoading.value || askState.value === 'paused') ask.reset()
+  if (pollTimer) window.clearTimeout(pollTimer)
+  if (ragIndexPollTimer) window.clearTimeout(ragIndexPollTimer)
+})
 const route = useRoute()
 const { isMobile } = useViewport()
 const pageSize = 20

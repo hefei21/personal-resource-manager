@@ -26,7 +26,7 @@
   </section>
 </template>
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onDeactivated, ref } from 'vue'
 import { useRagPlan, validateRagPlan, draftRagQuestions } from '@/composables/useRagPlan'
 import RagEvidenceResult from '@/components/RagEvidenceResult.vue'
 const props = defineProps({ question: String, sources: { type: Array, required: true }, api: Object, normalizeResult: Function, errorLabel: Function })
@@ -41,6 +41,9 @@ const completed = computed(() => items.value.filter(item => item.result).length)
 const stateLabel = computed(() => ({ running: '正在逐项提问', complete: '分项结果已汇总', paused: '连接中断，后续提问已暂停', error: '当前项失败，后续提问未执行', stopped: '已停止继续执行' })[state.value])
 function statusLabel(status) { return ({ waiting: '未执行', running: '正在提问', submitting: '正在检索并筛选证据…', polling: '等待结果', cancelling: '正在取消', answered: '已回答', abstained: '证据不足', degraded: '降级结果', paused: '等待恢复连接', error: '失败', cancelled: '已取消' })[status] || status }
 onBeforeUnmount(plan.dispose)
+onDeactivated(() => {
+  if (state.value === 'running' || state.value === 'paused') void plan.stop()
+})
 </script>
 <style scoped>
 .rag-plan { margin-top: 20px; padding: 18px; border: 1px solid var(--color-border-default); border-radius: 12px; background: var(--color-surface-raised); color: var(--color-text-primary); }
