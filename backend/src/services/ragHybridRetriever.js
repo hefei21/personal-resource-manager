@@ -21,7 +21,7 @@ const FORBIDDEN_CLIENT_CONTROLS = new Set([
   'filter', 'rawFilter', 'sourceAllowlist', 'activeSnapshotSources',
   'weights', 'rrfK', 'ftsWeight', 'vectorWeight', 'sourceCap',
   'maxPerSource', 'minDistinctSources', 'overlapGap', 'adjacentGap',
-  'diversity', 'candidateLimit'
+  'diversity', 'candidateLimit', 'rerankPool'
 ])
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 
@@ -317,6 +317,21 @@ function selectDiverse(sorted, config, limit) {
   return selected
 }
 
+// Ranking candidates are not final evidence. Early overlap suppression can
+// discard a chunk's unique answer just because it shares one boundary line.
+// Keep the strongest fused candidates and reserve room for semantic-only hits.
+function selectRerankPool(sorted, limit) {
+  const selected = sorted.slice(0, Math.min(35, limit))
+  const seen = new Set(selected)
+  const vectors = sorted.filter(candidate => candidate.ranks.vector !== undefined)
+    .sort((a, b) => a.ranks.vector - b.ranks.vector || compareCandidateIdentity(a, b))
+  for (const candidate of [...vectors, ...sorted]) {
+    if (selected.length >= limit) break
+    if (!seen.has(candidate)) { selected.push(candidate); seen.add(candidate) }
+  }
+  return selected
+}
+
 function publicCandidate(candidate) {
   if (!candidate.locator) return null
   const output = {
@@ -446,10 +461,21 @@ export class RagHybridRetriever {
   }
 
   async retrieve(input = {}) {
+    return this.#retrieve(input, false)
+  }
+
+  // Internal, opt-in path. The HTTP route uses it only for bound Qwen trials;
+  // ordinary Hybrid retrieval retains its diversity and pagination policy.
+  async retrieveRerankPool(input = {}) {
+    return this.#retrieve(input, true)
+  }
+
+  async #retrieve(input, rerankPool) {
     rejectClientControls(input)
     this.#ensureVisibility()
-    const limit = boundedInteger(input.limit, 'limit', 1, RAG_HYBRID_MAX_LIMIT, this.config.defaultLimit)
+    const limit = boundedInteger(input.limit, 'limit', 1, rerankPool ? 50 : RAG_HYBRID_MAX_LIMIT, this.config.defaultLimit)
     const offset = boundedInteger(input.offset, 'offset', 0, 1_000_000_000, 0)
+    if (rerankPool && offset !== 0) fail(RAG_HYBRID_ERROR_CODES.INPUT_INVALID, 'Rerank pools do not paginate.')
     if (!Array.isArray(input.ftsCandidates)) fail(RAG_HYBRID_ERROR_CODES.FTS_CANDIDATE_INVALID, 'ftsCandidates are required.')
     let fts
     try {
@@ -491,7 +517,8 @@ export class RagHybridRetriever {
     const authorizedFts = preAuthorized.filter((candidate) => candidate.channel === 'fts')
     const authorizedVectors = preAuthorized.filter((candidate) => candidate.channel === 'vector')
     const fused = fuseNormalized(authorizedFts, degraded ? [] : authorizedVectors, this.config)
-    const selected = selectDiverse(fused, this.config, Math.min(RAG_HYBRID_MAX_CANDIDATES, offset + limit))
+    const selected = rerankPool ? selectRerankPool(fused, limit)
+      : selectDiverse(fused, this.config, Math.min(RAG_HYBRID_MAX_CANDIDATES, offset + limit))
     const finalAuthorized = await this.#authorizeAll(selected, {
       query: input.query ?? input.q ?? null,
       mode: degraded ? 'fts' : 'hybrid',

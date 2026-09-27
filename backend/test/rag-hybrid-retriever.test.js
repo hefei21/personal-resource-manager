@@ -85,6 +85,33 @@ test('suppresses same-source adjacent/overlap chunks and preserves cross-source 
   assert.equal(result.data.some((item) => item.chunkId === 2), false)
 })
 
+test('rerank candidate pools preserve overlap without changing ordinary retrieval', async () => {
+  const retriever = createRagHybridRetriever({ config:{maxPerSource:50,adjacentGap:0}, authoritativeVisibility:()=>true })
+  const input = { ftsCandidates:[candidate({chunkId:1,startLine:1,endLine:3}),candidate({chunkId:2,startLine:3,endLine:5})],vectorCandidates:[],limit:50 }
+  assert.deepEqual((await retriever.retrieve(input)).data.map(c=>c.chunkId),[1])
+  assert.deepEqual((await retriever.retrieveRerankPool(input)).data.map(c=>c.chunkId),[1,2])
+  await assert.rejects(retriever.retrieveRerankPool({...input,limit:51}))
+  await assert.rejects(retriever.retrieveRerankPool({...input,offset:1}))
+  await assert.rejects(retriever.retrieve({...input,rerankPool:true}),{code:RAG_HYBRID_ERROR_CODES.CLIENT_CONTROL_FORBIDDEN})
+})
+
+test('rerank pool reserves semantic candidates after both authoritative checks', async () => {
+  const fts = Array.from({length:50},(_,i)=>candidate({chunkId:i+1,score:100-i,startLine:3*i+1}))
+  const vector = Array.from({length:50},(_,i)=>candidate({channel:'vector',chunkId:i+101,score:100-i,locator:undefined}))
+  const calls=[]
+  const retriever=createRagHybridRetriever({config:{ftsWeight:.75,vectorWeight:.25,maxPerSource:50},
+    candidateResolver:c=>candidate({chunkId:c.chunkId,startLine:3*c.chunkId}),
+    authoritativeVisibility:(c,context)=>{calls.push([c.chunkId,!!context.final]);return c.chunkId!==105},
+    authoritativeActiveSnapshot:c=>c.chunkId!==112})
+  // Real vector hits carry no locator; their bodies come from the resolver.
+  const result=await retriever.retrieveRerankPool({ftsCandidates:fts,vectorCandidates:vector.map(c=>({...c,locator:undefined})),limit:50})
+  assert.equal(result.data.length,50)
+  assert.deepEqual(result.data.slice(0,35).map(c=>c.chunkId),Array.from({length:35},(_,i)=>i+1))
+  assert.equal(result.data.filter(c=>c.chunkId>=101).length,15)
+  assert.ok(result.data.every(c=>c.chunkId!==105&&c.chunkId!==112&&typeof c.body==='string'))
+  for(const c of result.data){assert.ok(calls.some(([id,final])=>id===c.chunkId&&!final));assert.ok(calls.some(([id,final])=>id===c.chunkId&&final))}
+})
+
 test('applies authoritative active-snapshot and visibility checks before returning citations', async () => {
   const calls = []
   const retriever = createRagHybridRetriever({

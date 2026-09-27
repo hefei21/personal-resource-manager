@@ -1832,7 +1832,8 @@ export function createRagRouter({
                 retrievalConfig: { ...ragRetrievalPolicy({ source: querySource, limit: 50, overrides: retrievalConfig }), maxPerSource: 50 },
                 candidateResolver: typeof pool.candidateResolver === 'function' ? pool.candidateResolver : null
               })
-              const poolResult = await poolRetriever.retrieve({ query: input.query,
+              const retrievePool = poolRetriever.retrieveRerankPool ?? poolRetriever.retrieve
+              const poolResult = await retrievePool.call(poolRetriever, { query: input.query,
                 ftsCandidates: pool.ftsCandidates,
                 ...(pool.vectorCandidates === undefined ? {} : { vectorCandidates: pool.vectorCandidates }),
                 ...(pool.vectorError === undefined ? {} : { vectorError: pool.vectorError }), limit: 50, offset: 0 })
