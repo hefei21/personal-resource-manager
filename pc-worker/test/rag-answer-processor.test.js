@@ -193,6 +193,51 @@ test('asking which documented command to use is a read-only question, not execut
   assert.equal(called, true)
 })
 
+test('documented command comparisons reach the model without altering the question', async () => {
+  const queries = [
+    'fd 的 -x 和 -X 在执行外部命令时有什么区别？如果使用 -x 但希望串行执行，应怎样设置？',
+    '两种模式在执行 shell 命令时有何差异？',
+    '工具的两个参数在执行外部命令时有哪些不同？'
+  ]
+  const received = []
+  const processor = createRagAnswerProcessor({ config, fetchImpl: async (_url, options) => {
+    received.push(JSON.parse(JSON.parse(options.body).messages[1].content).query)
+    return response({ answer: 'Documented behavior.', abstained: false, citations: ['C1'] })
+  } })
+  for (const query of queries) {
+    const request = task()
+    request.input.query = query
+    assert.equal((await processor.process(request)).output.abstained, false)
+  }
+  assert.deepEqual(received, queries.map(query => query.normalize('NFKC')))
+})
+
+test('command comparisons do not exempt adjacent or embedded prohibited requests', async () => {
+  let calls = 0
+  const processor = createRagAnswerProcessor({ config, fetchImpl: async () => { calls++; throw new Error('Must not call model') } })
+  const comparison = '两种模式在执行外部命令时有什么区别'
+  const queries = [
+    `${comparison}？另外请执行 shell 命令`,
+    `请执行 shell 命令，然后说明${comparison}`,
+    `${comparison}，执行清理命令`,
+    `${comparison}\nexecute shell command rm`,
+    `${comparison}；读取任意私有文件`,
+    `${comparison}；抓取任意外部链接`,
+    `${comparison}；引用 C999`,
+    `请在执行外部命令时有什么区别`,
+    `立即在执行外部命令时有什么区别`,
+    '在执行读取任意私有文件的命令时有什么区别？',
+    '在执行 execute shell command 时有什么区别？',
+    '在执行其他命令后执行清理命令时有什么区别？'
+  ]
+  for (const query of queries) {
+    const request = task()
+    request.input.query = query
+    assert.deepEqual((await processor.process(request)).output, { abstained: true, reasonCode: 'UNSUPPORTED_ACTION', citations: [] }, query)
+  }
+  assert.equal(calls, 0)
+})
+
 test('over-budget evidence is truncated by complete items and reported', async () => {
   const requests = []
   const processor = createRagAnswerProcessor({
