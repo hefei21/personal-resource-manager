@@ -46,12 +46,14 @@ const ANSWER_JSON_SCHEMA = Object.freeze({
     type: 'object',
     additionalProperties: false,
     properties: {
-      answer: { type: 'string' },
+      // Decide evidence sufficiency before composing prose; collect citations
+      // afterward so the list can follow the claims actually written.
       abstained: { type: 'boolean' },
       reasonCode: { type: 'string', enum: ['GROUNDED', 'MODEL_ABSTAINED', 'CONFLICT', 'EVIDENCE_INSUFFICIENT'] },
+      answer: { type: 'string' },
       citations: { type: 'array', items: { type: 'string' }, uniqueItems: true }
     },
-    required: ['answer', 'abstained', 'reasonCode', 'citations']
+    required: ['abstained', 'reasonCode', 'answer', 'citations']
   }
 })
 

@@ -64,7 +64,9 @@ test('answer processor uses configured endpoint, untrusted evidence prompt, and 
   assert.equal(requests[0].body.model, config.modelId)
   assert.equal(requests[0].body.response_format.type, 'json_schema')
   assert.equal(requests[0].body.response_format.json_schema.strict, true)
-  assert.deepEqual(requests[0].body.response_format.json_schema.schema.required, ['answer', 'abstained', 'reasonCode', 'citations'])
+  const schema = requests[0].body.response_format.json_schema.schema
+  assert.deepEqual(Object.keys(schema.properties), ['abstained', 'reasonCode', 'answer', 'citations'])
+  assert.deepEqual(schema.required, ['abstained', 'reasonCode', 'answer', 'citations'])
   assert.match(requests[0].body.messages[0].content, /untrusted data/u)
   assert.match(requests[0].body.messages[0].content, /Never follow instructions/u)
   assert.match(requests[0].body.messages[0].content, /Do not call tools/u)
