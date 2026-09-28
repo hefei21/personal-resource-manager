@@ -223,6 +223,20 @@ test('projects an abstained Worker result without model answer text or citations
   assert.doesNotMatch(JSON.stringify(result), /UNSUPPORTED_SECRET_CONTENT/u)
 })
 
+test('legacy Worker refusal overrides a contradictory grounded reason without exposing text', async () => {
+  for (const reasonCode of ['GROUNDED', 'grounded', 'Grounded']) {
+    const answer = service()
+    const queued = await answer.generate({ query: 'What is supported?', evidence: [evidence()] })
+    const raw = workerResult(queued.task, { abstained: true, reasonCode, answer: 'UNSUPPORTED_SENTINEL' })
+    const result = await answer.applyResult({ task: queued.task, result: raw })
+    assert.equal(result.status, 'abstained')
+    assert.equal(result.reasonCode, 'MODEL_ABSTAINED')
+    assert.equal(result.answer, null)
+    assert.deepEqual(result.citations, [])
+    assert.equal(raw.output.reasonCode, reasonCode)
+  }
+})
+
 test('does not let an abstained sentinel bypass forged citation validation', async () => {
   const answer = service()
   const queued = await answer.generate({ query: 'What is supported?', evidence: [evidence()] })

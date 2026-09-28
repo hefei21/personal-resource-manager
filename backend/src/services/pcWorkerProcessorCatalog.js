@@ -625,6 +625,8 @@ function normalizeAnswerResult(value, expected) {
   }
   if (value.answer !== undefined) normalized.answer = boundedOutputText(value.answer, 'result.output.answer', LIMITS.answer.outputMaxBytes)
   if (value.reasonCode !== undefined) normalized.reasonCode = token(value.reasonCode, 'result.output.reasonCode', MAX_REASON_BYTES)
+  // Also protect results from older Workers that forwarded conflicting fields.
+  if (normalized.abstained && normalized.reasonCode?.toUpperCase() === 'GROUNDED') normalized.reasonCode = 'MODEL_ABSTAINED'
   if (!value.abstained && (!Object.hasOwn(normalized, 'answer') || !normalized.answer.trim())) {
     fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'non-abstained answers require answer text.')
   }

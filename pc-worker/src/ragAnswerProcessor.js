@@ -346,6 +346,8 @@ function normalizeResult(value, evidence, config, truncated) {
   }
   if (value.reasonCode !== undefined) output.reasonCode = token(value.reasonCode, 'answer.result.reasonCode', 128)
   if (!Object.hasOwn(output, 'reasonCode')) output.reasonCode = value.abstained ? 'MODEL_ABSTAINED' : 'GROUNDED'
+  // An explicit refusal takes precedence over a contradictory model reason.
+  if (output.abstained && output.reasonCode.toUpperCase() === 'GROUNDED') output.reasonCode = 'MODEL_ABSTAINED'
   if (truncated) output.reasonCode = 'EVIDENCE_TRUNCATED'
   return freeze(output)
 }

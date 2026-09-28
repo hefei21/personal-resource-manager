@@ -112,6 +112,25 @@ test('answer processor refuses forged citations and unknown result fields', asyn
   assert.doesNotMatch(JSON.stringify(abstainedResult), /UNSUPPORTED_SECRET_CONTENT/u)
 })
 
+test('explicit refusal cannot retain a contradictory grounded reason', async () => {
+  for (const reasonCode of ['GROUNDED', 'grounded', 'Grounded']) {
+    const processor = createRagAnswerProcessor({ config, fetchImpl: async () => response({
+      answer: 'No supporting evidence.', abstained: true, reasonCode, citations: ['C1']
+    }) })
+    const { output } = await processor.process(task())
+    assert.equal(output.abstained, true)
+    assert.equal(output.reasonCode, 'MODEL_ABSTAINED')
+    assert.deepEqual(output.citations, [])
+    assert.equal(Object.hasOwn(output, 'answer'), false)
+  }
+  for (const reasonCode of ['EVIDENCE_INSUFFICIENT', 'CONFLICT', 'MODEL_ABSTAINED']) {
+    const processor = createRagAnswerProcessor({ config, fetchImpl: async () => response({
+      abstained: true, reasonCode, citations: []
+    }) })
+    assert.equal((await processor.process(task())).output.reasonCode, reasonCode)
+  }
+})
+
 test('incomplete or filtered completions cannot become grounded answers even with valid JSON', async () => {
   for (const finishReason of ['length', 'content_filter', 'tool_calls', null]) {
     const processor = createRagAnswerProcessor({ config, fetchImpl: async () => ({
