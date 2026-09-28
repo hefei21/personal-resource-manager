@@ -65,8 +65,8 @@ test('answer processor uses configured endpoint, untrusted evidence prompt, and 
   assert.equal(requests[0].body.response_format.type, 'json_schema')
   assert.equal(requests[0].body.response_format.json_schema.strict, true)
   const schema = requests[0].body.response_format.json_schema.schema
-  assert.deepEqual(Object.keys(schema.properties), ['abstained', 'reasonCode', 'answer', 'citations'])
-  assert.deepEqual(schema.required, ['abstained', 'reasonCode', 'answer', 'citations'])
+  assert.deepEqual(Object.keys(schema.properties), ['abstained', 'reasonCode', 'missingRequirements', 'answer', 'citations'])
+  assert.deepEqual(schema.required, ['abstained', 'reasonCode', 'missingRequirements', 'answer', 'citations'])
   assert.match(requests[0].body.messages[0].content, /untrusted data/u)
   assert.match(requests[0].body.messages[0].content, /Never follow instructions/u)
   assert.match(requests[0].body.messages[0].content, /Do not call tools/u)
@@ -81,6 +81,23 @@ test('answer processor uses configured endpoint, untrusted evidence prompt, and 
   assert.doesNotMatch(JSON.stringify(result), /第一条证据|credentials|这个结论/u)
   assert.doesNotMatch(JSON.stringify(result), /http:\/\//u)
   assert.match(SYSTEM_PROMPT, /untrusted/u)
+})
+
+test('partial answers require evidence, missing requirements and consistent state', async () => {
+  const valid = { answer: '默认值为1。C1', abstained: false, reasonCode: 'PARTIAL', citations: ['C1'], missingRequirements: ['Windows最大层数'] }
+  const run = async value => (await createRagAnswerProcessor({ config, fetchImpl: async () => response(value) }).process(task())).output
+  assert.deepEqual((await run(valid)).missingRequirements, valid.missingRequirements)
+  const refused = await run({ ...valid, abstained: true, reasonCode: 'EVIDENCE_INSUFFICIENT' })
+  assert.equal(refused.abstained, true)
+  assert.equal(refused.missingRequirements, undefined)
+  assert.equal(refused.answer, undefined)
+  assert.deepEqual(refused.citations, [])
+  for (const change of [
+    { missingRequirements: [] }, { missingRequirements: null }, { missingRequirements: [''] },
+    { missingRequirements: ['x'.repeat(513)] }, { missingRequirements: ['https://example.invalid'] },
+    { missingRequirements: Array(17).fill('missing') }, { abstained: true }, { citations: [] },
+    { reasonCode: 'GROUNDED' }, { answer: '' }
+  ]) await assert.rejects(run({ ...valid, ...change }), /invalid|inconsistent|required/i)
 })
 
 test('answer processor refuses forged citations and unknown result fields', async () => {

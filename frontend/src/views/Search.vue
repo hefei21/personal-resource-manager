@@ -374,6 +374,7 @@ const askModeLabel = computed(() => {
   if (askState.value === 'cancelled') return '已取消'
   if (askResult.value?.degraded) return '本机检索降级'
   if (askResult.value?.abstained) return '证据不足，已拒答'
+  if (askResult.value?.partial) return '部分回答 · 尚有缺证项'
   return '相关片段 · 总结未核验'
 })
 const askSourceItems = computed(() => {
@@ -476,6 +477,9 @@ function normalizeAskResult(value) {
   return Object.freeze({
     answer,
     structured: reasonCode === 'structured_fact',
+    partial: !abstained && (source.status === 'partial' || reasonCode === 'partial'),
+    missingRequirements: Object.freeze((Array.isArray(source.missingRequirements) ? source.missingRequirements : [])
+      .slice(0, 16).map(item => safeText(item, 512)).filter(Boolean)),
     abstained,
     degraded,
     degradedLabel: degraded ? '当前使用本机检索降级；生成模型或向量能力不可用，以下引用仍受权限过滤。' : '',

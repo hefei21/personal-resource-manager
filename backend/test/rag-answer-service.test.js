@@ -75,6 +75,28 @@ function service(overrides = {}) {
   })
 }
 
+test('partial result preserves missing requirements but rejects inconsistent or unsafe fields', async () => {
+  const answer = service()
+  const queued = await answer.generate({ query: '默认值和最大层数？', evidence: [evidence()] })
+  const valid = workerResult(queued.task, { reasonCode: 'PARTIAL' })
+  valid.output.missingRequirements = ['最大层数']
+  const result = await answer.applyResult({ task: queued.task, result: valid })
+  assert.equal(result.status, 'partial')
+  assert.equal(result.abstained, false)
+  assert.deepEqual(result.missingRequirements, ['最大层数'])
+  assert.equal(result.citations.length, 1)
+  for (const change of [
+    { missingRequirements: [] }, { missingRequirements: [''] }, { missingRequirements: ['x'.repeat(513)] },
+    { missingRequirements: ['password=sentinel'] }, { missingRequirements: ['https://example.invalid'] },
+    { abstained: true }, { citations: [] }, { reasonCode: 'GROUNDED' }, { citations: ['C999'] }
+  ]) {
+    const rejected = await answer.applyResult({ task: queued.task, result: { ...valid, output: { ...valid.output, ...change } } })
+    assert.equal(rejected.status, 'degraded')
+    assert.equal(rejected.answer, null)
+    assert.equal(rejected.missingRequirements, undefined)
+  }
+})
+
 test('abstains without evidence and never enqueues a model task', async () => {
   const tasks = taskStoreFake()
   const answer = createRagAnswerService({

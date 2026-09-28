@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 
 const ACTIVE = new Set(['pending', 'queued', 'leased', 'running', 'active'])
-const FINISHED = new Set(['complete', 'answered', 'succeeded', 'completed', 'abstained', 'degraded'])
+const FINISHED = new Set(['complete', 'partial', 'answered', 'succeeded', 'completed', 'abstained', 'degraded'])
 const idOf = data => String(data?.runId ?? data?.queryId ?? data?.id ?? '').trim()
 
 // A pending response includes empty answer/citations too. Status always wins.
@@ -61,7 +61,8 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
     cancellable.value = false
     if (kind === 'cancelled') { state.value = 'cancelled'; result.value = null; return }
     result.value = normalizeResult(data)
-    state.value = result.value.degraded ? 'degraded' : result.value.abstained ? 'abstained' : 'answered'
+    state.value = result.value.degraded ? 'degraded' : result.value.abstained ? 'abstained' :
+      result.value.partial || data.status === 'partial' ? 'partial' : 'answered'
   }
   function fail(error) {
     stop()

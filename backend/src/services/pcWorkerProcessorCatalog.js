@@ -606,7 +606,7 @@ function normalizeRerankResult(value, expected) {
 }
 
 function normalizeAnswerResult(value, expected) {
-  exactKeys(value, ['answer', 'abstained', 'reasonCode', 'citations'], 'result.output')
+  exactKeys(value, ['answer', 'abstained', 'reasonCode', 'citations', 'missingRequirements'], 'result.output')
   if (typeof value.abstained !== 'boolean') fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'result.output.abstained is invalid.')
   const input = unwrapExpected(expected)
   if (!Array.isArray(value.citations) || value.citations.length > 64) {
@@ -625,6 +625,16 @@ function normalizeAnswerResult(value, expected) {
   }
   if (value.answer !== undefined) normalized.answer = boundedOutputText(value.answer, 'result.output.answer', LIMITS.answer.outputMaxBytes)
   if (value.reasonCode !== undefined) normalized.reasonCode = token(value.reasonCode, 'result.output.reasonCode', MAX_REASON_BYTES)
+  const missing = value.missingRequirements ?? []
+  if (!Array.isArray(missing) || missing.length > 16 || missing.some(item =>
+    typeof item !== 'string' || !item.trim() || item.length > 512 || /[\u0000-\u001f\u007f]/u.test(item))) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'Missing requirements are invalid.')
+  }
+  const partial = normalized.reasonCode?.toUpperCase() === 'PARTIAL'
+  if (partial ? (normalized.abstained || !citations.length || !missing.length) : !normalized.abstained && missing.length > 0) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'Partial answer state is inconsistent.')
+  }
+  if (partial) normalized.missingRequirements = [...new Set(missing.map(item => item.normalize('NFKC').trim()))]
   // Also protect results from older Workers that forwarded conflicting fields.
   if (normalized.abstained && normalized.reasonCode?.toUpperCase() === 'GROUNDED') normalized.reasonCode = 'MODEL_ABSTAINED'
   if (!value.abstained && (!Object.hasOwn(normalized, 'answer') || !normalized.answer.trim())) {

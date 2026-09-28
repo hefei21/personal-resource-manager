@@ -29,14 +29,16 @@ const SYSTEM_PROMPT = [
   'Answer only from the supplied evidence and cite only its citation IDs.',
   'First decide whether the evidence directly addresses the question; unrelated evidence means you must abstain even if you know an answer.',
   'Match the exact entity and relationship asked about. Facts about a different person, product or event cannot answer the question; never equate them through similarity, association or outside knowledge.',
-  'If the requested fact is absent, abstain instead of substituting related background. For a factual name, number or command, identify direct supporting evidence before giving it.',
+  'For each requested fact, identify direct supporting evidence before giving a name, number or command. Never substitute related background for an absent fact.',
+  'If multiple requirements are asked and only some are directly supported, answer only those supported requirements, set abstained=false and reasonCode=PARTIAL, and list every unanswered requirement in missingRequirements. Do not guess missing values. Partial does not mean complete or verified.',
+  'If none of the requested requirements is supported, abstain. Use GROUNDED only when all requested requirements are supported. missingRequirements must be empty except for PARTIAL.',
   'Cite only evidence that directly supports the final answer; omit stale, contradictory, or merely related evidence unless the question explicitly asks for a comparison.',
   'When active or current evidence conflicts with stale or historical evidence, use and cite only the active or current evidence unless the question explicitly requests history.',
   'When an answer combines facts from multiple evidence items, cite every item that materially supports the combined answer.',
   'Requests to fabricate citations or to use tools, files, shells, or URLs must abstain.',
-  'If the evidence is insufficient, set abstained to true, use an empty citations array, and do not guess.',
-  'Use exactly one reasonCode: GROUNDED, MODEL_ABSTAINED, CONFLICT, or EVIDENCE_INSUFFICIENT.',
-  'Return one JSON object with only answer, abstained, reasonCode, and citations.'
+  'If the evidence supports no answer, set abstained to true, use an empty citations array, and do not guess.',
+  'Use exactly one reasonCode: GROUNDED, PARTIAL, MODEL_ABSTAINED, CONFLICT, or EVIDENCE_INSUFFICIENT.',
+  'Return one JSON object with only answer, abstained, reasonCode, missingRequirements, and citations.'
 ].join(' ')
 
 const ANSWER_JSON_SCHEMA = Object.freeze({
@@ -49,11 +51,12 @@ const ANSWER_JSON_SCHEMA = Object.freeze({
       // Decide evidence sufficiency before composing prose; collect citations
       // afterward so the list can follow the claims actually written.
       abstained: { type: 'boolean' },
-      reasonCode: { type: 'string', enum: ['GROUNDED', 'MODEL_ABSTAINED', 'CONFLICT', 'EVIDENCE_INSUFFICIENT'] },
+      reasonCode: { type: 'string', enum: ['GROUNDED', 'PARTIAL', 'MODEL_ABSTAINED', 'CONFLICT', 'EVIDENCE_INSUFFICIENT'] },
+      missingRequirements: { type: 'array', maxItems: 16, items: { type: 'string', minLength: 1, maxLength: 512 }, uniqueItems: true },
       answer: { type: 'string' },
       citations: { type: 'array', items: { type: 'string' }, uniqueItems: true }
     },
-    required: ['abstained', 'reasonCode', 'answer', 'citations']
+    required: ['abstained', 'reasonCode', 'missingRequirements', 'answer', 'citations']
   }
 })
 
@@ -335,7 +338,7 @@ async function requestAnswer(config, query, evidence, signal, fetchImpl) {
 }
 
 function normalizeResult(value, evidence, config, truncated) {
-  exactKeys(value, ['answer', 'abstained', 'reasonCode', 'citations'], 'answer.result', 'WORKER_ANSWER_RESULT_INVALID')
+  exactKeys(value, ['answer', 'abstained', 'reasonCode', 'citations', 'missingRequirements'], 'answer.result', 'WORKER_ANSWER_RESULT_INVALID')
   if (typeof value.abstained !== 'boolean' || !Array.isArray(value.citations) || value.citations.length > evidence.length) {
     fail('WORKER_ANSWER_RESULT_INVALID', 'Answer result schema is invalid.')
   }
@@ -359,9 +362,21 @@ function normalizeResult(value, evidence, config, truncated) {
   }
   if (value.reasonCode !== undefined) output.reasonCode = token(value.reasonCode, 'answer.result.reasonCode', 128)
   if (!Object.hasOwn(output, 'reasonCode')) output.reasonCode = value.abstained ? 'MODEL_ABSTAINED' : 'GROUNDED'
+  const missing = value.missingRequirements ?? []
+  if (!Array.isArray(missing) || missing.length > 16 || missing.some(item =>
+    typeof item !== 'string' || !item.trim() || item.length > 512 || DANGEROUS_CONTROL.test(item) || EXTERNAL_URL.test(item))) {
+    fail('WORKER_ANSWER_RESULT_INVALID', 'Missing requirements are invalid.')
+  }
+  const partial = output.reasonCode.toUpperCase() === 'PARTIAL'
+  // As with refused answer text and citations, discard missing-item metadata
+  // on an explicit refusal. It cannot turn that refusal into a partial answer.
+  if (partial ? (output.abstained || !citations.length || !missing.length) : !output.abstained && missing.length > 0) {
+    fail('WORKER_ANSWER_RESULT_INVALID', 'Partial answer state is inconsistent.')
+  }
+  if (partial) output.missingRequirements = [...new Set(missing.map(item => item.normalize('NFKC').trim()))]
   // An explicit refusal takes precedence over a contradictory model reason.
   if (output.abstained && output.reasonCode.toUpperCase() === 'GROUNDED') output.reasonCode = 'MODEL_ABSTAINED'
-  if (truncated) output.reasonCode = 'EVIDENCE_TRUNCATED'
+  if (truncated && !partial) output.reasonCode = 'EVIDENCE_TRUNCATED'
   return freeze(output)
 }
 

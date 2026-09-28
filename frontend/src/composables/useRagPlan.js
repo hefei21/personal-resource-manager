@@ -37,7 +37,7 @@ export function useRagPlan(options) {
     const item = items.value[index]
     item.status = value
     item.feedback = query.feedback.value
-    if (['answered', 'abstained', 'degraded'].includes(value)) {
+    if (['answered', 'partial', 'abstained', 'degraded'].includes(value)) {
       item.result = query.result.value
       if (stopped) { state.value = 'stopped'; return }
       index += 1

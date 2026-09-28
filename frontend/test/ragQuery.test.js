@@ -28,6 +28,15 @@ test('202 with empty answer is pending; all active states precede result fields'
   assert.equal(classifyRagResponse(response('complete', { answer: 'Structured fact', citations: [] })).kind, 'finished')
   assert.throws(() => classifyRagResponse(response('unknown')))
 })
+test('partial is terminal and is not reported as a complete answer', async () => {
+  const c = fixture({ getQuery: async () => response('partial', { answer: 'Supported', missingRequirements: ['Missing fact'] }) })
+  await c.submit({ q: 'example' }); await c.tick()
+  assert.equal(c.state.value, 'partial')
+  assert.deepEqual(c.result.value.missingRequirements, ['Missing fact'])
+  assert.equal(c.timers.size, 0)
+  assert.equal(c.queryId.value, '')
+})
+
 test('queued to active to answer polls only while active', async () => {
   let n = 0
   const c = fixture({ getQuery: async () => ++n === 1 ? response('active', { runId: 'q1' }) : response('answered', { answer: 'done' }) })

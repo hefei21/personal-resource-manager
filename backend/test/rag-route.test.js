@@ -220,6 +220,28 @@ test('evidence-first response uses authorized source text, bounds excerpts and r
   }
 })
 
+test('HTTP partial answer preserves missing requirements and blocks unsafe missing text', async () => {
+  for (const missing of ['最大层数', 'password=do-not-expose']) {
+    const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+      authoritativeChecksFactory: checks,
+      candidateProvider: async () => ({ ftsCandidates: [] }),
+      hybridRetrieverFactory: () => ({ retrieve: async () => retrieval() }),
+      answerServiceFactory: () => ({ generate: async () => ({ status: 'partial', answer: '默认1。C1',
+        abstained: false, reasonCode: 'PARTIAL', missingRequirements: [missing], citations: [{ citationId: 'C1' }] }) })
+    })
+    await withServer(router, async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query: '默认值和最大层数' }) })
+      assert.equal(response.status, 200)
+      const result = (await response.json()).data
+      assert.equal(result.status, missing.startsWith('password') ? 'degraded' : 'partial')
+      if (result.status === 'partial') assert.deepEqual(result.missingRequirements, [missing])
+      else { assert.equal(result.answer, null); assert.equal(result.missingRequirements, undefined) }
+      assert.doesNotMatch(JSON.stringify(result), /do-not-expose/)
+    })
+  }
+})
+
 function queryRunStore() {
   const rows = new Map()
   return {

@@ -271,7 +271,7 @@ export class RagAnswerService {
   #modelQuery(query, language, conflict) {
     const conflictInstruction = conflict
       ? ' 证据可能存在冲突；请明确说明不确定性并引用相关来源。 '
-      : ' 如果证据不足请拒答，不要补写证据之外的事实。 '
+      : ' 多项要求仅部分有据时，只回答有据部分并标为PARTIAL、列出缺证项；全部缺证请拒答，不要补写证据之外的事实。 '
     const safeQuery = redactSensitiveText(query.replace(/[\u0000-\u001f\u007f]/gu, ' '))
     return `${languageInstruction(language)}${conflictInstruction} USER QUESTION: <<<${safeQuery}>>> END USER QUESTION.`
   }
@@ -452,15 +452,17 @@ export class RagAnswerService {
     if (after.length !== selectedCitations.length) {
       return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), after, 'evidence_stale')
     }
-    if (!output.abstained && (!isSafeAnswer(output.answer) || selectedCitations.length === 0)) {
+    if (!output.abstained && (!isSafeAnswer(output.answer) || selectedCitations.length === 0 ||
+        (output.missingRequirements ?? []).some(item => !isSafeAnswer(item) || /https?:\/\//iu.test(item)))) {
       return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), after, output.answer ? 'unsafe_output' : 'citation_missing')
     }
     return freezeResult({
-      status: output.abstained ? 'abstained' : 'complete',
+      status: output.abstained ? 'abstained' : output.reasonCode?.toUpperCase() === 'PARTIAL' ? 'partial' : 'complete',
       query: context?.query ?? '',
       language: context?.language ?? detectLanguage(projectedInput.query),
       answer: output.abstained ? null : output.answer ?? null,
       abstained: output.abstained,
+      ...(output.missingRequirements ? { missingRequirements: Object.freeze(output.missingRequirements) } : {}),
       reasonCode: output.reasonCode ?? (output.abstained ? 'model_abstained' : 'grounded'),
       degraded: false,
       citations: output.abstained ? [] : this.#publicReferences(after),

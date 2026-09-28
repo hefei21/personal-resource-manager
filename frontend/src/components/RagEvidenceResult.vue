@@ -22,8 +22,13 @@
     </ol>
     <p v-else class="notice">本次未返回可展示的原文片段。不能据此确认问题已有充分依据。</p>
     <p v-if="result.abstained" class="notice" role="status">{{ result.reasonLabel || '当前证据不足，未生成总结。' }}</p>
+    <section v-if="result.partial" class="notice" aria-label="部分回答与缺证项">
+      <strong>部分回答 · 尚有缺证项</strong>
+      <p>模型仅回答了有依据的部分，未完整回答你的问题；以下要求尚缺依据，仍需核对。</p>
+      <ul><li v-for="item in result.missingRequirements" :key="item">{{ item }}</li></ul>
+    </section>
     <details v-if="result.answer && !result.abstained" class="ai-summary">
-      <summary><strong>AI 总结</strong><span>尚未经逐项核验</span></summary>
+      <summary><strong>{{ result.partial ? 'AI 部分总结' : 'AI 总结' }}</strong><span>尚未经逐项核验</span></summary>
       <p class="explanation">以下为模型生成内容，可能遗漏条件、弱化约束或错误判断证据是否充分，不作为已验证结论。</p>
       <p class="answer">{{ result.answer }}</p>
       <ul v-if="result.citations.length" class="ai-citations" aria-label="AI 返回的引用">

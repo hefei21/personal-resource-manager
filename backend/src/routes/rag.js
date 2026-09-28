@@ -70,7 +70,7 @@ const DEFAULT_COVERAGE_LIMIT = 100
 const MAX_COVERAGE_LIMIT = 200
 const QUERY_RUN_TTL_MS = RAG_QUERY_RUN_TTL_SECONDS * 1000
 const QUERY_PENDING_STATUSES = new Set(['pending', 'leased', 'running', 'queued', 'active'])
-const QUERY_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'canceled', 'complete', 'degraded', 'abstained'])
+const QUERY_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'canceled', 'complete', 'partial', 'degraded', 'abstained'])
 const OPAQUE_RUN_ID_PATTERN = /^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._~-]{2,127}$/u
 const ANSWER_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+~-]{0,255}$/u
 const ANSWER_HASH_PATTERN = /^[a-f0-9]{64}$/u
@@ -1150,13 +1150,16 @@ async function authorizeReturnedEvidence(retrieval, checks, context) {
 function projectAnswer(answer, retrieval, runId, authorizedEvidence = []) {
   const result = isPlainObject(answer) ? answer : {}
   const safeAnswer = safeAnswerText(result.answer)
-  const unsafeAnswer = typeof result.answer === 'string' && safeAnswer === null
+  const missingRequirements = Array.isArray(result.missingRequirements) ? result.missingRequirements.map(safeAnswerText) : []
+  const unsafeAnswer = (typeof result.answer === 'string' && safeAnswer === null) ||
+    missingRequirements.some(item => !item || /https?:\/\//iu.test(item))
   const projected = {
     status: unsafeAnswer ? 'degraded' : (typeof result.status === 'string' ? result.status : 'degraded'),
     ...(typeof result.query === 'string' ? { query: result.query } : {}),
     ...(typeof result.language === 'string' ? { language: result.language } : {}),
     answer: unsafeAnswer ? null : safeAnswer,
     abstained: unsafeAnswer || result.abstained === true,
+    ...(result.status === 'partial' && !unsafeAnswer ? { missingRequirements } : {}),
     ...(unsafeAnswer
       ? { reasonCode: 'unsafe_output' }
       : (typeof result.reasonCode === 'string' ? { reasonCode: result.reasonCode } : {})),

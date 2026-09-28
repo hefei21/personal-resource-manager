@@ -54,6 +54,18 @@ test('pending child blocks next request; connection failure pauses and resumes s
   assert.equal(sent.length, 2); assert.equal(f.plan.state.value, 'complete')
   f.plan.dispose()
 })
+test('partial child retains its own status and continues the confirmed plan', async () => {
+  let count = 0
+  const { plan } = fixture({ createQuery: async () => ++count === 1
+    ? response({ status: 'partial', answer: 'Supported', missingRequirements: ['Missing'] }) : done() })
+  plan.confirm(rows(), sources); await flush()
+  assert.equal(count, 2)
+  assert.equal(plan.state.value, 'complete')
+  assert.equal(plan.items.value[0].status, 'partial')
+  assert.deepEqual(plan.items.value[0].result.missingRequirements, ['Missing'])
+  plan.dispose()
+})
+
 test('failure never executes remaining children', async () => {
   let count = 0
   const { plan } = fixture({ createQuery: async () => { count++; throw new Error('denied') } })
