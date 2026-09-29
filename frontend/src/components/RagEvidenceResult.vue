@@ -1,6 +1,7 @@
 <template>
   <section class="rag-evidence-result" aria-label="资料检索结果">
-    <p v-if="result.degraded" class="notice" role="status">{{ result.degradedLabel }}</p>
+    <p v-if="result.reasonCode === 'enhancement_unavailable'" class="notice" role="status">增强检索未完成，已保留原文结果，未按降级证据生成总结。可稍后重新提问；不会自动重试。</p>
+    <p v-else-if="result.degraded" class="notice" role="status">{{ result.degradedLabel }}</p>
     <template v-if="result.structured">
       <h3>资料记录</h3>
       <p class="explanation">直接查询资料记录，未调用 AI 生成。</p>

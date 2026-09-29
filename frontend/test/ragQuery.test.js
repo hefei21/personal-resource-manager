@@ -21,6 +21,37 @@ function fixture(overrides = {}) {
 }
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
 
+test('progressive query shows evidence while waiting and preserves it when cancelled', async () => {
+  const d = deferred(), calls = []
+  const c = fixture({ createQuery: async (payload, options) => {
+    calls.push({ payload, options })
+    if (payload.phase === 'evidence') return response('evidence', { enhancementRequired: true, evidence: [{ excerpt: 'original' }] })
+    return d.promise
+  } })
+  const pending = c.submit({ q: '中文', source: { type: 'ebook', id: 1 }, section: 'fixed' })
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(c.state.value, 'enhancing'); assert.equal(c.loading.value, true)
+  assert.equal(c.result.value.evidence[0].excerpt, 'original')
+  assert.deepEqual(calls[1].payload.source, calls[0].payload.source)
+  assert.equal(calls[1].payload.section, 'fixed')
+  await c.cancel(); assert.equal(calls[1].options.signal.aborted, true)
+  d.resolve(response('complete', { answer: 'late' })); await pending
+  assert.equal(c.state.value, 'cancelled'); assert.equal(c.result.value.evidence[0].excerpt, 'original')
+})
+
+test('progressive queued answer retains evidence and dispose aborts waiting request', async () => {
+  const c = fixture({ createQuery: async payload => payload.phase === 'evidence'
+    ? response('evidence', { enhancementRequired: true, evidence: [{ excerpt: 'original' }] }) : queued() })
+  await c.submit({ q: '中文' }); assert.equal(c.state.value, 'polling')
+  assert.equal(c.result.value.evidence[0].excerpt, 'original')
+  await c.tick(); assert.equal(c.state.value, 'answered')
+  const d = deferred(); let signal
+  const other = fixture({ createQuery: (payload, options) => { signal = options.signal; return d.promise } })
+  const pending = other.submit({}); other.dispose(); assert.equal(signal.aborted, true)
+  d.resolve(response('evidence', { enhancementRequired: true })); await pending
+  assert.equal(other.result.value, null)
+})
+
 test('202 with empty answer is pending; all active states precede result fields', () => {
   for (const state of ['queued', 'active', 'pending', 'leased', 'running'])
     assert.equal(classifyRagResponse(response(state, { answer: null, citations: [] })).kind, 'active')

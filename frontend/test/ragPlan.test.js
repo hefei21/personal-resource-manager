@@ -8,6 +8,27 @@ const rows = () => sources.map((source, i) => ({ q: `问题 ${i}`, sourceKey: so
 const response = data => ({ status: 200, data: { data } })
 const done = () => response({ status: 'complete', answer: '原文回答', citations: [] })
 const flush = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); await nextTick() } }
+
+test('enhancement preview stays with its child and stopping prevents subsequent children', async () => {
+  const calls = []
+  let finish, signal
+  const { plan } = fixture({ createQuery: async (payload, options) => {
+    calls.push(payload)
+    if (payload.phase === 'evidence') return response({ status: 'evidence', enhancementRequired: true, evidence: [{ text: '原文' }] })
+    signal = options.signal
+    return new Promise(resolve => { finish = resolve })
+  } })
+  plan.confirm(rows(), sources); await flush()
+  assert.equal(plan.items.value[0].status, 'enhancing')
+  assert.deepEqual(plan.items.value[0].result.evidence, [{ text: '原文' }])
+  assert.equal(plan.items.value[1].result, null)
+  await plan.stop(); finish(done()); await flush()
+  assert.equal(signal.aborted, true)
+  assert.equal(calls.length, 2)
+  assert.equal(plan.items.value[1].status, 'waiting')
+  assert.deepEqual(plan.items.value[0].result.evidence, [{ text: '原文' }])
+  plan.dispose()
+})
 test('draft only splits explicit separators, never guesses conjunctions or drops extra clauses', () => {
   assert.deepEqual(draftRagQuestions('A；B'), ['A', 'B'])
   assert.deepEqual(draftRagQuestions('A和B'), ['A和B', ''])

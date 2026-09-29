@@ -41,7 +41,9 @@ const LEASE_DURATION_MS = 60_000
 function translationRemainingBudget(store, task) {
   if (task.taskType !== 'rag.query.translate') return undefined
   const input = processorInput(task)
-  const remainingMs = Math.min(2000, input.expiresAt - Date.now())
+  const startedAt = Date.parse(task.startedAt)
+  const executionDeadline = Number.isFinite(startedAt) ? startedAt + 2000 : input.expiresAt
+  const remainingMs = Math.min(2000, input.expiresAt - Date.now(), executionDeadline - Date.now())
   if (remainingMs <= 0) {
     store.cancel({ id: task.id, owner: task.leaseOwner, token: task.leaseToken })
     throw Object.assign(new Error('Translation task expired.'), { code: 'TASK_INVALID_STATE' })

@@ -92,6 +92,59 @@ function rejectingChecks() {
   }
 }
 
+test('progressive evidence is immediate, scoped, and starts neither translation nor answer', async () => {
+  const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+    authoritativeChecksFactory: checks,
+    queryTranslationServiceFactory: () => ({ translate: () => assert.fail('no translation for first phase') }),
+    candidateProvider: async input => { assert.equal(input.lexicalOnly, true); return { ftsCandidates: [] } },
+    hybridRetrieverFactory: () => ({ retrieve: () => retrieval() }),
+    rerankerServiceFactory: () => assert.fail('no GPU reranking for first phase'),
+    answerServiceFactory: () => assert.fail('no early answer') })
+  await withServer(router, async base => {
+    const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query: '中文问题', phase: 'evidence' }) })
+    const { data } = await response.json()
+    assert.equal(data.status, 'evidence'); assert.equal(data.enhancementRequired, true)
+    assert.ok(data.evidence.length > 0); assert.equal(data.answer, null)
+  })
+})
+
+test('configured enhancement initialization failure never starts an early answer', async () => {
+  const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+    authoritativeChecksFactory: checks,
+    queryTranslationServiceFactory: () => { throw new Error('temporarily unavailable') },
+    candidateProvider: async input => { assert.equal(input.lexicalOnly, true); return { ftsCandidates: [] } },
+    hybridRetrieverFactory: () => ({ retrieve: () => retrieval() }),
+    answerServiceFactory: () => assert.fail('no fallback generation') })
+  await withServer(router, async base => {
+    for (const phase of ['evidence', 'enhanced']) {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query: '中文问题', phase }) })
+      assert.equal(response.status, 200)
+      const { data } = await response.json()
+      assert.equal(data.answer, null)
+      assert.equal(data.enhancementRequired, phase === 'evidence')
+    }
+  })
+})
+
+for (const status of ['enhanced', 'timeout', 'unavailable']) test(`enhanced phase ${status} only generates after successful enhancement`, async () => {
+  let generated = 0
+  const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+    authoritativeChecksFactory: checks,
+    queryTranslationServiceFactory: () => ({ translate: async input => {
+      assert.equal(input.waitForCapacity, true)
+      return { status, queries: status === 'enhanced' ? [input.query, 'English question'] : [input.query] }
+    } }),
+    candidateProvider: async input => { assert.equal(input.lexicalOnly, status !== 'enhanced'); return { ftsCandidates: [] } },
+    hybridRetrieverFactory: () => ({ retrieve: () => retrieval() }),
+    answerServiceFactory: () => ({ generate: async () => { generated++; return { status: 'complete', answer: 'Supported', citations: [] } } }) })
+  await withServer(router, async base => {
+    const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query: '中文问题', phase: 'enhanced' }) })
+    const { data } = await response.json()
+    assert.equal(generated, status === 'enhanced' ? 1 : 0)
+    if (status !== 'enhanced') { assert.equal(data.reasonCode, 'enhancement_unavailable'); assert.equal(data.answer, null); assert.ok(data.evidence.length) }
+  })
+})
+
 test('optional translation affects recall only; ranking and answer keep original question', async () => {
   const queries = [], downstream = []
   const query = '超时意味着整个下载超时吗'

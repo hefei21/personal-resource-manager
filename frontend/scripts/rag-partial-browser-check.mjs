@@ -34,7 +34,36 @@ try {
     assert.equal(await page.evaluate(() => window.opened), true)
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true)
     assert.deepEqual(errors, [])
+    await page.unroute(`${base}/`)
+    await page.route(`${base}/`, route => route.fulfill({ contentType: 'text/html', body: `
+      <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="app"></div><script type="module">
+      import {createApp,h} from '/node_modules/.vite_cache/deps/vue.js';
+      import View from '/src/components/RagEvidenceResult.vue';
+      import {useRagQuery} from '/src/composables/useRagQuery.js';
+      createApp({components:{View},setup(){
+        const response=data=>({status:200,data:{data}});
+        const api={createQuery:async(payload,options)=>{
+          if(payload.phase==='evidence') return response({status:'evidence',enhancementRequired:true,evidence:[{label:'E1',title:'合成来源',excerpt:'等待时原文仍可阅读'}],citations:[]});
+          window.waitSignal=options.signal;
+          return new Promise(resolve=>window.finishWait=()=>resolve(response({status:'answered',answer:'迟到总结不应显示',evidence:[],citations:[]})));
+        }};
+        const query=useRagQuery({api,errorLabel:()=> '失败',normalizeResult:x=>x});
+        query.submit({q:'合成问题'});
+        return ()=>h('main',[h('p',{role:'status'},query.state.value),h('button',{onClick:query.cancel,disabled:!query.cancellable.value},'取消增强'),query.result.value?h(View,{result:query.result.value}):null]);
+      }}).mount('#app');
+      </script></body></html>` }))
+    await page.goto(base)
+    await page.getByText('enhancing', { exact: true }).waitFor()
+    assert.equal(await page.getByText('等待时原文仍可阅读', { exact: true }).isVisible(), true)
+    assert.equal(await page.locator('summary').count(), 0)
+    await page.getByRole('button', { name: '取消增强' }).click()
+    assert.equal(await page.evaluate(() => window.waitSignal.aborted), true)
+    await page.evaluate(() => window.finishWait())
+    await page.getByText('cancelled', { exact: true }).waitFor()
+    assert.equal(await page.getByText('等待时原文仍可阅读', { exact: true }).isVisible(), true)
+    assert.equal(await page.locator('summary').count(), 0)
+    assert.deepEqual(errors, [])
     await page.close()
   }
-  console.log('Partial component: desktop/mobile × light/dark; visible gaps, collapsed answer, escaping and citation interaction passed')
+  console.log('Partial component and enhancement cancellation: desktop/mobile × light/dark; visible gaps, collapsed answer, escaping, citation interaction and retained preview passed')
 } finally { await browser.close() }

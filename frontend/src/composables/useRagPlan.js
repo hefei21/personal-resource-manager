@@ -27,6 +27,9 @@ export function useRagPlan(options) {
   const items = ref([])
   let index = 0
   let stopped = false
+  const unwatchResult = watch(query.result, value => {
+    if (items.value[index] && state.value !== 'draft') items.value[index].result = value
+  }, { flush: 'sync' })
   function run() {
     const item = items.value[index]
     item.status = 'running'
@@ -68,6 +71,6 @@ export function useRagPlan(options) {
     state.value = stopped ? 'stopped' : 'running'
     await query.resume()
   }
-  function dispose() { unwatch(); query.dispose() }
+  function dispose() { unwatchResult(); unwatch(); query.dispose() }
   return { state, items, query, confirm, stop, resume, dispose }
 }

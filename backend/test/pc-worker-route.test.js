@@ -85,6 +85,7 @@ function fakeStore() {
     markRunning({ owner, token }) {
       if (owner !== task.leaseOwner || token !== task.leaseToken) throw Object.assign(new Error(), { code: 'TASK_LEASE_MISMATCH' })
       task.status = 'running'
+      task.startedAt = new Date().toISOString()
       return task
     },
     heartbeat() { return task },
@@ -156,7 +157,7 @@ test('translation start budget and completion are guarded by lease and server ex
   const store = fakeStore()
   const query = 'Click 默认 1 次吗？'
   const input = { schemaVersion: 1, requestId: 'request-1', query,
-    querySha256: createHash('sha256').update(query).digest('hex'), modelId: 'answer-model', modelRevision: 'v1', expiresAt: Date.now() + 2000 }
+    querySha256: createHash('sha256').update(query).digest('hex'), modelId: 'answer-model', modelRevision: 'v1', expiresAt: Date.now() + 120000 }
   Object.assign(store.task, { taskType: 'rag.query.translate', input })
   store.cancel = () => { store.task.status = 'cancelled'; return store.task }
   store.leaseNext({ owner: `pcw:${worker.id}` })
@@ -172,10 +173,14 @@ test('translation start budget and completion are guarded by lease and server ex
     assert.equal(response.status, 200)
     const { data } = await response.json()
     assert.ok(data.remainingMs > 0 && data.remainingMs <= 2000)
+    assert.ok(input.expiresAt - Date.now() > 2000, 'queue deadline must not enlarge inference budget')
     const result = { schemaVersion: 1, processorVersion: 'v1', output: {
       requestId: input.requestId, querySha256: input.querySha256, modelId: input.modelId, modelRevision: input.modelRevision,
       status: 'enhanced', queries: [query, 'Does Click default to 1?'] } }
     assert.equal((await post('complete', { leaseToken: 'lease-secret', result })).status, 200)
+    Object.assign(store.task, { status: 'running', leaseOwner: `pcw:${worker.id}`, leaseToken: 'lease-secret', startedAt: new Date(Date.now() - 2100).toISOString() })
+    assert.equal((await post('complete', { leaseToken: 'lease-secret', result })).status, 409)
+    assert.equal(store.task.status, 'cancelled', 'late execution must fail even while queue deadline remains')
     Object.assign(store.task, { status: 'running', leaseOwner: `pcw:${worker.id}`, leaseToken: 'lease-secret' })
     input.expiresAt = Date.now() - 1
     assert.equal((await post('complete', { leaseToken: 'lease-secret', result })).status, 409)

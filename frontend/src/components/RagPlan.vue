@@ -19,6 +19,7 @@
       <button v-if="state === 'paused'" type="button" @click="plan.resume">继续查询当前任务</button>
       <article v-for="(item, index) in items" :key="index">
         <h3>{{ index + 1 }}. {{ item.q }}</h3><p>{{ item.title }} · {{ statusLabel(item.status) }}</p>
+        <p v-if="item.status === 'enhancing'" role="status">正在等待增强检索，可先查看原文；停止后不会自动生成总结。</p>
         <p v-if="item.feedback" role="alert">{{ item.feedback }}</p>
         <RagEvidenceResult v-if="item.result" :result="item.result" @open-citation="$emit('open-citation', $event)" />
       </article>
@@ -39,7 +40,7 @@ const { state, items } = plan
 const valid = computed(() => Boolean(validateRagPlan(rows.value, props.sources)))
 const completed = computed(() => items.value.filter(item => item.result).length)
 const stateLabel = computed(() => ({ running: '正在逐项提问', complete: '分项结果已汇总', paused: '连接中断，后续提问已暂停', error: '当前项失败，后续提问未执行', stopped: '已停止继续执行' })[state.value])
-function statusLabel(status) { return ({ waiting: '未执行', running: '正在提问', submitting: '正在检索并筛选证据…', polling: '等待结果', cancelling: '正在取消', answered: '已回答', partial: '部分回答 · 尚有缺证项', abstained: '证据不足', degraded: '降级结果', paused: '等待恢复连接', error: '失败', cancelled: '已取消' })[status] || status }
+function statusLabel(status) { return ({ waiting: '未执行', running: '正在提问', submitting: '正在检索并筛选证据…', enhancing: '等待增强检索', polling: '等待结果', cancelling: '正在取消', answered: '已回答', partial: '部分回答 · 尚有缺证项', abstained: '证据不足', degraded: '降级结果', paused: '等待恢复连接', error: '失败', cancelled: '已取消' })[status] || status }
 onBeforeUnmount(plan.dispose)
 onDeactivated(() => {
   if (state.value === 'running' || state.value === 'paused') void plan.stop()

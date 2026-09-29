@@ -50,7 +50,7 @@ const SOURCE_TABLES = Object.freeze({
   ebook: 'books',
   code_repository: 'code_repositories'
 })
-const ALLOWED_QUERY_KEYS = new Set(['query', 'q', 'limit', 'source', 'section'])
+const ALLOWED_QUERY_KEYS = new Set(['query', 'q', 'limit', 'source', 'section', 'phase'])
 const PUBLIC_LOCATOR_KEYS = new Set([
   'route',
   'sectionPath',
@@ -322,7 +322,9 @@ function normalizeQueryBody(body) {
   }
   if (body.section !== undefined && (source?.sourceType !== 'ebook' ||
       typeof body.section !== 'string' || !/^[a-f0-9]{64}$/u.test(body.section))) failInput()
+  if (body.phase !== undefined && !['evidence', 'enhanced'].includes(body.phase)) failInput()
   return Object.freeze({ query, limit, ...(source ? { source } : {}),
+    ...(body.phase === undefined ? {} : { phase: body.phase }),
     ...(body.section === undefined ? {} : { section: body.section }) })
 }
 
@@ -795,6 +797,7 @@ async function defaultCandidateProvider({
   source,
   chunkIds,
   expandedRerankPool = false,
+  lexicalOnly = false,
   authoritativeVisibility,
   authoritativeActiveSnapshot,
   textIndexServiceFactory,
@@ -825,6 +828,7 @@ async function defaultCandidateProvider({
     error.code = RAG_ROUTE_ERROR_CODES.CANDIDATES_INVALID
     throw error
   }
+  if (lexicalOnly) return { ftsCandidates: result.data }
   let vectorOutput = null
   try {
     const taskStore = typeof taskStoreProvider === 'function'
@@ -1775,14 +1779,24 @@ export function createRagRouter({
           queryController.signal.throwIfAborted()
         }
       }
-      const requestCandidateProvider = createTranslatedCandidateProvider({ candidateProvider: resolvedCandidateProvider,
-        translationService, signal: queryController.signal })
+      const canEnhance = queryTranslationServiceFactory && translationService?.enabled !== false &&
+        input.query.length <= 1024 && /\p{Script=Han}/u.test(input.query)
+      const evidencePhase = input.phase === 'evidence' && canEnhance
+      let enhancementReady = input.phase !== 'enhanced'
+      const requestCandidateProvider = createTranslatedCandidateProvider({ candidateProvider: options => resolvedCandidateProvider({
+        ...options, lexicalOnly: Boolean(evidencePhase || (input.phase === 'enhanced' && !enhancementReady)) }),
+        translationService: evidencePhase ? null : translationService && { translate: async options => {
+          const result = await translationService.translate({ ...options, waitForCapacity: input.phase === 'enhanced' })
+          enhancementReady = result?.status === 'enhanced' || result?.status === 'not_applicable'
+          return result
+        } }, signal: queryController.signal })
       const providerOutput = await Promise.resolve(requestCandidateProvider({
         database,
         req,
         query: input.query,
         limit: input.limit,
         source: querySource,
+        lexicalOnly: Boolean(evidencePhase),
         ...(chunkIds ? { chunkIds } : {}),
         authoritativeVisibility: checks.authoritativeVisibility,
         authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot
@@ -1835,7 +1849,7 @@ export function createRagRouter({
       let taskStore = null
       try { taskStore = await Promise.resolve(taskStoreProvider({ database, req })) } catch {}
       let rankedRetrieval = scopedRetrieval
-      if (scopedRetrieval.data.length > 0) {
+      if (!evidencePhase && (input.phase !== 'enhanced' || enhancementReady) && scopedRetrieval.data.length > 0) {
         try {
           const rerankerModel = resolveConfiguredRerankerModel()
           // Isolated candidate only. Keep the normal retrieval intact for exact
@@ -1912,6 +1926,14 @@ export function createRagRouter({
       const evidence = await expandRagEvidenceContext({ database, evidence: rankedRetrieval.data, checks,
         context: { query: input.query, req } })
       rankedRetrieval = Object.freeze({ ...rankedRetrieval, data: Object.freeze(evidence), total: evidence.length })
+      if (evidencePhase || (input.phase === 'enhanced' && !enhancementReady)) {
+        const visible = await authorizeReturnedEvidence(rankedRetrieval, checks, { phase: 'evidence_display', query: input.query, req })
+        const response = projectAnswer({ status: evidencePhase ? 'evidence' : 'degraded', query: input.query,
+          answer: null, abstained: false, degraded: !evidencePhase,
+          reasonCode: evidencePhase ? 'enhancement_pending' : 'enhancement_unavailable',
+          ...(!evidencePhase ? { degradedReason: 'enhancement_unavailable' } : {}) }, visible, null, visible.data)
+        return res.json({ data: { ...response, enhancementRequired: Boolean(evidencePhase) } })
+      }
       let answer
       let resolvedAnswerService = null
       let runStore = null

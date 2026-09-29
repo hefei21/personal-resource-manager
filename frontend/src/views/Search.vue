@@ -189,11 +189,11 @@
           <strong>原文与总结</strong>
           <span>{{ askModeLabel }}</span>
         </div>
-        <button v-if="askState === 'submitting' || (askQueryId && askCancellable)" class="inline-button" type="button" :disabled="askState === 'cancelling'" @click="cancelAsk">{{ askState === 'cancelling' ? '取消中…' : '取消' }}</button>
+        <button v-if="askState === 'submitting' || askCancellable" class="inline-button" type="button" :disabled="askState === 'cancelling'" @click="cancelAsk">{{ askState === 'cancelling' ? '取消中…' : '取消' }}</button>
       </header>
 
       <div v-if="askLoading" class="answer-loading" role="status">
-        {{ askState === 'cancelling' ? '正在确认取消…' : askState === 'submitting' ? '正在检索并筛选证据…' : askPhase === 'queued' ? '问题已进入队列，等待 Worker 处理…' : '正在整理回答和引用…' }}
+        {{ askState === 'cancelling' ? '正在确认取消…' : askState === 'enhancing' ? '正在等待增强检索，模型忙时可能需要稍候。可先查看原文，也可取消；证据就绪后再生成总结。' : askState === 'submitting' ? '正在检索并筛选证据…' : askPhase === 'queued' ? '问题已进入队列，等待 Worker 处理…' : '正在整理回答和引用…' }}
       </div>
       <div v-else-if="['error', 'paused'].includes(askState)" class="answer-feedback" role="alert">
         {{ askFeedback }}
@@ -202,7 +202,7 @@
       <div v-else-if="askState === 'cancelled'" class="answer-feedback" role="status">
         已取消本次提问；原有关键词搜索仍可继续使用。
       </div>
-      <RagEvidenceResult v-else-if="askResult" :result="askResult" @open-citation="openCitation" />
+      <RagEvidenceResult v-if="askResult" :result="askResult" @open-citation="openCitation" />
     </section>
 
     <section v-if="mode === 'search' && searched && !loading" class="results-section">
@@ -472,17 +472,19 @@ function normalizeAskResult(value) {
   const citations = Array.isArray(source.citations)
     ? source.citations.map(normalizeCitation).filter(Boolean).slice(0, 16)
     : []
-  const abstained = Boolean(source.abstained) || !answer
+  const pending = ['evidence', 'queued', 'active', 'running', 'pending'].includes(source.status)
+  const abstained = Boolean(source.abstained) || (!pending && !answer && reasonCode !== 'enhancement_unavailable')
   const degraded = Boolean(source.degraded || source.fallback || source.mode === 'fts')
   return Object.freeze({
     answer,
+    reasonCode,
     structured: reasonCode === 'structured_fact',
     partial: !abstained && (source.status === 'partial' || reasonCode === 'partial'),
     missingRequirements: Object.freeze((Array.isArray(source.missingRequirements) ? source.missingRequirements : [])
       .slice(0, 16).map(item => safeText(item, 512)).filter(Boolean)),
     abstained,
     degraded,
-    degradedLabel: degraded ? '当前使用本机检索降级；生成模型或向量能力不可用，以下引用仍受权限过滤。' : '',
+    degradedLabel: degraded ? reasonCode === 'enhancement_unavailable' ? '增强检索未完成，以下仍为原文检索结果。' : '当前使用本机检索降级；生成模型或向量能力不可用，以下引用仍受权限过滤。' : '',
     reasonLabel: ASK_REASON_LABELS[reasonCode] || (abstained ? '当前证据不足，未生成未经支持的结论。' : ''),
     citations: Object.freeze(citations),
     evidence: Object.freeze((Array.isArray(source.evidence) ? source.evidence : []).slice(0, 16)

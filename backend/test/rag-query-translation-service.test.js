@@ -8,6 +8,32 @@ import { createQueryTranslationService } from '../src/services/ragQueryTranslati
 const Database = createRequire(import.meta.url)('better-sqlite3')
 const query = 'Click 默认 1 次吗？'
 const model = { modelId: 'answer-model', modelRevision: 'v1' }
+
+test('progressive request survives queue residence beyond inference budget and still cancels exactly', async t => {
+  const { store, service } = setup(t, { timeoutMs: 20, queueTimeoutMs: 500 })
+  const controller = new AbortController()
+  const pending = service.translate({ query, signal: controller.signal, waitForCapacity: true })
+  const rejected = assert.rejects(pending)
+  await delay(60)
+  assert.equal(store.getById(1).status, 'pending')
+  assert.ok(store.getById(1).input.expiresAt > Date.now())
+  controller.abort()
+  await rejected
+  assert.equal(store.getById(1).status, 'cancelled')
+})
+
+test('progressive delayed claim completes without extending Worker inference contract', async t => {
+  const { store, service } = setup(t, { timeoutMs: 20, queueTimeoutMs: 500 })
+  const pending = service.translate({ query, waitForCapacity: true })
+  await delay(60)
+  const task = store.leaseNext({ owner: 'worker', executionClasses: ['gpu'] })
+  const lease = { id: task.id, owner: task.leaseOwner, token: task.leaseToken }
+  store.markRunning(lease)
+  const { requestId, querySha256, modelId, modelRevision } = task.input
+  store.succeed({ ...lease, result: { schemaVersion: 1, processorVersion: 'v1', output: {
+    requestId, querySha256, modelId, modelRevision, status: 'enhanced', queries: [query, 'Does Click default to 1?'] } } })
+  assert.equal((await pending).status, 'enhanced')
+})
 function setup(t, options = {}) {
   const db = new Database(':memory:')
   db.exec(CREATE_TASK_SCHEMA_SQL)

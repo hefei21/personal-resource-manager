@@ -27,7 +27,8 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
   const queryId = ref('')
   const cancellable = ref(false)
   const phase = ref('')
-  const loading = computed(() => ['submitting', 'polling', 'cancelling'].includes(state.value))
+  const loading = computed(() => ['submitting', 'enhancing', 'polling', 'cancelling'].includes(state.value))
+  let submission = null
   let generation = 0
   let timer = null
   let disposed = false
@@ -36,6 +37,8 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
   function abandon(id) { if (id) Promise.resolve().then(() => api.cancelQuery(id)).catch(() => {}) }
   function reset() {
     generation += 1
+    submission?.abort()
+    submission = null
     stop()
     abandon(queryId.value)
     queryId.value = ''
@@ -43,10 +46,12 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
     result.value = null
     feedback.value = ''
     cancellable.value = false
+    phase.value = ''
   }
   function receive(response, token) {
     const { kind, data } = classifyRagResponse(response)
     if (kind === 'active') {
+      if (Array.isArray(data.evidence)) result.value = normalizeResult(data)
       queryId.value = idOf(data) || queryId.value
       if (!queryId.value) throw new Error('Missing query id')
       phase.value = ['pending', 'queued'].includes(data.status) ? 'queued' : 'running'
@@ -59,7 +64,7 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
     stop()
     queryId.value = ''
     cancellable.value = false
-    if (kind === 'cancelled') { state.value = 'cancelled'; result.value = null; return }
+    if (kind === 'cancelled') { state.value = 'cancelled'; return }
     result.value = normalizeResult(data)
     state.value = result.value.degraded ? 'degraded' : result.value.abstained ? 'abstained' :
       result.value.partial || data.status === 'partial' ? 'partial' : 'answered'
@@ -67,6 +72,7 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
   function fail(error) {
     stop()
     if (error.terminal || [401, 403, 404].includes(error.response?.status)) queryId.value = ''
+    if (!queryId.value) cancellable.value = false
     state.value = queryId.value ? 'paused' : 'error'
     feedback.value = queryId.value
       ? '暂时无法读取回答状态，后台任务可能仍在进行。恢复连接后可继续查询，不会重复提问。'
@@ -83,15 +89,25 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
     if (disposed || loading.value) return
     reset()
     const token = generation
+    const controller = new AbortController()
+    submission = controller
     state.value = 'submitting'
     try {
-      const response = await api.createQuery(payload)
+      let response = await api.createQuery({ ...payload, phase: 'evidence' }, { signal: controller.signal })
+      if (current(token) && response?.data?.data?.status === 'evidence' && response.data.data.enhancementRequired === true) {
+        result.value = normalizeResult(response.data.data)
+        state.value = 'enhancing'
+        phase.value = 'enhancing'
+        cancellable.value = true
+        response = await api.createQuery({ ...payload, phase: 'enhanced' }, { signal: controller.signal, timeout: 240000 })
+      }
       if (!current(token)) {
         if (ACTIVE.has(response?.data?.data?.status) || response.status === 202) abandon(idOf(response.data?.data))
         return
       }
       receive(response, token)
     } catch (error) { if (current(token)) fail(error) }
+    finally { if (submission === controller) submission = null }
   }
   async function resume() {
     if (disposed || state.value !== 'paused' || !queryId.value) return
@@ -102,9 +118,11 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
   async function cancel() {
     if (disposed || state.value === 'cancelling') return
     const token = ++generation
+    submission?.abort()
+    submission = null
     stop()
     const id = queryId.value
-    if (!id) { state.value = 'cancelled'; result.value = null; return }
+    if (!id) { state.value = 'cancelled'; cancellable.value = false; return }
     state.value = 'cancelling'
     feedback.value = ''
     try {

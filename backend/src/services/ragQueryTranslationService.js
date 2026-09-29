@@ -5,22 +5,27 @@ import { TRANSLATION_TASK_TYPE, projectTranslationInput, normalizeTranslationRes
 // Optional request-scoped enhancement. Uses the synchronous authoritative SQLite
 // TaskStore; it deliberately does not deduplicate tasks between request lifetimes.
 export function createQueryTranslationService({ enabled = false, taskStore, model,
-  workerAvailable = () => false, timeoutMs = 2000, pollMs = 25, onCleanupError = () => {} } = {}) {
+  workerAvailable = () => false, timeoutMs = 2000, queueTimeoutMs = 120000, pollMs = 25, onCleanupError = () => {} } = {}) {
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2000 ||
+      !Number.isInteger(queueTimeoutMs) || queueTimeoutMs < timeoutMs || queueTimeoutMs > 120000 ||
       !Number.isInteger(pollMs) || pollMs < 1 || pollMs > 100) throw new TypeError('Invalid translation budget')
   return {
-    async translate({ query, signal } = {}) {
+    enabled,
+    async translate({ query, signal, waitForCapacity = false } = {}) {
       if (typeof query !== 'string' || !query.trim() || query.length > 1024) throw new TypeError('Invalid query')
       signal?.throwIfAborted()
       const fallback = status => ({ status, queries: [query] })
       if (!enabled) return fallback('disabled')
       if (!/\p{Script=Han}/u.test(query)) return fallback('not_applicable')
-      const deadline = performance.now() + timeoutMs
-      const expiresAt = Date.now() + timeoutMs
+      // The start endpoint still caps inference at 2000ms; only opted-in
+      // progressive callers extend queue residence, never the model budget.
+      const budgetMs = waitForCapacity === true ? queueTimeoutMs : timeoutMs
+      const deadline = performance.now() + budgetMs
+      const expiresAt = Date.now() + budgetMs
       const controller = new AbortController()
       const abort = () => controller.abort(signal.reason)
       signal?.addEventListener('abort', abort, { once: true })
-      const timer = setTimeout(() => controller.abort(new Error('Translation deadline')), timeoutMs)
+      const timer = setTimeout(() => controller.abort(new Error('Translation deadline')), budgetMs)
       let task, input, rejectOnAbort
       const stopped = new Promise((_, reject) => {
         rejectOnAbort = () => reject(controller.signal.reason)
