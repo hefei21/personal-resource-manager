@@ -11,6 +11,7 @@ import {
 } from '../services/ragAnswerService.js'
 import { createRagRerankService, RAG_RERANK_TASK_TYPE } from '../services/ragRerankService.js'
 import { createRagHybridRetriever } from '../services/ragHybridRetriever.js'
+import { createTranslatedCandidateProvider } from '../services/ragTranslatedCandidateProvider.js'
 import { expandRagEvidenceContext } from '../services/ragEvidenceContext.js'
 import { ragRetrievalPolicy } from '../services/ragRetrievalPolicy.js'
 import { normalizeRagChunkScope, readRagChapterScope } from '../services/ragChapterScope.js'
@@ -1475,6 +1476,7 @@ export function createRagRouter({
   authoritativeChecksFactory = ({ database }) => createAuthoritativeChecks(database),
   textIndexServiceFactory = defaultTextIndexServiceFactory,
   candidateProvider = null,
+  queryTranslationServiceFactory = null,
   retrieveCandidates = null,
   queryRuntimeFactory = defaultQueryRuntimeFactory,
   hybridRetrieverFactory = defaultHybridRetrieverFactory,
@@ -1696,6 +1698,10 @@ export function createRagRouter({
       return queryError(res, error)
     }
 
+    const queryController = new AbortController()
+    const abortQuery = () => { if (!res.writableEnded) queryController.abort(new Error('Query request closed')) }
+    req.once('aborted', abortQuery)
+    res.once('close', abortQuery)
     try {
       const database = await Promise.resolve(databaseProvider(req))
       let checks = await Promise.resolve(authoritativeChecksFactory({ database, req }))
@@ -1758,7 +1764,15 @@ export function createRagRouter({
         const reasonCode = scopedIndexReason(sourceStatus)
         if (reasonCode) return res.json({ data: scopedAbstention(input.query, reasonCode) })
       }
-      const providerOutput = await Promise.resolve(resolvedCandidateProvider({
+      let translationService = null
+      if (queryTranslationServiceFactory) {
+        try { translationService = await resolveComponent(queryTranslationServiceFactory, { database, req }) } catch {
+          queryController.signal.throwIfAborted()
+        }
+      }
+      const requestCandidateProvider = createTranslatedCandidateProvider({ candidateProvider: resolvedCandidateProvider,
+        translationService, signal: queryController.signal })
+      const providerOutput = await Promise.resolve(requestCandidateProvider({
         database,
         req,
         query: input.query,
@@ -1834,7 +1848,7 @@ export function createRagRouter({
           if (resolvedReranker && typeof resolvedReranker.rerank === 'function') {
             let window = scopedRetrieval.data.slice(0, 10)
             if (expanded) {
-              const pool = await resolvedCandidateProvider({ database, req, query: input.query, limit: 50,
+              const pool = await requestCandidateProvider({ database, req, query: input.query, limit: 50,
                 expandedRerankPool: true,
                 source: querySource, ...(chunkIds ? { chunkIds } : {}),
                 authoritativeVisibility: checks.authoritativeVisibility,
@@ -1889,6 +1903,7 @@ export function createRagRouter({
         req
       })
 
+      queryController.signal.throwIfAborted()
       const evidence = await expandRagEvidenceContext({ database, evidence: rankedRetrieval.data, checks,
         context: { query: input.query, req } })
       rankedRetrieval = Object.freeze({ ...rankedRetrieval, data: Object.freeze(evidence), total: evidence.length })
@@ -1927,6 +1942,7 @@ export function createRagRouter({
           error.code = RAG_ROUTE_ERROR_CODES.UNAVAILABLE
           throw error
         }
+        queryController.signal.throwIfAborted()
         try {
           answer = await resolvedAnswerService.generate({ query: input.query, evidence })
         } catch (error) {
@@ -1977,7 +1993,11 @@ export function createRagRouter({
       const httpStatus = response.status === 'queued' || response.status === 'active' ? 202 : 200
       return res.status(httpStatus).json({ data: response })
     } catch (error) {
+      if (queryController.signal.aborted) return
       return queryError(res, error)
+    } finally {
+      req.removeListener('aborted', abortQuery)
+      res.removeListener('close', abortQuery)
     }
   })
 

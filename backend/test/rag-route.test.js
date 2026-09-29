@@ -92,6 +92,60 @@ function rejectingChecks() {
   }
 }
 
+test('optional translation affects recall only; ranking and answer keep original question', async () => {
+  const queries = [], downstream = []
+  const query = '超时意味着整个下载超时吗'
+  const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+    authoritativeChecksFactory: checks,
+    queryTranslationServiceFactory: () => ({ translate: async input => {
+      assert.equal(input.query, query)
+      return { status: 'enhanced', queries: [query, 'Does timeout cover the entire download?'] }
+    } }),
+    candidateProvider: async input => { queries.push(input.query); return { ftsCandidates: [] } },
+    hybridRetrieverFactory: () => ({ retrieve: async input => { downstream.push(input.query); return retrieval() } }),
+    answerServiceFactory: () => ({ generate: async input => {
+      downstream.push(input.query)
+      return { status: 'complete', answer: 'Supported answer.', abstained: false, citations: [] }
+    } })
+  })
+  await withServer(router, async base => {
+    const response = await fetch(`${base}/api/rag/queries`, { method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query }) })
+    assert.equal(response.status, 200)
+    await response.json()
+    assert.deepEqual(queries, [query, 'Does timeout cover the entire download?'])
+    assert.deepEqual(downstream, [query, query])
+  })
+})
+
+test('closing HTTP query aborts pending translation without fallback recall', async () => {
+  let entered, cancelled, recalls = 0
+  const started = new Promise(resolve => { entered = resolve })
+  const stopped = new Promise(resolve => { cancelled = resolve })
+  const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+    authoritativeChecksFactory: checks,
+    queryTranslationServiceFactory: () => ({ translate: ({ signal }) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => { cancelled(); reject(signal.reason) }, { once: true })
+      entered()
+    }) }),
+    candidateProvider: async () => { recalls++; return { ftsCandidates: [] } }
+  })
+  await withServer(router, async base => {
+    const controller = new AbortController()
+    const request = fetch(`${base}/api/rag/queries`, { method: 'POST', signal: controller.signal,
+      headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query: '中文问题' }) })
+    const rejected = assert.rejects(request, { name: 'AbortError' })
+    await started
+    controller.abort()
+    await rejected
+    await Promise.race([stopped, new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('HTTP cancellation not propagated')), 1000)
+      timer.unref()
+    })])
+    assert.equal(recalls, 0)
+  })
+})
+
 test('chapter contract requires explicit ebook binding; question wording never adds a chapter filter', () => {
   const section = 'a'.repeat(64)
   for (const query of ['第一章以外的章节', 'not limited to chapter one', '比较第一章与第十三章']) {
@@ -111,6 +165,7 @@ test('explicit chapter reaches both retrievers and final authorization; stale se
   const calls = []
   const router = createRagRouter({
     databaseProvider: () => ({}), authoritativeChecksFactory: checks,
+    queryTranslationServiceFactory: () => ({ translate: async ({ query }) => ({ status: 'enhanced', queries: [query, 'translated question'] }) }),
     sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 2 } }),
     chapterScopeProvider: ({ sourceId, section: key }) => {
       if (sourceId !== 23 || key && key !== section) throw Object.assign(new Error('stale'), { code: 'RAG_SECTION_STALE' })
@@ -140,7 +195,7 @@ test('explicit chapter reaches both retrievers and final authorization; stale se
       if (expected === 200) assert.equal(body.data.reasonCode, 'no_evidence')
       else assert.equal(body.code, 'RAG_SECTION_STALE')
     }
-    assert.deepEqual(calls, [['fts', [41]], ['vector', [41]]])
+    assert.deepEqual(calls, [['fts', [41]], ['vector', [41]], ['fts', [41]], ['vector', [41]]])
   })
 })
 
