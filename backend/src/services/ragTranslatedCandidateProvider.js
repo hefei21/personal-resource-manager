@@ -20,7 +20,7 @@ export function createTranslatedCandidateProvider({ candidateProvider, translati
   }
   return async options => {
     signal?.throwIfAborted()
-    if (!translationService) return candidateProvider(options)
+    if (!translationService) return candidateProvider({ ...options, signal })
     if (!translation) {
       originalQuery = options.query
       translation = Promise.resolve().then(() => translationService.translate({ query: originalQuery, signal }))

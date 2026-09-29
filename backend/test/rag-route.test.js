@@ -118,17 +118,25 @@ test('optional translation affects recall only; ranking and answer keep original
   })
 })
 
-test('closing HTTP query aborts pending translation without fallback recall', async () => {
+for (const phase of ['translation', 'vector']) test(`closing HTTP query aborts pending ${phase} without downstream work`, async () => {
   let entered, cancelled, recalls = 0
   const started = new Promise(resolve => { entered = resolve })
   const stopped = new Promise(resolve => { cancelled = resolve })
-  const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
-    authoritativeChecksFactory: checks,
-    queryTranslationServiceFactory: () => ({ translate: ({ signal }) => new Promise((resolve, reject) => {
+  const waitForAbort = ({ signal }) => new Promise((resolve, reject) => {
+      assert.ok(signal instanceof AbortSignal)
       signal.addEventListener('abort', () => { cancelled(); reject(signal.reason) }, { once: true })
       entered()
-    }) }),
-    candidateProvider: async () => { recalls++; return { ftsCandidates: [] } }
+    })
+  const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+    authoritativeChecksFactory: checks,
+    ...(phase === 'translation' ? {
+      queryTranslationServiceFactory: () => ({ translate: waitForAbort }),
+      candidateProvider: async () => { recalls++; return { ftsCandidates: [] } }
+    } : {
+      textIndexServiceFactory: () => ({ query: () => ({ data: [] }) }),
+      queryRuntimeFactory: () => ({ query: waitForAbort }),
+      hybridRetrieverFactory: () => ({ retrieve: () => { recalls++; assert.fail('no ranking after abort') } })
+    })
   })
   await withServer(router, async base => {
     const controller = new AbortController()

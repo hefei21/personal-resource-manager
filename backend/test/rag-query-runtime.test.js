@@ -72,7 +72,7 @@ function taskFor(query, { stale = false } = {}) {
 }
 
 function runtime({ database = fakeDatabase(), task = null, vectorStore = null, workerAvailable = true, modelResolver = null,
-  queryText = 'find the document' } = {}) {
+  queryText = 'find the document', overrides = {} } = {}) {
   const activeModelResolver = modelResolver ?? (() => ({ embeddingModelId: 3, model: MODEL }))
   const store = vectorStore ?? {
     modelConfig: MODEL,
@@ -103,7 +103,8 @@ function runtime({ database = fakeDatabase(), task = null, vectorStore = null, w
     },
     vectorStore: store,
     workerAvailable: async () => workerAvailable,
-    waitMs: 0
+    waitMs: 0,
+    ...overrides
   }) }
 }
 
@@ -132,6 +133,62 @@ test('query runtime stays FTS-degraded when model, worker, or Qdrant configurati
   const qdrantFailureResult = await qdrantFailure.runtime.query({ query: qdrantFailure.query, limit: 5 })
   assert.equal(qdrantFailureResult.vectorCandidates.length, 0)
   assert.equal(qdrantFailureResult.vectorError.code, 'RAG_VECTOR_UNAVAILABLE')
+})
+
+test('aborted observers neither enqueue nor wait for unavailable model probes', async () => {
+  let probes = 0, enqueues = 0
+  const controller = new AbortController()
+  const current = runtime({ overrides: {
+    modelResolver: () => { probes++; return new Promise(() => {}) },
+    taskStore: { enqueue: () => { enqueues++; assert.fail('must not enqueue') } }
+  } }).runtime
+  const pending = current.query({ query: 'cancel probe', signal: controller.signal })
+  await new Promise(resolve => setImmediate(resolve))
+  controller.abort(new Error('observer left'))
+  await assert.rejects(pending, /observer left/)
+  await assert.rejects(current.query({ query: 'already cancelled', signal: controller.signal }), /observer left/)
+  assert.equal(probes, 1)
+  assert.equal(enqueues, 0)
+})
+
+test('one cancelled embedding observer does not cancel a shared task or another observer', async () => {
+  const query = 'shared question', controller = new AbortController()
+  let task = { id: 1, status: 'running' }, reads = 0, searches = 0
+  const current = runtime({ queryText: query, overrides: {
+    waitMs: 1000, pollMs: 1,
+    taskStore: { enqueueExclusiveRun: () => ({ task }), getById: () => { reads++; return task },
+      cancel: () => assert.fail('shared task must survive'), retryTerminalTask: () => assert.fail('no retry after abort') },
+    vectorStore: { modelConfig: MODEL, health: async () => ({ available: true }),
+      search: async () => { searches++; return { points: [] } } }
+  } }).runtime
+  const cancelled = current.query({ query, signal: controller.signal })
+  const rejected = assert.rejects(cancelled, /observer left/)
+  const survivor = current.query({ query })
+  await new Promise(resolve => setTimeout(resolve, 10))
+  controller.abort(new Error('observer left'))
+  await rejected
+  assert.equal(task.status, 'running')
+  task = taskFor(query)
+  await survivor
+  assert.ok(reads > 0)
+  assert.equal(searches, 1)
+})
+
+test('abort during vector search is propagated even if transport ignores its signal', async () => {
+  const controller = new AbortController()
+  let entered
+  const started = new Promise(resolve => { entered = resolve })
+  const current = runtime({ vectorStore: { modelConfig: MODEL, health: async () => ({ available: true }),
+    search: async (embedding, options) => {
+      assert.equal(options.signal, controller.signal)
+      entered()
+      return new Promise(() => {})
+    } } }).runtime
+  const pending = current.query({ query: 'find the document', signal: controller.signal })
+  const rejected = assert.rejects(pending, /observer left/)
+  await started
+  controller.abort(new Error('observer left'))
+  await rejected
 })
 
 test('vector availability probes Qdrant independently from PC Worker readiness', async () => {

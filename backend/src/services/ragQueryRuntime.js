@@ -114,6 +114,20 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex')
 }
 
+// Stop this observer, not the shared embedding task used by other requests.
+function observeWithSignal(operation, signal) {
+  signal?.throwIfAborted()
+  if (!signal) return Promise.resolve().then(operation)
+  return new Promise((resolve, reject) => {
+    const abort = () => { cleanup(); reject(signal.reason) }
+    const cleanup = () => signal.removeEventListener('abort', abort)
+    signal.addEventListener('abort', abort, { once: true })
+    Promise.resolve().then(() => { signal.throwIfAborted(); return operation() }).then(
+      value => { cleanup(); resolve(value) }, error => { cleanup(); reject(error) }
+    )
+  })
+}
+
 function modelIdentity(row) {
   if (!isPlainObject(row)) return null
   const model = {
@@ -629,7 +643,8 @@ export class RagQueryRuntime {
     }
   }
 
-  async #waitForTask(task) {
+  async #waitForTask(task, signal) {
+    signal?.throwIfAborted()
     if (!task || typeof task !== 'object') return null
     let current = task
     const initialStatus = taskStatus(current)
@@ -639,7 +654,8 @@ export class RagQueryRuntime {
     if (id === null || typeof this.taskStore?.getById !== 'function') return null
     const deadline = this.now() + this.waitMs
     while (this.now() <= deadline) {
-      await this.sleep(Math.min(this.pollMs, Math.max(0, deadline - this.now())))
+      await observeWithSignal(() => this.sleep(Math.min(this.pollMs, Math.max(0, deadline - this.now()))), signal)
+      signal?.throwIfAborted()
       current = await Promise.resolve(this.taskStore.getById(id)).catch(() => null)
       if (!current) return null
       const status = taskStatus(current)
@@ -649,7 +665,8 @@ export class RagQueryRuntime {
     return null
   }
 
-  async #embed(query, model, retryTerminal = this.retryTerminal) {
+  async #embed(query, model, retryTerminal = this.retryTerminal, signal) {
+    signal?.throwIfAborted()
     if (!this.taskStore || (typeof this.taskStore.enqueueExclusiveRun !== 'function' && typeof this.taskStore.enqueue !== 'function')) {
       throw fail(RAG_QUERY_RUNTIME_ERROR_CODES.TASK_STORE_UNAVAILABLE, 'query embedding task store is unavailable.')
     }
@@ -680,7 +697,8 @@ export class RagQueryRuntime {
       ? await this.taskStore.enqueueExclusiveRun(request, { taskTypes: [RAG_QUERY_EMBED_TASK_TYPE] })
       : await this.taskStore.enqueue(request)
     let task = outcome?.task ?? outcome
-    let completed = await this.#waitForTask(task)
+    let completed = await this.#waitForTask(task, signal)
+    signal?.throwIfAborted()
     const retryTaskId = taskId(completed)
     if (completed && retryTaskId !== null && ['failed', 'cancelled'].includes(taskStatus(completed)) && retryTerminal &&
         typeof this.taskStore.retryTerminalTask === 'function') {
@@ -689,7 +707,7 @@ export class RagQueryRuntime {
         maxRetries: this.terminalRetryBudget
       }))
       task = retryOutcome?.task ?? retryOutcome
-      completed = await this.#waitForTask(task)
+      completed = await this.#waitForTask(task, signal)
     }
     if (!completed || taskStatus(completed) !== 'succeeded' || !completed.result) {
       throw fail(
@@ -775,34 +793,39 @@ export class RagQueryRuntime {
   }
 
   async query({ query, limit = 10, sourceType, sourceId, chunkIds, signal, retryTerminal = this.retryTerminal } = {}) {
+    signal?.throwIfAborted()
     const chapterIds = normalizeRagChunkScope(chunkIds)
     const normalizedQuery = normalizeQueryText(query)
     const normalizedLimit = boundedInteger(limit, 'limit', 1, 100, 10)
     const sourceScope = normalizeSourceScope(sourceType, sourceId)
     if (typeof retryTerminal !== 'boolean') throw fail(RAG_QUERY_RUNTIME_ERROR_CODES.INPUT_INVALID, 'retryTerminal is invalid.')
-    const availability = await this.availability()
+    const availability = await observeWithSignal(() => this.availability(), signal)
+    signal?.throwIfAborted()
     if (!availability.available) return degradedResult(availability.reason)
     const modelBefore = availability.model
     let embedding
     try {
-      embedding = await this.#embed(normalizedQuery, modelBefore, retryTerminal)
+      embedding = await observeWithSignal(() => this.#embed(normalizedQuery, modelBefore, retryTerminal, signal), signal)
     } catch (error) {
+      signal?.throwIfAborted()
       return degradedResult(error?.code ?? RAG_QUERY_RUNTIME_ERROR_CODES.WORKER_UNAVAILABLE)
     }
-    const modelAfter = await this.#resolveModel()
+    const modelAfter = await observeWithSignal(() => this.#resolveModel(), signal)
     if (!modelAfter || modelAfter.embeddingModelId !== modelBefore.embeddingModelId || !sameModel(modelAfter.model, modelBefore.model)) {
       return degradedResult(RAG_QUERY_RUNTIME_ERROR_CODES.STALE)
     }
-    const activeSources = await this.#activeSources(modelAfter, sourceScope)
+    const activeSources = await observeWithSignal(() => this.#activeSources(modelAfter, sourceScope), signal)
+    signal?.throwIfAborted()
     if (!activeSources) return degradedResult(RAG_QUERY_RUNTIME_ERROR_CODES.STALE)
     try {
-      const result = await availability.vectorStore.search(embedding.embedding, {
+      const result = await observeWithSignal(() => availability.vectorStore.search(embedding.embedding, {
         activeSnapshotSources: activeSources,
         ...(chapterIds ? { chunkIds: chapterIds } : {}),
         limit: normalizedLimit,
         overfetch: this.vectorOverfetch,
         signal
-      })
+      }), signal)
+      signal?.throwIfAborted()
       if (!result || !Array.isArray(result.points)) throw fail(RAG_QUERY_RUNTIME_ERROR_CODES.VECTOR_SCHEMA_MISMATCH, 'vector search response is invalid.')
       const candidates = []
       for (const point of result.points) {
@@ -826,6 +849,7 @@ export class RagQueryRuntime {
         candidateResolver: (candidate) => this.resolveCandidate(candidate, modelAfter)
       })
     } catch (error) {
+      signal?.throwIfAborted()
       return degradedResult(error?.code ?? RAG_QUERY_RUNTIME_ERROR_CODES.VECTOR_UNAVAILABLE)
     }
   }

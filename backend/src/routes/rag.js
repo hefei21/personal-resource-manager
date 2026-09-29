@@ -790,6 +790,7 @@ async function defaultCandidateProvider({
   database,
   req,
   query,
+  signal,
   limit,
   source,
   chunkIds,
@@ -801,6 +802,7 @@ async function defaultCandidateProvider({
   taskStoreProvider,
   workerAvailable
 }) {
+  signal?.throwIfAborted()
   const service = await Promise.resolve(textIndexServiceFactory({
     database,
     authoritativeVisibility
@@ -837,14 +839,17 @@ async function defaultCandidateProvider({
       authoritativeActiveSnapshot
     })
     if (runtime && typeof runtime.query === 'function') {
+      signal?.throwIfAborted()
       vectorOutput = await runtime.query({
         query,
+        signal,
         limit,
         ...(chunkIds ? { chunkIds } : {}),
         ...(source ? { sourceType: source.sourceType, sourceId: source.sourceId } : {})
       })
     }
   } catch (error) {
+    signal?.throwIfAborted()
     vectorOutput = { vectorCandidates: [], vectorError: Object.freeze({ code: error?.code ?? 'VECTOR_UNAVAILABLE' }) }
   }
   return Object.freeze({
