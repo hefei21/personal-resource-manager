@@ -22,7 +22,9 @@ const SOURCE_ROUTES = Object.freeze({
 })
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const SNAPSHOT_COMPLETE_STATUSES = new Set(['text_ready', 'embedding_pending', 'ready', 'partial'])
-const MAX_QUERY_LENGTH = 256
+// Translated questions can be longer than their original Chinese input. Match
+// the translation protocol; ragQueryTerms still caps the FTS expression at 64 terms.
+const MAX_QUERY_LENGTH = 1024
 const MAX_QUERY_LIMIT = 100
 const MAX_QUERY_OFFSET = 100_000
 const MAX_QUERY_CANDIDATES = 5_000

@@ -12,6 +12,7 @@ import { createRagTextIndexService, RAG_TEXT_INDEX_ERROR_CODES } from '../src/se
 import { ragQueryTerms } from '../src/services/ragLexicalText.js'
 import { expandRagEvidenceContext } from '../src/services/ragEvidenceContext.js'
 import { readRagChapterScope, normalizeRagChunkScope } from '../src/services/ragChapterScope.js'
+import { createTranslatedCandidateProvider } from '../src/services/ragTranslatedCandidateProvider.js'
 
 const require = createRequire(import.meta.url)
 let Database
@@ -30,6 +31,33 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   : { skip: 'better-sqlite3 native binding is unavailable locally; Linux CI must run this test' }
 
 const registry = createMigrationRegistry(RAG_INDEX_MIGRATIONS)
+
+test('translated FTS accepts the complete protocol length without losing source scope', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const service = createService(database, { collectSources: async () => ({
+      sources: [source({ id: 1, text: 'alpha beta' }), source({ id: 2, text: 'alpha beta' })], errors: []
+    }) })
+    await service.refresh()
+    for (const length of [256, 257, 310, 1024]) {
+      const translated = `alpha beta ${'x'.repeat(length - 11)}`
+      assert.equal(translated.length, length)
+      const provider = createTranslatedCandidateProvider({
+        translationService: { translate: async () => ({ status: 'enhanced', queries: ['原问题', translated] }) },
+        candidateProvider: async ({ query, source }) => ({ ftsCandidates: service.query({ q: query, ...source, limit: 50 }).data })
+      })
+      const result = await provider({ query: '原问题', source: { sourceType: 'document', sourceId: 1 } })
+      assert.equal(result.ftsCandidates.length, 1, `translation length ${length} must not silently fail open`)
+      assert.equal(result.ftsCandidates[0].sourceId, 1)
+      assert.equal(result.ftsCandidates[0].body, 'alpha beta')
+    }
+    for (const q of ['x'.repeat(1025), 'ﬃ'.repeat(342)]) {
+      assert.throws(() => service.query({ q }), { code: RAG_TEXT_INDEX_ERROR_CODES.QUERY_INVALID })
+    }
+    assert.equal(ragQueryTerms(Array.from({ length: 100 }, (_, i) => `term${i}`).join(' ')).length, 64)
+  } finally { database.close() }
+})
 
 test('chapter scope never accepts empty or client-shaped chunk filters', () => {
   assert.equal(normalizeRagChunkScope(undefined), undefined)
