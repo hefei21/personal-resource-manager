@@ -17,7 +17,8 @@ export function validateQueryTranslations(query, value) {
   }).map(text => text.trim()))].filter(text => text !== query)
 }
 
-export async function translateRetrievalQuery({ query, enabled = false, complete, signal, timeoutMs = 2000 } = {}) {
+export async function translateRetrievalQuery({ query, enabled = false, complete, signal, timeoutMs = 2000,
+  expiresAt, now = Date.now } = {}) {
   if (typeof query !== 'string' || !query.trim() || query.length > 1024) throw new TypeError('Invalid query')
   const result = (status, extra = []) => Object.freeze({ status, queries: Object.freeze([query, ...extra]) })
   if (signal?.aborted) throw signal.reason ?? new Error('Aborted')
@@ -27,6 +28,9 @@ export async function translateRetrievalQuery({ query, enabled = false, complete
   if (!/\p{Script=Han}/u.test(query)) return result('not_applicable')
   if (typeof complete !== 'function') return result('unavailable')
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw new TypeError('Invalid deadline')
+  if (expiresAt !== undefined && !Number.isSafeInteger(expiresAt)) throw new TypeError('Invalid expiry')
+  const remainingMs = Math.min(timeoutMs, expiresAt === undefined ? timeoutMs : expiresAt - now())
+  if (remainingMs <= 0) return result('timeout')
   const controller = new AbortController()
   const abort = () => controller.abort(signal.reason)
   signal?.addEventListener('abort', abort, { once: true })
@@ -36,13 +40,21 @@ export async function translateRetrievalQuery({ query, enabled = false, complete
     const deadline = new Promise((_, reject) => {
       stop = () => reject(controller.signal.reason ?? new Error('Aborted'))
       controller.signal.addEventListener('abort', stop, { once: true })
-      timer = setTimeout(() => controller.abort(new Error('Translation deadline')), timeoutMs)
+      timer = setTimeout(() => controller.abort(new Error('Translation deadline')), remainingMs)
     })
-    const response = await Promise.race([deadline, Promise.resolve().then(() => complete({
-      messages: [{ role: 'system', content: QUERY_TRANSLATION_PROMPT }, { role: 'user', content: query }],
-      signal: controller.signal
-    }))])
+    const response = await Promise.race([deadline, Promise.resolve().then(() => {
+      controller.signal.throwIfAborted()
+      if (expiresAt !== undefined && now() >= expiresAt) {
+        controller.abort(new Error('Translation deadline'))
+        throw controller.signal.reason
+      }
+      return complete({
+        messages: [{ role: 'system', content: QUERY_TRANSLATION_PROMPT }, { role: 'user', content: query }],
+        signal: controller.signal
+      })
+    })])
     if (signal?.aborted) throw signal.reason ?? new Error('Aborted')
+    if (expiresAt !== undefined && now() >= expiresAt) return result('timeout')
     if (response?.finishReason !== 'stop') return result('invalid')
     const extra = validateQueryTranslations(query, response.value)
     return result(extra.length ? 'enhanced' : 'rejected', extra)

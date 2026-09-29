@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import { createQueryTranslationTransport } from '../src/ragQueryTranslationTransport.js'
 import { translateRetrievalQuery, validateQueryTranslations } from '../src/ragQueryTranslation.js'
 
 test('disabled and unavailable preserve original without inference', async () => {
@@ -66,5 +67,55 @@ test('real HTTP transport timeout aborts fetch and retains the query', async () 
   } finally {
     server.closeAllConnections()
     await new Promise(resolve => server.close(resolve))
+  }
+})
+
+test('queue expiry avoids inference and a late completion cannot extend the deadline', async () => {
+  let now = 1000
+  let calls = 0
+  const input = { query: '中文问题', enabled: true, expiresAt: 1000, now: () => now,
+    complete: async () => { calls++; now = 2000; return { finishReason: 'stop', value: { queries: ['Question?'] } } } }
+  assert.equal((await translateRetrievalQuery(input)).status, 'timeout')
+  assert.equal(calls, 0)
+  assert.equal((await translateRetrievalQuery({ ...input, expiresAt: 1500 })).status, 'timeout')
+  assert.equal(calls, 1)
+})
+
+test('queue time reduces the remaining inference budget', async () => {
+  let signal
+  const result = await translateRetrievalQuery({ query: '问题', enabled: true, timeoutMs: 2000,
+    expiresAt: 1010, now: () => 1000,
+    complete: input => { signal = input.signal; return new Promise(() => {}) } })
+  assert.equal(result.status, 'timeout')
+  assert.equal(signal.aborted, true)
+})
+
+test('configured HTTP translation transport enforces payload, failure and response bounds', async t => {
+  let mode = 'ok'
+  const server = http.createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    assert.equal(req.url, '/v1/chat/completions')
+    const input = JSON.parse(body)
+    assert.equal(input.model, 'test-model')
+    assert.equal(input.messages[1].content, '中文问题')
+    assert.equal(input.temperature, 0)
+    assert.equal(input.chat_template_kwargs.enable_thinking, false)
+    if (mode === 'offline') { res.writeHead(503); res.end(); return }
+    if (mode === 'redirect') { res.writeHead(302, { Location: '/unexpected' }); res.end(); return }
+    if (mode === 'large') { res.end('x'.repeat(65537)); return }
+    if (mode === 'hung') return
+    res.end(JSON.stringify({ choices: [{ finish_reason: mode === 'truncated' ? 'length' : 'stop',
+      message: { content: JSON.stringify({ queries: ['Chinese question?'] }) } }] }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => { server.closeAllConnections(); server.close() })
+  const complete = createQueryTranslationTransport({ baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: 'test-model' })
+  const run = () => translateRetrievalQuery({ query: '中文问题', enabled: true, complete, timeoutMs: 100 })
+  assert.deepEqual((await run()).queries, ['中文问题', 'Chinese question?'])
+  for (mode of ['offline', 'redirect', 'large', 'truncated', 'hung']) {
+    const result = await run()
+    assert.deepEqual(result.queries, ['中文问题'])
+    assert.equal(result.status, mode === 'hung' ? 'timeout' : mode === 'truncated' ? 'invalid' : 'unavailable')
   }
 })
