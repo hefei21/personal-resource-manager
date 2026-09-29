@@ -22,6 +22,9 @@ import { createModelReadiness, modelKindForTaskType } from './modelReadiness.js'
 
 const ACCESS_REFRESH_MARGIN_MS = 60_000
 const PROFILE_REFRESH_MS = 5 * 60_000
+const LOST_LEASE_CODES = new Set([
+  'TASK_INVALID_STATE', 'TASK_LEASE_MISMATCH', 'TASK_LEASE_EXPIRED', 'TASK_STATE_CONFLICT'
+])
 const CONTENT_EXTRACT_FAILURE_CODES = new Set([
   'WORKER_INPUT_STREAM_INVALID',
   'WORKER_CONTENT_EXTRACT_INPUT_INVALID',
@@ -257,6 +260,7 @@ export class PcWorker {
   async execute(task) {
     let heartbeatTimer
     let heartbeatBusy = false
+    let leaseLostError = null
     const controller = new AbortController()
     this.activeController = controller
     try {
@@ -272,9 +276,16 @@ export class PcWorker {
       }
       await this.api.start(this.state.accessToken, task)
       heartbeatTimer = setInterval(() => {
-        if (heartbeatBusy) return
+        if (heartbeatBusy || leaseLostError) return
         heartbeatBusy = true
         void this.ensureState().then(() => this.api.heartbeat(this.state.accessToken, task)).catch((error) => {
+          // Only an authoritative rejection ends execution. Network failures do
+          // not prove cancellation, and a late heartbeat belongs to this task only.
+          if (this.activeController === controller && error instanceof WorkerApiError &&
+              error.status === 409 && LOST_LEASE_CODES.has(error.code)) {
+            leaseLostError = error
+            controller.abort(error)
+          }
           safeLog(this.logger, 'warn', 'task_heartbeat_failed', { taskId: task.id, code: error.code || 'UNKNOWN' })
         }).finally(() => { heartbeatBusy = false })
       }, this.config.heartbeatIntervalMs)
@@ -304,6 +315,7 @@ export class PcWorker {
         throw Object.assign(new Error('Worker processor is not configured.'), { code: 'WORKER_PROCESSOR_UNSUPPORTED', retryable: false })
       }
       await this.ensureState()
+      if (leaseLostError) throw leaseLostError
       if (this.contentExtractProcessor.supports(task.taskType)) {
         const artifact = result?.artifact
         const metadata = result?.output
@@ -316,6 +328,7 @@ export class PcWorker {
         result = { ...result }
         delete result.artifact
       }
+      if (leaseLostError) throw leaseLostError
       await this.api.complete(this.state.accessToken, task, result)
       safeLog(this.logger, 'info', 'task_succeeded', {
         taskId: task.id,
@@ -326,6 +339,12 @@ export class PcWorker {
         ...(typeof result?.output?.abstained === 'boolean' ? { abstained: result.output.abstained } : {})
       })
     } catch (error) {
+      if (leaseLostError) {
+        safeLog(this.logger, 'warn', 'task_lease_lost', { taskId: task.id, code: leaseLostError.code })
+        // The server already owns the terminal/reassigned state; do not retry it
+        // or treat cancellation as a model readiness failure.
+        throw leaseLostError
+      }
       await this.publishReadinessAfterFailure(modelKindForTaskType(task.taskType), error)
       const failure = failureFor(error)
       safeLog(this.logger, 'warn', 'task_failed', {
