@@ -152,6 +152,40 @@ function inspectionResult(overrides = {}) {
   }
 }
 
+test('translation start budget and completion are guarded by lease and server expiry', async () => {
+  const store = fakeStore()
+  const query = 'Click 默认 1 次吗？'
+  const input = { schemaVersion: 1, requestId: 'request-1', query,
+    querySha256: createHash('sha256').update(query).digest('hex'), modelId: 'answer-model', modelRevision: 'v1', expiresAt: Date.now() + 2000 }
+  Object.assign(store.task, { taskType: 'rag.query.translate', input })
+  store.cancel = () => { store.task.status = 'cancelled'; return store.task }
+  store.leaseNext({ owner: `pcw:${worker.id}` })
+  const app = express()
+  app.use(express.json())
+  app.use('/agent', createPcWorkerAgentRouter({ database: () => fakeDatabase(),
+    runtime: () => ({ getStore: () => store }), authenticate: () => worker }))
+  await withServer(app, async base => {
+    const post = (action, body) => fetch(`${base}/agent/tasks/41/${action}`, { method: 'POST',
+      headers: { authorization: 'Bearer synthetic', 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    assert.equal((await post('start', { leaseToken: 'wrong' })).status, 409)
+    const response = await post('start', { leaseToken: 'lease-secret' })
+    assert.equal(response.status, 200)
+    const { data } = await response.json()
+    assert.ok(data.remainingMs > 0 && data.remainingMs <= 2000)
+    const result = { schemaVersion: 1, processorVersion: 'v1', output: {
+      requestId: input.requestId, querySha256: input.querySha256, modelId: input.modelId, modelRevision: input.modelRevision,
+      status: 'enhanced', queries: [query, 'Does Click default to 1?'] } }
+    assert.equal((await post('complete', { leaseToken: 'lease-secret', result })).status, 200)
+    Object.assign(store.task, { status: 'running', leaseOwner: `pcw:${worker.id}`, leaseToken: 'lease-secret' })
+    input.expiresAt = Date.now() - 1
+    assert.equal((await post('complete', { leaseToken: 'lease-secret', result })).status, 409)
+    assert.equal(store.task.status, 'cancelled')
+    store.task.status = 'leased'
+    assert.equal((await post('start', { leaseToken: 'lease-secret' })).status, 409)
+    assert.equal(store.task.status, 'cancelled')
+  })
+})
+
 test('Worker agent flow binds bearer identity, lease, content and result', async () => {
   const store = fakeStore()
   const app = express()

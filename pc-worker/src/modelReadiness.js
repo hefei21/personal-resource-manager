@@ -342,7 +342,7 @@ export function createModelReadiness(options) {
 }
 
 export function modelKindForTaskType(taskType) {
-  if (taskType === 'rag.answer.generate') return 'answer'
+  if (taskType === 'rag.answer.generate' || taskType === 'rag.query.translate') return 'answer'
   if (taskType === 'rag.embedding.generate' || taskType === 'rag.query.embed') return 'embedding'
   if (taskType === 'rag.rerank') return 'reranker'
   return null

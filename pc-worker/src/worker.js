@@ -1,4 +1,5 @@
 import { WorkerApiError } from './apiClient.js'
+import { createQueryTranslationProcessor } from './ragQueryTranslationProcessor.js'
 import { inspectContent } from './contentInspector.js'
 import {
   createRagEmbeddingProcessor,
@@ -148,6 +149,7 @@ export class PcWorker {
     })
     this.embeddingProcessor = embeddingProcessorFactory({ config: config?.embedding, fetchImpl })
     this.answerProcessor = answerProcessorFactory({ config: config?.answer, fetchImpl })
+    this.translationProcessor = createQueryTranslationProcessor({ enabled: config?.queryTranslationEnabled, config: config?.answer, fetchImpl })
     this.rerankProcessor = rerankProcessorFactory({ config: config?.reranker, fetchImpl })
     this.contentExtractProcessor = contentExtractProcessorFactory()
     this.activeController = null
@@ -160,9 +162,10 @@ export class PcWorker {
     ]
     if (this.modelReadiness.isReady('embedding')) extra.push(...embeddingProcessorsForConfig(this.config?.embedding))
     if (this.modelReadiness.isReady('answer')) extra.push(...answerProcessorsForConfig(this.config?.answer))
+    if (this.modelReadiness.isReady('answer') && this.translationProcessor.capability) extra.push(this.translationProcessor.capability)
     if (this.modelReadiness.isReady('reranker')) extra.push(...rerankProcessorsForConfig(this.config?.reranker))
     if (!profile?.capabilities || !Array.isArray(profile.capabilities.processors)) return profile
-    const localTaskTypes = new Set(['rag.content.extract', 'rag.embedding.generate', 'rag.query.embed', 'rag.rerank', 'rag.answer.generate'])
+    const localTaskTypes = new Set(['rag.content.extract', 'rag.embedding.generate', 'rag.query.embed', 'rag.rerank', 'rag.answer.generate', 'rag.query.translate'])
     const existing = profile.capabilities.processors.filter((item) => !localTaskTypes.has(item?.taskType))
     if (extra.length === 0 && existing.length === profile.capabilities.processors.length) return profile
     const keys = new Set(existing.map((item) => `${item.taskType}:${item.processorVersion}:${item.executionClass}:${item.outputSchemaVersion}`))
@@ -274,7 +277,10 @@ export class PcWorker {
           code: 'WORKER_MODEL_NOT_READY', retryable: true
         })
       }
-      await this.api.start(this.state.accessToken, task)
+      const startAt = performance.now()
+      const startResponse = await this.api.start(this.state.accessToken, task)
+      const translationBudget = Number.isInteger(startResponse?.remainingMs) && startResponse.remainingMs >= 0 && startResponse.remainingMs <= 2000
+        ? Math.max(0, startResponse.remainingMs - (performance.now() - startAt)) : 0
       heartbeatTimer = setInterval(() => {
         if (heartbeatBusy || leaseLostError) return
         heartbeatBusy = true
@@ -309,6 +315,8 @@ export class PcWorker {
         result = await this.embeddingProcessor.process(task, { signal: controller.signal })
       } else if (this.rerankProcessor.supports(task.taskType)) {
         result = await this.rerankProcessor.process(task, { signal: controller.signal })
+      } else if (this.translationProcessor.supports(task.taskType)) {
+        result = await this.translationProcessor.process(task, { signal: controller.signal, remainingMs: translationBudget })
       } else if (this.answerProcessor.supports(task.taskType)) {
         result = await this.answerProcessor.process(task, { signal: controller.signal })
       } else {

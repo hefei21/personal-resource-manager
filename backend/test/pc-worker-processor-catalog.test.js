@@ -12,6 +12,26 @@ import {
 
 const hash = 'a'.repeat(64)
 
+test('translation contract binds request/model/hash and retains only bounded faithful query variants', () => {
+  const definition = lookupPcWorkerProcessor('rag.query.translate')
+  const query = 'Click 默认 1 次吗？'
+  const input = { schemaVersion: 1, requestId: 'r-1', query, querySha256: crypto.createHash('sha256').update(query).digest('hex'),
+    modelId: 'answer-model', modelRevision: 'v1', expiresAt: Date.now() + 2000 }
+  assert.deepEqual(definition.projectInput(input), input)
+  const value = { schemaVersion: 1, processorVersion: 'v1', output: { requestId: input.requestId,
+    querySha256: input.querySha256, modelId: input.modelId, modelRevision: input.modelRevision,
+    status: 'enhanced', queries: [query, 'Does Click default to 1?'] } }
+  assert.deepEqual(definition.normalizeResult(value, { input }), value)
+  for (const patch of [{ querySha256: hash }, { endpoint: 'http://example.org' }, { expiresAt: 0 }]) {
+    assert.throws(() => definition.projectInput({ ...input, ...patch }))
+  }
+  for (const patch of [{ requestId: 'r-2' }, { modelRevision: 'v2' }, { queries: [query, 'Click defaults to 10?'] },
+    { status: 'timeout' }, { queries: ['Does Click default to 1?'] }]) {
+    assert.throws(() => definition.normalizeResult({ ...value, output: { ...value.output, ...patch } }, { input }))
+  }
+  assert.equal(definition.staleGuard(input, { ...input, requestId: 'r-2' }), false)
+})
+
 function vectorHash(vectors) {
   return crypto.createHash('sha256').update(JSON.stringify(vectors.map((vector) => vector.embedding))).digest('hex')
 }
@@ -92,14 +112,15 @@ function answerInput() {
   }
 }
 
-test('catalog is immutable, allowlisted, and exposes the five RAG processors plus content.inspect', () => {
+test('catalog is immutable and allowlists RAG processors including optional translation', () => {
   assert.deepEqual(PC_WORKER_PROCESSOR_DEFINITIONS.map((item) => item.taskType), [
     'content.inspect',
     'rag.content.extract',
     'rag.embedding.generate',
     'rag.query.embed',
     'rag.rerank',
-    'rag.answer.generate'
+    'rag.answer.generate',
+    'rag.query.translate'
   ])
   assert.equal(Object.isFrozen(PC_WORKER_PROCESSOR_CATALOG), true)
   assert.equal(Object.isFrozen(lookupPcWorkerProcessor('rag.embedding.generate')), true)

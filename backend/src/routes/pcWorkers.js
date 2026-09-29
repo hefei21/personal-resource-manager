@@ -38,6 +38,17 @@ const POSITIVE_ID = /^[1-9]\d*$/u
 const WORKER_ERROR_CODE = /^WORKER_[A-Z0-9_.-]{1,56}$/u
 const LEASE_DURATION_MS = 60_000
 
+function translationRemainingBudget(store, task) {
+  if (task.taskType !== 'rag.query.translate') return undefined
+  const input = processorInput(task)
+  const remainingMs = Math.min(2000, input.expiresAt - Date.now())
+  if (remainingMs <= 0) {
+    store.cancel({ id: task.id, owner: task.leaseOwner, token: task.leaseToken })
+    throw Object.assign(new Error('Translation task expired.'), { code: 'TASK_INVALID_STATE' })
+  }
+  return remainingMs
+}
+
 export function claimableRemoteProcessors(capabilities, {
   embeddingModel = null,
   rerankerModel = null
@@ -616,7 +627,9 @@ export function createPcWorkerAgentRouter({
         owner: `pcw:${req.pcWorker.id}`,
         token: req.body.leaseToken
       }))
-      return res.json({ data: { id: task.id, status: task.status, leaseExpiresAt: task.leaseExpiresAt } })
+      const remainingMs = translationRemainingBudget(runtimeStore(runtime), task)
+      return res.json({ data: { id: task.id, status: task.status, leaseExpiresAt: task.leaseExpiresAt,
+        ...(remainingMs === undefined ? {} : { remainingMs }) } })
     } catch (error) { return mapError(res, error) }
   })
 
@@ -717,6 +730,7 @@ export function createPcWorkerAgentRouter({
       }
       const store = runtimeStore(runtime)
       task = authorizedTask(store, req.pcWorker, req.params.taskId, req.body.leaseToken, ['running'])
+      translationRemainingBudget(store, task)
       const input = processorInput(task)
       const definition = lookupPcWorkerProcessor(task.taskType, task.processorVersion)
       const databaseValue = await database(req)
@@ -761,6 +775,7 @@ export function createPcWorkerAgentRouter({
           current: { sourceVersionId: input.sourceVersionId, sourceContentSha256: row.sha256, contentBytes: row.bytes }
         })
       }
+      translationRemainingBudget(store, task)
       const succeeded = await Promise.resolve(store.succeed({
         id: task.id,
         owner: `pcw:${req.pcWorker.id}`,

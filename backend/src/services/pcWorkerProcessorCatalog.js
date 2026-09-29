@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { TRANSLATION_TASK_TYPE, projectTranslationInput, normalizeTranslationResult } from './ragQueryTranslationContract.js'
 import { matchesQwenReranker } from '../config/qwenReranker.js'
 
 import { normalizeContentInspectionResult } from './pcWorkerContract.js'
@@ -845,7 +846,19 @@ const ANSWER = definition({
   staleGuard: answerStaleGuard
 })
 
+const TRANSLATION = definition({
+  taskType: TRANSLATION_TASK_TYPE, executionClass: 'gpu', inputMode: 'bounded-query',
+  limits: Object.freeze({ inputMaxBytes: 8192, outputMaxBytes: 16384, maxBatchItems: 1 }),
+  projectInput: projectTranslationInput, normalizeResult: normalizeTranslationResult,
+  resolveInput: ({ input }) => projectTranslationInput(input),
+  staleGuard: (current, expected) => {
+    const left = current?.input ?? current, right = expected?.input ?? expected
+    return Boolean(left && right && ['requestId', 'querySha256', 'modelId', 'modelRevision', 'expiresAt'].every(key => left[key] === right[key]))
+  }
+})
+
 export const PC_WORKER_PROCESSOR_CATALOG = Object.freeze({
+  [TRANSLATION.taskType]: TRANSLATION,
   [CONTENT_INSPECT.taskType]: CONTENT_INSPECT,
   [CONTENT_EXTRACT.taskType]: CONTENT_EXTRACT,
   [EMBEDDING_GENERATE.taskType]: EMBEDDING_GENERATE,
@@ -855,7 +868,7 @@ export const PC_WORKER_PROCESSOR_CATALOG = Object.freeze({
 })
 
 export const PC_WORKER_PROCESSOR_DEFINITIONS = Object.freeze([
-  CONTENT_INSPECT, CONTENT_EXTRACT, EMBEDDING_GENERATE, QUERY_EMBED, RERANK, ANSWER
+  CONTENT_INSPECT, CONTENT_EXTRACT, EMBEDDING_GENERATE, QUERY_EMBED, RERANK, ANSWER, TRANSLATION
 ])
 
 export function lookupPcWorkerProcessor(taskType, processorVersion = PC_WORKER_PROCESSOR_VERSION) {
