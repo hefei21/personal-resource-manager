@@ -153,3 +153,23 @@ Container Toolkit；准备、启动、停止和导出日志分别使用 `scripts
 命令。玩游戏前可手动 eject LM Studio 模型并停止 TEI，结束后按需重新加载/启动，Worker 无需重启。
 
 任务不能覆盖本地模型或端点；回答必须通过严格 JSON Schema，并且引用只能来自本次证据集。
+
+### 可选的隔离 RAG 运行配置（候选，默认关闭）
+
+`PC_WORKER_ANSWER_RUNTIME_PROFILE=qwen35-rag-v1` 为回答与查询翻译启用固定 SDK 2.0.0
+传输，避免继承日常聊天的预算终止提示、模板和采样预设。当前候选只支持本机 loopback、无 API
+凭据的 LM Studio 服务及配置中固定的现用 Qwen3.5 9B Q6 模型；不是自动更换模型或质量达标声明。
+
+操作员先显式运行 `node scripts/rag-runtime-start.js`，使用当前进程的
+`PC_WORKER_ANSWER_BASE_URL` 指向服务。启动独立别名 `prm-rag-answer-v1`，只改该加载实例；
+不保存聊天预设、不下载模型、不卸载其他实例，同名别名已存在时拒绝启动。32K 上下文、GPU、
+KV、模板与预算终止行为以 `rag-runtime/qwen35-v1.json` 为准；不支持的加载配置将拒绝启动。
+完成后可显式执行 `lms unload prm-rag-answer-v1`，普通 Worker 不代替用户管理显存。
+
+Worker 还需使用 `PC_WORKER_ANSWER_PROVIDER=lm-studio` 与上述专用 model ID，保留既有 revision、
+正文/输出预算等配置。新配置 hash 包含 profile 内容；原 hash 不能复用，NAS 与 Worker 身份
+必须在单独授权的候选部署中同步，不可只改生产一端。未设置 runtime profile 的旧路径不变。
+
+每个请求发送证据前检查模型路径、别名与实际加载配置；不一致或离线则失败，不回退聊天实例。
+回答固定思考预算 256，查询翻译关闭思考；两者显式固定采样、模板与输出上限。取消向 SDK
+预测传播，配置/readiness 期间取消后不再发送证据。运行配置隔离不替代引用、缺证及端到端质量门。

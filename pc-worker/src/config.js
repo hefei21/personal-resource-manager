@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { QWEN_RERANKER_MODEL, validQwenEndpoint } from './qwenReranker.js'
+import { RAG_RUNTIME, RAG_RUNTIME_HASH, runtimeUrl } from './ragRuntime.js'
 
 export class WorkerConfigError extends Error {
   constructor(code, message) {
@@ -98,13 +99,15 @@ function optionalEmbeddingConfig(env, requestTimeoutMs) {
 }
 
 function optionalAnswerConfig(env, requestTimeoutMs) {
+  const runtimeProfile = env.PC_WORKER_ANSWER_RUNTIME_PROFILE || null
+  if (runtimeProfile && runtimeProfile !== RAG_RUNTIME.id) fail('WORKER_CONFIG_INVALID', 'Unknown RAG runtime profile.')
   const endpoint = env.PC_WORKER_ANSWER_BASE_URL || env.PC_WORKER_LLM_BASE_URL
   const modelId = env.PC_WORKER_ANSWER_MODEL_ID || env.PC_WORKER_LLM_MODEL_ID
   const modelRevision = env.PC_WORKER_ANSWER_MODEL_REVISION || env.PC_WORKER_LLM_MODEL_REVISION
   const contextLimitRaw = env.PC_WORKER_ANSWER_CONTEXT_LIMIT || env.PC_WORKER_ANSWER_CONTEXT_BYTES || env.PC_WORKER_ANSWER_MAX_CONTEXT_BYTES
   const maxOutputBytesRaw = env.PC_WORKER_ANSWER_MAX_OUTPUT_BYTES || env.PC_WORKER_ANSWER_OUTPUT_LIMIT_BYTES
   const fields = [endpoint, modelId, modelRevision, contextLimitRaw, maxOutputBytesRaw]
-  if (fields.every((value) => value === undefined || value === '')) return null
+  if (!runtimeProfile && fields.every((value) => value === undefined || value === '')) return null
   if (typeof endpoint !== 'string' || endpoint.trim() === '' || typeof modelId !== 'string' || modelId.trim() === '' ||
       typeof modelRevision !== 'string' || modelRevision.trim() === '' || contextLimitRaw === undefined || contextLimitRaw === '' ||
       maxOutputBytesRaw === undefined || maxOutputBytesRaw === '') {
@@ -130,10 +133,19 @@ function optionalAnswerConfig(env, requestTimeoutMs) {
   const maxOutputBytes = integer(maxOutputBytesRaw, 0, 1, 256 * 1024, 'PC_WORKER_ANSWER_MAX_OUTPUT_BYTES')
   const maxEvidenceItems = integer(env.PC_WORKER_ANSWER_MAX_EVIDENCE, 64, 1, 64, 'PC_WORKER_ANSWER_MAX_EVIDENCE')
   const timeoutMs = integer(env.PC_WORKER_ANSWER_TIMEOUT_MS, requestTimeoutMs, 1_000, 5 * 60_000, 'PC_WORKER_ANSWER_TIMEOUT_MS')
+  if (runtimeProfile) {
+    try { runtimeUrl(baseUrl.toString()) } catch { fail('WORKER_CONFIG_INVALID', 'RAG runtime requires a loopback LM Studio endpoint.') }
+    if (provider !== 'lm-studio' || normalizedModelId !== RAG_RUNTIME.alias || env.PC_WORKER_ANSWER_API_KEY) {
+      fail('WORKER_CONFIG_INVALID', 'RAG runtime requires its dedicated local model alias without API credentials.')
+    }
+  }
+  const derivedHash = crypto.createHash('sha256').update(JSON.stringify({ provider, modelId: normalizedModelId, modelRevision: normalizedRevision, contextLimit, maxOutputBytes, maxEvidenceItems,
+    ...(runtimeProfile ? { runtimeProfileHash: RAG_RUNTIME_HASH } : {}) })).digest('hex')
   const configHash = typeof env.PC_WORKER_ANSWER_CONFIG_HASH === 'string' && env.PC_WORKER_ANSWER_CONFIG_HASH !== ''
     ? env.PC_WORKER_ANSWER_CONFIG_HASH.toLowerCase()
-    : crypto.createHash('sha256').update(JSON.stringify({ provider, modelId: normalizedModelId, modelRevision: normalizedRevision, contextLimit, maxOutputBytes, maxEvidenceItems })).digest('hex')
+    : derivedHash
   if (!HASH_PATTERN.test(configHash)) fail('WORKER_CONFIG_INVALID', 'Answer configuration hash is invalid.')
+  if (runtimeProfile && configHash !== derivedHash) fail('WORKER_CONFIG_INVALID', 'RAG runtime configuration hash must include the profile.')
   return Object.freeze({
     baseUrl: baseUrl.toString().replace(/\/$/u, ''),
     provider,
@@ -144,6 +156,7 @@ function optionalAnswerConfig(env, requestTimeoutMs) {
     maxEvidenceItems,
     timeoutMs,
     configHash,
+    ...(runtimeProfile ? { runtimeProfile } : {}),
     apiKey: typeof env.PC_WORKER_ANSWER_API_KEY === 'string' && env.PC_WORKER_ANSWER_API_KEY !== ''
       ? env.PC_WORKER_ANSWER_API_KEY
       : null

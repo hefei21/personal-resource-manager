@@ -1,5 +1,6 @@
 import { WorkerApiError } from './apiClient.js'
 import { createQueryTranslationProcessor } from './ragQueryTranslationProcessor.js'
+import { createRagRuntimeFetch } from './ragRuntime.js'
 import { inspectContent } from './contentInspector.js'
 import {
   createRagEmbeddingProcessor,
@@ -148,8 +149,9 @@ export class PcWorker {
       rerankerManifestProvider
     })
     this.embeddingProcessor = embeddingProcessorFactory({ config: config?.embedding, fetchImpl })
-    this.answerProcessor = answerProcessorFactory({ config: config?.answer, fetchImpl })
-    this.translationProcessor = createQueryTranslationProcessor({ enabled: config?.queryTranslationEnabled, config: config?.answer, fetchImpl })
+    const answerFetch = config?.answer?.runtimeProfile ? createRagRuntimeFetch({ config: config.answer }) : fetchImpl
+    this.answerProcessor = answerProcessorFactory({ config: config?.answer, fetchImpl: answerFetch })
+    this.translationProcessor = createQueryTranslationProcessor({ enabled: config?.queryTranslationEnabled, config: config?.answer, fetchImpl: answerFetch })
     this.rerankProcessor = rerankProcessorFactory({ config: config?.reranker, fetchImpl })
     this.contentExtractProcessor = contentExtractProcessorFactory()
     this.activeController = null
