@@ -112,6 +112,25 @@ function answerInput() {
   }
 }
 
+test('answer evidence accepts layout whitespace without weakening IDs, unsafe controls or serialized byte limits', () => {
+  const definition = lookupPcWorkerProcessor('rag.answer.generate')
+  const input = answerInput()
+  input.evidence[0].text = 'Header\r\n\n```\nif ready:\n\twork()\n```\ncolumn\tvalue'
+  assert.equal(definition.projectInput(input).evidence[0].text, input.evidence[0].text)
+  for (const code of [0, 7, 8, 11, 12, 14, 31, 127]) {
+    const unsafe = structuredClone(input)
+    unsafe.evidence[0].text += String.fromCharCode(code) + 'tail'
+    assert.throws(() => definition.projectInput(unsafe), error => error.code === 'PC_WORKER_PROCESSOR_INPUT_INVALID')
+  }
+  const invalidId = structuredClone(input)
+  invalidId.evidence[0].citationId = 'C1\nC2'
+  assert.throws(() => definition.projectInput(invalidId), error => error.code === 'PC_WORKER_PROCESSOR_INPUT_INVALID')
+  const oversized = structuredClone(input)
+  oversized.evidence[0].text = 'start' + '\n'.repeat(1_100_000) + 'end'
+  assert.throws(() => definition.projectInput(oversized), error => error.code === 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE')
+  assert.deepEqual(definition.projectInput(answerInput()).evidence, answerInput().evidence)
+})
+
 test('catalog is immutable and allowlists RAG processors including optional translation', () => {
   assert.deepEqual(PC_WORKER_PROCESSOR_DEFINITIONS.map((item) => item.taskType), [
     'content.inspect',

@@ -165,7 +165,9 @@ function budgetEvidence(evidence, { query, language, maxEvidenceBytes, maxEviden
       omitted.push({ citationId: item.citationId, reason: 'evidence_item_limit' })
       continue
     }
-    const safeText = redactSensitiveText(item.text.replace(/[\u0000-\u001f\u007f]/gu, ' '))
+    // Preserve paragraph boundaries, code indentation and table separators.
+    // Match the Worker's accepted whitespace; strip only unsafe controls.
+    const safeText = redactSensitiveText(item.text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, ' '))
     const wrapped = `[UNTRUSTED_EVIDENCE ${item.citationId}] ${safeText} [END_UNTRUSTED_EVIDENCE ${item.citationId}]`
     const bytes = Buffer.byteLength(wrapped, 'utf8')
     if (used + bytes > maxEvidenceBytes) {

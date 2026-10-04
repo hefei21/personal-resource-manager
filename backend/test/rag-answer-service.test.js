@@ -194,6 +194,44 @@ test('canonical Unicode evidence stays valid and full-width secrets are redacted
   assert.equal((await answer.applyResult({ task: forged, result: workerResult(forged) })).reasonCode, 'evidence_stale')
 })
 
+test('preserves evidence paragraphs, code indentation and table whitespace through projection and result validation', async () => {
+  const answer = service()
+  const body = '# Branch behavior\r\n\r\n```python\nif enabled:\n\treturn "on"\nreturn "off"\n```\n\n| mode | result |\n| --- | --- |\n| enabled | on |\n'
+  const queued = await answer.generate({ query: 'What happens when enabled is false?', evidence: [evidence({ body })] })
+  assert.equal(queued.task.input.evidence[0].text, `[UNTRUSTED_EVIDENCE C1] ${body} [END_UNTRUSTED_EVIDENCE C1]`)
+  const { createRagAnswerProcessor } = await import('../../pc-worker/src/ragAnswerProcessor.js')
+  let calls = 0
+  const worker = createRagAnswerProcessor({
+    config: { ...MODEL, baseUrl: 'http://127.0.0.1:1234', contextLimit: 8192, maxOutputBytes: 4096, maxEvidenceItems: 16, timeoutMs: 1000 },
+    fetchImpl: async (_url, options) => {
+      calls++
+      const request = JSON.parse(options.body)
+      assert.equal(JSON.parse(request.messages[1].content).evidence[0].text, queued.task.input.evidence[0].text)
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        abstained: false, reasonCode: 'GROUNDED', missingRequirements: [], answer: 'It returns off (C1).', citations: ['C1']
+      }) } }] }), { status: 200 })
+    }
+  })
+  const result = await worker.process(queued.task)
+  assert.equal(calls, 1)
+  assert.equal((await answer.applyResult({ task: queued.task, result })).status, 'complete')
+  const flattened = structuredClone(queued.task)
+  flattened.input.evidence[0].text = flattened.input.evidence[0].text.replace(/[\r\n\t]/gu, ' ')
+  assert.equal((await answer.applyResult({ task: flattened, result: workerResult(flattened) })).reasonCode, 'evidence_stale')
+})
+
+test('retaining whitespace still redacts multiline and full-width secrets and removes unsafe controls', async () => {
+  const answer = service()
+  const body = 'Paragraph\n\napi_key:\n\tfixture-secret\nｐａｓｓｗｏｒｄ＝fixture-password\nC:\\fixture\\private.txt\n' +
+    String.fromCharCode(0, 7, 8, 11, 12, 14, 31, 127) + '\nTail\tcell'
+  const queued = await answer.generate({ query: 'Explain the public paragraph.', evidence: [evidence({ body })] })
+  const text = queued.task.input.evidence[0].text
+  assert.doesNotMatch(text, /fixture-secret|fixture-password|private\.txt/u)
+  assert.doesNotMatch(text, /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u)
+  assert.match(text, /Paragraph\n\n\[REDACTED_SECRET\]\n\[REDACTED_SECRET\]\n\[REDACTED_PATH\]/u)
+  assert.match(text, /\nTail\tcell/u)
+})
+
 test('preserves URI scheme text in evidence and does not mistake a generic URI for a drive path', async () => {
   const answer = service()
   const text = 'http://example.invalid/robots.txt https://example.invalid/a scheme://authority/robots.txt git+ssh://example.invalid/repo'

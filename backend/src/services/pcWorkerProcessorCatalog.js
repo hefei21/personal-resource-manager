@@ -394,7 +394,7 @@ function projectAnswerInput(input) {
     exactKeys(item, ['citationId', 'text'], `task.input.evidence[${index}]`)
     return freeze({
       citationId: token(item.citationId, `task.input.evidence[${index}].citationId`, MAX_CITATION_ID_BYTES),
-      text: boundedText(item.text, `task.input.evidence[${index}].text`, LIMITS.answer.inputMaxBytes)
+      text: boundedContentText(item.text, `task.input.evidence[${index}].text`, LIMITS.answer.inputMaxBytes)
     })
   })
   if (new Set(evidence.map((item) => item.citationId)).size !== evidence.length) {
