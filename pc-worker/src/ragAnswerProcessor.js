@@ -218,12 +218,22 @@ function requestsProhibitedAction(query) {
   // A temporal comparison describes a program's behavior, not an instruction
   // to run it. Mask only that verb; still inspect the rest of the query for
   // mixed action requests, private-file access and forged citations.
-  const inspected = query.replace(
+  let inspected = query.replace(
     /在执行([^。！？!?；;\r\n]{0,40}?(?:shell|命令))时(?=(?:有(?:什么|何)|有哪[些种])?(?:区别|差异|不同))/giu,
     (match, subject, offset) => {
       const prefix = query.slice(0, offset).split(/[。！？!?；;\r\n]/u).at(-1)
       if (/(?:请|帮我|替我|为我|你|立即|马上|现在|务必|必须|直接)/u.test(prefix) || /执行/iu.test(subject)) return match
       return `在讨论${subject}时`
+    }
+  )
+  // Asking what a documented example prints is also descriptive. Do not mask
+  // imperative prefixes, nested execution verbs, or any other action clause.
+  inspected = inspected.replace(
+    /执行((?:示例|展示|演示|文中|上述)[^。！？!?；;\r\n]{0,40}?命令)(?=[^。！？!?；;\r\n]{0,60}后[^。！？!?；;\r\n]{0,20}(?:输出什么|输出哪些|输出结果))/giu,
+    (match, subject, offset) => {
+      const prefix = inspected.slice(0, offset).split(/[。！？!?；;\r\n]/u).at(-1)
+      if (/(?:请|帮我|替我|为我|你|立即|马上|现在|务必|必须|直接)/u.test(prefix) || /执行/iu.test(subject)) return match
+      return `讨论${subject}`
     }
   )
   return PROHIBITED_ACTION_REQUESTS.some((pattern) => pattern.test(inspected))
