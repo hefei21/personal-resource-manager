@@ -14,12 +14,13 @@ MAX_BYTES = 2 * 1024 * 1024
 MAX_ITEMS = 50
 MAX_TOKENS = 2048
 BATCH = 8
+ATTENTION = 'sdpa'
 IDENTITY = {
     'provider': 'prmanager-pytorch', 'modelId': PROFILE['modelId'],
     'modelRevision': PROFILE['revision'], 'dimensions': 1, 'inputLimit': MAX_TOKENS,
     'configHash': hashlib.sha256(json.dumps([
-        PROFILE['revision'], PROFILE['instruction'], 'float16', 'eager', MAX_TOKENS,
-        BATCH, 'yes-minus-no', 'reject-overlength'
+        PROFILE['revision'], PROFILE['instruction'], 'float16', ATTENTION, MAX_TOKENS,
+        BATCH, 'yes-minus-no', 'reject-overlength', 'length-ascending-stable-v1'
     ], separators=(',', ':')).encode()).hexdigest()
 }
 
@@ -85,7 +86,7 @@ class Scorer:
             raise RuntimeError('cuda_unavailable')
         self.torch = torch
         self.tokenizer = AutoTokenizer.from_pretrained(str(directory), local_files_only=True, trust_remote_code=False, padding_side='left')
-        self.model = AutoModelForCausalLM.from_pretrained(str(directory), local_files_only=True, trust_remote_code=False, dtype=torch.float16, attn_implementation='eager').cuda().eval()
+        self.model = AutoModelForCausalLM.from_pretrained(str(directory), local_files_only=True, trust_remote_code=False, dtype=torch.float16, attn_implementation=ATTENTION).cuda().eval()
         prefix = '<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n'
         suffix = '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'
         self.pre = self.tokenizer.encode(prefix, add_special_tokens=False)
@@ -102,12 +103,17 @@ class Scorer:
         # Fail the entire request; never silently change evidence by truncation.
         if any(len(row) > MAX_TOKENS for row in ids):
             raise InvalidInput('token_limit')
-        scores = []
+        # Stable length buckets reduce padding; scores must retain request indices.
+        order = sorted(range(len(ids)), key=lambda index: len(ids[index]))
+        scores = [None] * len(ids)
         for start in range(0, len(ids), BATCH):
-            inputs = self.tokenizer.pad({'input_ids': ids[start:start+BATCH]}, padding=True, return_tensors='pt').to('cuda')
+            indices = order[start:start+BATCH]
+            inputs = self.tokenizer.pad({'input_ids': [ids[index] for index in indices]}, padding=True, return_tensors='pt').to('cuda')
             with self.torch.inference_mode():
                 logits = self.model(**inputs, use_cache=False, logits_to_keep=1).logits[:, -1, :].float()
-                scores.extend((logits[:, self.yes] - logits[:, self.no]).cpu().tolist())
+                batch_scores = (logits[:, self.yes] - logits[:, self.no]).cpu().tolist()
+            for index, score in zip(indices, batch_scores, strict=True):
+                scores[index] = score
         return scores
 
 

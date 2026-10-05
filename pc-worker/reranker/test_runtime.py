@@ -1,11 +1,14 @@
 import http.client
+import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
+import subprocess
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
-from runtime import IDENTITY, InvalidInput, MAX_BYTES, Scorer, Server, validate_request, verify_files
+from unittest.mock import MagicMock, patch
+from runtime import ATTENTION, BATCH, IDENTITY, PROFILE, InvalidInput, MAX_BYTES, Scorer, Server, validate_request, verify_files
 
 TOKEN = 'test-only-not-a-real-credential-0000'
 
@@ -15,6 +18,59 @@ def body(**changes):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_identity_matches_worker_and_backend_and_rejects_eager(self):
+        root = Path(__file__).resolve().parents[2]
+        code = """
+import { QWEN_RERANKER_MODEL as worker } from './pc-worker/src/qwenReranker.js';
+import { QWEN_RERANKER_MODEL as backend } from './backend/src/config/qwenReranker.js';
+console.log(JSON.stringify([worker, backend]));
+"""
+        identities = json.loads(subprocess.check_output(['node', '--input-type=module', '-e', code], cwd=root))
+        self.assertEqual(identities, [IDENTITY, IDENTITY])
+        self.assertEqual(ATTENTION, 'sdpa')
+        previous = hashlib.sha256(json.dumps([
+            PROFILE['revision'], PROFILE['instruction'], 'float16', 'eager', 2048,
+            8, 'yes-minus-no', 'reject-overlength'
+        ], separators=(',', ':')).encode()).hexdigest()
+        self.assertNotEqual(IDENTITY['configHash'], previous)
+        request = json.loads(body())
+        request['model']['configHash'] = previous
+        with self.assertRaisesRegex(InvalidInput, 'identity_mismatch'):
+            validate_request(json.dumps(request).encode())
+
+    def test_length_batches_restore_scores_to_original_indices(self):
+        # No Torch dependency: exercise the real batching/scattering loop.
+        for count in (1, 8, 9, 50):
+            with self.subTest(count=count):
+                scorer = Scorer.__new__(Scorer)
+                scorer.pre, scorer.post, scorer.yes, scorer.no = [], [], 1, 0
+                lengths = [(count - index) % 7 + 1 for index in range(count)]
+                rows = [[index] * length for index, length in enumerate(lengths)]
+                tokenizer = MagicMock()
+                tokenizer.encode.side_effect = rows
+                batches = []
+                def pad(data, **kwargs):
+                    batch = data['input_ids']
+                    batches.append([row[0] for row in batch])
+                    output = MagicMock()
+                    output.to.return_value = {'rows': batch}
+                    return output
+                tokenizer.pad.side_effect = pad
+                scorer.tokenizer = tokenizer
+                scorer.torch = MagicMock()
+                scorer.torch.inference_mode.side_effect = nullcontext
+                def model(rows, **kwargs):
+                    result = MagicMock()
+                    logits = result.logits.__getitem__.return_value.float.return_value
+                    logits.__getitem__.return_value.__sub__.return_value.cpu.return_value.tolist.return_value = [row[0] + 0.25 for row in rows]
+                    return result
+                scorer.model = model
+                scores = scorer('q', [f'text {index}' for index in range(count)])
+                self.assertEqual(scores, [index + 0.25 for index in range(count)])
+                self.assertEqual([index for batch in batches for index in batch],
+                                 sorted(range(count), key=lambda index: lengths[index]))
+                self.assertTrue(all(len(batch) <= BATCH for batch in batches))
+
     def test_input_contract(self):
         good = json.loads(body())
         self.assertEqual(validate_request(body())['query'], '问题')
