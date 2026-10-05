@@ -10,7 +10,7 @@ import {
   RAG_ANSWER_TASK_TYPE
 } from '../services/ragAnswerService.js'
 import { createRagRerankService, RAG_RERANK_TASK_TYPE } from '../services/ragRerankService.js'
-import { createRagHybridRetriever } from '../services/ragHybridRetriever.js'
+import { createRagHybridRetriever, selectGlobalRerankedEvidence } from '../services/ragHybridRetriever.js'
 import { createTranslatedCandidateProvider } from '../services/ragTranslatedCandidateProvider.js'
 import { expandRagEvidenceContext } from '../services/ragEvidenceContext.js'
 import { ragRetrievalPolicy } from '../services/ragRetrievalPolicy.js'
@@ -1853,22 +1853,24 @@ export function createRagRouter({
         try {
           const rerankerModel = resolveConfiguredRerankerModel()
           // Isolated candidate only. Keep the normal retrieval intact for exact
-          // fail-open; global queries and BGE retain their established policy.
+          // fail-open; neither expanded path changes the production default.
           const expanded = rerankerConfig.expandedCandidatePool === true &&
             querySource && matchesQwenReranker(rerankerModel)
+          const globalExpanded = rerankerConfig.globalCandidatePool === true &&
+            !querySource && matchesQwenReranker(rerankerModel)
           const resolvedReranker = await resolveComponent(resolvedRerankerServiceFactory, {
             database,
             req,
             taskStore,
             workerAvailable: (context) => workerAvailable({ ...context, database, req }),
             model: rerankerModel,
-            rerankerConfig: expanded ? { ...rerankerConfig, maxCandidates: 50 } : rerankerConfig
+            rerankerConfig: expanded || globalExpanded ? { ...rerankerConfig, maxCandidates: 50 } : rerankerConfig
           })
           if (resolvedReranker && typeof resolvedReranker.rerank === 'function') {
             let window = scopedRetrieval.data.slice(0, 10)
-            if (expanded) {
+            if (expanded || globalExpanded) {
               const pool = await requestCandidateProvider({ database, req, query: input.query, limit: 50,
-                expandedRerankPool: true,
+                expandedRerankPool: Boolean(expanded), globalRerankPool: Boolean(globalExpanded),
                 source: querySource, ...(chunkIds ? { chunkIds } : {}),
                 authoritativeVisibility: checks.authoritativeVisibility,
                 authoritativeActiveSnapshot: checks.authoritativeActiveSnapshot })
@@ -1878,21 +1880,26 @@ export function createRagRouter({
                 retrievalConfig: { ...ragRetrievalPolicy({ source: querySource, limit: 50, overrides: retrievalConfig }), maxPerSource: 50 },
                 candidateResolver: typeof pool.candidateResolver === 'function' ? pool.candidateResolver : null
               })
-              const retrievePool = poolRetriever.retrieveRerankPool ?? poolRetriever.retrieve
+              const retrievePool = globalExpanded ? poolRetriever.retrieveGlobalRerankPool : poolRetriever.retrieveRerankPool ?? poolRetriever.retrieve
               const poolResult = await retrievePool.call(poolRetriever, { query: input.query,
                 ftsCandidates: pool.ftsCandidates,
                 ...(pool.vectorCandidates === undefined ? {} : { vectorCandidates: pool.vectorCandidates }),
-                ...(pool.vectorError === undefined ? {} : { vectorError: pool.vectorError }), limit: 50, offset: 0 })
+                ...(pool.vectorError === undefined ? {} : { vectorError: pool.vectorError }), limit: globalExpanded ? 150 : 50, offset: 0 })
               const authorizedPool = await authorizeReturnedEvidence(poolResult, checks, {
                 phase: 'route_rerank_pool', query: input.query, req })
-              window = authorizedPool.data.filter(candidate => candidate.sourceType === querySource.sourceType &&
+              window = globalExpanded ? authorizedPool.data.slice(0, 150) : authorizedPool.data.filter(candidate => candidate.sourceType === querySource.sourceType &&
                 candidate.sourceId === querySource.sourceId).slice(0, 50)
               if (!window.length) throw new Error('Empty candidate pool')
             }
-            const reranked = await resolvedReranker.rerank({ query: input.query, candidates: window })
+            const rank = globalExpanded ? resolvedReranker.rerankPool : resolvedReranker.rerank
+            const reranked = await rank.call(resolvedReranker, { query: input.query, candidates: window, signal: queryController.signal })
             if (Array.isArray(reranked?.candidates) && reranked.candidates.length === window.length) {
               let combined = [...reranked.candidates, ...scopedRetrieval.data.slice(window.length)]
-              if (expanded) {
+              if (globalExpanded) {
+                combined = reranked.applied === true
+                  ? selectGlobalRerankedEvidence({ pool: window, ranked: reranked.candidates, limit: Math.min(input.limit, 10) })
+                  : scopedRetrieval.data
+              } else if (expanded) {
                 const originals = new Map(window.map(candidate => [candidate.citationId, candidate]))
                 const ids = reranked.candidates.map(candidate => candidate.citationId)
                 if (originals.size !== window.length || new Set(ids).size !== window.length || ids.some(id => !originals.has(id))) throw new Error('Invalid rerank permutation')

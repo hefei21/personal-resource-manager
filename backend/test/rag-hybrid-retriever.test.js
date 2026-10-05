@@ -46,6 +46,21 @@ function candidate({
   return { ...base, ...extra }
 }
 
+test('internal global pool defers quotas but still checks visibility and active snapshots twice', async () => {
+  const phases = []
+  const service = createRagHybridRetriever({ config: { maxPerSource: 2 }, authoritativeVisibility: (c, context) => {
+    phases.push(context.final === true); return c.chunkId !== 149
+  }, authoritativeActiveSnapshot: c => c.chunkId !== 150 })
+  const input = { ftsCandidates: Array.from({ length: 150 }, (_, i) => candidate({ chunkId: i + 1, startLine: i * 3 })), limit: 150 }
+  const result = await service.retrieveGlobalRerankPool(input)
+  assert.equal(result.data.length, 148)
+  assert.ok(phases.includes(true) && phases.includes(false))
+  assert.ok(result.data.every(c => c.chunkId < 149))
+  assert.ok((await service.retrieve({ ...input, limit: 10 })).data.length <= 2)
+  await assert.rejects(service.retrieveGlobalRerankPool({ ...input, limit: 151 }))
+  await assert.rejects(service.retrieveGlobalRerankPool({ ...input, offset: 1 }))
+})
+
 test('fuses FTS and vector ranks with injected RRF weights and stable citation IDs', () => {
   const fts = [candidate({ chunkId: 1, score: 0.9 }), candidate({ chunkId: 2, score: 0.8 })]
   const vector = [candidate({ channel: 'vector', chunkId: 2, score: 0.99 }), candidate({ channel: 'vector', chunkId: 3, score: 0.98 })]

@@ -4,14 +4,14 @@ export function createTranslatedCandidateProvider({ candidateProvider, translati
     throw new TypeError('Invalid candidate provider')
   }
   let translation, originalQuery
-  const merge = lists => {
+  const merge = (lists, limit = maxCandidates) => {
     const result = [], seen = new Set()
-    for (let rank = 0; rank < maxCandidates && result.length < maxCandidates; rank++) {
+    for (let rank = 0; rank < maxCandidates && result.length < limit; rank++) {
       for (const list of lists) {
         const item = list?.[rank]
         if (!item) continue
         const key = JSON.stringify([item.sourceType, item.sourceId, item.snapshotId, item.chunkId])
-        if (!seen.has(key) && result.length < maxCandidates) { seen.add(key); result.push(item) }
+        if (!seen.has(key) && result.length < limit) { seen.add(key); result.push(item) }
       }
     }
     // Scores from different queries are incomparable. Preserve the evaluated
@@ -34,7 +34,7 @@ export function createTranslatedCandidateProvider({ candidateProvider, translati
       ? [...new Set(value.queries)] : [originalQuery]
     if (queries.length === 1) return candidateProvider({ ...options, signal })
     const outputs = []
-    for (const query of queries) {
+    for (const query of (options.globalRerankPool === true ? queries.slice(0, 2) : queries)) {
       signal?.throwIfAborted()
       try {
         const output = await candidateProvider({ ...options, query, signal, limit: maxCandidates })
@@ -50,6 +50,7 @@ export function createTranslatedCandidateProvider({ candidateProvider, translati
     if (outputs.length === 1) return outputs[0]
     const first = outputs[0]
     return { ...first, ftsCandidates: merge(outputs.map(output => output.ftsCandidates)),
-      ...(first.vectorError || !Array.isArray(first.vectorCandidates) ? {} : { vectorCandidates: merge(outputs.filter(output => !output.vectorError).map(output => output.vectorCandidates ?? [])) }) }
+      ...(first.vectorError || !Array.isArray(first.vectorCandidates) ? {} : { vectorCandidates: merge(outputs.filter(output => !output.vectorError).map(output => output.vectorCandidates ?? []),
+        options.globalRerankPool === true ? maxCandidates * 2 : maxCandidates) }) }
   }
 }

@@ -148,13 +148,14 @@ export class RagRerankService {
     this.terminalRetryBudget = boundedInteger(terminalRetryBudget, 'terminalRetryBudget', 0, 3, 1)
   }
 
-  async #wait(task, deadline) {
+  async #wait(task, deadline, signal) {
     let current = task
     if (!current || typeof current !== 'object') return null
     if (TERMINAL.has(status(current)) || (status(current) === null && current.result)) return current
     const id = taskId(current)
     if (id === null || typeof this.taskStore?.getById !== 'function') return null
     while (this.now() < deadline) {
+      signal?.throwIfAborted()
       await this.sleep(Math.min(this.pollMs, Math.max(0, deadline - this.now())))
       current = await Promise.resolve(this.taskStore.getById(id)).catch(() => null)
       if (!current) return null
@@ -165,7 +166,37 @@ export class RagRerankService {
     return null
   }
 
-  async rerank({ query, candidates } = {}) {
+  async rerank(input = {}) {
+    return this.#rerank(input)
+  }
+
+  // Internal opt-in pool; each Worker task retains the <=50 protocol. Never
+  // publish a partial permutation or give each batch a fresh waiting budget.
+  async rerankPool({ query, candidates, signal } = {}) {
+    const originals = Array.isArray(candidates) ? candidates : []
+    if (!matchesQwenReranker(this.model) || !normalizeCandidates(candidates, 150)) {
+      return unchanged(originals, 'reranker_input_invalid')
+    }
+    const deadline = this.now() + this.waitMs
+    const scores = new Map()
+    for (let start = 0; start < originals.length; start += this.maxCandidates) {
+      signal?.throwIfAborted()
+      if (this.now() >= deadline) return unchanged(originals, 'reranker_timeout')
+      const result = await this.#rerank({ query, candidates: originals.slice(start, start + this.maxCandidates), signal }, deadline)
+      signal?.throwIfAborted()
+      if (!result.applied || this.now() >= deadline) {
+        return unchanged(originals, this.now() >= deadline ? 'reranker_timeout' : result.reason)
+      }
+      for (const item of result.scoredCandidates) scores.set(item.candidate, item.score)
+    }
+    if (scores.size !== originals.length) return unchanged(originals, 'reranker_result_invalid')
+    const ranked = originals.map((candidate, index) => ({ candidate, index }))
+      .sort((a, b) => scores.get(b.candidate) - scores.get(a.candidate) || a.index - b.index)
+      .map(item => item.candidate)
+    return Object.freeze({ candidates: Object.freeze(ranked), applied: true, degraded: false, reason: null })
+  }
+
+  async #rerank({ query, candidates, signal } = {}, sharedDeadline = null) {
     const sourceCandidates = Array.isArray(candidates) ? candidates : []
     if (!this.enabled || !this.model) return unchanged(sourceCandidates, 'reranker_disabled')
     const normalized = normalizedQuery(query)
@@ -218,18 +249,20 @@ export class RagRerankService {
     }
     let task
     try {
+      signal?.throwIfAborted()
+      if (sharedDeadline !== null && this.now() >= sharedDeadline) return unchanged(sourceCandidates, 'reranker_timeout')
       const outcome = typeof this.taskStore.enqueueExclusiveRun === 'function'
         ? await this.taskStore.enqueueExclusiveRun(request, { taskTypes: [RAG_RERANK_TASK_TYPE] })
         : await this.taskStore.enqueue(request)
       task = outcome?.task ?? outcome
-      const deadline = this.now() + this.waitMs
-      let completed = await this.#wait(task, deadline)
+      const deadline = sharedDeadline ?? this.now() + this.waitMs
+      let completed = await this.#wait(task, deadline, signal)
       const completedId = taskId(completed)
       if (completedId !== null && ['failed', 'cancelled'].includes(status(completed)) &&
           this.now() < deadline && this.terminalRetryBudget > 0 && typeof this.taskStore.retryTerminalTask === 'function') {
         const retried = await this.taskStore.retryTerminalTask({ id: completedId, maxRetries: this.terminalRetryBudget })
         task = retried?.task ?? retried
-        completed = await this.#wait(task, deadline)
+        completed = await this.#wait(task, deadline, signal)
       }
       if (!completed || status(completed) !== 'succeeded' || !completed.result) {
         return unchanged(sourceCandidates, completed ? 'reranker_failed' : 'reranker_timeout', task)
@@ -246,12 +279,15 @@ export class RagRerankService {
       }
       return Object.freeze({
         candidates: Object.freeze(ranked),
+        ...(sharedDeadline === null ? {} : { scoredCandidates: Object.freeze(result.candidates.map(item =>
+          Object.freeze({ candidate: originals.get(item.candidateId), score: item.score }))) }),
         applied: true,
         degraded: false,
         reason: null,
         task
       })
     } catch {
+      signal?.throwIfAborted()
       return unchanged(sourceCandidates, 'reranker_failed', task)
     }
   }

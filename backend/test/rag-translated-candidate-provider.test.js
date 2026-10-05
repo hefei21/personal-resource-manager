@@ -3,6 +3,26 @@ import test from 'node:test'
 import { createTranslatedCandidateProvider } from '../src/services/ragTranslatedCandidateProvider.js'
 const query = '原问题', english = 'Original question?'
 const candidate = chunkId => ({ sourceType: 'ebook', sourceId: 1, snapshotId: 4, chunkId, score: 900 - chunkId })
+
+test('internal global pool retains original and first translation vectors without widening normal or lexical pools', async () => {
+  const calls = []
+  const provider = createTranslatedCandidateProvider({
+    translationService: { translate: async () => ({ status: 'enhanced', queries: [query, english, 'third'] }) },
+    candidateProvider: async input => {
+      calls.push(input)
+      const offset = input.query === query ? 0 : input.query === english ? 50 : 100
+      const data = Array.from({ length: 50 }, (_, i) => candidate(offset + i))
+      return { ftsCandidates: data, vectorCandidates: data }
+    } })
+  const regular = await provider({ query })
+  assert.equal(regular.vectorCandidates.length, 50)
+  calls.length = 0
+  const expanded = await provider({ query, globalRerankPool: true })
+  assert.deepEqual(calls.map(c => c.query), [query, english])
+  assert.equal(expanded.ftsCandidates.length, 50)
+  assert.equal(expanded.vectorCandidates.length, 100)
+  assert.deepEqual(expanded.vectorCandidates.slice(0,4).map(c => c.chunkId), [0,50,1,51])
+})
 test('original-first merge is bounded per channel and preserves scope, body and resolver', async () => {
   const seen = [], resolver = () => {}, source = { sourceType: 'ebook', sourceId: 1 }, chunkIds = [1, 2, 3]
   let translations = 0

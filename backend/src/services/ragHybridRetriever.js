@@ -21,7 +21,7 @@ const FORBIDDEN_CLIENT_CONTROLS = new Set([
   'filter', 'rawFilter', 'sourceAllowlist', 'activeSnapshotSources',
   'weights', 'rrfK', 'ftsWeight', 'vectorWeight', 'sourceCap',
   'maxPerSource', 'minDistinctSources', 'overlapGap', 'adjacentGap',
-  'diversity', 'candidateLimit', 'rerankPool'
+  'diversity', 'candidateLimit', 'rerankPool', 'globalRerankPool', 'globalCandidatePool'
 ])
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 
@@ -332,6 +332,23 @@ function selectRerankPool(sorted, limit) {
   return selected
 }
 
+// Preserve Hybrid's exact-term hits while letting semantic scores rescue lower
+// ranks. Inputs must be the same already-authorized pool, not new evidence.
+export function selectGlobalRerankedEvidence({ pool, ranked, limit = 10 }) {
+  const originals = new Map(pool.map(candidate => [candidate.citationId, candidate]))
+  if (pool.length > 150 || originals.size !== pool.length || ranked.length !== pool.length ||
+      new Set(ranked.map(candidate => candidate.citationId)).size !== pool.length ||
+      ranked.some(candidate => !originals.has(candidate.citationId))) throw new TypeError('Invalid rerank permutation')
+  const ordered = [], seen = new Set()
+  for (let index = 0; index < pool.length; index++) {
+    for (const candidate of [pool[index], originals.get(ranked[index].citationId)]) {
+      if (!seen.has(candidate.citationId)) { ordered.push(candidate); seen.add(candidate.citationId) }
+    }
+  }
+  return selectDiverse(ordered, normalizeConfig({ maxPerSource: 6, minDistinctSources: 2, adjacentGap: 1 }),
+    boundedInteger(limit, 'limit', 1, 10, 10))
+}
+
 function publicCandidate(candidate) {
   if (!candidate.locator) return null
   const output = {
@@ -470,10 +487,14 @@ export class RagHybridRetriever {
     return this.#retrieve(input, true)
   }
 
+  async retrieveGlobalRerankPool(input = {}) {
+    return this.#retrieve(input, 'global')
+  }
+
   async #retrieve(input, rerankPool) {
     rejectClientControls(input)
     this.#ensureVisibility()
-    const limit = boundedInteger(input.limit, 'limit', 1, rerankPool ? 50 : RAG_HYBRID_MAX_LIMIT, this.config.defaultLimit)
+    const limit = boundedInteger(input.limit, 'limit', 1, rerankPool === 'global' ? 150 : rerankPool ? 50 : RAG_HYBRID_MAX_LIMIT, this.config.defaultLimit)
     const offset = boundedInteger(input.offset, 'offset', 0, 1_000_000_000, 0)
     if (rerankPool && offset !== 0) fail(RAG_HYBRID_ERROR_CODES.INPUT_INVALID, 'Rerank pools do not paginate.')
     if (!Array.isArray(input.ftsCandidates)) fail(RAG_HYBRID_ERROR_CODES.FTS_CANDIDATE_INVALID, 'ftsCandidates are required.')
@@ -517,7 +538,7 @@ export class RagHybridRetriever {
     const authorizedFts = preAuthorized.filter((candidate) => candidate.channel === 'fts')
     const authorizedVectors = preAuthorized.filter((candidate) => candidate.channel === 'vector')
     const fused = fuseNormalized(authorizedFts, degraded ? [] : authorizedVectors, this.config)
-    const selected = rerankPool ? selectRerankPool(fused, limit)
+    const selected = rerankPool === 'global' ? fused.slice(0, limit) : rerankPool ? selectRerankPool(fused, limit)
       : selectDiverse(fused, this.config, Math.min(RAG_HYBRID_MAX_CANDIDATES, offset + limit))
     const finalAuthorized = await this.#authorizeAll(selected, {
       query: input.query ?? input.q ?? null,
