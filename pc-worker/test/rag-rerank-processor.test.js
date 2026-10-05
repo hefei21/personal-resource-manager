@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
+import { QWEN_RERANKER_MODEL } from '../src/qwenReranker.js'
 
 import {
   createRagRerankProcessor,
@@ -44,6 +45,52 @@ function candidateSetSha256(candidates) {
     ...(candidate.score === undefined ? {} : { score: candidate.score })
   }))))
 }
+
+test('pool capability is Qwen-only; 150 candidates run in <=50 batches and merge stable scores', async () => {
+  const local = { ...QWEN_RERANKER_MODEL, baseUrl: 'http://127.0.0.1:19091', apiKey: 'x'.repeat(32) }
+  const rows = Array.from({ length: 150 }, (_, i) => ({ candidateId: `C${i}`, text: String(i) }))
+  const poolTask = { taskType: 'rag.rerank.pool', processorVersion: 'v1', executionClass: 'gpu', input: {
+    schemaVersion: 1, query: 'q', querySha256: sha256('q'), model: QWEN_RERANKER_MODEL,
+    candidates: rows, candidateSetSha256: candidateSetSha256(rows)
+  } }
+  assert.equal(rerankProcessorsForConfig(local).some(c => c.taskType === 'rag.rerank.pool'), true)
+  assert.equal(rerankProcessorsForConfig(config).some(c => c.taskType === 'rag.rerank.pool'), false)
+  for (const mode of ['success', 'ties', 'failure', 'cancel']) {
+    const sizes = [], controller = new AbortController()
+    const processor = createRagRerankProcessor({ config: local, fetchImpl: async (url, options) => {
+      const texts = JSON.parse(options.body).texts; sizes.push(texts.length)
+      if (sizes.length === 2 && mode === 'cancel') controller.abort()
+      return { ok: mode !== 'failure' || sizes.length !== 2, json: async () => texts.map((t, index) => ({ index, score: mode === 'ties' ? 1 : Number(t) })) }
+    } })
+    if (['failure', 'cancel'].includes(mode)) {
+      await assert.rejects(processor.process(poolTask, { signal: controller.signal }))
+      assert.equal(sizes.length, 2)
+    } else {
+      const result = await processor.process(poolTask)
+      assert.deepEqual(sizes, [50, 50, 50])
+      assert.deepEqual(result.output.candidates.map(c => c.candidateId), (mode === 'ties' ? rows : [...rows].reverse()).map(c => c.candidateId))
+      assert.equal(result.output.candidateSetSha256, poolTask.input.candidateSetSha256)
+    }
+    await assert.rejects(processor.process({ ...poolTask, taskType: 'rag.rerank' }))
+    await assert.rejects(processor.process({ ...poolTask, input: { ...poolTask.input, candidates: [...rows, {candidateId:'extra',text:'x'}] } }))
+  }
+})
+
+test('pool execution timeout is shared across HTTP sub-batches', async () => {
+  const rows = Array.from({ length: 101 }, (_, i) => ({candidateId:`C${i}`,text:'evidence'}))
+  const pool = {taskType:'rag.rerank.pool',processorVersion:'v1',executionClass:'gpu',input:{schemaVersion:1,
+    query:'q',querySha256:sha256('q'),model:QWEN_RERANKER_MODEL,candidates:rows,candidateSetSha256:candidateSetSha256(rows)}}
+  const signals = []
+  const processor = createRagRerankProcessor({config:{...QWEN_RERANKER_MODEL,baseUrl:'http://127.0.0.1:19091',apiKey:'x'.repeat(32),timeoutMs:1000},
+    fetchImpl: async (url, options) => {
+      signals.push(options.signal)
+      if(signals.length===2)return new Promise(()=>{})
+      await new Promise(resolve=>setTimeout(resolve,600))
+      return {ok:true,json:async()=>JSON.parse(options.body).texts.map((t,index)=>({index,score:1}))}
+    }})
+  await assert.rejects(processor.process(pool), error=>error.code==='WORKER_RERANK_TIMEOUT')
+  assert.equal(signals.length,2);assert.equal(signals[1].aborted,true)
+})
 
 function task(overrides = {}) {
   const query = '如何恢复索引？\n第二个条件\t值'

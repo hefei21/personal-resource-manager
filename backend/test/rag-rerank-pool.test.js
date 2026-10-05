@@ -3,26 +3,36 @@ import test from 'node:test'
 import { createRagRerankService } from '../src/services/ragRerankService.js'
 import { QWEN_RERANKER_MODEL as model } from '../src/config/qwenReranker.js'
 import { selectGlobalRerankedEvidence } from '../src/services/ragHybridRetriever.js'
+import { lookupPcWorkerProcessor, matchPcWorkerCapabilities, rerankCandidateSetSha256 } from '../src/services/pcWorkerProcessorCatalog.js'
 
 const candidates = count => Array.from({ length: count }, (_, i) => ({ citationId: `C${i}`, body: `evidence ${i}` }))
+test('pool catalog rejects wrong model capabilities, oversized input and old single-task limit widening', () => {
+  const descriptor={taskType:'rag.rerank.pool',processorVersion:'v1',executionClass:'gpu',outputSchemaVersion:1,model}
+  assert.equal(matchPcWorkerCapabilities({processors:[descriptor]}).length,1)
+  assert.equal(matchPcWorkerCapabilities({processors:[{...descriptor,model:{...model,configHash:'a'.repeat(64)}}]}).length,0)
+  const rows=candidates(150).map(c=>({candidateId:c.citationId,text:'x'.repeat(16000)}))
+  const input={schemaVersion:1,query:'q',querySha256:'a'.repeat(64),model,candidates:rows,candidateSetSha256:rerankCandidateSetSha256(rows)}
+  assert.throws(()=>lookupPcWorkerProcessor('rag.rerank.pool').projectInput(input))
+  assert.throws(()=>lookupPcWorkerProcessor('rag.rerank').projectInput(input))
+})
 function success(request, score = c => Number(c.candidateId.slice(1))) {
   return { id: 1, status: 'succeeded', result: { schemaVersion: 1, processorVersion: 'v1', output: {
     model, querySha256: request.input.querySha256, candidateSetSha256: request.input.candidateSetSha256,
     candidates: request.input.candidates.map(c => ({ candidateId: c.candidateId, score: score(c) })).sort((a, b) => b.score - a.score)
   } } }
 }
-test('150-candidate pool uses bounded tasks and returns original objects in global score order', async () => {
+test('150-candidate pool uses one separately advertised task and returns original objects', async () => {
   const calls = [], input = candidates(150)
   const service = createRagRerankService({ model, maxCandidates: 50, workerAvailable: () => true,
     taskStore: { enqueueExclusiveRun(request) { calls.push(request); return { task: success(request) } } } })
   const result = await service.rerankPool({ query: 'q', candidates: input })
   assert.equal(result.applied, true)
-  assert.deepEqual(calls.map(c => c.input.candidates.length), [50, 50, 50])
+  assert.deepEqual(calls.map(c => c.input.candidates.length), [150])
+  assert.equal(calls[0].taskType, 'rag.rerank.pool')
   assert.deepEqual(result.candidates, [...input].reverse())
   assert.equal(result.candidates[0], input[149])
-  assert.equal(new Set(calls.map(c => c.input.candidateSetSha256)).size, 3)
   assert.equal((await service.rerankPool({ query: 'q', candidates: candidates(151) })).applied, false)
-  assert.equal(calls.length, 3)
+  assert.equal(calls.length, 1)
 })
 test('batches share a deadline including enqueue time and never publish partial ranking', async () => {
   for (const failure of ['deadline', 'invalid', 'cancel']) {
@@ -30,10 +40,10 @@ test('batches share a deadline including enqueue time and never publish partial 
     const input = candidates(120), controller = new AbortController()
     const service = createRagRerankService({ model, maxCandidates: 50, now: () => now, waitMs: 3000,
       workerAvailable: () => true, taskStore: { enqueueExclusiveRun(request) {
-        calls++; now += 1600
-        if (calls === 2 && failure === 'cancel') controller.abort()
+        calls++; now += 3200
+        if (failure === 'cancel') controller.abort()
         const task = success(request)
-        if (calls === 2 && failure === 'invalid') { now = 2000; task.result.output.candidateSetSha256 = 'a'.repeat(64) }
+        if (failure === 'invalid') { now = 2000; task.result.output.candidateSetSha256 = 'a'.repeat(64) }
         return { task }
       } } })
     if (failure === 'cancel') await assert.rejects(service.rerankPool({ query: 'q', candidates: input, signal: controller.signal }))
@@ -41,7 +51,7 @@ test('batches share a deadline including enqueue time and never publish partial 
       const result = await service.rerankPool({ query: 'q', candidates: input })
       assert.equal(result.applied, false); assert.deepEqual(result.candidates, input)
     }
-    assert.equal(calls, 2)
+    assert.equal(calls, 1)
   }
 })
 test('equal scores remain stable across batches; disabled and duplicate pools enqueue nothing', async () => {

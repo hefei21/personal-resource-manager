@@ -956,8 +956,16 @@ export const TASK_TYPE_CATALOG = Object.freeze({
     projectInput: projectRagRerankInput,
     cloneInput: (input) => clonePcWorkerInput('rag.rerank', input),
     projectResult: projectRagRerankResult,
-    mutexTaskTypes: ['rag.rerank'],
+    mutexTaskTypes: ['rag.rerank', 'rag.rerank.pool'],
     retryableFrom: []
+  }),
+  'rag.rerank.pool': createDefinition({
+    taskType: 'rag.rerank.pool', executionClass: 'gpu', subjectType: 'rag-rerank-query',
+    projectSubjectId: projectQueryHashSubjectId,
+    projectInput: input => projectRagQueryInput('rag.rerank.pool', input, 'candidates', 'candidateCount'),
+    cloneInput: input => clonePcWorkerInput('rag.rerank.pool', input),
+    projectResult: projectRagRerankResult,
+    mutexTaskTypes: ['rag.rerank', 'rag.rerank.pool'], retryableFrom: []
   }),
   'rag.answer.generate': createDefinition({
     taskType: 'rag.answer.generate',

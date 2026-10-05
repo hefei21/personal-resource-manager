@@ -40,6 +40,11 @@ Worker 就启用生产重排。后端六字段身份必须与 Worker 完全一�
   `rerankerConfig.expandedCandidatePool=true`：只对绑定资源的 Qwen 查询保留融合前 35 条，
   再用未入选向量候选补足至 50，重排前不抑制边界重叠；最终种子/上下文预算不变。
   普通 Hybrid、全局查询和 BGE 不走该路径。它不是 RAG 总质量门通过或生产开启授权。
+- 全局隔离路由可设置 `rerankerConfig.globalCandidatePool=true`：最多150条已鉴权候选作为
+  独立 `rag.rerank.pool` 任务一次领取，Worker内部串行请求每批最多50条，统一排序后返回。
+  只有匹配Qwen身份且声明新能力的Worker可领取；旧任务和BGE协议不扩大。整池仍受2MiB输入
+  上限、完整结果校验及服务端共享3秒等待约束；Worker执行超时也是整池共用，取消/失败不返回
+  部分分数。服务端等待到期不抢占已进入CUDA的推理，基础Hybrid完整回退；不代表NAS队列或总质量门通过。
 - Ctrl+C 停止手动启动的服务；不开启自启动，也不自动加载/卸载其他模型。
 
 无需模型的协议测试：`python -B -m unittest discover -s . -p "test_*.py"`。

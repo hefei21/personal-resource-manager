@@ -65,6 +65,7 @@ export function claimableRemoteProcessors(capabilities, {
   }
   if (rerankerModel) {
     processors.push(...supportedRemoteProcessors(capabilities, { taskType: 'rag.rerank', model: rerankerModel }))
+    processors.push(...supportedRemoteProcessors(capabilities, { taskType: 'rag.rerank.pool', model: rerankerModel }))
   }
 
   const unique = new Map(processors.map((processor) => [

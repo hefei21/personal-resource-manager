@@ -167,7 +167,7 @@ export class PcWorker {
     if (this.modelReadiness.isReady('answer') && this.translationProcessor.capability) extra.push(this.translationProcessor.capability)
     if (this.modelReadiness.isReady('reranker')) extra.push(...rerankProcessorsForConfig(this.config?.reranker))
     if (!profile?.capabilities || !Array.isArray(profile.capabilities.processors)) return profile
-    const localTaskTypes = new Set(['rag.content.extract', 'rag.embedding.generate', 'rag.query.embed', 'rag.rerank', 'rag.answer.generate', 'rag.query.translate'])
+    const localTaskTypes = new Set(['rag.content.extract', 'rag.embedding.generate', 'rag.query.embed', 'rag.rerank', 'rag.rerank.pool', 'rag.answer.generate', 'rag.query.translate'])
     const existing = profile.capabilities.processors.filter((item) => !localTaskTypes.has(item?.taskType))
     if (extra.length === 0 && existing.length === profile.capabilities.processors.length) return profile
     const keys = new Set(existing.map((item) => `${item.taskType}:${item.processorVersion}:${item.executionClass}:${item.outputSchemaVersion}`))

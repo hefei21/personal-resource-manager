@@ -722,7 +722,7 @@ test('catalog reserves retry metadata for the next task-center node', () => {
     assert.ok(metadata.mutexTaskTypes.includes(taskType))
     assert.deepEqual(
       metadata.retryableFrom,
-      ['rag.query.embed', 'rag.rerank', 'rag.answer.generate'].includes(taskType) ? [] : ['failed']
+      ['rag.query.embed', 'rag.rerank', 'rag.rerank.pool', 'rag.answer.generate'].includes(taskType) ? [] : ['failed']
     )
   }
 })

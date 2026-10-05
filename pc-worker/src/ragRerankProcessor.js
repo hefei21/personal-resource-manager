@@ -198,8 +198,9 @@ function assertLocalModel(value, config) {
 }
 
 function normalizeTask(task, config) {
+  const pool = task?.taskType === 'rag.rerank.pool' && matchesQwenReranker(config)
   if (!isPlainObject(task) || task.processorVersion !== RAG_RERANK_PROCESSOR_VERSION ||
-      task.executionClass !== RAG_RERANK_EXECUTION_CLASS || task.taskType !== RAG_RERANK_TASK_TYPE) {
+      task.executionClass !== RAG_RERANK_EXECUTION_CLASS || (!pool && task.taskType !== RAG_RERANK_TASK_TYPE)) {
     fail('WORKER_RERANK_TASK_INVALID', 'Task processor identity is invalid.')
   }
   exactKeys(task.input, ['schemaVersion', 'querySha256', 'candidateSetSha256', 'query', 'model', 'candidates'], 'task.input')
@@ -210,7 +211,7 @@ function normalizeTask(task, config) {
   if (querySha256 !== sha256(query)) fail('WORKER_RERANK_INPUT_INVALID', 'task query hash does not match query text.')
   const candidateSetSha256 = hash(input.candidateSetSha256, 'task.input.candidateSetSha256')
   const model = assertLocalModel(input.model, config)
-  if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > config.maxBatchItems) {
+  if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > (pool ? 150 : config.maxBatchItems)) {
     fail('WORKER_RERANK_INPUT_INVALID', 'task.input.candidates exceeds its batch limit.')
   }
   const ids = new Set()
@@ -350,12 +351,38 @@ export function createRagRerankProcessor({ config, fetchImpl = fetch } = {}) {
   const processor = {
     configured: normalizedConfig !== null,
     supports(taskType) {
-      return normalizedConfig !== null && taskType === RAG_RERANK_TASK_TYPE
+      return normalizedConfig !== null && (taskType === RAG_RERANK_TASK_TYPE || (taskType === 'rag.rerank.pool' && matchesQwenReranker(normalizedConfig)))
     },
     async process(task, { signal } = {}) {
       if (!normalizedConfig) fail('WORKER_RERANK_NOT_CONFIGURED', 'Reranker processor is not configured.')
       const input = normalizeTask(task, normalizedConfig)
-      const payload = await requestRerank(normalizedConfig, input, signal, fetchImpl)
+      let candidates
+      if (task.taskType === 'rag.rerank.pool') {
+        const timeout = timeoutSignal(signal, normalizedConfig.timeoutMs)
+        try {
+          const scored = []
+          for (let start = 0; start < input.candidates.length; start += 50) {
+            const batch = { ...input, candidates: input.candidates.slice(start, start + 50) }
+            try {
+              const payload = await requestRerank(normalizedConfig, batch, timeout.signal, fetchImpl)
+              scored.push(...normalizeResponse(payload, batch))
+            } catch (error) {
+              if (signal?.aborted) fail('WORKER_PROCESSOR_CANCELLED', 'Reranker pool was cancelled.')
+              if (timeout.signal.aborted) fail('WORKER_RERANK_TIMEOUT', 'Reranker pool timed out.')
+              throw error
+            }
+          }
+          if (timeout.signal.aborted) {
+            if (signal?.aborted) fail('WORKER_PROCESSOR_CANCELLED', 'Reranker pool was cancelled.')
+            fail('WORKER_RERANK_TIMEOUT', 'Reranker pool timed out.')
+          }
+          const indexes = new Map(input.candidates.map((c, i) => [c.candidateId, i]))
+          candidates = scored.sort((a, b) => b.score - a.score || indexes.get(a.candidateId) - indexes.get(b.candidateId))
+        } finally { timeout.dispose() }
+      } else {
+        const payload = await requestRerank(normalizedConfig, input, signal, fetchImpl)
+        candidates = normalizeResponse(payload, input)
+      }
       return freeze({
         schemaVersion: RAG_RERANK_OUTPUT_SCHEMA_VERSION,
         processorVersion: RAG_RERANK_PROCESSOR_VERSION,
@@ -363,7 +390,7 @@ export function createRagRerankProcessor({ config, fetchImpl = fetch } = {}) {
           model: input.model,
           querySha256: input.querySha256,
           candidateSetSha256: input.candidateSetSha256,
-          candidates: normalizeResponse(payload, input)
+          candidates
         }
       })
     }
@@ -375,13 +402,13 @@ export function rerankProcessorsForConfig(config) {
   if (!config) return Object.freeze([])
   try {
     const normalizedConfig = normalizeConfig(config)
-    return Object.freeze([Object.freeze({
-      taskType: RAG_RERANK_TASK_TYPE,
+    return Object.freeze([RAG_RERANK_TASK_TYPE, ...(matchesQwenReranker(normalizedConfig) ? ['rag.rerank.pool'] : [])].map(taskType => Object.freeze({
+      taskType,
       processorVersion: RAG_RERANK_PROCESSOR_VERSION,
       executionClass: RAG_RERANK_EXECUTION_CLASS,
       outputSchemaVersion: RAG_RERANK_OUTPUT_SCHEMA_VERSION,
       model: localModelIdentity(normalizedConfig)
-    })])
+    })))
   } catch {
     return Object.freeze([])
   }

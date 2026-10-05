@@ -13,7 +13,7 @@ import {
 test('task presentation names every RAG stage and resolves an owner-visible resource source', () => {
   for (const type of [
     'rag.index.refresh', 'rag.content.extract', 'rag.embedding.generate',
-    'rag.query.embed', 'rag.rerank', 'rag.answer.generate'
+    'rag.query.embed', 'rag.rerank', 'rag.rerank.pool', 'rag.answer.generate'
   ]) assert.notEqual(TASK_TYPE_LABELS[type], undefined, type)
 
   const task = {
@@ -30,6 +30,7 @@ test('task presentation names every RAG stage and resolves an owner-visible reso
 test('partial index results are not presented as completed and ephemeral query jobs are not manually retried', () => {
   assert.equal(effectiveTaskStatus({ status: 'succeeded', result: { status: 'partial' } }), 'partial')
   assert.equal(taskCanRetry({ status: 'failed', taskType: 'rag.answer.generate' }), false)
+  assert.equal(taskCanRetry({ status: 'failed', taskType: 'rag.rerank.pool' }), false)
   assert.equal(taskCanRetry({ status: 'failed', taskType: 'rag.content.extract' }), true)
   assert.equal(taskCanRetry({ status: 'failed', taskType: 'rag.embedding.generate', errorCode: 'WORKER_PROCESSOR_INPUT_INVALID' }), false)
   assert.equal(taskCanRetry({ status: 'failed', taskType: 'rag.embedding.generate', errorCode: 'WORKER_EMBEDDING_INPUT_TOO_LARGE' }), false)

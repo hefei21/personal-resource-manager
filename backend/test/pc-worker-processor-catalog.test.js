@@ -138,6 +138,7 @@ test('catalog is immutable and allowlists RAG processors including optional tran
     'rag.embedding.generate',
     'rag.query.embed',
     'rag.rerank',
+    'rag.rerank.pool',
     'rag.answer.generate',
     'rag.query.translate'
   ])

@@ -5,6 +5,7 @@ export const TASK_TYPE_OPTIONS = Object.freeze([
   { value: 'rag.embedding.generate', label: 'RAG 向量化' },
   { value: 'rag.query.embed', label: '查询向量化' },
   { value: 'rag.rerank', label: 'RAG 结果重排' },
+  { value: 'rag.rerank.pool', label: 'RAG 候选池重排' },
   { value: 'rag.answer.generate', label: 'RAG 回答生成' },
   { value: 'search.index.refresh', label: '统一搜索索引刷新' },
   { value: 'code.repository.clone', label: '代码仓库克隆' },
@@ -92,7 +93,7 @@ export const TASK_ERROR_MESSAGES = Object.freeze({
 })
 
 const SAFE_TASK_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_.-]{0,63}$/u
-const NON_RETRYABLE_TASK_TYPES = new Set(['rag.query.embed', 'rag.rerank', 'rag.answer.generate'])
+const NON_RETRYABLE_TASK_TYPES = new Set(['rag.query.embed', 'rag.rerank', 'rag.rerank.pool', 'rag.answer.generate'])
 const NON_RETRYABLE_ERROR_CODES = new Set([
   'WORKER_PROCESSOR_INPUT_INVALID',
   'WORKER_EMBEDDING_INPUT_INVALID',
@@ -138,7 +139,7 @@ export function taskStageLabel(task) {
   if (task?.taskType === 'rag.content.extract') return 'PC Worker · 文件正文提取'
   if (task?.taskType === 'rag.embedding.generate') return 'PC Worker · 向量生成'
   if (task?.taskType === 'rag.query.embed') return 'PC Worker · 查询向量'
-  if (task?.taskType === 'rag.rerank') return 'PC Worker · 候选重排'
+  if (['rag.rerank', 'rag.rerank.pool'].includes(task?.taskType)) return 'PC Worker · 候选重排'
   if (task?.taskType === 'rag.answer.generate') return 'PC Worker · 有证据回答'
   const execution = { cpu: 'CPU', disk: '磁盘', network: '网络', gpu: 'GPU' }[task?.executionClass]
   return execution ? `${execution} 任务` : '后台任务'

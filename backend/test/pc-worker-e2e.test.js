@@ -26,6 +26,9 @@ const {
 } = await import('../src/config/resourceModelSchema.js')
 const { CREATE_TASK_SCHEMA_SQL } = await import('../src/config/taskSchema.js')
 const { createTaskStore } = await import('../src/services/taskStore.js')
+const { createRagRerankService } = await import('../src/services/ragRerankService.js')
+const { QWEN_RERANKER_MODEL } = await import('../src/config/qwenReranker.js')
+const { createRagRerankProcessor, rerankProcessorsForConfig } = await import('../../pc-worker/src/ragRerankProcessor.js')
 const { StorageService } = await import('../src/services/storageService.js')
 
 const require = createRequire(import.meta.url)
@@ -70,6 +73,47 @@ async function withServer(app, callback) {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   }
 }
+
+test('pool is leased once only to a capable worker and completes all 150 through real SQLite/HTTP', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  database.exec(`${CREATE_TASK_SCHEMA_SQL};${CREATE_PC_WORKERS_SQL};${CREATE_PC_WORKER_ENROLLMENTS_SQL};${CREATE_PC_WORKER_CREDENTIALS_SQL};`)
+  const store = createTaskStore({ database }), runtime = () => ({ getStore: () => store })
+  const model = QWEN_RERANKER_MODEL, config = { ...model, baseUrl: 'http://127.0.0.1:19091', apiKey: 'x'.repeat(32) }
+  const app = express(); app.use(express.json())
+  app.use('/api/pc-workers', ownerBoundary, createPcWorkerOwnerRouter({ database: () => database, runtime }))
+  app.use('/api/pc-worker-agent', createPcWorkerAgentRouter({ database: () => database, runtime, rerankerModelProvider: () => model }))
+  try { await withServer(app, async baseUrl => {
+    const api = new WorkerApiClient({ baseUrl })
+    const enroll = async processors => {
+      const response = await fetch(`${baseUrl}/api/pc-workers/enrollments`, { method: 'POST', headers: { 'x-test-role': 'owner', 'content-type': 'application/json' }, body: '{}' })
+      const { data } = await response.json(), p = profile(); p.capabilities.processors = processors
+      return api.enroll(data.token, p)
+    }
+    const advertised = rerankProcessorsForConfig(config)
+    const old = await enroll(advertised.filter(p => p.taskType === 'rag.rerank'))
+    const current = await enroll(advertised)
+    const inputs = Array.from({ length: 150 }, (_, i) => ({ citationId: `C${i}`, body: `text ${i}` }))
+    // Queue via the real service but return immediately; consume the same task after completion.
+    let clock = 0
+    const service = createRagRerankService({ model, workerAvailable: () => true, taskStore: store,
+      now: () => clock, sleep: async () => { clock = 3001 } })
+    assert.equal((await service.rerankPool({ query: 'q', candidates: inputs })).applied, false)
+    assert.equal(await api.claim(old.accessToken), null)
+    const leased = await api.claim(current.accessToken)
+    assert.equal(leased.taskType, 'rag.rerank.pool'); assert.equal(leased.input.candidates.length, 150)
+    await api.start(current.accessToken, leased)
+    const sizes = [], processor = createRagRerankProcessor({ config, fetchImpl: async (url, options) => {
+      const texts = JSON.parse(options.body).texts; sizes.push(texts.length)
+      return { ok: true, json: async () => texts.map((text, index) => ({ index, score: Number(text.slice(5)) })) }
+    } })
+    await api.complete(current.accessToken, leased, await processor.process(leased))
+    assert.equal(store.getById(leased.id).status, 'succeeded')
+    assert.deepEqual(sizes, [50, 50, 50])
+    const result = await createRagRerankService({ model, workerAvailable: () => true, taskStore: store }).rerankPool({ query: 'q', candidates: inputs })
+    assert.equal(result.applied, true); assert.equal(result.candidates[0].citationId, 'C149')
+    assert.equal(await api.claim(current.accessToken), null)
+  }) } finally { database.close() }
+})
 
 test('real SQLite and storage complete the Worker lifecycle without exposing paths', nativeTestOptions, async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-worker-e2e-'))

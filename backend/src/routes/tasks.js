@@ -381,7 +381,7 @@ function taskResourceIdentity(task) {
 }
 
 function taskScopePresentation(task) {
-  if (['rag.query.embed', 'rag.rerank', 'rag.answer.generate'].includes(task?.taskType)) {
+  if (['rag.query.embed', 'rag.rerank', 'rag.rerank.pool', 'rag.answer.generate'].includes(task?.taskType)) {
     return TASK_SCOPE_PRESENTATIONS['rag-query']
   }
   if (task?.taskType === 'rag.index.refresh') {

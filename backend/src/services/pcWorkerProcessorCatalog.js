@@ -211,7 +211,7 @@ export const PC_WORKER_EMBEDDING_TASK_TYPES = Object.freeze([
 
 export const PC_WORKER_MODEL_BOUND_TASK_TYPES = Object.freeze([
   ...PC_WORKER_EMBEDDING_TASK_TYPES,
-  'rag.rerank'
+  'rag.rerank', 'rag.rerank.pool'
 ])
 const PC_WORKER_MODEL_BOUND_TASK_TYPE_SET = new Set(PC_WORKER_MODEL_BOUND_TASK_TYPES)
 const PC_WORKER_EMBEDDING_MODEL_KEYS = Object.freeze([
@@ -348,12 +348,12 @@ function projectQueryEmbedInput(input) {
   return projected
 }
 
-function projectRerankInput(input) {
+function projectRerankInput(input, pool = false) {
   exactKeys(input, ['schemaVersion', 'querySha256', 'candidateSetSha256', 'query', 'model', 'candidates'], 'task.input')
   if (input.schemaVersion !== 1) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
   const query = boundedContentText(input.query, 'task.input.query', MAX_QUERY_BYTES)
   const model = modelIdentity(input.model, 'task.input.model')
-  if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > (matchesQwenReranker(model) ? 50 : LIMITS.rerank.maxBatchItems)) {
+  if ((pool && !matchesQwenReranker(model)) || !Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > (matchesQwenReranker(model) ? pool ? 150 : 50 : LIMITS.rerank.maxBatchItems)) {
     fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.candidates exceeds its batch limit.')
   }
   const candidates = input.candidates.map((candidate, index) => {
@@ -566,7 +566,7 @@ function normalizeQueryEmbeddingResult(value, expected) {
   return freeze({ model, querySha256, embedding, vectorSha256: vectorHash })
 }
 
-function normalizeRerankResult(value, expected) {
+function normalizeRerankResult(value, expected, pool = false) {
   exactKeys(value, ['model', 'querySha256', 'candidateSetSha256', 'candidates'], 'result.output')
   const input = unwrapExpected(expected)
   const model = normalizeModelOutput(value.model, expectedModelFrom(expected))
@@ -576,7 +576,7 @@ function normalizeRerankResult(value, expected) {
   if (input && candidateSetSha256 !== input.candidateSetSha256) {
     fail('PC_WORKER_PROCESSOR_RESULT_STALE', 'result candidate set is stale.')
   }
-  if (!Array.isArray(value.candidates) || value.candidates.length > (matchesQwenReranker(value.model) ? 50 : LIMITS.rerank.maxBatchItems)) {
+  if ((pool && !matchesQwenReranker(value.model)) || !Array.isArray(value.candidates) || value.candidates.length > (matchesQwenReranker(value.model) ? pool ? 150 : 50 : LIMITS.rerank.maxBatchItems)) {
     fail('PC_WORKER_PROCESSOR_RESULT_COUNT_INVALID', 'result candidates exceed the batch limit.')
   }
   const allowedIds = new Set(input?.candidates?.map((candidate) => candidate.candidateId) ?? [])
@@ -835,6 +835,15 @@ const RERANK = definition({
   staleGuard: rerankStaleGuard
 })
 
+const projectRerankPoolInput = input => projectRerankInput(input, true)
+const RERANK_POOL = definition({
+  taskType: 'rag.rerank.pool', executionClass: 'gpu', inputMode: 'bounded-candidates',
+  limits: Object.freeze({ ...LIMITS.rerank, maxBatchItems: 150 }),
+  projectInput: projectRerankPoolInput,
+  normalizeResult: (value, expected) => normalizeEnvelope(value, (output, context) => normalizeRerankResult(output, context, true), expected, LIMITS.rerank.outputMaxBytes),
+  resolveInput: ragInputResolver(projectRerankPoolInput), staleGuard: rerankStaleGuard
+})
+
 const ANSWER = definition({
   taskType: 'rag.answer.generate',
   executionClass: 'gpu',
@@ -864,11 +873,12 @@ export const PC_WORKER_PROCESSOR_CATALOG = Object.freeze({
   [EMBEDDING_GENERATE.taskType]: EMBEDDING_GENERATE,
   [QUERY_EMBED.taskType]: QUERY_EMBED,
   [RERANK.taskType]: RERANK,
+  [RERANK_POOL.taskType]: RERANK_POOL,
   [ANSWER.taskType]: ANSWER
 })
 
 export const PC_WORKER_PROCESSOR_DEFINITIONS = Object.freeze([
-  CONTENT_INSPECT, CONTENT_EXTRACT, EMBEDDING_GENERATE, QUERY_EMBED, RERANK, ANSWER, TRANSLATION
+  CONTENT_INSPECT, CONTENT_EXTRACT, EMBEDDING_GENERATE, QUERY_EMBED, RERANK, RERANK_POOL, ANSWER, TRANSLATION
 ])
 
 export function lookupPcWorkerProcessor(taskType, processorVersion = PC_WORKER_PROCESSOR_VERSION) {
@@ -899,6 +909,7 @@ export function matchPcWorkerCapabilities(capabilities, requirements = {}) {
     if (isModelBound && Object.hasOwn(processor, 'model')) {
       try { processorModel = normalizePcWorkerEmbeddingModel(processor.model, 'processor.model') } catch { continue }
     }
+    if (processor.taskType === 'rag.rerank.pool' && !matchesQwenReranker(processorModel)) continue
     if (isModelBound && Object.hasOwn(requirements, 'model') &&
         (!requirements.model || !processorModel || !pcWorkerEmbeddingModelMatches(processorModel, requirements.model))) continue
     if (Object.entries(requirements).some(([key, value]) => key !== 'model' &&

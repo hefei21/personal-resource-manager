@@ -170,42 +170,30 @@ export class RagRerankService {
     return this.#rerank(input)
   }
 
-  // Internal opt-in pool; each Worker task retains the <=50 protocol. Never
-  // publish a partial permutation or give each batch a fresh waiting budget.
+  // Separate advertised capability: one lease, <=50 HTTP sub-batches in Worker.
   async rerankPool({ query, candidates, signal } = {}) {
     const originals = Array.isArray(candidates) ? candidates : []
     if (!matchesQwenReranker(this.model) || !normalizeCandidates(candidates, 150)) {
       return unchanged(originals, 'reranker_input_invalid')
     }
     const deadline = this.now() + this.waitMs
-    const scores = new Map()
-    for (let start = 0; start < originals.length; start += this.maxCandidates) {
-      signal?.throwIfAborted()
-      if (this.now() >= deadline) return unchanged(originals, 'reranker_timeout')
-      const result = await this.#rerank({ query, candidates: originals.slice(start, start + this.maxCandidates), signal }, deadline)
-      signal?.throwIfAborted()
-      if (!result.applied || this.now() >= deadline) {
-        return unchanged(originals, this.now() >= deadline ? 'reranker_timeout' : result.reason)
-      }
-      for (const item of result.scoredCandidates) scores.set(item.candidate, item.score)
-    }
-    if (scores.size !== originals.length) return unchanged(originals, 'reranker_result_invalid')
-    const ranked = originals.map((candidate, index) => ({ candidate, index }))
-      .sort((a, b) => scores.get(b.candidate) - scores.get(a.candidate) || a.index - b.index)
-      .map(item => item.candidate)
-    return Object.freeze({ candidates: Object.freeze(ranked), applied: true, degraded: false, reason: null })
+    const result = await this.#rerank({ query, candidates, signal }, deadline)
+    signal?.throwIfAborted()
+    return this.now() >= deadline ? unchanged(originals, 'reranker_timeout') : result
   }
 
   async #rerank({ query, candidates, signal } = {}, sharedDeadline = null) {
     const sourceCandidates = Array.isArray(candidates) ? candidates : []
     if (!this.enabled || !this.model) return unchanged(sourceCandidates, 'reranker_disabled')
     const normalized = normalizedQuery(query)
-    const projectedCandidates = normalizeCandidates(candidates, this.maxCandidates)
+    const pool = sharedDeadline !== null
+    const taskType = pool ? 'rag.rerank.pool' : RAG_RERANK_TASK_TYPE
+    const projectedCandidates = normalizeCandidates(candidates, pool ? 150 : this.maxCandidates)
     if (!normalized || !projectedCandidates) return unchanged(sourceCandidates, 'reranker_input_invalid')
-    const processor = lookupPcWorkerProcessor(RAG_RERANK_TASK_TYPE, RAG_RERANK_PROCESSOR_VERSION)
+    const processor = lookupPcWorkerProcessor(taskType, RAG_RERANK_PROCESSOR_VERSION)
     if (!processor) return unchanged(sourceCandidates, 'reranker_processor_unavailable')
     const available = await Promise.resolve(this.workerAvailable({
-      taskType: RAG_RERANK_TASK_TYPE,
+      taskType,
       processorVersion: RAG_RERANK_PROCESSOR_VERSION,
       model: this.model
     })).catch(() => false)
@@ -236,7 +224,7 @@ export class RagRerankService {
     }
     const contentSha256 = input.candidateSetSha256
     const request = {
-      taskType: RAG_RERANK_TASK_TYPE,
+      taskType,
       processorVersion: RAG_RERANK_PROCESSOR_VERSION,
       subjectType: 'rag-rerank-query',
       subjectId: querySha256,
@@ -252,7 +240,7 @@ export class RagRerankService {
       signal?.throwIfAborted()
       if (sharedDeadline !== null && this.now() >= sharedDeadline) return unchanged(sourceCandidates, 'reranker_timeout')
       const outcome = typeof this.taskStore.enqueueExclusiveRun === 'function'
-        ? await this.taskStore.enqueueExclusiveRun(request, { taskTypes: [RAG_RERANK_TASK_TYPE] })
+        ? await this.taskStore.enqueueExclusiveRun(request, { taskTypes: [RAG_RERANK_TASK_TYPE, 'rag.rerank.pool'] })
         : await this.taskStore.enqueue(request)
       task = outcome?.task ?? outcome
       const deadline = sharedDeadline ?? this.now() + this.waitMs
@@ -279,8 +267,6 @@ export class RagRerankService {
       }
       return Object.freeze({
         candidates: Object.freeze(ranked),
-        ...(sharedDeadline === null ? {} : { scoredCandidates: Object.freeze(result.candidates.map(item =>
-          Object.freeze({ candidate: originals.get(item.candidateId), score: item.score }))) }),
         applied: true,
         degraded: false,
         reason: null,
