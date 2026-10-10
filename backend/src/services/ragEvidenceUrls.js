@@ -1,8 +1,16 @@
-// Kept identical to backend/src/services/ragEvidenceUrls.js: both runtimes
+// Duplicated in the independent Worker/server packages; a parity test keeps
 // independently enforce the display-only contract, without resolving URLs.
 export function evidenceUrls(text) {
   return (text.match(/https?:\/\/[^\s<>"'`，。；！？、）】》]+/giu) ?? [])
-    .map(url => url.replace(/[.,;:!?)\]}]+$/u, ''))
+    .map(url => {
+      // Only discard unmatched prose wrappers, never URI punctuation such
+      // as a trailing dot or question mark (which can change the resource).
+      for (;;) {
+        const close = url.at(-1), open = { ')': '(', ']': '[', '}': '{' }[close]
+        if (!open || url.split(close).length <= url.split(open).length) return url
+        url = url.slice(0, -1)
+      }
+    })
 }
 
 export function hasOnlyCitedUrls(answer, allowedUrls) {

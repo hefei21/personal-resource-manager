@@ -17,4 +17,9 @@ test('quoted URL boundaries do not allow prefixes, suffixes or normalized invent
     assert.equal(hasOnlyCitedUrls(value, [url]), false)
   }
   assert.equal(hasOnlyCitedUrls('https://user:pass@example.invalid/', ['https://user:pass@example.invalid/']), false)
+  for (const tail of ['.', '?', '!', ';', '(part)']) {
+    const exact = 'https://example.invalid/path' + tail
+    assert.deepEqual(evidenceUrls(exact), [exact])
+    assert.equal(hasOnlyCitedUrls('https://example.invalid/path', evidenceUrls(exact)), false)
+  }
 })
