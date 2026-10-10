@@ -7,7 +7,7 @@ import test from 'node:test'
 
 import AdmZip from 'adm-zip'
 
-import { createPdfDocumentOptions, createRagContentExtractProcessor } from '../src/ragContentExtractProcessor.js'
+import { createPdfDocumentOptions, createRagContentExtractProcessor, RAG_CONTENT_EXTRACTOR_VERSION } from '../src/ragContentExtractProcessor.js'
 
 function task(format, buffer) {
   return {
@@ -78,6 +78,24 @@ test('extracts EPUB spine order and strips markup', async () => {
   assert.equal(result.artifact.sections[0].title, 'Chapter One')
   assert.match(result.artifact.sections[0].text, /Hello Grounded text\./u)
   assert.deepEqual(result.artifact.sections[0].locator, { spineIndex: 0 })
+})
+
+test('keeps original EPUB spine positions when empty items are skipped', async () => {
+  const zip = new AdmZip()
+  zip.addFile('META-INF/container.xml', Buffer.from('<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>'))
+  zip.addFile('OPS/book.opf', Buffer.from('<package><manifest><item id="cover" href="cover.xhtml"/><item id="c1" href="one.xhtml"/><item id="blank" href="blank.xhtml"/><item id="c2" href="two.xhtml"/></manifest><spine><itemref idref="cover"/><itemref idref="c1"/><itemref idref="blank"/><itemref idref="c2"/></spine></package>'))
+  zip.addFile('OPS/cover.xhtml', Buffer.from('<html><head><title>Cover</title></head><body><img src="cover.jpg"/></body></html>'))
+  zip.addFile('OPS/one.xhtml', Buffer.from('<html><head><title>One</title></head><body><p>First chapter.</p></body></html>'))
+  zip.addFile('OPS/blank.xhtml', Buffer.from('<html><head><title>Blank</title></head><body> </body></html>'))
+  zip.addFile('OPS/two.xhtml', Buffer.from('<html><head><title>Two</title></head><body><p>Second chapter.</p></body></html>'))
+  const buffer = zip.toBuffer()
+  const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
+  assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v2')
+  assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
+    { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
+    { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }
+  ])
 })
 
 test('extracts PDF page text with a page locator', async () => {

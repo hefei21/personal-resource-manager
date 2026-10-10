@@ -193,7 +193,7 @@ test('falls back to the PC extraction artifact when an EPUB cache is not bound',
       ebookBuffer,
       binaryExtractor: async (input) => ({
         extractorVersion: 'pc-worker-structured-text.v1',
-        sections: [{ ordinal: 0, title: 'Spine 1', text: '新提取正文', locator: { spineIndex: 0 } }]
+        sections: [{ ordinal: 0, title: 'Spine 3', text: '新提取正文', locator: { spineIndex: 2 } }]
       })
     })
     const report = await collector({ database })
@@ -201,7 +201,7 @@ test('falls back to the PC extraction artifact when an EPUB cache is not bound',
     assert.equal(ebook.status, 'ready')
     assert.equal(ebook.extractorVersion, 'pc-worker-structured-text.v1')
     assert.equal(ebook.sections[0].text, '新提取正文')
-    assert.deepEqual(ebook.sections[0].locator, { route: '/books', bookId: 2, spineIndex: 0 })
+    assert.deepEqual(ebook.sections[0].locator, { route: '/books', bookId: 2, spineIndex: 2 })
     assert.equal(report.errors.length, 0)
   } finally {
     database.close()

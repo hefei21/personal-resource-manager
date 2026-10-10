@@ -8,7 +8,7 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
 export const RAG_CONTENT_EXTRACT_EXECUTION_CLASS = 'cpu'
-export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v1'
+export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v2'
 
 const MAX_INPUT_BYTES = 64 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
@@ -111,14 +111,16 @@ function extractEpub(buffer) {
   }).filter(([id]) => id))
   const spine = [...opf.matchAll(/<itemref\b[^>]*idref=["']([^"']+)["'][^>]*\/?\s*>/giu)].map((match) => match[1])
   const sections = []
-  for (const id of spine) {
+  for (const [spineIndex, id] of spine.entries()) {
     const entryName = manifest.get(id)
     if (!entryName) continue
     const html = entryText(zip, entryName)
     const body = text(html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/iu)?.[1] ?? html)
     if (!body) continue
     const title = text(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/iu)?.[1] ?? path.posix.basename(entryName))
-    sections.push({ ordinal: sections.length, title: title || `Section ${sections.length + 1}`, text: body, locator: { spineIndex: sections.length } })
+    // Artifact ordinals are dense, but source locations must retain gaps left
+    // by image-only/empty spine items so references still target the original book.
+    sections.push({ ordinal: sections.length, title: title || `Section ${sections.length + 1}`, text: body, locator: { spineIndex } })
   }
   if (sections.length === 0) fail('WORKER_CONTENT_EXTRACT_EMPTY')
   return sections
