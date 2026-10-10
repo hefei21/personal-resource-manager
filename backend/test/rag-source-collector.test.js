@@ -148,6 +148,34 @@ test('collects permission-aware document, ebook and repository sources with stab
   }
 })
 
+test('preserves literal markup in Markdown and TXT documents, books and repository examples', nativeTestOptions, async () => {
+  const original = '# Literal examples\n\n<EOS> <pad> &lt; &amp; x < y and z > 0\n\n```html\n<button>Click</button>\n```'
+  for (const extension of ['md', 'txt']) {
+    const { database, documentBuffer, ebookBuffer } = fixtureDatabase({ documentBody: original, ebookBody: original })
+    try {
+      database.prepare('UPDATE documents SET original_name = ? WHERE id = 1').run(`example.${extension}`)
+      database.exec("UPDATE books SET original_name = 'book.txt', file_type = 'txt', file_path = 'legacy/book.txt' WHERE id = 2")
+      const collector = collectorFor({ database, documentBuffer, ebookBuffer,
+        read: (_database, _id, relativePath) => ({ relativePath, buffer: Buffer.from(original) }) })
+      const report = await collector({ database })
+      assert.equal(report.errors.length, 0)
+      assert.equal(report.sources.length, 3)
+      for (const source of report.sources) {
+        for (const section of source.sections) assert.equal(section.text, original, `${extension}/${source.sourceType}`)
+      }
+    } finally { database.close() }
+  }
+})
+
+test('still extracts text from explicitly HTML document sources', nativeTestOptions, async () => {
+  const { database, documentBuffer, ebookBuffer } = fixtureDatabase({ documentBody: '<p>Visible &amp; readable</p>' })
+  try {
+    database.exec("UPDATE documents SET original_name = 'example.html' WHERE id = 1")
+    const report = await collectorFor({ database, documentBuffer, ebookBuffer })({ database })
+    assert.equal(report.sources.find(source => source.sourceType === 'document').sections[0].text, 'Visible & readable')
+  } finally { database.close() }
+})
+
 test('filters inactive, trashed and trashed-current-version sources before content access', nativeTestOptions, async () => {
   const { database, documentBuffer, ebookBuffer } = fixtureDatabase()
   let documentReads = 0

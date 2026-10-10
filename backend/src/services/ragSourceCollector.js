@@ -16,7 +16,7 @@ import { resolveManagedRepositoryPath, resolveRepositoryEntry } from './reposito
 import { isSensitiveCodeFile, safeCodeText } from './searchSourceCollector.js'
 import { extractRagBinaryContent } from './ragContentExtractionService.js'
 
-export const RAG_SOURCE_EXTRACTOR_VERSION = 'rag-source.v1'
+export const RAG_SOURCE_EXTRACTOR_VERSION = 'rag-source.v2'
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu
@@ -118,18 +118,22 @@ function isAllowedRepositoryDocument(value) {
     ALLOWED_REPOSITORY_BASENAMES.has(path.posix.basename(basename, extension))
 }
 
-function stripMarkup(value) {
+function normalizeText(value) {
   if (typeof value !== 'string') fail('RAG_SOURCE_CONTENT_NOT_TEXT')
-  const text = /<[/!A-Za-z][^>]*>/u.test(value)
-    ? load(`<body>${value}</body>`)('body').text()
-    : value
-  return text
+  return value
     .replace(/^\uFEFF/u, '')
     .replace(/\r\n?/gu, '\n')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
     .replace(/[ \t]+\n/gu, '\n')
     .replace(/\n{3,}/gu, '\n\n')
     .trim()
+}
+
+function stripMarkup(value) {
+  if (typeof value !== 'string') fail('RAG_SOURCE_CONTENT_NOT_TEXT')
+  return normalizeText(/<[/!A-Za-z][^>]*>/u.test(value)
+    ? load(`<body>${value}</body>`)('body').text()
+    : value)
 }
 
 function textFromBuffer(buffer, { html = false } = {}) {
@@ -139,7 +143,9 @@ function textFromBuffer(buffer, { html = false } = {}) {
   const text = buffer.toString('utf8')
   const replacementCount = [...text].filter((character) => character === '\ufffd').length
   if (replacementCount > Math.max(4, text.length * 0.01)) fail('RAG_SOURCE_CONTENT_NOT_TEXT')
-  const normalized = html ? stripMarkup(text) : stripMarkup(text)
+  // Markdown/TXT may contain literal tags or fenced HTML examples. Only an
+  // explicitly HTML source should be parsed as markup at this boundary.
+  const normalized = html ? stripMarkup(text) : normalizeText(text)
   if (!normalized) fail('RAG_SOURCE_CONTENT_EMPTY')
   return normalized
 }
