@@ -115,3 +115,29 @@ test('v2 counts slot instructions in context budget and does not invoke a model 
   const processor = createRagAnswerProcessor({ config: { ...config, contextLimit: 32 }, fetchImpl: () => { throw Error('must not call') } })
   assert.equal((await processor.process(queued.task)).output.reasonCode, 'EVIDENCE_TOO_LARGE')
 })
+
+test('v2 cancellation rejects before a late response can be promoted', async () => {
+  const { task } = await setup().generate({ query: 'Q?', evidence: [original(0)] })
+  const controller = new AbortController()
+  let finish, read = false
+  const processor = createRagAnswerProcessor({ config, fetchImpl: () => new Promise(resolve => { finish = resolve }) })
+  const pending = processor.process(task, { signal: controller.signal })
+  await new Promise(resolve => setImmediate(resolve))
+  controller.abort()
+  await assert.rejects(pending, { code: 'WORKER_PROCESSOR_CANCELLED' })
+  finish({ ok: true, json: async () => { read = true; return reply({ Q1: supported('Known') }).json() } })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(read, false)
+})
+
+test('v2 preserves timeout and offline error semantics without a fallback generation', async () => {
+  const { task } = await setup().generate({ query: 'Q?', evidence: [original(0)] })
+  let calls = 0
+  const timeout = createRagAnswerProcessor({ config: { ...config, timeoutMs: 20 }, fetchImpl: () => {
+    calls++; return new Promise(() => {})
+  } })
+  await assert.rejects(timeout.process(task), { code: 'WORKER_ANSWER_TIMEOUT' })
+  const offline = createRagAnswerProcessor({ config, fetchImpl: async () => { calls++; throw Error('offline') } })
+  await assert.rejects(offline.process(task), { code: 'WORKER_ANSWER_UNAVAILABLE' })
+  assert.equal(calls, 2)
+})
