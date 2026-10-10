@@ -140,6 +140,7 @@ test('catalog is immutable and allowlists RAG processors including optional tran
     'rag.rerank',
     'rag.rerank.pool',
     'rag.answer.generate',
+    'rag.answer.generate', // Explicit v2 capability; v1 remains the default.
     'rag.query.translate'
   ])
   assert.equal(Object.isFrozen(PC_WORKER_PROCESSOR_CATALOG), true)

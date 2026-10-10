@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 
 import { lookupPcWorkerProcessor } from './pcWorkerProcessorCatalog.js'
 import { evidenceUrls, hasOnlyCitedUrls } from './ragEvidenceUrls.js'
+import { createQuestionPlan } from './ragQuestionPlan.js'
 
 export const RAG_ANSWER_SERVICE_VERSION = 'rag-answer-service.v1'
 export const RAG_ANSWER_TASK_TYPE = 'rag.answer.generate'
@@ -225,7 +226,11 @@ export class RagAnswerService {
     this.authoritativeVisibility = authoritativeVisibility
     this.authoritativeActiveSnapshot = authoritativeActiveSnapshot
     this.model = model
+    const answerFormat = config.answerFormat ?? 'legacy'
+    if (!['legacy', 'question-slots-v1'].includes(answerFormat)) fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, 'Answer format is invalid.')
+    this.processorVersion = answerFormat === 'question-slots-v1' ? 'v2' : RAG_ANSWER_PROCESSOR_VERSION
     this.config = Object.freeze({
+      answerFormat,
       maxEvidenceItems: boundedInteger(config.maxEvidenceItems, 'config.maxEvidenceItems', 1, 64, 16),
       maxEvidenceBytes: boundedInteger(config.maxEvidenceBytes, 'config.maxEvidenceBytes', 256, 8 * 1024 * 1024, 32 * 1024),
       systemPromptBytes: boundedInteger(config.systemPromptBytes, 'config.systemPromptBytes', 0, 1_000_000, 512),
@@ -238,7 +243,7 @@ export class RagAnswerService {
   }
 
   #processor() {
-    const processor = this.processorCatalog(RAG_ANSWER_TASK_TYPE, RAG_ANSWER_PROCESSOR_VERSION)
+    const processor = this.processorCatalog(RAG_ANSWER_TASK_TYPE, this.processorVersion)
     if (!processor || typeof processor.projectInput !== 'function' || typeof processor.normalizeResult !== 'function') {
       fail(RAG_ANSWER_ERROR_CODES.MODEL_INVALID, 'rag.answer.generate processor is unavailable.')
     }
@@ -328,11 +333,13 @@ export class RagAnswerService {
     let projectedInput
     try {
       projectedInput = processor.projectInput({
-        schemaVersion: 1,
+        schemaVersion: this.processorVersion === 'v2' ? 2 : 1,
         querySha256,
         query: modelQuery,
         model: this.model,
-        evidence: budget.selected.map((item) => ({ citationId: item.citationId, text: item.taskText }))
+        evidence: budget.selected.map((item) => ({ citationId: item.citationId, text: item.taskText })),
+        ...(this.processorVersion === 'v2' ? { questionPlan: createQuestionPlan(
+          redactSensitiveText(normalizedQuery.replace(/[\u0000-\u001f\u007f]/gu, ' ')), budget.selected) } : {})
       })
     } catch (error) {
       if (!this.model || !error?.code?.includes('TOO_LARGE')) {
@@ -340,7 +347,7 @@ export class RagAnswerService {
       }
       return this.#fallback(normalizedQuery, language, budget.selected, 'evidence_budget', { omitted: budget.omitted })
     }
-    const available = await this.workerAvailable({ taskType: RAG_ANSWER_TASK_TYPE, query: normalizedQuery })
+    const available = await this.workerAvailable({ taskType: RAG_ANSWER_TASK_TYPE, processorVersion: this.processorVersion, query: normalizedQuery })
     if (available !== true && !(isPlainObject(available) && available.available === true)) {
       return this.#fallback(normalizedQuery, language, budget.selected, degradedReason(available), { omitted: budget.omitted })
     }
@@ -350,7 +357,7 @@ export class RagAnswerService {
     const evidenceHash = evidenceDigest(budget.selected)
     const request = {
       taskType: RAG_ANSWER_TASK_TYPE,
-      processorVersion: RAG_ANSWER_PROCESSOR_VERSION,
+      processorVersion: this.processorVersion,
       subjectType: TASK_SUBJECT_TYPE,
       subjectId: `answer-${querySha256.slice(0, 32)}`,
       subjectVersionId: querySha256,
@@ -365,6 +372,9 @@ export class RagAnswerService {
         ? await this.taskStore.enqueueExclusiveRun(request, { taskTypes: [RAG_ANSWER_TASK_TYPE] })
         : await this.taskStore.enqueue(request)
       const task = outcome?.task ?? outcome
+      if (task?.processorVersion && task.processorVersion !== this.processorVersion) {
+        return this.#fallback(normalizedQuery, language, budget.selected, 'worker_unavailable', { omitted: budget.omitted })
+      }
       this.requests.set(task?.id ?? task?.idempotencyKey ?? request.subjectContentSha256, {
         query: normalizedQuery,
         language,
@@ -395,7 +405,7 @@ export class RagAnswerService {
   async applyResult({ task, result, evidence } = {}) {
     if (!isPlainObject(task) || !isPlainObject(task.input)) fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, 'task is invalid.')
     if ((task.taskType !== undefined && task.taskType !== RAG_ANSWER_TASK_TYPE) ||
-        (task.processorVersion !== undefined && task.processorVersion !== RAG_ANSWER_PROCESSOR_VERSION)) {
+        (task.processorVersion !== undefined && task.processorVersion !== this.processorVersion)) {
       fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, 'task identity is invalid.')
     }
     const processor = this.#processor()
@@ -431,6 +441,9 @@ export class RagAnswerService {
     const byCitation = new Map((context?.evidence ?? normalizedEvidence).map((item) => [item.citationId, item]))
     const allowed = projectedInput.evidence.map((item) => byCitation.get(item.citationId)).filter(Boolean)
     const expectedInput = new Map((context?.projectedInput.evidence ?? []).map(item => [item.citationId, item]))
+    if (context && JSON.stringify(projectedInput.questionPlan) !== JSON.stringify(context.projectedInput.questionPlan)) {
+      return this.#fallback(context.query, context.language, before, 'evidence_stale')
+    }
     if (context && projectedInput.evidence.some((item) => {
       const expected = expectedInput.get(item.citationId)
       return !expected || expected.text !== item.text

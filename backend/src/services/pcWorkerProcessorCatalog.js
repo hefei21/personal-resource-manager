@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { validateQuestionPlan } from './ragQuestionPlan.js'
 import { TRANSLATION_TASK_TYPE, projectTranslationInput, normalizeTranslationResult } from './ragQueryTranslationContract.js'
 import { matchesQwenReranker } from '../config/qwenReranker.js'
 
@@ -382,9 +383,9 @@ function projectRerankInput(input, pool = false) {
   return projected
 }
 
-function projectAnswerInput(input) {
-  exactKeys(input, ['schemaVersion', 'querySha256', 'query', 'model', 'evidence'], 'task.input')
-  if (input.schemaVersion !== 1) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
+function projectAnswerInput(input, slots = false) {
+  exactKeys(input, ['schemaVersion', 'querySha256', 'query', 'model', 'evidence', ...(slots ? ['questionPlan'] : [])], 'task.input')
+  if (input.schemaVersion !== (slots ? 2 : 1)) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
   const query = boundedText(input.query, 'task.input.query', MAX_QUERY_BYTES)
   const model = modelIdentity(input.model, 'task.input.model')
   if (!Array.isArray(input.evidence) || input.evidence.length < 1 || input.evidence.length > 64) {
@@ -400,7 +401,12 @@ function projectAnswerInput(input) {
   if (new Set(evidence.map((item) => item.citationId)).size !== evidence.length) {
     fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.evidence contains duplicate citation IDs.')
   }
-  const projected = freeze({ schemaVersion: 1, querySha256: hash(input.querySha256, 'task.input.querySha256'), query, model, evidence })
+  let questionPlan
+  if (slots) {
+    try { questionPlan = validateQuestionPlan(input.questionPlan, evidence) } catch { fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'Question plan is invalid.') }
+    if (!query.includes(questionPlan.question)) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'Question plan is not in the query.')
+  }
+  const projected = freeze({ schemaVersion: slots ? 2 : 1, querySha256: hash(input.querySha256, 'task.input.querySha256'), query, model, evidence, ...(questionPlan ? { questionPlan } : {}) })
   assertSerializedBytes(projected, LIMITS.answer.inputMaxBytes, 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE')
   return projected
 }
@@ -410,14 +416,14 @@ function unwrapExpected(expected) {
   return expected
 }
 
-function normalizeEnvelope(value, normalizeOutput, expected, maxOutputBytes) {
+function normalizeEnvelope(value, normalizeOutput, expected, maxOutputBytes, version = PC_WORKER_PROCESSOR_VERSION) {
   exactKeys(value, ['schemaVersion', 'processorVersion', 'output'], 'result')
-  if (value.schemaVersion !== 1 || value.processorVersion !== PC_WORKER_PROCESSOR_VERSION) {
+  if (value.schemaVersion !== 1 || value.processorVersion !== version) {
     fail('PC_WORKER_PROCESSOR_RESULT_SCHEMA_INVALID', 'result schema or processor version is invalid.')
   }
   const output = normalizeOutput(value.output, expected)
   assertSerializedBytes(output, maxOutputBytes, 'PC_WORKER_PROCESSOR_RESULT_TOO_LARGE')
-  return freeze({ schemaVersion: 1, processorVersion: PC_WORKER_PROCESSOR_VERSION, output })
+  return freeze({ schemaVersion: 1, processorVersion: version, output })
 }
 
 function normalizeContentInspectResult(value, expected) {
@@ -758,10 +764,10 @@ function descriptor(definition, model = null) {
   })
 }
 
-function definition({ taskType, executionClass, inputMode, limits, projectInput, normalizeResult, resolveInput, staleGuard }) {
+function definition({ taskType, executionClass, inputMode, limits, projectInput, normalizeResult, resolveInput, staleGuard, processorVersion = PC_WORKER_PROCESSOR_VERSION }) {
   const value = {
     taskType,
-    processorVersion: PC_WORKER_PROCESSOR_VERSION,
+    processorVersion,
     executionClass,
     outputSchemaVersion: PC_WORKER_OUTPUT_SCHEMA_VERSION,
     inputMode,
@@ -855,6 +861,16 @@ const ANSWER = definition({
   staleGuard: answerStaleGuard
 })
 
+const ANSWER_SLOTS = definition({
+  taskType: 'rag.answer.generate', processorVersion: 'v2', executionClass: 'gpu',
+  inputMode: 'bounded-evidence', limits: LIMITS.answer,
+  projectInput: input => projectAnswerInput(input, true),
+  normalizeResult: (value, expected) => normalizeEnvelope(value, normalizeAnswerResult, expected, LIMITS.answer.outputMaxBytes, 'v2'),
+  resolveInput: ragInputResolver(input => projectAnswerInput(input, true)),
+  staleGuard: (current, expected) => answerStaleGuard(current, expected) &&
+    JSON.stringify(unwrapExpected(current)?.questionPlan) === JSON.stringify(unwrapExpected(expected)?.questionPlan)
+})
+
 const TRANSLATION = definition({
   taskType: TRANSLATION_TASK_TYPE, executionClass: 'gpu', inputMode: 'bounded-query',
   limits: Object.freeze({ inputMaxBytes: 8192, outputMaxBytes: 16384, maxBatchItems: 1 }),
@@ -878,11 +894,12 @@ export const PC_WORKER_PROCESSOR_CATALOG = Object.freeze({
 })
 
 export const PC_WORKER_PROCESSOR_DEFINITIONS = Object.freeze([
-  CONTENT_INSPECT, CONTENT_EXTRACT, EMBEDDING_GENERATE, QUERY_EMBED, RERANK, RERANK_POOL, ANSWER, TRANSLATION
+  CONTENT_INSPECT, CONTENT_EXTRACT, EMBEDDING_GENERATE, QUERY_EMBED, RERANK, RERANK_POOL, ANSWER, ANSWER_SLOTS, TRANSLATION
 ])
 
 export function lookupPcWorkerProcessor(taskType, processorVersion = PC_WORKER_PROCESSOR_VERSION) {
   if (typeof taskType !== 'string' || typeof processorVersion !== 'string') return null
+  if (taskType === ANSWER_SLOTS.taskType && processorVersion === ANSWER_SLOTS.processorVersion) return ANSWER_SLOTS
   const definitionValue = PC_WORKER_PROCESSOR_CATALOG[taskType]
   return definitionValue?.processorVersion === processorVersion ? definitionValue : null
 }

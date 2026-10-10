@@ -115,6 +115,20 @@ test('Worker only enables explicit complete embedding configuration', () => {
   }), (error) => error.code === 'WORKER_CONFIG_INVALID')
 })
 
+test('question-slot mode is opt-in and participates in answer configuration identity', () => {
+  const env = { PC_WORKER_NAS_BASE_URL: 'https://nas.example.test', LOCALAPPDATA: 'C:\\worker-test',
+    PC_WORKER_ANSWER_BASE_URL: 'http://127.0.0.1:1234', PC_WORKER_ANSWER_MODEL_ID: 'fixed-model',
+    PC_WORKER_ANSWER_MODEL_REVISION: 'fixed-revision', PC_WORKER_ANSWER_CONTEXT_LIMIT: '65536', PC_WORKER_ANSWER_MAX_OUTPUT_BYTES: '8192' }
+  const legacy = loadConfig(env).answer
+  const slots = loadConfig({ ...env, PC_WORKER_ANSWER_FORMAT: 'question-slots-v1' }).answer
+  assert.equal(legacy.answerFormat, undefined)
+  assert.equal(slots.answerFormat, 'question-slots-v1')
+  assert.equal(slots.modelId, legacy.modelId)
+  assert.notEqual(slots.configHash, legacy.configHash)
+  assert.throws(() => loadConfig({ ...env, PC_WORKER_ANSWER_FORMAT: 'question-slots-v1', PC_WORKER_ANSWER_CONFIG_HASH: legacy.configHash }))
+  assert.throws(() => loadConfig({ PC_WORKER_NAS_BASE_URL: env.PC_WORKER_NAS_BASE_URL, LOCALAPPDATA: env.LOCALAPPDATA, PC_WORKER_ANSWER_FORMAT: 'question-slots-v1' }))
+})
+
 test('Worker keeps model readiness probes fast and bounds their backoff', () => {
   const config = loadConfig({
     PC_WORKER_NAS_BASE_URL: 'https://nas.example.test',

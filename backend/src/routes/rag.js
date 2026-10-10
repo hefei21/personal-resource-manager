@@ -645,11 +645,11 @@ export function readRagRerankerModelFromEnv(env = process.env) {
   return loadRagRerankerModel(env)
 }
 
-function defaultWorkerAvailable({ database, taskType = RAG_ANSWER_TASK_TYPE, model = null } = {}) {
+function defaultWorkerAvailable({ database, taskType = RAG_ANSWER_TASK_TYPE, model = null, processorVersion } = {}) {
   return readRagWorkerAvailability({
     database,
     taskType,
-    processorVersion: taskType === RAG_QUERY_EMBED_TASK_TYPE ? RAG_QUERY_EMBED_PROCESSOR_VERSION : 'v1',
+    processorVersion: processorVersion ?? (taskType === RAG_QUERY_EMBED_TASK_TYPE ? RAG_QUERY_EMBED_PROCESSOR_VERSION : 'v1'),
     model
   }).available
 }

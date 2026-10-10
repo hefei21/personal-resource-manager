@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { evidenceUrls, hasOnlyCitedUrls } from './ragEvidenceUrls.js'
+import { validateQuestionPlan, slotSchema, slotSystemPrompt, mapQuestionSlots } from './ragQuestionPlan.js'
 
 export const RAG_ANSWER_PROCESSOR_VERSION = 'v1'
 export const RAG_ANSWER_EXECUTION_CLASS = 'gpu'
@@ -128,6 +129,8 @@ function freeze(value) {
 
 function normalizeConfig(raw) {
   if (!isPlainObject(raw)) fail('WORKER_ANSWER_NOT_CONFIGURED', 'Answer processor is not configured.')
+  const answerFormat = raw.answerFormat ?? 'legacy'
+  if (!['legacy', 'question-slots-v1'].includes(answerFormat)) fail('WORKER_ANSWER_NOT_CONFIGURED', 'Answer format is invalid.')
   const baseUrl = requiredText(raw.baseUrl, 'answer.baseUrl', 2048)
   let parsed
   try { parsed = new URL(baseUrl) } catch { fail('WORKER_ANSWER_NOT_CONFIGURED', 'Answer endpoint is invalid.') }
@@ -142,7 +145,8 @@ function normalizeConfig(raw) {
   const maxEvidenceItems = positiveInteger(raw.maxEvidenceItems ?? MAX_EVIDENCE_ITEMS, 'answer.maxEvidenceItems', MAX_EVIDENCE_ITEMS)
   const timeoutMs = positiveInteger(raw.timeoutMs, 'answer.timeoutMs', 5 * 60_000)
   const configHash = raw.configHash === undefined || raw.configHash === null || raw.configHash === ''
-    ? crypto.createHash('sha256').update(JSON.stringify({ provider, modelId, modelRevision, contextLimit, maxOutputBytes, maxEvidenceItems })).digest('hex')
+    ? crypto.createHash('sha256').update(JSON.stringify({ provider, modelId, modelRevision, contextLimit, maxOutputBytes, maxEvidenceItems,
+      ...(answerFormat !== 'legacy' ? { answerFormat } : {}) })).digest('hex')
     : hash(raw.configHash, 'answer.configHash')
   const endpoint = new URL(parsed.toString())
   const pathname = endpoint.pathname.replace(/\/$/u, '')
@@ -150,6 +154,8 @@ function normalizeConfig(raw) {
     ? pathname
     : pathname.endsWith('/v1') ? `${pathname}/chat/completions` : `${pathname}/v1/chat/completions`
   return freeze({
+    answerFormat,
+    processorVersion: answerFormat === 'question-slots-v1' ? 'v2' : RAG_ANSWER_PROCESSOR_VERSION,
     baseUrl: parsed.toString().replace(/\/$/u, ''),
     endpoint: endpoint.toString(),
     provider,
@@ -184,13 +190,14 @@ function assertLocalModel(value, config) {
 }
 
 function normalizeTask(task, config) {
-  if (!isPlainObject(task) || task.processorVersion !== RAG_ANSWER_PROCESSOR_VERSION ||
+  if (!isPlainObject(task) || task.processorVersion !== config.processorVersion ||
       task.executionClass !== RAG_ANSWER_EXECUTION_CLASS || task.taskType !== RAG_ANSWER_TASK_TYPE) {
     fail('WORKER_ANSWER_TASK_INVALID', 'Task processor identity is invalid.')
   }
   const input = task.input
-  exactKeys(input, ['schemaVersion', 'querySha256', 'query', 'model', 'evidence'], 'task.input')
-  if (input.schemaVersion !== 1) fail('WORKER_ANSWER_INPUT_INVALID', 'task.input.schemaVersion is invalid.')
+  const slots = config.answerFormat === 'question-slots-v1'
+  exactKeys(input, ['schemaVersion', 'querySha256', 'query', 'model', 'evidence', ...(slots ? ['questionPlan'] : [])], 'task.input')
+  if (input.schemaVersion !== (slots ? 2 : 1)) fail('WORKER_ANSWER_INPUT_INVALID', 'task.input.schemaVersion is invalid.')
   const query = contentText(input.query, 'task.input.query', MAX_QUERY_BYTES)
   const model = assertLocalModel(input.model, config)
   if (!Array.isArray(input.evidence) || input.evidence.length > config.maxEvidenceItems) {
@@ -205,7 +212,13 @@ function normalizeTask(task, config) {
     const text = contentText(item.text, `task.input.evidence[${index}].text`, MAX_CONTEXT_BYTES)
     return freeze({ citationId, text, quotedUrls: evidenceUrls(item.text) })
   })
+  let questionPlan
+  if (slots) {
+    try { questionPlan = validateQuestionPlan(input.questionPlan, evidence) } catch { fail('WORKER_ANSWER_INPUT_INVALID', 'Question plan is invalid.') }
+    if (!query.includes(questionPlan.question)) fail('WORKER_ANSWER_INPUT_INVALID', 'Question plan is not part of the input query.')
+  }
   return freeze({
+    ...(questionPlan ? { questionPlan } : {}),
     querySha256: hash(input.querySha256, 'task.input.querySha256'),
     query,
     model,
@@ -247,7 +260,8 @@ function selectEvidence(input, config) {
   let truncated = false
   for (const item of input.evidence) {
     const candidate = [...selected, item]
-    const bytes = Buffer.byteLength(SYSTEM_PROMPT, 'utf8') + Buffer.byteLength(contextPayload(input.query, candidate), 'utf8')
+    const bytes = Buffer.byteLength(input.questionPlan ? slotSystemPrompt(SYSTEM_PROMPT) : SYSTEM_PROMPT, 'utf8') +
+      Buffer.byteLength(input.questionPlan ? slotPayload(input.query, candidate, input.questionPlan) : contextPayload(input.query, candidate), 'utf8')
     if (bytes > config.contextLimit) {
       truncated = true
       break
@@ -255,6 +269,13 @@ function selectEvidence(input, config) {
     selected.push(item)
   }
   return Object.freeze({ evidence: Object.freeze(selected), truncated })
+}
+
+function slotPayload(query, evidence, plan) {
+  const byId = new Map(evidence.map(item => [item.citationId, { citationId: item.citationId, text: item.text }]))
+  const groups = plan.groups.map(group => group.map(id => byId.get(id)).filter(Boolean)).filter(group => group.length)
+  return JSON.stringify({ query, evidenceGroups: groups }) + '\nFIXED ORIGINAL QUESTION SPANS: ' +
+    JSON.stringify(Object.fromEntries(plan.spans.map((part, i) => [`Q${i + 1}`, part])))
 }
 
 function timeoutSignal(signal, timeoutMs) {
@@ -291,7 +312,7 @@ function awaitAbortable(value, signal) {
   })
 }
 
-async function requestAnswer(config, query, evidence, signal, fetchImpl) {
+async function requestAnswer(config, query, evidence, signal, fetchImpl, questionPlan) {
   const timeout = timeoutSignal(signal, config.timeoutMs)
   try {
     if (timeout.signal.aborted) {
@@ -308,6 +329,11 @@ async function requestAnswer(config, query, evidence, signal, fetchImpl) {
       ],
       response_format: { type: 'json_schema', json_schema: ANSWER_JSON_SCHEMA },
       temperature: 0
+    }
+    if (questionPlan) {
+      body.messages[0].content = slotSystemPrompt(SYSTEM_PROMPT)
+      body.messages[1].content = slotPayload(query, evidence, questionPlan)
+      body.response_format.json_schema = slotSchema(questionPlan, evidence)
     }
     let response
     try {
@@ -344,6 +370,9 @@ async function requestAnswer(config, query, evidence, signal, fetchImpl) {
     }
     let result
     try { result = JSON.parse(content) } catch { fail('WORKER_ANSWER_RESPONSE_INVALID', 'Answer response JSON is invalid.') }
+    if (questionPlan) {
+      try { return mapQuestionSlots(result, questionPlan, evidence) } catch { fail('WORKER_ANSWER_RESULT_INVALID', 'Question slot output is invalid.') }
+    }
     return result
   } finally {
     timeout.dispose()
@@ -412,14 +441,14 @@ export function createRagAnswerProcessor({ config, fetchImpl = fetch } = {}) {
       if (requestsProhibitedAction(input.query)) {
         return freeze({
           schemaVersion: RAG_ANSWER_OUTPUT_SCHEMA_VERSION,
-          processorVersion: RAG_ANSWER_PROCESSOR_VERSION,
+          processorVersion: normalizedConfig.processorVersion,
           output: { abstained: true, reasonCode: 'UNSUPPORTED_ACTION', citations: [] }
         })
       }
       if (input.evidence.length === 0) {
         return freeze({
           schemaVersion: RAG_ANSWER_OUTPUT_SCHEMA_VERSION,
-          processorVersion: RAG_ANSWER_PROCESSOR_VERSION,
+          processorVersion: normalizedConfig.processorVersion,
           output: { abstained: true, reasonCode: 'NO_EVIDENCE', citations: [] }
         })
       }
@@ -427,14 +456,14 @@ export function createRagAnswerProcessor({ config, fetchImpl = fetch } = {}) {
       if (selected.evidence.length === 0) {
         return freeze({
           schemaVersion: RAG_ANSWER_OUTPUT_SCHEMA_VERSION,
-          processorVersion: RAG_ANSWER_PROCESSOR_VERSION,
+          processorVersion: normalizedConfig.processorVersion,
           output: { abstained: true, reasonCode: 'EVIDENCE_TOO_LARGE', citations: [] }
         })
       }
-      const result = await requestAnswer(normalizedConfig, input.query, selected.evidence, signal, fetchImpl)
+      const result = await requestAnswer(normalizedConfig, input.query, selected.evidence, signal, fetchImpl, input.questionPlan)
       return freeze({
         schemaVersion: RAG_ANSWER_OUTPUT_SCHEMA_VERSION,
-        processorVersion: RAG_ANSWER_PROCESSOR_VERSION,
+        processorVersion: normalizedConfig.processorVersion,
         output: normalizeResult(result, selected.evidence, normalizedConfig, selected.truncated)
       })
     }
@@ -444,10 +473,11 @@ export function createRagAnswerProcessor({ config, fetchImpl = fetch } = {}) {
 
 export function answerProcessorsForConfig(config) {
   if (!config) return Object.freeze([])
-  try { normalizeConfig(config) } catch { return Object.freeze([]) }
+  let normalized
+  try { normalized = normalizeConfig(config) } catch { return Object.freeze([]) }
   return Object.freeze([Object.freeze({
     taskType: RAG_ANSWER_TASK_TYPE,
-    processorVersion: RAG_ANSWER_PROCESSOR_VERSION,
+    processorVersion: normalized.processorVersion,
     executionClass: RAG_ANSWER_EXECUTION_CLASS,
     outputSchemaVersion: RAG_ANSWER_OUTPUT_SCHEMA_VERSION
   })])

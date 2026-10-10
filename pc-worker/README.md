@@ -156,6 +156,13 @@ Container Toolkit；准备、启动、停止和导出日志分别使用 `scripts
 
 ### 可选的隔离 RAG 运行配置（候选，默认关闭）
 
+另有默认关闭的原问项回答协议：`PC_WORKER_ANSWER_FORMAT=question-slots-v1`。
+它仅声明 `rag.answer.generate` v2 能力；服务端须显式配置
+`answerConfig.answerFormat=question-slots-v1`，且模型配置身份匹配后才能分配任务。
+默认 `legacy` 保持 v1，不自动回退或混用。此开关不更换、加载或卸载模型；
+它保留各原文片段的引用身份，一次推理回答原问题的字面分项，再确定性汇总缺证状态。
+格式计入配置哈希，不能复用旧格式的显式哈希。仍须独立质量和端到端验收后才启用生产。
+
 `PC_WORKER_ANSWER_RUNTIME_PROFILE=qwen35-rag-v1` 为回答与查询翻译启用固定 SDK 2.0.0
 传输，避免继承日常聊天的预算终止提示、模板和采样预设。当前候选只支持本机 loopback、无 API
 凭据的 LM Studio 服务及配置中固定的现用 Qwen3.5 9B Q6 模型；不是自动更换模型或质量达标声明。
