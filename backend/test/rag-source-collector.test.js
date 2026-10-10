@@ -7,6 +7,7 @@ import test from 'node:test'
 import { CREATE_RESOURCE_DOMAIN_LINKS_SQL, CREATE_RESOURCES_SQL } from '../src/config/resourceModelSchema.js'
 import { CREATE_RESOURCE_TRASH_SQL } from '../src/config/resourceTrashSchema.js'
 import { createRagSourceCollector } from '../src/services/ragSourceCollector.js'
+import { chunkRagSource } from '../src/services/ragChunker.js'
 
 const require = createRequire(import.meta.url)
 let Database
@@ -167,12 +168,18 @@ test('preserves literal markup in Markdown and TXT documents, books and reposito
   }
 })
 
-test('still extracts text from explicitly HTML document sources', nativeTestOptions, async () => {
-  const { database, documentBuffer, ebookBuffer } = fixtureDatabase({ documentBody: '<p>Visible &amp; readable</p>' })
+test('parses HTML exactly once while preserving escaped examples and heading structure', nativeTestOptions, async () => {
+  const { database, documentBuffer, ebookBuffer } = fixtureDatabase({ documentBody: '<h1>Tokens</h1><p>Visible &amp; readable</p><pre>&lt;EOS&gt; &lt;pad&gt;</pre><script>excluded_script()</script>' })
   try {
     database.exec("UPDATE documents SET original_name = 'example.html' WHERE id = 1")
     const report = await collectorFor({ database, documentBuffer, ebookBuffer })({ database })
-    assert.equal(report.sources.find(source => source.sourceType === 'document').sections[0].text, 'Visible & readable')
+    const section = report.sources.find(source => source.sourceType === 'document').sections[0]
+    const result = chunkRagSource({ format: section.format, body: section.text, locator: section.locator, sectionPath: section.sectionPath })
+    const body = result.chunks.map(chunk => chunk.body).join('\n')
+    assert.match(body, /Visible & readable/u)
+    assert.match(body, /<EOS> <pad>/u)
+    assert.equal(body.includes('excluded_script'), false)
+    assert.ok(result.chunks.some(chunk => chunk.sectionPath.includes('Tokens')))
   } finally { database.close() }
 })
 

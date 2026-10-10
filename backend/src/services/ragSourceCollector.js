@@ -16,7 +16,7 @@ import { resolveManagedRepositoryPath, resolveRepositoryEntry } from './reposito
 import { isSensitiveCodeFile, safeCodeText } from './searchSourceCollector.js'
 import { extractRagBinaryContent } from './ragContentExtractionService.js'
 
-export const RAG_SOURCE_EXTRACTOR_VERSION = 'rag-source.v2'
+export const RAG_SOURCE_EXTRACTOR_VERSION = 'rag-source.v3'
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/u
 const COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu
@@ -136,16 +136,16 @@ function stripMarkup(value) {
     : value)
 }
 
-function textFromBuffer(buffer, { html = false } = {}) {
+function textFromBuffer(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length > MAX_TEXT_BYTES || buffer.includes(0)) {
     fail('RAG_SOURCE_CONTENT_NOT_TEXT')
   }
   const text = buffer.toString('utf8')
   const replacementCount = [...text].filter((character) => character === '\ufffd').length
   if (replacementCount > Math.max(4, text.length * 0.01)) fail('RAG_SOURCE_CONTENT_NOT_TEXT')
-  // Markdown/TXT may contain literal tags or fenced HTML examples. Only an
-  // explicitly HTML source should be parsed as markup at this boundary.
-  const normalized = html ? stripMarkup(text) : normalizeText(text)
+  // Preserve source syntax here. The format-aware chunker parses HTML once;
+  // pre-stripping loses headings and makes escaped examples look like tags.
+  const normalized = normalizeText(text)
   if (!normalized) fail('RAG_SOURCE_CONTENT_EMPTY')
   return normalized
 }
@@ -519,7 +519,7 @@ async function collectDocument(row, contentService, binaryExtractor, signal) {
         extractorVersion = extracted.extractorVersion
         sections = artifactSections({ sourceType, id, versionId, title, extracted })
       } else {
-        const text = textFromBuffer(content.buffer, { html: format === 'html' })
+        const text = textFromBuffer(content.buffer)
         sections = [makeDocumentSection({ id, versionId, format, title, text })]
       }
     } catch (error) {
