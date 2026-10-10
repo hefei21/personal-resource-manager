@@ -100,6 +100,34 @@ test('partial answers require evidence, missing requirements and consistent stat
   ]) await assert.rejects(run({ ...valid, ...change }), /invalid|inconsistent|required/i)
 })
 
+test('URLs are display-only verbatim tokens from actually cited and selected evidence', async () => {
+  const url = 'https://example.invalid/repo.git'
+  const run = async (answer, citations = ['C1'], items = [{ citationId: 'C1', text: `git clone ${url}` }], overrides = {}) => {
+    let calls = 0
+    const processor = createRagAnswerProcessor({ config: { ...config, ...overrides }, fetchImpl: async endpoint => {
+      calls++
+      assert.equal(endpoint, 'http://127.0.0.1:1234/v1/chat/completions')
+      return response({ answer, abstained: false, citations })
+    } })
+    const result = await processor.process(task(items))
+    assert.equal(calls, 1)
+    return result.output
+  }
+  assert.equal((await run(`命令是 git clone ${url}。`)).answer, `命令是 git clone ${url}。`)
+  for (const changed of [url + '/extra', url + '?key=x', url + '#extra', 'https://example.invalid/repo',
+    'https://example.invalid.evil/repo.git', 'http://example.invalid/repo.git',
+    'ｈｔｔｐｓ：／／example.invalid/repo.git']) {
+    await assert.rejects(run(changed), { code: 'WORKER_ANSWER_RESULT_INVALID' })
+  }
+  await assert.rejects(run(url, ['C1'], [{ citationId: 'C1', text: 'No URL.' }, { citationId: 'C2', text: url }]), { code: 'WORKER_ANSWER_RESULT_INVALID' })
+  const credential = 'https://user:sample@example.invalid/repo'
+  await assert.rejects(run(credential, ['C1'], [{ citationId: 'C1', text: credential }]), { code: 'WORKER_ANSWER_RESULT_INVALID' })
+  await assert.rejects(run(url, [], [{ citationId: 'C1', text: url }]), { code: 'WORKER_ANSWER_RESULT_INVALID' })
+  const first = { citationId: 'C1', text: 'a'.repeat(300) }
+  const limit = Buffer.byteLength(SYSTEM_PROMPT) + Buffer.byteLength(JSON.stringify({ query: '这个结论是什么？', evidence: [first] })) + 1
+  await assert.rejects(run(url, ['C2'], [first, { citationId: 'C2', text: url }], { contextLimit: limit }), { code: 'WORKER_ANSWER_RESULT_INVALID' })
+})
+
 test('answer processor refuses forged citations and unknown result fields', async () => {
   const processor = createRagAnswerProcessor({ config, fetchImpl: async () => response({ answer: 'never', abstained: false, citations: ['C1'] }) })
   const injectedUrl = task()

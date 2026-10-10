@@ -75,6 +75,27 @@ function service(overrides = {}) {
   })
 }
 
+test('server independently validates quoted URLs against authorized cited originals', async () => {
+  const url = 'https://example.invalid/repo.git'
+  const run = async (answerText, citations = ['C1']) => {
+    const instance = service()
+    const queued = await instance.generate({ query: '文档中的克隆命令是什么？', evidence: [
+      evidence({ body: `git clone ${url}` }),
+      evidence({ citationId: 'internal:2', sourceId: 2, body: 'https://other.invalid/other' })
+    ] })
+    return instance.applyResult({ task: queued.task, result: workerResult(queued.task, { answer: answerText, citations }) })
+  }
+  const accepted = await run(`git clone ${url}`)
+  assert.equal(accepted.status, 'complete')
+  assert.equal(accepted.answer, `git clone ${url}`)
+  for (const value of [url + '?extra=1', url + '/extra', 'https://example.invalid/repo', 'https://other.invalid/other', 'https://forged.invalid/']) {
+    const refused = await run(value)
+    assert.equal(refused.abstained, true)
+    assert.equal(refused.reasonCode, 'unsafe_output')
+  }
+  assert.equal((await run(url, ['C2'])).reasonCode, 'unsafe_output')
+})
+
 test('partial result preserves missing requirements but rejects inconsistent or unsafe fields', async () => {
   const answer = service()
   const queued = await answer.generate({ query: '默认值和最大层数？', evidence: [evidence()] })

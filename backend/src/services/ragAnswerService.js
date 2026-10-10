@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 
 import { lookupPcWorkerProcessor } from './pcWorkerProcessorCatalog.js'
+import { evidenceUrls, hasOnlyCitedUrls } from './ragEvidenceUrls.js'
 
 export const RAG_ANSWER_SERVICE_VERSION = 'rag-answer-service.v1'
 export const RAG_ANSWER_TASK_TYPE = 'rag.answer.generate'
@@ -454,7 +455,11 @@ export class RagAnswerService {
     if (after.length !== selectedCitations.length) {
       return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), after, 'evidence_stale')
     }
+    const citedIds = new Set(after.map(item => item.citationId))
+    const sentUrls = new Set(projectedInput.evidence.filter(item => citedIds.has(item.citationId)).flatMap(item => evidenceUrls(item.text)))
+    const quotedUrls = after.flatMap(item => evidenceUrls(item.candidate.body ?? item.text)).filter(url => sentUrls.has(url))
     if (!output.abstained && (!isSafeAnswer(output.answer) || selectedCitations.length === 0 ||
+        !hasOnlyCitedUrls(result.output.answer, quotedUrls) ||
         (output.missingRequirements ?? []).some(item => !isSafeAnswer(item) || /https?:\/\//iu.test(item)))) {
       return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), after, output.answer ? 'unsafe_output' : 'citation_missing')
     }
