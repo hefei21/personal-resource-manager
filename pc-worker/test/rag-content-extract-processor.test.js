@@ -40,8 +40,9 @@ function epub() {
   return zip.toBuffer()
 }
 
-function pdf() {
-  const stream = 'BT /F1 12 Tf 72 720 Td (Hello PDF evidence) Tj ET'
+function pdf(bodyText = 'Hello PDF evidence') {
+  const escaped = bodyText.replace(/[\\()]/gu, '\\$&')
+  const stream = `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -91,11 +92,19 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v2')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v3')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }
   ])
+})
+
+test('keeps PDF literal tokens, comparisons and entity examples as plain text', async () => {
+  const original = '<EOS> <pad> x < y and z > 0 &lt; &amp; &#39; <b>literal</b>'
+  const buffer = pdf(original)
+  const result = await createRagContentExtractProcessor().process(task('pdf', buffer), Readable.from([buffer]))
+  assert.equal(result.artifact.sections[0].text, original)
+  assert.deepEqual(result.artifact.sections[0].locator, { page: 1 })
 })
 
 test('extracts PDF page text with a page locator', async () => {
