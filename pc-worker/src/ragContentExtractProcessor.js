@@ -8,7 +8,7 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
 export const RAG_CONTENT_EXTRACT_EXECUTION_CLASS = 'cpu'
-export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v3'
+export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v4'
 
 const MAX_INPUT_BYTES = 64 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
@@ -83,11 +83,28 @@ function entryText(zip, entryName) {
   return data.toString('utf8')
 }
 
+function docxParagraphText(xml) {
+  // Formatting runs do not imply whitespace. Only visible text and explicit
+  // breaks belong to the paragraph, not XML indentation or field instructions.
+  const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+  const parts = [...xml.matchAll(/<w:t\b[^>]*?(?<!\/)>([\s\S]*?)<\/w:t>|<w:(tab|br|cr)\b[^>]*>/gu)]
+    .map((match) => {
+      if (match[2]) return match[2] === 'tab' ? '\t' : '\n'
+      return match[1].replace(/&(amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);/gu, (entity, value) => {
+        if (Object.hasOwn(entities, value)) return entities[value]
+        const point = value.startsWith('#x') ? Number.parseInt(value.slice(2), 16) : Number(value.slice(1))
+        return point > 0 && point <= 0x10ffff && !(point >= 0xd800 && point <= 0xdfff)
+          ? String.fromCodePoint(point) : entity
+      })
+    })
+  return text(parts.join(''), { markup: false })
+}
+
 function extractDocx(buffer) {
   const zip = archive(buffer)
   const xml = entryText(zip, 'word/document.xml')
   const paragraphs = [...xml.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/giu)]
-    .map((match) => text(match[1].replace(/<w:tab\b[^>]*\/?\s*>/giu, '\t').replace(/<w:br\b[^>]*\/?\s*>/giu, '\n')))
+    .map((match) => docxParagraphText(match[1]))
     .filter(Boolean)
   if (paragraphs.length === 0) fail('WORKER_CONTENT_EXTRACT_EMPTY')
   return [{ ordinal: 0, title: 'Document', text: paragraphs.join('\n\n'), locator: { paragraphStart: 0, paragraphEnd: paragraphs.length - 1 } }]

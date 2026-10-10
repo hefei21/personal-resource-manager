@@ -73,6 +73,23 @@ test('extracts bounded DOCX paragraphs into a hash-bound Worker artifact', async
   assert.equal(Object.hasOwn(result.output, 'manifest'), false)
 })
 
+test('DOCX joins visible text runs without adding XML layout or exposing field instructions', async () => {
+  const zip = new AdmZip()
+  zip.addFile('word/document.xml', Buffer.from(`<w:document><w:body>
+    <w:p>
+      <w:r><w:t>Trans</w:t></w:r>
+      <w:r><w:rPr><w:b/></w:rPr><w:t>former</w:t></w:r>
+      <w:hyperlink><w:r><w:t xml:space="preserve"> example</w:t></w:r></w:hyperlink>
+      <w:r><w:instrText>HYPERLINK hidden_instruction</w:instrText><w:t>.</w:t></w:r>
+    </w:p>
+    <w:p><w:r><w:t/><w:t>&amp;lt;EOS&amp;gt; &lt;pad&gt; &#x4E2D;&#25991;</w:t><w:tab></w:tab><w:t>next</w:t><w:br/><w:t>line</w:t></w:r></w:p>
+  </w:body></w:document>`))
+  const buffer = zip.toBuffer()
+  const result = await createRagContentExtractProcessor().process(task('docx', buffer), Readable.from([buffer]))
+  assert.equal(result.artifact.sections[0].text, 'Transformer example.\n\n&lt;EOS&gt; <pad> 中文 next\nline')
+  assert.deepEqual(result.artifact.sections[0].locator, { paragraphStart: 0, paragraphEnd: 1 })
+})
+
 test('extracts EPUB spine order and strips markup', async () => {
   const buffer = epub()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
@@ -92,7 +109,7 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v3')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v4')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }
