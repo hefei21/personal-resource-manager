@@ -111,10 +111,12 @@ test('configured HTTP translation transport enforces payload, failure and respon
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(() => { server.closeAllConnections(); server.close() })
   const complete = createQueryTranslationTransport({ baseUrl: `http://127.0.0.1:${server.address().port}/v1`, modelId: 'test-model' })
-  const run = () => translateRetrievalQuery({ query: '中文问题', enabled: true, complete, timeoutMs: 100 })
+  // Protocol cases must not fail on a busy Windows runner's first fetch setup.
+  // Only the deliberately hung request tests the short deadline below.
+  const run = (timeoutMs = 2000) => translateRetrievalQuery({ query: '中文问题', enabled: true, complete, timeoutMs })
   assert.deepEqual((await run()).queries, ['中文问题', 'Chinese question?'])
   for (mode of ['offline', 'redirect', 'large', 'truncated', 'hung']) {
-    const result = await run()
+    const result = await run(mode === 'hung' ? 100 : 2000)
     assert.deepEqual(result.queries, ['中文问题'])
     assert.equal(result.status, mode === 'hung' ? 'timeout' : mode === 'truncated' ? 'invalid' : 'unavailable')
   }
