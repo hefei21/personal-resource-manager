@@ -4,11 +4,12 @@ import { fileURLToPath } from 'node:url'
 
 import AdmZip from 'adm-zip'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
+import { extractEpubHtml } from './epubText.js'
 
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
 export const RAG_CONTENT_EXTRACT_EXECUTION_CLASS = 'cpu'
-export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v4'
+export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v5'
 
 const MAX_INPUT_BYTES = 64 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
@@ -34,20 +35,8 @@ function fail(code, message = code) {
   throw Object.assign(new Error(message), { code, retryable: false })
 }
 
-function text(value, { markup = true } = {}) {
-  let content = String(value ?? '').normalize('NFKC')
-  if (markup) content = content
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/giu, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, ' ')
-    .replace(/<[^>]+>/gu, ' ')
-    .replace(/&nbsp;|&#160;/giu, ' ')
-    .replace(/&amp;/giu, '&')
-    .replace(/&lt;/giu, '<')
-    .replace(/&gt;/giu, '>')
-    .replace(/&quot;/giu, '"')
-    .replace(/&apos;|&#39;/giu, "'")
-    .replace(/&#(\d+);/gu, (_match, value) => String.fromCodePoint(Number(value)))
-  return content
+function text(value) {
+  return String(value ?? '').normalize('NFKC')
     .replace(/\r\n?/gu, '\n')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
     .replace(/[ \t]+/gu, ' ')
@@ -97,7 +86,7 @@ function docxParagraphText(xml) {
           ? String.fromCodePoint(point) : entity
       })
     })
-  return text(parts.join(''), { markup: false })
+  return text(parts.join(''))
 }
 
 function extractDocx(buffer) {
@@ -133,9 +122,10 @@ function extractEpub(buffer) {
     const entryName = manifest.get(id)
     if (!entryName) continue
     const html = entryText(zip, entryName)
-    const body = text(html.match(/<body\b[^>]*>([\s\S]*?)<\/body>/iu)?.[1] ?? html)
+    const parsed = extractEpubHtml(html)
+    const body = text(parsed.body)
     if (!body) continue
-    const title = text(html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/iu)?.[1] ?? path.posix.basename(entryName))
+    const title = text(parsed.title || path.posix.basename(entryName))
     // Artifact ordinals are dense, but source locations must retain gaps left
     // by image-only/empty spine items so references still target the original book.
     sections.push({ ordinal: sections.length, title: title || `Section ${sections.length + 1}`, text: body, locator: { spineIndex } })
@@ -157,7 +147,7 @@ async function extractPdf(buffer, signal) {
       const content = await page.getTextContent()
       // PDF.js already returns plain text. Markup stripping would delete literal
       // tokens such as <EOS> and comparisons, or decode literal entity examples.
-      const pageText = text(content.items.map((item) => `${item.str ?? ''}${item.hasEOL ? '\n' : ' '}`).join(''), { markup: false })
+      const pageText = text(content.items.map((item) => `${item.str ?? ''}${item.hasEOL ? '\n' : ' '}`).join(''))
       if (pageText) sections.push({ ordinal: sections.length, title: `Page ${pageNumber}`, text: pageText, locator: { page: pageNumber } })
     }
   } finally {

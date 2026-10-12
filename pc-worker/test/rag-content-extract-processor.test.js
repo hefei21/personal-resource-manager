@@ -32,11 +32,11 @@ function docx() {
   return zip.toBuffer()
 }
 
-function epub() {
+function epub(body = '<h1>Hello</h1><p>Grounded text.</p>') {
   const zip = new AdmZip()
   zip.addFile('META-INF/container.xml', Buffer.from('<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>'))
   zip.addFile('OPS/book.opf', Buffer.from('<package><manifest><item id="c1" href="chapter.xhtml"/></manifest><spine><itemref idref="c1"/></spine></package>'))
-  zip.addFile('OPS/chapter.xhtml', Buffer.from('<html><head><title>Chapter One</title></head><body><h1>Hello</h1><p>Grounded text.</p></body></html>'))
+  zip.addFile('OPS/chapter.xhtml', Buffer.from(`<html><head><title>Chapter One</title></head><body>${body}</body></html>`))
   return zip.toBuffer()
 }
 
@@ -94,8 +94,26 @@ test('extracts EPUB spine order and strips markup', async () => {
   const buffer = epub()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.artifact.sections[0].title, 'Chapter One')
-  assert.match(result.artifact.sections[0].text, /Hello Grounded text\./u)
+  assert.equal(result.artifact.sections[0].text, 'Hello\n\nGrounded text.')
   assert.deepEqual(result.artifact.sections[0].locator, { spineIndex: 0 })
+})
+
+test('EPUB preserves inline words and separates blocks without inventing spaces', async () => {
+  const buffer = epub('<p>Trans<em>former</em>与地<strong>球</strong>，<a href="#note">注释</a>。</p><p>Next<br/>line</p><ul><li>one</li><li>two</li></ul>')
+  const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
+  assert.equal(result.artifact.sections[0].text, 'Transformer与地球,注释。\n\nNext\nline\n\none\n\ntwo')
+})
+
+test('EPUB decodes entities once and retains literal examples without executing markup', async () => {
+  const buffer = epub('<p>&amp;lt;EOS&amp;gt; &lt;pad&gt; &#x4E2D;&#25991; &copy; &#x1F600;</p><p data-note="a > b">visible<!-- not evidence --> text</p><script>hiddenScript()</script><style>.hidden{}</style><template>hiddenTemplate</template>')
+  const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
+  assert.equal(result.artifact.sections[0].text, '&lt;EOS&gt; <pad> 中文 © 😀\n\nvisible text')
+})
+
+test('invalid EPUB numeric entities do not abort extraction of valid surrounding evidence', async () => {
+  const buffer = epub('<p>before &#99999999; after</p><p>valid evidence</p>')
+  const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
+  assert.equal(result.artifact.sections[0].text, 'before � after\n\nvalid evidence')
 })
 
 test('keeps original EPUB spine positions when empty items are skipped', async () => {
@@ -109,7 +127,7 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v4')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v5')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }
