@@ -195,6 +195,34 @@ test('default NAS prose chunks fit an evidence window without pretending to coun
   assert.ok(explicit.chunks.every(chunk => bytes(chunk.body) <= 128))
 })
 
+test('deferred byte bounds preserve words when a preceding whitespace boundary exists', () => {
+  const body = `${'alpha '.repeat(20)}improving distinct_identifier\n${'中文😀'.repeat(90)} tail`
+  const report = chunkRagSource({ format: 'txt', body, locator: documentLocator }, { maxChunkBytes: 128 })
+  assert.ok(report.chunks.some(chunk => chunk.body.includes('improving distinct_identifier')))
+  assert.ok(report.chunks.every(chunk => bytes(chunk.body) <= 128 && !chunk.body.includes('\ufffd')))
+  assert.equal(report.chunks.map(chunk => chunk.body).join('').replace(/\s/gu, ''), body.replace(/\s/gu, ''))
+  assert.ok(report.chunks.every(chunk => chunk.startLine >= 1 && chunk.endLine <= 2))
+})
+
+test('oversized words still terminate within the byte ceiling without losing characters', () => {
+  const body = `prefix ${'a'.repeat(300)} suffix`
+  const report = chunkRagSource({ format: 'txt', body, locator: documentLocator }, { maxChunkBytes: 128 })
+  assert.ok(report.chunks.every(chunk => bytes(chunk.body) <= 128))
+  assert.equal(report.chunks.map(chunk => chunk.body).join('').replace(/\s/gu, ''), body.replace(/\s/gu, ''))
+})
+
+test('deferred word boundaries preserve varying offsets and whitespace without empty chunks', () => {
+  for (let offset = 1; offset < 128; offset++) {
+    const body = `${'x'.repeat(offset)} ${'alpha improving beta '.repeat(20)}`.trim()
+    const report = chunkRagSource({ format: 'txt', body, locator: documentLocator }, { maxChunkBytes: 128 })
+    assert.ok(report.chunks.every(chunk => bytes(chunk.body) <= 128))
+    assert.equal(report.chunks.map(chunk => chunk.body).join(' ').split(/\s/u).filter(Boolean).join(' '), body)
+  }
+  const body = `head${' '.repeat(400)}tail`
+  const report = chunkRagSource({ format: 'txt', body, locator: documentLocator }, { maxChunkBytes: 128 })
+  assert.equal(report.chunks.map(chunk => chunk.body).join(' '), 'head tail')
+})
+
 test('Chinese ebook chapter boundaries work without ASCII word boundaries', () => {
   const report = chunkRagSource({ format: 'ebook', body: '第一章 起点\n\nAlpha\n\n第二則　故事\n\nBeta\n\n第三节终点\n\nGamma', locator: { route: '/books', bookId: 1, chapterIndex: 0 } })
   assert.equal(report.chunks.length, 3)

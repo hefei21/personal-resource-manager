@@ -59,6 +59,22 @@ test('translated FTS accepts the complete protocol length without losing source 
   } finally { database.close() }
 })
 
+test('FTS finds a word spanning the former deferred byte cut without changing scope or evidence', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const body = `${'alpha '.repeat(255)}improving distinct_identifier`
+    const service = createService(database, { collectSources: async () => ({ sources: [source({ text: body })], errors: [] }) })
+    await service.refresh()
+    const hits = service.query({ q: 'improving', sourceType: 'document', sourceId: 1 }).data
+    assert.equal(hits.length, 1)
+    assert.match(hits[0].body, /improving distinct_identifier/u)
+    assert.ok(body.includes(hits[0].body))
+    assert.equal(service.query({ q: 'improving', sourceType: 'document', sourceId: 2 }).data.length, 0)
+    assert.equal(service.query({ q: 'notpresentlexeme' }).data.length, 0)
+  } finally { database.close() }
+})
+
 test('chapter scope never accepts empty or client-shaped chunk filters', () => {
   assert.equal(normalizeRagChunkScope(undefined), undefined)
   assert.deepEqual(normalizeRagChunkScope([2, 2, 3]), [2, 3])

@@ -36,7 +36,7 @@ const ROUTES = Object.freeze({
   ebook: '/books',
   repository_document: '/code'
 })
-const STRUCTURE_RULES_VERSION = 'headings-v2|html-blocks-v1|paragraphs-v1|fence-atomic-v1|line-locators-v1'
+const STRUCTURE_RULES_VERSION = 'headings-v2|html-blocks-v1|paragraphs-v1|fence-atomic-v1|line-locators-v1|deferred-word-boundaries-v1'
 
 export const RAG_CHUNKER_DEFAULTS = Object.freeze({
   modelId: RAG_CHUNKER_MODEL_ID,
@@ -652,21 +652,26 @@ function chunkAtomicUnit(unit, config, ordinalRef) {
 
 function splitUtf8(text, maxBytes) {
   const pieces = []
-  let current = ''
+  let currentBytes = 0
   let startOffset = 0
   let offset = 0
+  let whitespaceEnd = 0
   for (const character of text) {
-    const next = `${current}${character}`
-    if (current && byteLength(next) > maxBytes) {
-      pieces.push({ text: current, startOffset, endOffset: offset })
-      current = character
-      startOffset = offset
-    } else {
-      current = next
+    const characterBytes = byteLength(character)
+    while (offset > startOffset && currentBytes + characterBytes > maxBytes) {
+      // Preserve lexical terms, not just code points. A word longer than the
+      // entire ceiling still falls back to bounded UTF-8 slices; no fake overlap.
+      const endOffset = /\s/u.test(character) ? offset : whitespaceEnd > startOffset ? whitespaceEnd : offset
+      pieces.push({ text: text.slice(startOffset, endOffset), startOffset, endOffset })
+      startOffset = endOffset
+      currentBytes = byteLength(text.slice(startOffset, offset))
+      whitespaceEnd = startOffset
     }
+    currentBytes += characterBytes
     offset += character.length
+    if (/\s/u.test(character)) whitespaceEnd = offset
   }
-  if (current) pieces.push({ text: current, startOffset, endOffset: offset })
+  if (offset > startOffset) pieces.push({ text: text.slice(startOffset), startOffset, endOffset: offset })
   return pieces
 }
 
@@ -708,7 +713,9 @@ function chunkDeferredRun(units, config, ordinalRef) {
     const pieces = byteLength(unit.text) > proseBytes
       ? splitUtf8(unit.text, proseBytes)
       : [{ text: unit.text, startOffset: 0, endOffset: unit.text.length }]
+    if (pieces.length > 1) flush()
     for (const piece of pieces) {
+      if (!piece.text.trim()) continue
       const separatorBytes = current.length === 0 ? 0 : byteLength('\n\n')
       if (current.length > 0 && currentBytes + separatorBytes + byteLength(piece.text) > proseBytes) flush()
       if (current.length === 0 && byteLength(piece.text) <= proseBytes) {
