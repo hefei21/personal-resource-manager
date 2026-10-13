@@ -17,27 +17,6 @@ const repositoryLocator = {
   route: '/code', repositoryId: 43, path: 'docs/README.md', commit: 'a'.repeat(40)
 }
 
-test('oversized prose prefers complete sentences without breaking decimals or URLs', () => {
-  const first = 'An ordinary sentence with complete evidence. '.repeat(26)
-  const body = first + 'A second sentence has important conditions and a final exception. '.repeat(30)
-  const chunks = chunkRagSource({ format: 'txt', body, locator: documentLocator }).chunks
-  assert.ok(chunks.length > 1)
-  assert.match(chunks[0].body, /\.$/u)
-  assert.equal(chunks.map(c => c.body).join('').replace(/\s/gu, ''), body.replace(/\s/gu, ''))
-  for (let offset = 0; offset < 200; offset++) {
-    const text = 'First sentence. ' + 'word '.repeat(280) + 'x'.repeat(offset) +
-      ' https://example.org/path 3.14159 中文。 😀 Next sentence. ' + 'tail '.repeat(400)
-    const parts = chunkRagSource({ format: 'txt', body: text, locator: documentLocator }).chunks
-    assert.ok(parts.every(c => Buffer.byteLength(c.body) <= RAG_CHUNKER_DEFAULTS.deferredProseBytes))
-    assert.ok(parts.some(c => c.body.includes('3.14159')))
-    assert.ok(parts.some(c => c.body.includes('https://example.org/path')))
-    assert.equal(parts.map(c => c.body).join('').replace(/\s/gu, ''), text.replace(/\s/gu, ''))
-  }
-  const decimalAtCeiling = 'word '.repeat(306) + 'abc 3.14159 ' + 'tail '.repeat(100)
-  assert.ok(chunkRagSource({ format: 'txt', body: decimalAtCeiling, locator: documentLocator })
-    .chunks.some(c => c.body.includes('3.14159')))
-})
-
 const whitespaceTokenizer = Object.freeze({
   encode(text) {
     return text.split(/\s+/u).filter(Boolean)

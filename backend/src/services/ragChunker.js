@@ -36,7 +36,7 @@ const ROUTES = Object.freeze({
   ebook: '/books',
   repository_document: '/code'
 })
-const STRUCTURE_RULES_VERSION = 'headings-v2|html-blocks-v1|paragraphs-v1|fence-atomic-v1|line-locators-v1|deferred-sentence-boundaries-v1'
+const STRUCTURE_RULES_VERSION = 'headings-v2|html-blocks-v1|paragraphs-v1|fence-atomic-v1|line-locators-v1|deferred-word-boundaries-v1'
 
 export const RAG_CHUNKER_DEFAULTS = Object.freeze({
   modelId: RAG_CHUNKER_MODEL_ID,
@@ -659,19 +659,9 @@ function splitUtf8(text, maxBytes) {
   for (const character of text) {
     const characterBytes = byteLength(character)
     while (offset > startOffset && currentBytes + characterBytes > maxBytes) {
-      // Keep the last complete sentence in the latter half of the byte budget.
-      // Look beyond the ceiling so a decimal/URL dot at the cut cannot become
-      // an artificial end of sentence. Otherwise retain lexical boundaries;
-      // only words larger than the entire ceiling require UTF-8 slicing.
-      let sentenceEnd = 0
-      const prefix = text.slice(startOffset, offset + 2)
-      for (const match of prefix.matchAll(/[.!?。！？][”’"')\]]*(?:\s+|$)/gu)) {
-        const candidateEnd = match.index + match[0].length
-        if (startOffset + candidateEnd <= offset && byteLength(prefix.slice(0, candidateEnd)) >= maxBytes / 2) {
-          sentenceEnd = startOffset + candidateEnd
-        }
-      }
-      const endOffset = sentenceEnd || (/\s/u.test(character) ? offset : whitespaceEnd > startOffset ? whitespaceEnd : offset)
+      // Preserve lexical terms, not just code points. A word longer than the
+      // entire ceiling still falls back to bounded UTF-8 slices; no fake overlap.
+      const endOffset = /\s/u.test(character) ? offset : whitespaceEnd > startOffset ? whitespaceEnd : offset
       pieces.push({ text: text.slice(startOffset, endOffset), startOffset, endOffset })
       startOffset = endOffset
       currentBytes = byteLength(text.slice(startOffset, offset))
