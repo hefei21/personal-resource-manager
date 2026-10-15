@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { lookupPcWorkerProcessor } from './pcWorkerProcessorCatalog.js'
 import { evidenceUrls, hasOnlyCitedUrls } from './ragEvidenceUrls.js'
 import { createQuestionPlan } from './ragQuestionPlan.js'
+import { isSafeRagText } from './ragOutputSafety.js'
 
 export const RAG_ANSWER_SERVICE_VERSION = 'rag-answer-service.v1'
 export const RAG_ANSWER_TASK_TYPE = 'rag.answer.generate'
@@ -195,7 +196,7 @@ function degradedReason(error) {
 }
 
 function isSafeAnswer(value) {
-  return typeof value === 'string' && !SENSITIVE_OUTPUT_PATTERN.test(value)
+  return isSafeRagText(value)
 }
 
 function freezeResult(result) {

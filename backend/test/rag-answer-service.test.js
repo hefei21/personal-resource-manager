@@ -99,6 +99,25 @@ test('server independently validates quoted URLs against authorized cited origin
   assert.equal((await run(url, ['C2'], `See [repository](${url}).`)).reasonCode, 'unsafe_output')
 })
 
+test('technical terminology survives service validation without allowing credential values', async () => {
+  const instance = service()
+  const queued = await instance.generate({ query: 'Explain password handling.', evidence: [evidence({
+    body: 'A user-id/password mismatch and a UTF-8 decoding failure are distinct.'
+  })] })
+  for (const text of ['A user-id/password mismatch differs from a UTF-8 decoding failure.', 'Do not expose a shared secret.']) {
+    const result = await instance.applyResult({ task: queued.task, result: workerResult(queued.task, { answer: text }) })
+    assert.equal(result.status, 'complete')
+    assert.equal(result.answer, text)
+  }
+  for (const text of ['password=synthetic-value', 'secret is synthetic-value', '/mnt/synthetic/file.txt']) {
+    const result = await instance.applyResult({ task: queued.task, result: workerResult(queued.task, { answer: text }) })
+    assert.equal(result.reasonCode, 'unsafe_output')
+  }
+  const partial = workerResult(queued.task, { answer: 'Do not expose a shared secret.', reasonCode: 'PARTIAL' })
+  partial.output.missingRequirements = ['Maximum password length']
+  assert.equal((await instance.applyResult({ task: queued.task, result: partial })).status, 'partial')
+})
+
 test('partial result preserves missing requirements but rejects inconsistent or unsafe fields', async () => {
   const answer = service()
   const queued = await answer.generate({ query: '默认值和最大层数？', evidence: [evidence()] })

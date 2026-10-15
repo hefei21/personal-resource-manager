@@ -303,9 +303,9 @@ function retrieval() {
 }
 
 test('evidence-first response uses authorized source text, bounds excerpts and rechecks after generation', async () => {
-  for (const mode of ['plain', 'long', 'sensitive', 'revoked']) {
+  for (const mode of ['plain', 'concept', 'long', 'sensitive', 'revoked']) {
     let visible = true
-    const body = mode === 'long' ? '原文'.repeat(600) : mode === 'sensitive' ? 'password=do-not-expose' : 'Original source, not a model paraphrase.'
+    const body = mode === 'long' ? '原文'.repeat(600) : mode === 'sensitive' ? 'password=do-not-expose' : mode === 'concept' ? 'Protect password confidentiality without publishing a shared secret.' : 'Original source, not a model paraphrase.'
     const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
       authoritativeChecksFactory: () => ({ authoritativeVisibility: () => visible, authoritativeActiveSnapshot: () => true }),
       candidateProvider: async () => ({ ftsCandidates: [] }),
@@ -331,18 +331,18 @@ test('evidence-first response uses authorized source text, bounds excerpts and r
       assert.equal(result.evidence[0].excerpt, mode === 'sensitive' ? '' : body.slice(0,800))
       assert.equal(result.evidence[0].excerptTruncated, mode === 'long')
       assert.equal(result.evidence[0].excerptUnavailable, mode === 'sensitive')
-      assert.doesNotMatch(JSON.stringify(result.evidence), /password|do-not-expose|documentId|sourceId|snapshotId|private/u)
+      assert.doesNotMatch(JSON.stringify(result.evidence), /do-not-expose|documentId|sourceId|snapshotId|private/u)
     })
   }
 })
 
 test('HTTP partial answer preserves missing requirements and blocks unsafe missing text', async () => {
-  for (const missing of ['最大层数', 'password=do-not-expose']) {
+  for (const missing of ['最大层数', 'Maximum password length', 'password=do-not-expose']) {
     const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
       authoritativeChecksFactory: checks,
       candidateProvider: async () => ({ ftsCandidates: [] }),
       hybridRetrieverFactory: () => ({ retrieve: async () => retrieval() }),
-      answerServiceFactory: () => ({ generate: async () => ({ status: 'partial', answer: '默认1。C1',
+      answerServiceFactory: () => ({ generate: async () => ({ status: 'partial', answer: 'Protect password confidentiality. C1',
         abstained: false, reasonCode: 'PARTIAL', missingRequirements: [missing], citations: [{ citationId: 'C1' }] }) })
     })
     await withServer(router, async base => {
@@ -353,6 +353,7 @@ test('HTTP partial answer preserves missing requirements and blocks unsafe missi
       assert.equal(result.status, missing.startsWith('password') ? 'degraded' : 'partial')
       if (result.status === 'partial') assert.deepEqual(result.missingRequirements, [missing])
       else { assert.equal(result.answer, null); assert.equal(result.missingRequirements, undefined) }
+      if (result.status === 'partial') assert.equal(result.answer, 'Protect password confidentiality. C1')
       assert.doesNotMatch(JSON.stringify(result), /do-not-expose/)
     })
   }

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import express from 'express'
+import { isSafeRagText } from '../services/ragOutputSafety.js'
 
 import { getDatabase } from '../config/database.js'
 import { loadRagRerankerModel } from '../config/ragReranker.js'
@@ -1094,9 +1095,7 @@ function languageForQuery(query) {
 }
 
 function safeAnswerText(value) {
-  if (typeof value !== 'string') return null
-  if (/(?:[A-Za-z]:[\\/]|^\\\\|\/(?:home|root|mnt|var|tmp|etc|opt|srv|data)\/|storage[ _-]?key|(?:sha|sha256)[ _-]?hash|api[ _-]?key|password|secret|lease[ _-]?token|(?:source|document|book|repository|snapshot|chunk|database)[ _-]?id\s*[:=]?\s*\d+)/iu.test(value)) return null
-  return value
+  return isSafeRagText(value) ? value : null
 }
 
 function fallbackReason(error) {
