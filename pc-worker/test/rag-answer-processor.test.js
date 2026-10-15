@@ -114,6 +114,9 @@ test('URLs are display-only verbatim tokens from actually cited and selected evi
     return result.output
   }
   assert.equal((await run(`命令是 git clone ${url}。`)).answer, `命令是 git clone ${url}。`)
+  const markdown = [{ citationId: 'C1', text: `See [repository](${url}).` }]
+  assert.equal((await run(`地址 (${url})。`, ['C1'], markdown)).answer, `地址 (${url})。`)
+  await assert.rejects(run(url + '/extra', ['C1'], markdown), { code: 'WORKER_ANSWER_RESULT_INVALID' })
   for (const changed of [url + '/extra', url + '?key=x', url + '#extra', 'https://example.invalid/repo',
     'https://example.invalid.evil/repo.git', 'http://example.invalid/repo.git',
     'ｈｔｔｐｓ：／／example.invalid/repo.git']) {

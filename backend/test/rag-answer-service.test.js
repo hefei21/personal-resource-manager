@@ -77,10 +77,10 @@ function service(overrides = {}) {
 
 test('server independently validates quoted URLs against authorized cited originals', async () => {
   const url = 'https://example.invalid/repo.git'
-  const run = async (answerText, citations = ['C1']) => {
+  const run = async (answerText, citations = ['C1'], body = `git clone ${url}`) => {
     const instance = service()
     const queued = await instance.generate({ query: '文档中的克隆命令是什么？', evidence: [
-      evidence({ body: `git clone ${url}` }),
+      evidence({ body }),
       evidence({ citationId: 'internal:2', sourceId: 2, body: 'https://other.invalid/other' })
     ] })
     return instance.applyResult({ task: queued.task, result: workerResult(queued.task, { answer: answerText, citations }) })
@@ -94,6 +94,9 @@ test('server independently validates quoted URLs against authorized cited origin
     assert.equal(refused.reasonCode, 'unsafe_output')
   }
   assert.equal((await run(url, ['C2'])).reasonCode, 'unsafe_output')
+  assert.equal((await run(`地址 (${url})。`, ['C1'], `See [repository](${url}).`)).status, 'complete')
+  assert.equal((await run(url + '/extra', ['C1'], `See [repository](${url}).`)).reasonCode, 'unsafe_output')
+  assert.equal((await run(url, ['C2'], `See [repository](${url}).`)).reasonCode, 'unsafe_output')
 })
 
 test('partial result preserves missing requirements but rejects inconsistent or unsafe fields', async () => {

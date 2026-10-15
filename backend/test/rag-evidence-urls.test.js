@@ -23,3 +23,23 @@ test('quoted URL boundaries do not allow prefixes, suffixes or normalized invent
     assert.equal(hasOnlyCitedUrls('https://example.invalid/path', evidenceUrls(exact)), false)
   }
 })
+
+test('Markdown destinations exclude following prose without trimming URI punctuation', () => {
+  const base = 'https://example.invalid/builder'
+  for (const tail of ['', '.', '?', '!', ';', '(part)', '(part(nested))', '?x=(a)&y=2#section']) {
+    const exact = base + tail
+    for (const punctuation of ['', '.', ',', ';', ':', '!', '?']) {
+      const source = `See [builder](${exact})${punctuation}`
+      assert.deepEqual(evidenceUrls(source), [exact])
+      assert.equal(hasOnlyCitedUrls(`原文 (${exact})。`, evidenceUrls(source)), true)
+      assert.equal(hasOnlyCitedUrls(exact + '/extra', evidenceUrls(source)), false)
+      if (tail) assert.equal(hasOnlyCitedUrls(base, evidenceUrls(source)), false)
+    }
+  }
+  assert.deepEqual(evidenceUrls(`Bare ${base}).`), [base + ').'])
+  assert.deepEqual(evidenceUrls(`[malformed](${base}).evil`), [base + ').evil'])
+  assert.equal(hasOnlyCitedUrls(base, evidenceUrls(`[malformed](${base}).evil`)), false)
+  assert.equal(hasOnlyCitedUrls('https://user:pass@example.invalid/builder',
+    evidenceUrls('[login](https://user:pass@example.invalid/builder).')), false)
+  assert.equal(hasOnlyCitedUrls(base, evidenceUrls('[other](https://other.invalid/builder).')), false)
+})
