@@ -1064,9 +1064,8 @@ function publicLocator(locator, citationId) {
     if (/^(?:absolute|storage|db|database|internal|secret|token|credential)/iu.test(key) ||
         /(?:hash|storagekey|storage_key|documentid|bookid|repositoryid|sourceid|snapshotid|versionid|commit)/iu.test(key)) continue
     if (key === 'path' && (typeof value !== 'string' || /^[A-Za-z]:[\\/]|^\\\\|^\//u.test(value))) continue
-    if (Array.isArray(value) && value.some((item) => typeof item === 'string' &&
-        /(?:[A-Za-z]:[\\/]|^\\\\|\/(?:home|root|mnt|var|tmp|etc|opt|srv|data)\/|storage[ _-]?key|(?:sha|sha256)[ _-]?hash|api[ _-]?key|password|secret|lease[ _-]?token)/iu.test(item))) continue
-    if (typeof value === 'string' && /(?:[A-Za-z]:[\\/]|^\\\\|\/(?:home|root|mnt|var|tmp|etc|opt|srv|data)\/|storage[ _-]?key|(?:sha|sha256)[ _-]?hash|api[ _-]?key|password|secret|lease[ _-]?token)/iu.test(value)) continue
+    if (Array.isArray(value) && value.some(item => typeof item !== 'string' || !isSafeRagText(item))) continue
+    if (typeof value === 'string' && !isSafeRagText(value)) continue
     output[key] = value
   }
   return output
@@ -1076,7 +1075,7 @@ function publicCitation(item, index) {
   const citationId = /^C[1-9]\d{0,3}$/u.test(item?.citationId ?? '') ? item.citationId : `C${index + 1}`
   const citation = { citationId }
   if (isPlainObject(item)) {
-    if (typeof item.title === 'string' && !/[A-Za-z]:[\\/]|^\\\\|(?:sha|sha256)[ _-]?hash|storage[ _-]?key|password|secret|(?:source|document|book|repository|snapshot|chunk|database)[ _-]?id\s*[:=]?\s*\d+/iu.test(item.title)) {
+    if (isSafeRagText(item.title)) {
       citation.title = item.title
     }
     citation.locator = publicLocator(item.locator, citationId)

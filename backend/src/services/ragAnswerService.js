@@ -30,8 +30,6 @@ const FORBIDDEN_TASK_FIELDS = new Set(['locator', 'title', 'sourceId', 'sourceVe
 const TASK_SUBJECT_TYPE = 'rag.answer.query'
 const MAX_QUERY_BYTES = 16_384
 const MAX_CITATION_ID_BYTES = 128
-// A drive letter cannot be the tail of a multi-character URI scheme (https:, scheme:).
-const SENSITIVE_OUTPUT_PATTERN = /(?:(?<![A-Za-z0-9+.-])[A-Za-z]:[\\/]|\\\\|\/(?:home|root|mnt|var|tmp|etc|opt|srv|data)\/|storage[ _-]?key|(?:sha|sha256)[ _-]?hash|api[ _-]?key|password|secret|lease[ _-]?token)/iu
 
 export class RagAnswerServiceError extends Error {
   constructor(code, message = code, details = {}) {
@@ -113,7 +111,8 @@ function sanitizeLocator(locator, citationId) {
     if (/^(?:absolute|storage|db|database|internal|secret|token|credential)/iu.test(key) ||
         /(?:hash|storagekey|storage_key|documentid|bookid|repositoryid|sourceid|snapshotid|versionid|commit)/iu.test(key)) continue
     if (key === 'path' && (typeof value !== 'string' || /^[A-Za-z]:[\\/]|^\\\\|^\//u.test(value))) continue
-    if (typeof value === 'string' && SENSITIVE_OUTPUT_PATTERN.test(value)) continue
+    if (typeof value === 'string' && !isSafeRagText(value)) continue
+    if (Array.isArray(value) && value.some(item => typeof item !== 'string' || !isSafeRagText(item))) continue
     result[key] = cloneJson(value)
   }
   return Object.freeze(result)
@@ -122,7 +121,7 @@ function sanitizeLocator(locator, citationId) {
 function publicCitation(evidence) {
   return Object.freeze({
     citationId: evidence.citationId,
-    ...(evidence.title === null ? {} : { title: redactSensitiveText(evidence.title) }),
+    ...(isSafeRagText(evidence.title) ? { title: evidence.title } : {}),
     locator: sanitizeLocator(evidence.locator, evidence.citationId)
   })
 }

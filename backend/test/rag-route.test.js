@@ -309,7 +309,8 @@ test('evidence-first response uses authorized source text, bounds excerpts and r
     const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
       authoritativeChecksFactory: () => ({ authoritativeVisibility: () => visible, authoritativeActiveSnapshot: () => true }),
       candidateProvider: async () => ({ ftsCandidates: [] }),
-      hybridRetrieverFactory: () => ({ retrieve: async () => ({ ...retrieval(), data: [{ ...retrieval().data[0], body }] }) }),
+      hybridRetrieverFactory: () => ({ retrieve: async () => ({ ...retrieval(), data: [{ ...retrieval().data[0], body,
+        ...(mode === 'concept' ? { title: 'Password guidance', locator: { route: 'documents', sectionPath: ['Shared secret handling'] } } : {}) }] }) }),
       answerServiceFactory: () => ({ generate: async () => {
         if (mode === 'revoked') visible = false
         return {status:'complete',answer:'Model paraphrase [C3].',abstained:false,citations:[{citationId:'C3',title:'Source'}]}
@@ -331,6 +332,10 @@ test('evidence-first response uses authorized source text, bounds excerpts and r
       assert.equal(result.evidence[0].excerpt, mode === 'sensitive' ? '' : body.slice(0,800))
       assert.equal(result.evidence[0].excerptTruncated, mode === 'long')
       assert.equal(result.evidence[0].excerptUnavailable, mode === 'sensitive')
+      if (mode === 'concept') {
+        assert.equal(result.evidence[0].title, 'Password guidance')
+        assert.deepEqual(result.evidence[0].locator.sectionPath, ['Shared secret handling'])
+      }
       assert.doesNotMatch(JSON.stringify(result.evidence), /do-not-expose|documentId|sourceId|snapshotId|private/u)
     })
   }

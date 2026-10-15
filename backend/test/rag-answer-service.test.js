@@ -118,6 +118,19 @@ test('technical terminology survives service validation without allowing credent
   assert.equal((await instance.applyResult({ task: queued.task, result: partial })).status, 'partial')
 })
 
+test('citation titles and section names permit concepts but never credential values', async () => {
+  for (const name of ['Password and shared secret handling', 'password=synthetic-value', '/mnt/synthetic/file.txt']) {
+    const instance = service(), item = evidence({ title: name })
+    item.locator.sectionPath = [name]
+    const queued = await instance.generate({ query: 'Explain the guidance.', evidence: [item] })
+    const result = await instance.applyResult({ task: queued.task, result: workerResult(queued.task) })
+    assert.equal(result.status, 'complete')
+    const safe = name === 'Password and shared secret handling'
+    assert.equal(result.citations[0].title, safe ? name : undefined)
+    assert.deepEqual(result.citations[0].locator.sectionPath, safe ? [name] : undefined)
+  }
+})
+
 test('partial result preserves missing requirements but rejects inconsistent or unsafe fields', async () => {
   const answer = service()
   const queued = await answer.generate({ query: '默认值和最大层数？', evidence: [evidence()] })
