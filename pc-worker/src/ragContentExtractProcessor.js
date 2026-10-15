@@ -9,7 +9,7 @@ import { extractEpubHtml } from './epubText.js'
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
 export const RAG_CONTENT_EXTRACT_EXECUTION_CLASS = 'cpu'
-export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v5'
+export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v6'
 
 const MAX_INPUT_BYTES = 64 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
@@ -72,12 +72,16 @@ function entryText(zip, entryName) {
   return data.toString('utf8')
 }
 
-function docxParagraphText(xml) {
+function docxParagraphText(xml, noteText) {
   // Formatting runs do not imply whitespace. Only visible text and explicit
   // breaks belong to the paragraph, not XML indentation or field instructions.
   const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
-  const parts = [...xml.matchAll(/<w:t\b[^>]*?(?<!\/)>([\s\S]*?)<\/w:t>|<w:(tab|br|cr)\b[^>]*>/gu)]
+  const parts = [...xml.matchAll(/<w:t\b[^>]*?(?<!\/)>([\s\S]*?)<\/w:t>|<w:(tab|br|cr)\b[^>]*>|<w:(footnote|endnote)Reference\b([^>]*)>/gu)]
     .map((match) => {
+      if (match[3]) {
+        if (!noteText) fail('WORKER_CONTENT_EXTRACT_DOCX_NOTE_INVALID')
+        return noteText(match[3], match[4])
+      }
       if (match[2]) return match[2] === 'tab' ? '\t' : '\n'
       return match[1].replace(/&(amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);/gu, (entity, value) => {
         if (Object.hasOwn(entities, value)) return entities[value]
@@ -92,8 +96,57 @@ function docxParagraphText(xml) {
 function extractDocx(buffer) {
   const zip = archive(buffer)
   const xml = entryText(zip, 'word/document.xml')
+  const notes = new Map()
+  const renderedNotes = new Map()
+  let noteBytes = 0
+  const attribute = (attrs, name) => attrs.match(new RegExp(`(?:^|\\s)${name}\\s*=\\s*["']([^"']*)["']`, 'u'))?.[1]
+  const noteText = (kind, attrs) => {
+    const id = attribute(attrs, 'w:id')
+    if (!id || !/^-?\d+$/u.test(id)) fail('WORKER_CONTENT_EXTRACT_DOCX_NOTE_INVALID')
+    if (!notes.has(kind)) {
+      // Resolve the package part, never a hyperlink or an external target.
+      let target = `word/${kind}s.xml`
+      if (zip.getEntry('word/_rels/document.xml.rels')) {
+        const rels = entryText(zip, 'word/_rels/document.xml.rels')
+        const matches = [...rels.matchAll(/<Relationship\b([^>]*)>/gu)].filter((match) =>
+          /^https?:\/\/(?:schemas\.openxmlformats\.org\/officeDocument\/2006|purl\.oclc\.org\/ooxml\/officeDocument)\/relationships\/(footnotes|endnotes)$/u.test(attribute(match[1], 'Type') ?? '') &&
+          attribute(match[1], 'Type').endsWith(`/${kind}s`))
+        if (matches.length !== 1) fail('WORKER_CONTENT_EXTRACT_DOCX_NOTE_INVALID')
+        const rel = matches[0][1]
+        const part = attribute(rel, 'Target')
+        if (!part || attribute(rel, 'TargetMode') === 'External' || /[:&#?\\]/u.test(part) || part.startsWith('/')) {
+          fail('WORKER_CONTENT_EXTRACT_DOCX_NOTE_INVALID')
+        }
+        target = resolveArchivePath('word/document.xml', part)
+      }
+      const map = new Map()
+      const noteXml = entryText(zip, target)
+      for (const match of noteXml.matchAll(new RegExp(`<w:${kind}\\b([^>]*?)(?<!/)>([\\s\\S]*?)</w:${kind}>`, 'gu'))) {
+        const key = attribute(match[1], 'w:id')
+        const type = attribute(match[1], 'w:type')
+        if (type && type !== 'normal') continue
+        if (!key || map.has(key)) fail('WORKER_CONTENT_EXTRACT_DOCX_NOTE_INVALID')
+        map.set(key, match[2])
+      }
+      notes.set(kind, map)
+    }
+    const content = notes.get(kind).get(id)
+    if (content === undefined) fail('WORKER_CONTENT_EXTRACT_DOCX_NOTE_INVALID')
+    const key = `${kind}:${id}`
+    if (!renderedNotes.has(key)) {
+      const value = [...content.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/gu)]
+        .map((match) => docxParagraphText(match[1])).filter(Boolean).join('\n\n')
+      if (!value) fail('WORKER_CONTENT_EXTRACT_DOCX_NOTE_INVALID')
+      const result = ` [${kind} ${id}: ${value}] `
+      renderedNotes.set(key, { result, bytes: Buffer.byteLength(result) })
+    }
+    const { result, bytes } = renderedNotes.get(key)
+    noteBytes += bytes
+    if (noteBytes > MAX_ARTIFACT_BYTES) fail('WORKER_CONTENT_EXTRACT_ARTIFACT_TOO_LARGE')
+    return result
+  }
   const paragraphs = [...xml.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/giu)]
-    .map((match) => docxParagraphText(match[1]))
+    .map((match) => docxParagraphText(match[1], noteText))
     .filter(Boolean)
   if (paragraphs.length === 0) fail('WORKER_CONTENT_EXTRACT_EMPTY')
   return [{ ordinal: 0, title: 'Document', text: paragraphs.join('\n\n'), locator: { paragraphStart: 0, paragraphEnd: paragraphs.length - 1 } }]

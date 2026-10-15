@@ -127,7 +127,7 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v5')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v6')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }
