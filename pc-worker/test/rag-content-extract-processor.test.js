@@ -63,6 +63,15 @@ function pdf(bodyText = 'Hello PDF evidence') {
   return Buffer.from(body, 'ascii')
 }
 
+test('EPUB Ruby produces a versioned hash-bound artifact without changing spine identity', async () => {
+  const buffer=epub('<p>Before <ruby>H2O<rt>water molecule</rt></ruby> after.</p>')
+  const result=await createRagContentExtractProcessor().process(task('epub',buffer),Readable.from([buffer]))
+  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v7')
+  assert.equal(result.artifact.sections[0].text,'Before H2O after.\n[Ruby "H2O" → "water molecule"]')
+  assert.deepEqual(result.artifact.sections[0].locator,{spineIndex:0})
+  assert.equal(result.output.artifactSha256,crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
+})
+
 test('extracts bounded DOCX paragraphs into a hash-bound Worker artifact', async () => {
   const buffer = docx()
   const result = await createRagContentExtractProcessor().process(task('docx', buffer), Readable.from([buffer]))
@@ -127,7 +136,7 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v6')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v7')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }

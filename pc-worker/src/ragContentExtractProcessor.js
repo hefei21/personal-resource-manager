@@ -9,7 +9,7 @@ import { extractEpubHtml } from './epubText.js'
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
 export const RAG_CONTENT_EXTRACT_EXECUTION_CLASS = 'cpu'
-export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v6'
+export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v7'
 
 const MAX_INPUT_BYTES = 64 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
