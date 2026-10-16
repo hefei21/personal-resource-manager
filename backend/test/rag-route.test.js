@@ -696,6 +696,57 @@ test('isolated Qwen pool preserves authorization, seed budget and exact fail-ope
   }
 })
 
+test('bound zero-hit recovery requires explicit opt-in and valid ranking, preserves empty fail-open', async () => {
+  for (const mode of ['applied', 'offline', 'throws', 'duplicate', 'foreign-id', 'empty', 'disabled', 'pool-disabled', 'wrong-model', 'global', 'chapter', 'evidence']) {
+    const calls = []
+    let evidence = [], ranks = 0
+    const seed = retrieval().data[0]
+    const pool = Array.from({ length: 12 }, (_, i) => ({ ...seed, citationId: `C${i}`, chunkId: i + 1,
+      body: `Original ${i}`, sourceType: 'ebook', sourceId: i === 11 ? 99 : 23 }))
+    const router = createRagRouter({
+      databaseProvider: () => ({}),
+      authoritativeChecksFactory: () => ({ authoritativeVisibility: c => c.chunkId !== 10,
+        authoritativeActiveSnapshot: c => c.chunkId !== 11 }),
+      querySourceResolver: () => null,
+      sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 12 } }),
+      structuredAnswerProvider: () => null,
+      queryTranslationServiceFactory: mode === 'evidence' ? () => ({ translate: () => assert.fail('no translation') }) : null,
+      chapterScopeProvider: () => ({ chunkIds: [1, 2, 3] }),
+      candidateProvider: input => { calls.push(input); return { ftsCandidates: [] } },
+      hybridRetrieverFactory: ({ retrievalConfig }) => ({ retrieve: () => ({ ...retrieval(),
+        data: retrievalConfig.maxPerSource === 50 && mode !== 'empty' ? pool : [] }) }),
+      rerankerModel: mode === 'wrong-model' ? null : QWEN_RERANKER_MODEL,
+      rerankerConfig: { expandedCandidatePool: mode !== 'pool-disabled', recoverBoundEmpty: mode !== 'disabled' },
+      rerankerService: { rerank: async ({ candidates }) => {
+        ranks++
+        assert.ok(candidates.every(c => c.chunkId < 10 && c.sourceId === 23))
+        if (mode === 'throws') throw new Error('timeout')
+        const ranked = [...candidates].reverse().map(c => ({ ...c, body: 'Untrusted replacement' }))
+        if (mode === 'duplicate') ranked.fill(ranked[0])
+        if (mode === 'foreign-id') ranked[0] = { ...ranked[0], citationId: 'foreign' }
+        return { applied: mode !== 'offline', candidates: ranked }
+      } },
+      answerService: { generate: async input => { evidence = input.evidence; return {
+        status: 'abstained', query: input.query, language: 'en', answer: null, abstained: true,
+        reasonCode: 'no_evidence', degraded: false, citations: [] } } },
+      taskStoreProvider: () => null
+    })
+    await withServer(router, async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+        body: JSON.stringify({ query: mode === 'evidence' ? '说明' : 'explain', ...(mode === 'global' ? {} : { source: { type: 'ebook', id: 23 } }),
+          ...(mode === 'chapter' ? { section: 'a'.repeat(64) } : {}), ...(mode === 'evidence' ? { phase: 'evidence' } : {}) }) })
+      assert.equal(response.status, 200, mode)
+      assert.deepEqual(evidence.map(c => c.chunkId), mode === 'applied' ? [9, 8, 7, 6, 5, 4] : mode === 'chapter' ? [3, 2, 1] : [], mode)
+      assert.ok(evidence.every(c => c.body.startsWith('Original ')), mode)
+      const skipped = ['disabled', 'pool-disabled', 'wrong-model', 'global', 'evidence'].includes(mode)
+      assert.equal(calls.length, skipped ? 1 : 2, mode)
+      assert.equal(ranks, skipped || mode === 'empty' ? 0 : 1, mode)
+      if (mode === 'chapter') assert.deepEqual(calls[1].chunkIds, [1, 2, 3])
+    })
+  }
+})
+
 test('global pool HTTP path remains opt-in, filters before reranking and completely fails open', async () => {
   for (const mode of ['applied', 'offline', 'throws', 'duplicate', 'disabled', 'bound', 'revoked']) {
     const calls = [], seed = retrieval().data[0]

@@ -1847,7 +1847,12 @@ export function createRagRouter({
       let taskStore = null
       try { taskStore = await Promise.resolve(taskStoreProvider({ database, req })) } catch {}
       let rankedRetrieval = scopedRetrieval
-      if (!evidencePhase && (input.phase !== 'enhanced' || enhancementReady) && scopedRetrieval.data.length > 0) {
+      // Isolated opt-in: never turn a topic-only pool into evidence on failure.
+      const recoverBoundEmpty = rerankerConfig.recoverBoundEmpty === true &&
+        rerankerConfig.expandedCandidatePool === true && querySource &&
+        matchesQwenReranker(resolveConfiguredRerankerModel())
+      if (!evidencePhase && (input.phase !== 'enhanced' || enhancementReady) &&
+          (scopedRetrieval.data.length > 0 || recoverBoundEmpty)) {
         try {
           const rerankerModel = resolveConfiguredRerankerModel()
           // Isolated candidate only. Keep the normal retrieval intact for exact
