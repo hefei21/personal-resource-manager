@@ -66,7 +66,7 @@ function pdf(bodyText = 'Hello PDF evidence') {
 test('EPUB Ruby produces a versioned hash-bound artifact without changing spine identity', async () => {
   const buffer=epub('<p>Before <ruby>H2O<rt>water molecule</rt></ruby> after.</p>')
   const result=await createRagContentExtractProcessor().process(task('epub',buffer),Readable.from([buffer]))
-  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v7')
+  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v8')
   assert.equal(result.artifact.sections[0].text,'Before H2O after.\n[Ruby "H2O" → "water molecule"]')
   assert.deepEqual(result.artifact.sections[0].locator,{spineIndex:0})
   assert.equal(result.output.artifactSha256,crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
@@ -97,6 +97,20 @@ test('DOCX joins visible text runs without adding XML layout or exposing field i
   const result = await createRagContentExtractProcessor().process(task('docx', buffer), Readable.from([buffer]))
   assert.equal(result.artifact.sections[0].text, 'Transformer example.\n\n&lt;EOS&gt; <pad> 中文 next\nline')
   assert.deepEqual(result.artifact.sections[0].locator, { paragraphStart: 0, paragraphEnd: 1 })
+})
+
+test('DOCX preserves visible nonbreaking hyphens without inserting discretionary hyphens', async () => {
+  const zip = new AdmZip()
+  zip.addFile('word/document.xml', Buffer.from(`<w:document><w:body><w:p>
+    <w:r><w:t>Non</w:t><w:noBreakHyphen/><w:t>Performance; Know</w:t></w:r>
+    <w:r><w:noBreakHyphen></w:noBreakHyphen><w:t>How; inter</w:t><w:softHyphen/><w:t>national; </w:t>
+    <w:t>&lt;w:noBreakHyphen/&gt;</w:t><w:instrText>hidden</w:instrText></w:r>
+  </w:p></w:body></w:document>`))
+  const buffer = zip.toBuffer()
+  const result = await createRagContentExtractProcessor().process(task('docx', buffer), Readable.from([buffer]))
+  assert.equal(result.artifact.sections[0].text, 'Non-Performance; Know-How; international; <w:noBreakHyphen/>')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v8')
+  assert.equal(result.output.artifactSha256, crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
 })
 
 test('extracts EPUB spine order and strips markup', async () => {
@@ -136,7 +150,7 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v7')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v8')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }

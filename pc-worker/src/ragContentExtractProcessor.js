@@ -9,7 +9,7 @@ import { extractEpubHtml } from './epubText.js'
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
 export const RAG_CONTENT_EXTRACT_EXECUTION_CLASS = 'cpu'
-export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v7'
+export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v8'
 
 const MAX_INPUT_BYTES = 64 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
@@ -76,13 +76,15 @@ function docxParagraphText(xml, noteText) {
   // Formatting runs do not imply whitespace. Only visible text and explicit
   // breaks belong to the paragraph, not XML indentation or field instructions.
   const entities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
-  const parts = [...xml.matchAll(/<w:t\b[^>]*?(?<!\/)>([\s\S]*?)<\/w:t>|<w:(tab|br|cr)\b[^>]*>|<w:(footnote|endnote)Reference\b([^>]*)>/gu)]
+  const parts = [...xml.matchAll(/<w:t\b[^>]*?(?<!\/)>([\s\S]*?)<\/w:t>|<w:(tab|br|cr|noBreakHyphen)\b[^>]*>|<w:(footnote|endnote)Reference\b([^>]*)>/gu)]
     .map((match) => {
       if (match[3]) {
         if (!noteText) fail('WORKER_CONTENT_EXTRACT_DOCX_NOTE_INVALID')
         return noteText(match[3], match[4])
       }
-      if (match[2]) return match[2] === 'tab' ? '\t' : '\n'
+      // Word stores a visible nonbreaking hyphen as an element, not w:t.
+      // Its plain-text glyph is U+002D; a discretionary softHyphen stays omitted.
+      if (match[2]) return match[2] === 'noBreakHyphen' ? '-' : match[2] === 'tab' ? '\t' : '\n'
       return match[1].replace(/&(amp|lt|gt|quot|apos|#\d+|#x[\da-fA-F]+);/gu, (entity, value) => {
         if (Object.hasOwn(entities, value)) return entities[value]
         const point = value.startsWith('#x') ? Number.parseInt(value.slice(2), 16) : Number(value.slice(1))

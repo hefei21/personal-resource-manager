@@ -36,6 +36,14 @@ test('DOCX resolves a nonstandard internal note part and preserves visible text 
     footnotes: note('footnote', 1, 'A &amp; B</w:t><w:instrText>hidden</w:instrText><w:t> only') })
   assert.equal(result.artifact.sections[0].text, 'Rule [footnote 1: A & B only]')
 })
+test('DOCX preserves nonbreaking hyphens inside referenced notes', async () => {
+  const result = await extract({ body: `Rule${ref('footnote', 1)}${ref('endnote', 2)}`,
+    footnotes: note('footnote', 1, 'Non</w:t><w:noBreakHyphen/><w:t>Performance only.'),
+    endnotes: note('endnote', 2, 'Sub</w:t><w:noBreakHyphen/><w:t>Licensee excluded.') })
+  assert.match(result.artifact.sections[0].text, /footnote 1: Non-Performance only/u)
+  assert.match(result.artifact.sections[0].text, /endnote 2: Sub-Licensee excluded/u)
+})
+
 test('DOCX without note references ignores unused note parts', async () => {
   const result = await extract({ body: 'Original', footnotes: 'malformed unused notes' })
   assert.equal(result.artifact.sections[0].text, 'Original')
