@@ -104,7 +104,7 @@ function contentText(value, fieldName, maxBytes, preserveText = false) {
     fail('WORKER_ANSWER_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
   }
   // Compatibility folding changes mathematical meaning (i⁹ and i₉ both become
-  // i9). Validate a normalized shadow, but do not rewrite generated answers.
+  // i9). Validate a normalized shadow, but do not rewrite evidence or answers.
   return preserveText ? value.trim() : normalized
 }
 
@@ -213,7 +213,7 @@ function normalizeTask(task, config) {
     const citationId = token(item.citationId, `task.input.evidence[${index}].citationId`, 128)
     if (seen.has(citationId)) fail('WORKER_ANSWER_INPUT_INVALID', 'Task evidence contains duplicate citation IDs.')
     seen.add(citationId)
-    const text = contentText(item.text, `task.input.evidence[${index}].text`, MAX_CONTEXT_BYTES)
+    const text = contentText(item.text, `task.input.evidence[${index}].text`, MAX_CONTEXT_BYTES, true)
     return freeze({ citationId, text, quotedUrls: evidenceUrls(item.text) })
   })
   let questionPlan

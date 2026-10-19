@@ -130,14 +130,14 @@ function boundedText(value, fieldName, maxBytes) {
   return normalized
 }
 
-function boundedContentText(value, fieldName, maxBytes) {
+function boundedContentText(value, fieldName, maxBytes, preserveText = false) {
   if (typeof value !== 'string') fail('PC_WORKER_PROCESSOR_INPUT_INVALID', `${fieldName} is invalid.`)
   const normalized = value.normalize('NFKC').trim()
   if (!normalized || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(normalized)) {
     fail('PC_WORKER_PROCESSOR_INPUT_INVALID', `${fieldName} is invalid.`)
   }
-  if (byteLength(normalized) > maxBytes) fail('PC_WORKER_PROCESSOR_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
-  return normalized
+  if (byteLength(normalized) > maxBytes || (preserveText && byteLength(value.trim()) > maxBytes)) fail('PC_WORKER_PROCESSOR_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
+  return preserveText ? value.trim() : normalized
 }
 
 function vectorSha256(vectors) {
@@ -398,7 +398,7 @@ function projectAnswerInput(input, slots = false) {
     exactKeys(item, ['citationId', 'text'], `task.input.evidence[${index}]`)
     return freeze({
       citationId: token(item.citationId, `task.input.evidence[${index}].citationId`, MAX_CITATION_ID_BYTES),
-      text: boundedContentText(item.text, `task.input.evidence[${index}].text`, LIMITS.answer.inputMaxBytes)
+      text: boundedContentText(item.text, `task.input.evidence[${index}].text`, LIMITS.answer.inputMaxBytes, true)
     })
   })
   if (new Set(evidence.map((item) => item.citationId)).size !== evidence.length) {

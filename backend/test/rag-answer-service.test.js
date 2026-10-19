@@ -259,6 +259,50 @@ test('correct mathematical answer characters survive worker and service delivery
   }
 })
 
+test('original notation survives answer evidence projection, worker request and result revalidation', async () => {
+  const { createRagAnswerProcessor } = await import('../../pc-worker/src/ragAnswerProcessor.js')
+  const body = 'Assyriology: dun₃⁺. Chemistry: Ca²⁺_concentration. Mathematics: xₖ₊₁ or f⁽⁴⁾. Phonetics: daan⁶. Other: ⑴ 🄂 ⒈.'
+  for (const answerFormat of ['legacy', 'question-slots-v1']) {
+    const answer = service({ config: { answerFormat } })
+    const queued = await answer.generate({ query: 'List the example identifiers.', evidence: [evidence({ body })] })
+    const wrapped = `[UNTRUSTED_EVIDENCE C1] ${body} [END_UNTRUSTED_EVIDENCE C1]`
+    assert.equal(queued.task.input.evidence[0].text, wrapped)
+    let calls = 0
+    const worker = createRagAnswerProcessor({
+      config: { ...MODEL, answerFormat, baseUrl: 'http://127.0.0.1:1234', contextLimit: 8192, maxOutputBytes: 4096, maxEvidenceItems: 16, timeoutMs: 1000 },
+      fetchImpl: async (_url, options) => {
+        calls++
+        const content = JSON.parse(options.body).messages[1].content
+        const payload = JSON.parse(content.split('\nFIXED ORIGINAL QUESTION SPANS:')[0])
+        const sent = payload.evidence ?? payload.evidenceGroups.flat()
+        assert.equal(sent[0].text, wrapped)
+        const output = answerFormat === 'legacy'
+          ? { answer: body, abstained: false, reasonCode: 'GROUNDED', citations: ['C1'] }
+          : { Q1: { status: 'supported', answer: body, citations: ['C1'], missing: [] } }
+        return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }] }))
+      }
+    })
+    const result = await worker.process(queued.task)
+    assert.equal(calls, 1)
+    const delivered = await answer.applyResult({ task: queued.task, result })
+    assert.equal(delivered.status, 'complete')
+    assert.equal(delivered.answer, body)
+    const folded = structuredClone(queued.task)
+    folded.input.evidence[0].text = wrapped.normalize('NFKC')
+    assert.equal((await answer.applyResult({ task: folded, result })).reasonCode, 'evidence_stale')
+  }
+})
+
+test('sensitive evidence keeps conservative redaction even when mixed with mathematical notation', async () => {
+  for (const secret of ['ｐａｓｓｗｏｒｄ：fixture-value', 'Ｃ：＼fixture＼hidden.txt', 'ａｐｉ＿ｋｅｙ＝fixture-value']) {
+    const answer = service()
+    const queued = await answer.generate({ query: 'Explain the notation.', evidence: [evidence({ body: `dun₃⁺ ${secret}` })] })
+    assert.match(queued.task.input.evidence[0].text, /\[REDACTED_(SECRET|PATH)\]/u)
+    assert.doesNotMatch(queued.task.input.evidence[0].text, /fixture|hidden/u)
+    assert.equal((await answer.applyResult({ task: queued.task, result: workerResult(queued.task) })).status, 'complete')
+  }
+})
+
 test('preserved answer characters do not bypass normalized credential and private-path checks', async () => {
   for (const text of ['ｐａｓｓｗｏｒｄ：test-only-value', 'Ｃ：＼fixture＼private.txt', 'ｓｅｃｒｅｔ＝test-only-value']) {
     const answer = service()

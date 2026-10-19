@@ -131,6 +131,15 @@ test('answer evidence accepts layout whitespace without weakening IDs, unsafe co
   assert.deepEqual(definition.projectInput(answerInput()).evidence, answerInput().evidence)
 })
 
+test('answer evidence preserves compatibility distinctions and checks original UTF-8 byte size', () => {
+  const definition = lookupPcWorkerProcessor('rag.answer.generate')
+  const input = answerInput()
+  input.evidence[0].text = 'xₖ₊₁ and f⁽⁴⁾ are different objects; ⑴ 🄂 ⒈.'
+  assert.equal(definition.projectInput(input).evidence[0].text, input.evidence[0].text)
+  input.evidence[0].text = '⁴'.repeat(800_000)
+  assert.throws(() => definition.projectInput(input), error => error.code === 'PC_WORKER_PROCESSOR_INPUT_TOO_LARGE')
+})
+
 test('catalog is immutable and allowlists RAG processors including optional translation', () => {
   assert.deepEqual(PC_WORKER_PROCESSOR_DEFINITIONS.map((item) => item.taskType), [
     'content.inspect',

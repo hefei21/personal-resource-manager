@@ -91,13 +91,17 @@ function opaqueCitationId(index) {
 }
 
 function redactSensitiveText(value) {
-  // Normalize before redaction, just as the task projector does: full-width
-  // punctuation must neither bypass redaction nor cause false stale evidence.
-  return value.normalize('NFKC')
+  // Detect secrets on a normalized shadow so compatibility characters cannot
+  // evade redaction. If no redaction is needed, preserve the original evidence:
+  // compatibility folding can change mathematical objects, units and identifiers.
+  // Mixed sensitive text retains the existing conservative normalized fallback.
+  const normalized = value.normalize('NFKC')
+  const redacted = normalized
     .replace(/(?<![A-Za-z0-9+.-])[A-Za-z]:[\\/][^\s<>]+/gu, '[REDACTED_PATH]')
     .replace(/\\\\[^\s<>]+/gu, '[REDACTED_PATH]')
     .replace(/(?:storage[ _-]?key|api[ _-]?key|password|secret|lease[ _-]?token)\s*[:=]\s*[^\s,;]+/giu, '[REDACTED_SECRET]')
     .replace(/(?:sha256?|content[ _-]?hash)\s*[:=]\s*[a-f0-9]{32,128}/giu, '[REDACTED_HASH]')
+  return redacted === normalized ? value : redacted
 }
 
 function cloneJson(value) {
