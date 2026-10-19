@@ -257,6 +257,19 @@ function requestsProhibitedAction(query) {
       return `讨论${subject}`
     }
   )
+  // A named API's yes/no behavior question does not request execution. Mask
+  // only its predicate/API name, not the rest: adjacent actions remain checked.
+  inspected = inspected.replace(
+    /([A-Za-z_][A-Za-z0-9_.]{0,63}(?:\(\))?)\s*(?:是否会|会不会|会)\s*执行\s*(?:子\s*shell|shell|外部命令|命令)(?=([^。！？!?；;\r\n]{0,100})[？?])/giu,
+    (match, subject, tail, offset) => {
+      const prefix = inspected.slice(0, offset).split(/[。！？!?；;\r\n]/u).at(-1)
+      if (/^(?:you|assistant|agent|codex|chatgpt|run|execute)$/iu.test(subject) ||
+          /(?:请|帮|替|为我|你|立即|马上|现在|务必|必须|直接|让|要求|执行|运行)|\b(?:please|run|execute)\b/iu.test(prefix) ||
+          /(?:执行|运行|删除|写入|下载|上传|访问|抓取|读取|引用)|\b(?:execute|run|delete|write|fetch|read|cite)\b/iu.test(tail)) return match
+      // Also mask API-name verbs (e.g. subprocess.run) in the inspection copy.
+      return `API${match.slice(subject.length).replace('执行', '讨论')}`
+    }
+  )
   return PROHIBITED_ACTION_REQUESTS.some((pattern) => pattern.test(inspected))
 }
 
