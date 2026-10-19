@@ -482,7 +482,7 @@ export class RagAnswerService {
     const quotedUrls = after.flatMap(item => evidenceUrls(item.candidate.body ?? item.text)).filter(url => sentUrls.has(url))
     if (!output.abstained && (!isSafeAnswer(output.answer) || selectedCitations.length === 0 ||
         !hasOnlyCitedUrls(result.output.answer, quotedUrls) ||
-        (output.missingRequirements ?? []).some(item => !isSafeAnswer(item) || /https?:\/\//iu.test(item)))) {
+        (output.missingRequirements ?? []).some(item => !isSafeAnswer(item) || /https?:\/\//iu.test(item.normalize('NFKC'))))) {
       return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), after, output.answer ? 'unsafe_output' : 'citation_missing')
     }
     return freezeResult({

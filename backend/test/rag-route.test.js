@@ -351,7 +351,7 @@ test('evidence-first response uses authorized source text, bounds excerpts and r
 })
 
 test('HTTP partial answer preserves missing requirements and blocks unsafe missing text', async () => {
-  for (const missing of ['最大层数', 'Maximum password length', 'password=do-not-expose']) {
+  for (const missing of ['最大层数', 'Maximum password length', "Fraction('½') / Fraction('1⁄2')", 'password=do-not-expose', 'ｈｔｔｐｓ：／／example.invalid']) {
     const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
       authoritativeChecksFactory: checks,
       candidateProvider: async () => ({ ftsCandidates: [] }),
@@ -364,7 +364,7 @@ test('HTTP partial answer preserves missing requirements and blocks unsafe missi
         headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query: '默认值和最大层数' }) })
       assert.equal(response.status, 200)
       const result = (await response.json()).data
-      assert.equal(result.status, missing.startsWith('password') ? 'degraded' : 'partial')
+      assert.equal(result.status, /^(password|https)/u.test(missing.normalize('NFKC')) ? 'degraded' : 'partial')
       if (result.status === 'partial') assert.deepEqual(result.missingRequirements, [missing])
       else { assert.equal(result.answer, null); assert.equal(result.missingRequirements, undefined) }
       if (result.status === 'partial') assert.equal(result.answer, 'Protect password confidentiality. C1')

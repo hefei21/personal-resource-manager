@@ -87,6 +87,8 @@ test('partial answers require evidence, missing requirements and consistent stat
   const valid = { answer: '默认值为1。C1', abstained: false, reasonCode: 'PARTIAL', citations: ['C1'], missingRequirements: ['Windows最大层数'] }
   const run = async value => (await createRagAnswerProcessor({ config, fetchImpl: async () => response(value) }).process(task())).output
   assert.deepEqual((await run(valid)).missingRequirements, valid.missingRequirements)
+  const objects = ['½', '1⁄2', 'x₁', 'x1', '⅓', '1⁄3']
+  assert.deepEqual((await run({ ...valid, missingRequirements: [...objects, ' ½ '] })).missingRequirements, objects)
   const refused = await run({ ...valid, abstained: true, reasonCode: 'EVIDENCE_INSUFFICIENT' })
   assert.equal(refused.abstained, true)
   assert.equal(refused.missingRequirements, undefined)
@@ -94,7 +96,8 @@ test('partial answers require evidence, missing requirements and consistent stat
   assert.deepEqual(refused.citations, [])
   for (const change of [
     { missingRequirements: [] }, { missingRequirements: null }, { missingRequirements: [''] },
-    { missingRequirements: ['x'.repeat(513)] }, { missingRequirements: ['https://example.invalid'] },
+    { missingRequirements: ['x'.repeat(513)] }, { missingRequirements: ['½'.repeat(200)] },
+    { missingRequirements: ['https://example.invalid'] }, { missingRequirements: ['ｈｔｔｐｓ：／／example.invalid'] },
     { missingRequirements: Array(17).fill('missing') }, { abstained: true }, { citations: [] },
     { reasonCode: 'GROUNDED' }, { answer: '' }
   ]) await assert.rejects(run({ ...valid, ...change }), /invalid|inconsistent|required/i)

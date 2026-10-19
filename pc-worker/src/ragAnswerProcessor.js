@@ -412,7 +412,8 @@ function normalizeResult(value, evidence, config, truncated) {
   if (!Object.hasOwn(output, 'reasonCode')) output.reasonCode = value.abstained ? 'MODEL_ABSTAINED' : 'GROUNDED'
   const missing = value.missingRequirements ?? []
   if (!Array.isArray(missing) || missing.length > 16 || missing.some(item =>
-    typeof item !== 'string' || !item.trim() || item.length > 512 || DANGEROUS_CONTROL.test(item) || EXTERNAL_URL.test(item))) {
+    typeof item !== 'string' || !item.trim() || item.length > 512 || item.normalize('NFKC').length > 512 ||
+    DANGEROUS_CONTROL.test(item.normalize('NFKC')) || EXTERNAL_URL.test(item.normalize('NFKC')))) {
     fail('WORKER_ANSWER_RESULT_INVALID', 'Missing requirements are invalid.')
   }
   const partial = output.reasonCode.toUpperCase() === 'PARTIAL'
@@ -421,7 +422,8 @@ function normalizeResult(value, evidence, config, truncated) {
   if (partial ? (output.abstained || !citations.length || !missing.length) : !output.abstained && missing.length > 0) {
     fail('WORKER_ANSWER_RESULT_INVALID', 'Partial answer state is inconsistent.')
   }
-  if (partial) output.missingRequirements = [...new Set(missing.map(item => item.normalize('NFKC').trim()))]
+  // Distinct unanswered objects must not merge through compatibility folding.
+  if (partial) output.missingRequirements = [...new Set(missing.map(item => item.trim()))]
   // An explicit refusal takes precedence over a contradictory model reason.
   if (output.abstained && output.reasonCode.toUpperCase() === 'GROUNDED') output.reasonCode = 'MODEL_ABSTAINED'
   if (truncated && !partial) output.reasonCode = 'EVIDENCE_TRUNCATED'

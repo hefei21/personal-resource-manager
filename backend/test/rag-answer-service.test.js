@@ -311,6 +311,34 @@ test('query identity preserves distinct objects without weakening redaction or b
   }
 })
 
+test('partial missing objects survive worker and service projection without compatibility deduplication', async () => {
+  const { createRagAnswerProcessor } = await import('../../pc-worker/src/ragAnswerProcessor.js')
+  const missing = ['½', '1⁄2', '⅓', '1⁄3', 'x₁', 'x1']
+  for (const answerFormat of ['legacy', 'question-slots-v1']) {
+    const answer = service({ config: { answerFormat } })
+    const queued = await answer.generate({ query: 'Report supported and missing examples.', evidence: [evidence()] })
+    const output = answerFormat === 'legacy'
+      ? { abstained: false, answer: 'Supported example.', reasonCode: 'PARTIAL', citations: ['C1'], missingRequirements: [...missing, ' ½ '] }
+      : { Q1: { status: 'partial', answer: 'Supported example.', citations: ['C1'], missing: [...missing, ' ½ '] } }
+    const worker = createRagAnswerProcessor({
+      config: { ...MODEL, answerFormat, baseUrl: 'http://127.0.0.1:1234', contextLimit: 8192, maxOutputBytes: 4096, maxEvidenceItems: 16, timeoutMs: 1000 },
+      fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }] }))
+    })
+    const result = await worker.process(queued.task)
+    assert.deepEqual(result.output.missingRequirements, missing)
+    const delivered = await answer.applyResult({ task: queued.task, result })
+    assert.equal(delivered.status, 'partial')
+    assert.deepEqual(delivered.missingRequirements, missing)
+    for (const unsafe of ['ｐａｓｓｗｏｒｄ：fixture-secret', 'Ｃ：＼fixture＼private.txt', 'ｈｔｔｐｓ：／／example.invalid', '½'.repeat(200)]) {
+      const forged = structuredClone(result)
+      forged.output.missingRequirements = [unsafe]
+      const rejected = await answer.applyResult({ task: queued.task, result: forged })
+      assert.equal(rejected.status, 'degraded', unsafe)
+      assert.equal(rejected.missingRequirements, undefined)
+    }
+  }
+})
+
 test('sensitive evidence keeps conservative redaction even when mixed with mathematical notation', async () => {
   for (const secret of ['ｐａｓｓｗｏｒｄ：fixture-value', 'Ｃ：＼fixture＼hidden.txt', 'ａｐｉ＿ｋｅｙ＝fixture-value']) {
     const answer = service()

@@ -1161,7 +1161,7 @@ function projectAnswer(answer, retrieval, runId, authorizedEvidence = []) {
   const safeAnswer = safeAnswerText(result.answer)
   const missingRequirements = Array.isArray(result.missingRequirements) ? result.missingRequirements.map(safeAnswerText) : []
   const unsafeAnswer = (typeof result.answer === 'string' && safeAnswer === null) ||
-    missingRequirements.some(item => !item || /https?:\/\//iu.test(item))
+    missingRequirements.some(item => !item || /https?:\/\//iu.test(item.normalize('NFKC')))
   const projected = {
     status: unsafeAnswer ? 'degraded' : (typeof result.status === 'string' ? result.status : 'degraded'),
     ...(typeof result.query === 'string' ? { query: result.query } : {}),

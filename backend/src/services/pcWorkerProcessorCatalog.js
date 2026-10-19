@@ -637,14 +637,15 @@ function normalizeAnswerResult(value, expected) {
   if (value.reasonCode !== undefined) normalized.reasonCode = token(value.reasonCode, 'result.output.reasonCode', MAX_REASON_BYTES)
   const missing = value.missingRequirements ?? []
   if (!Array.isArray(missing) || missing.length > 16 || missing.some(item =>
-    typeof item !== 'string' || !item.trim() || item.length > 512 || /[\u0000-\u001f\u007f]/u.test(item))) {
+    typeof item !== 'string' || !item.trim() || item.length > 512 || item.normalize('NFKC').length > 512 ||
+    /[\u0000-\u001f\u007f]/u.test(item.normalize('NFKC')))) {
     fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'Missing requirements are invalid.')
   }
   const partial = normalized.reasonCode?.toUpperCase() === 'PARTIAL'
   if (partial ? (normalized.abstained || !citations.length || !missing.length) : !normalized.abstained && missing.length > 0) {
     fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'Partial answer state is inconsistent.')
   }
-  if (partial) normalized.missingRequirements = [...new Set(missing.map(item => item.normalize('NFKC').trim()))]
+  if (partial) normalized.missingRequirements = [...new Set(missing.map(item => item.trim()))]
   // Also protect results from older Workers that forwarded conflicting fields.
   if (normalized.abstained && normalized.reasonCode?.toUpperCase() === 'GROUNDED') normalized.reasonCode = 'MODEL_ABSTAINED'
   if (!value.abstained && (!Object.hasOwn(normalized, 'answer') || !normalized.answer.trim())) {
