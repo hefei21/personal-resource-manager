@@ -236,6 +236,39 @@ test('wraps evidence as untrusted text, keeps locator/title outside the task inp
   assert.equal('storageKey' in result.citations[0].locator, false)
 })
 
+test('correct mathematical answer characters survive worker and service delivery without compatibility folding', async () => {
+  // UAX #15 section 1.1: these are compatibility equivalents, not interchangeable
+  // mathematical notation. Model output is stubbed: this tests delivery, not inference.
+  const { createRagAnswerProcessor } = await import('../../pc-worker/src/ragAnswerProcessor.js')
+  for (const text of ['i⁹ is not i₉.', 'ℌ and ℍ are distinct symbols.', 'The factor is 10⁻³.', 'The unit is m².']) {
+    const answer = service()
+    const queued = await answer.generate({ query: 'Explain the notation.', evidence: [evidence({
+      body: 'Superscripts and subscripts can express distinct mathematical meanings. The scale is one thousandth and the unit is square metres.'
+    })] })
+    const worker = createRagAnswerProcessor({
+      config: { ...MODEL, baseUrl: 'http://127.0.0.1:1234', contextLimit: 8192, maxOutputBytes: 4096, maxEvidenceItems: 16, timeoutMs: 1000 },
+      fetchImpl: async () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        answer: text, abstained: false, reasonCode: 'GROUNDED', citations: ['C1']
+      }) } }] }))
+    })
+    const result = await worker.process(queued.task)
+    assert.equal(result.output.answer, text)
+    const delivered = await answer.applyResult({ task: queued.task, result })
+    assert.equal(delivered.status, 'complete')
+    assert.equal(delivered.answer, text)
+  }
+})
+
+test('preserved answer characters do not bypass normalized credential and private-path checks', async () => {
+  for (const text of ['ｐａｓｓｗｏｒｄ：test-only-value', 'Ｃ：＼fixture＼private.txt', 'ｓｅｃｒｅｔ＝test-only-value']) {
+    const answer = service()
+    const queued = await answer.generate({ query: 'Explain the notation.', evidence: [evidence()] })
+    const result = await answer.applyResult({ task: queued.task, result: workerResult(queued.task, { answer: text }) })
+    assert.equal(result.reasonCode, 'unsafe_output')
+    assert.equal(result.answer, null)
+  }
+})
+
 test('canonical Unicode evidence stays valid and full-width secrets are redacted before projection', async () => {
   const answer = service()
   const queued = await answer.generate({ query: 'What is supported?', evidence: [evidence({

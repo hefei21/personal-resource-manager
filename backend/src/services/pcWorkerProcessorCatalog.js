@@ -155,11 +155,14 @@ export function rerankCandidateSetSha256(candidates) {
   return crypto.createHash('sha256').update(JSON.stringify(identity), 'utf8').digest('hex')
 }
 
-function boundedOutputText(value, fieldName, maxBytes) {
+function boundedOutputText(value, fieldName, maxBytes, preserveText = false) {
   if (typeof value !== 'string' || byteLength(value) > maxBytes || /[\u0000]/u.test(value)) {
     fail('PC_WORKER_PROCESSOR_RESULT_INVALID', `${fieldName} exceeds its limit.`)
   }
-  return value.normalize('NFKC')
+  // Answer safety is checked on a normalized shadow by ragOutputSafety. Keep
+  // the original answer characters; compatibility folding loses exponents and
+  // distinctions between mathematical objects. Extraction behavior is unchanged.
+  return preserveText ? value : value.normalize('NFKC')
 }
 
 function assertSerializedBytes(value, maxBytes, code) {
@@ -630,7 +633,7 @@ function normalizeAnswerResult(value, expected) {
     abstained: value.abstained,
     citations
   }
-  if (value.answer !== undefined) normalized.answer = boundedOutputText(value.answer, 'result.output.answer', LIMITS.answer.outputMaxBytes)
+  if (value.answer !== undefined) normalized.answer = boundedOutputText(value.answer, 'result.output.answer', LIMITS.answer.outputMaxBytes, true)
   if (value.reasonCode !== undefined) normalized.reasonCode = token(value.reasonCode, 'result.output.reasonCode', MAX_REASON_BYTES)
   const missing = value.missingRequirements ?? []
   if (!Array.isArray(missing) || missing.length > 16 || missing.some(item =>

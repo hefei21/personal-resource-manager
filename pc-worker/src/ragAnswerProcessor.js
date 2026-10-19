@@ -96,12 +96,16 @@ function requiredText(value, fieldName, maxBytes = 512) {
   return normalized
 }
 
-function contentText(value, fieldName, maxBytes) {
+function contentText(value, fieldName, maxBytes, preserveText = false) {
   if (typeof value !== 'string') fail('WORKER_ANSWER_INPUT_INVALID', `${fieldName} is invalid.`)
   const normalized = value.normalize('NFKC').trim()
   if (!normalized || DANGEROUS_CONTROL.test(normalized)) fail('WORKER_ANSWER_INPUT_INVALID', `${fieldName} is invalid.`)
-  if (Buffer.byteLength(normalized, 'utf8') > maxBytes) fail('WORKER_ANSWER_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
-  return normalized
+  if (Buffer.byteLength(normalized, 'utf8') > maxBytes || (preserveText && Buffer.byteLength(value.trim(), 'utf8') > maxBytes)) {
+    fail('WORKER_ANSWER_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
+  }
+  // Compatibility folding changes mathematical meaning (i⁹ and i₉ both become
+  // i9). Validate a normalized shadow, but do not rewrite generated answers.
+  return preserveText ? value.trim() : normalized
 }
 
 function token(value, fieldName, maxBytes = 512) {
@@ -392,9 +396,9 @@ function normalizeResult(value, evidence, config, truncated) {
   const output = { abstained: value.abstained, citations: value.abstained ? [] : citations }
   if (value.answer !== undefined) {
     if (typeof value.answer !== 'string') fail('WORKER_ANSWER_RESULT_INVALID', 'Answer result answer is invalid.')
-    const normalizedAnswer = value.answer.normalize('NFKC').trim()
+    const normalizedAnswer = value.answer.trim()
     if (normalizedAnswer && !value.abstained) {
-      const answer = contentText(normalizedAnswer, 'answer.result.answer', config.maxOutputBytes)
+      const answer = contentText(normalizedAnswer, 'answer.result.answer', config.maxOutputBytes, true)
       const quotedUrls = evidence.filter(item => citations.includes(item.citationId)).flatMap(item => item.quotedUrls)
       if (!hasOnlyCitedUrls(value.answer, quotedUrls)) fail('WORKER_ANSWER_RESULT_INVALID', 'Answer URL is not a verbatim cited evidence URL.')
       output.answer = answer
