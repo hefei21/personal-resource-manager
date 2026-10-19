@@ -50,13 +50,14 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null
 }
 
-function requiredText(value, fieldName, maxBytes = MAX_QUERY_BYTES) {
+function requiredText(value, fieldName, maxBytes = MAX_QUERY_BYTES, preserveText = false) {
   if (typeof value !== 'string') fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, `${fieldName} is invalid.`)
   const normalized = value.normalize('NFKC').trim()
-  if (!normalized || Buffer.byteLength(normalized, 'utf8') > maxBytes || /[\u0000]/u.test(normalized)) {
+  if (!normalized || Buffer.byteLength(normalized, 'utf8') > maxBytes ||
+      (preserveText && Buffer.byteLength(value.trim(), 'utf8') > maxBytes) || /[\u0000]/u.test(normalized)) {
     fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, `${fieldName} is invalid.`)
   }
-  return normalized
+  return preserveText ? value.trim() : normalized
 }
 
 function positiveInteger(value, fieldName) {
@@ -285,7 +286,9 @@ export class RagAnswerService {
       ? ' 证据可能存在冲突；请明确说明不确定性并引用相关来源。 '
       : ' 多项要求仅部分有据时，只回答有据部分并标为PARTIAL、列出缺证项；全部缺证请拒答，不要补写证据之外的事实。 '
     const safeQuery = redactSensitiveText(query.replace(/[\u0000-\u001f\u007f]/gu, ' '))
-    return `${languageInstruction(language)}${conflictInstruction} USER QUESTION: <<<${safeQuery}>>> END USER QUESTION.`
+    // Keep the established instruction bytes, but never fold the user's objects.
+    const instructions = `${languageInstruction(language)}${conflictInstruction}`.normalize('NFKC')
+    return `${instructions} USER QUESTION: <<<${safeQuery}>>> END USER QUESTION.`
   }
 
   #publicReferences(evidence) {
@@ -308,7 +311,9 @@ export class RagAnswerService {
   }
 
   async generate({ query, evidence = [] } = {}) {
-    const normalizedQuery = requiredText(query, 'query')
+    // Compatibility folding can merge distinct requested objects (½ / 1⁄2).
+    // Safety redaction still inspects its normalized shadow in #modelQuery.
+    const normalizedQuery = requiredText(query, 'query', MAX_QUERY_BYTES, true)
     const language = detectLanguage(normalizedQuery)
     let normalizedEvidence = normalizeEvidence(evidence, this.config.maxEvidenceItems)
     if (normalizedEvidence.length === 0) {

@@ -264,7 +264,9 @@ test('original notation survives answer evidence projection, worker request and 
   const body = 'Assyriology: dun₃⁺. Chemistry: Ca²⁺_concentration. Mathematics: xₖ₊₁ or f⁽⁴⁾. Phonetics: daan⁶. Other: ⑴ 🄂 ⒈.'
   for (const answerFormat of ['legacy', 'question-slots-v1']) {
     const answer = service({ config: { answerFormat } })
-    const queued = await answer.generate({ query: 'List the example identifiers.', evidence: [evidence({ body })] })
+    const query = 'Compare ½ with 1⁄2 and list xₖ₊₁ identifiers.'
+    const queued = await answer.generate({ query, evidence: [evidence({ body })] })
+    assert.ok(queued.task.input.query.includes(query))
     const wrapped = `[UNTRUSTED_EVIDENCE C1] ${body} [END_UNTRUSTED_EVIDENCE C1]`
     assert.equal(queued.task.input.evidence[0].text, wrapped)
     let calls = 0
@@ -274,6 +276,8 @@ test('original notation survives answer evidence projection, worker request and 
         calls++
         const content = JSON.parse(options.body).messages[1].content
         const payload = JSON.parse(content.split('\nFIXED ORIGINAL QUESTION SPANS:')[0])
+        assert.ok(payload.query.includes(query))
+        if (answerFormat === 'question-slots-v1') assert.ok(content.includes(query))
         const sent = payload.evidence ?? payload.evidenceGroups.flat()
         assert.equal(sent[0].text, wrapped)
         const output = answerFormat === 'legacy'
@@ -290,6 +294,20 @@ test('original notation survives answer evidence projection, worker request and 
     const folded = structuredClone(queued.task)
     folded.input.evidence[0].text = wrapped.normalize('NFKC')
     assert.equal((await answer.applyResult({ task: folded, result })).reasonCode, 'evidence_stale')
+  }
+})
+
+test('query identity preserves distinct objects without weakening redaction or byte limits', async () => {
+  const first = await service().generate({ query: 'Explain ½.', evidence: [evidence()] })
+  const second = await service().generate({ query: 'Explain 1⁄2.', evidence: [evidence()] })
+  assert.notEqual(first.task.input.querySha256, second.task.input.querySha256)
+  for (const secret of ['ｐａｓｓｗｏｒｄ：fixture-value', 'Ｃ：＼fixture＼hidden.txt']) {
+    const queued = await service().generate({ query: `Explain ½ ${secret}`, evidence: [evidence()] })
+    assert.match(queued.task.input.query, /\[REDACTED_(SECRET|PATH)\]/u)
+    assert.doesNotMatch(queued.task.input.query, /fixture|hidden/u)
+  }
+  for (const query of ['Ａ'.repeat(6000), '½'.repeat(4000)]) {
+    await assert.rejects(service().generate({ query, evidence: [evidence()] }))
   }
 })
 

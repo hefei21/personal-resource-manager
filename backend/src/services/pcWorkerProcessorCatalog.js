@@ -124,10 +124,10 @@ function byteLength(value) {
   return Buffer.byteLength(value, 'utf8')
 }
 
-function boundedText(value, fieldName, maxBytes) {
+function boundedText(value, fieldName, maxBytes, preserveText = false) {
   const normalized = requiredText(value, fieldName, maxBytes)
-  if (byteLength(normalized) > maxBytes) fail('PC_WORKER_PROCESSOR_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
-  return normalized
+  if (byteLength(normalized) > maxBytes || (preserveText && byteLength(value.trim()) > maxBytes)) fail('PC_WORKER_PROCESSOR_INPUT_TOO_LARGE', `${fieldName} exceeds its limit.`)
+  return preserveText ? value.trim() : normalized
 }
 
 function boundedContentText(value, fieldName, maxBytes, preserveText = false) {
@@ -389,7 +389,7 @@ function projectRerankInput(input, pool = false) {
 function projectAnswerInput(input, slots = false) {
   exactKeys(input, ['schemaVersion', 'querySha256', 'query', 'model', 'evidence', ...(slots ? ['questionPlan'] : [])], 'task.input')
   if (input.schemaVersion !== (slots ? 2 : 1)) fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.schemaVersion is unsupported.')
-  const query = boundedText(input.query, 'task.input.query', MAX_QUERY_BYTES)
+  const query = boundedText(input.query, 'task.input.query', MAX_QUERY_BYTES, true)
   const model = modelIdentity(input.model, 'task.input.model')
   if (!Array.isArray(input.evidence) || input.evidence.length < 1 || input.evidence.length > 64) {
     fail('PC_WORKER_PROCESSOR_INPUT_INVALID', 'task.input.evidence exceeds its batch limit.')

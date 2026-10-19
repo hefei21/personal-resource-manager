@@ -17,6 +17,15 @@ const {
   normalizeRagIndexRefreshBody
 } = await import('../src/routes/rag.js')
 
+test('query transport preserves distinct Unicode objects with both raw and normalized bounds', () => {
+  const query = 'Compare ½ with 1⁄2 and xₖ₊₁.'
+  assert.equal(normalizeQueryBody({ query: ` ${query} ` }).query, query)
+  assert.equal(normalizeQueryBody({ q: query }).query, query)
+  for (const value of ['Ａ'.repeat(6000), '½'.repeat(4000), 'query\u0000']) {
+    assert.throws(() => normalizeQueryBody({ query: value }))
+  }
+})
+
 const ANSWER_ENV_KEYS = [
   'PC_WORKER_ANSWER_PROVIDER',
   'PC_WORKER_ANSWER_MODEL_ID',
