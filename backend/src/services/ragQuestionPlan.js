@@ -104,13 +104,15 @@ export function mapQuestionSlots(value, plan, evidence) {
     if (status === 'partial' && !x.answer.trim() && !x.citations.length && x.missing.length) status = 'unsupported'
     if (status === 'unsupported' ? x.answer.trim() || x.citations.length : !x.answer.trim() || !x.citations.length) invalid()
     if (status === 'supported' && x.missing.length || status === 'partial' && !x.missing.length) invalid()
-    return { ...x, status, question: plan.spans[i] }
+    return { ...x, status, question: plan.spans[i], slot: key }
   })
   const supported = entries.filter(x => x.status !== 'unsupported')
-  const missing = entries.flatMap(x => x.status === 'unsupported' ? [x.question] : x.missing)
+  const missing = entries.flatMap(x => x.status === 'unsupported' ? [x.question] :
+    x.missing.map(item => entries.length > 1 ? `问题 ${x.slot}：${item}` : item))
   // Short slot answers can be bare values. Keep their original question attached
   // when flattening; otherwise distinct objects become indistinguishable.
-  const answer = supported.map(x => entries.length > 1 ? `问题：${x.question}\n${x.answer}` : x.answer).join('\n\n')
+  const answer = supported.map(x => entries.length > 1
+    ? `问题 ${x.slot}：${x.question}\n${x.answer}\n引用：${x.citations.join('、')}` : x.answer).join('\n\n')
   return { abstained: !supported.length, reasonCode: !supported.length ? 'EVIDENCE_INSUFFICIENT' : missing.length ? 'PARTIAL' : 'GROUNDED',
     missingRequirements: supported.length ? missing : [], answer, citations: [...new Set(supported.flatMap(x => x.citations))] }
 }

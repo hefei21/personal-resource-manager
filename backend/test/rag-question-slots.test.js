@@ -81,10 +81,25 @@ test('short slot values retain their original objects through service delivery',
   }) })
   const result = await processor.process(task)
   const applied = await service.applyResult({ task, result })
-  assert.equal(applied.answer, '问题：预约请求保留多久？\n20天\n\n问题：预约到书保留多久？\n7天')
+  assert.equal(applied.answer, '问题 Q1：预约请求保留多久？\n20天\n引用：C1\n\n问题 Q2：预约到书保留多久？\n7天\n引用：C2')
   assert.equal(applied.status, 'partial')
   assert.deepEqual(applied.missingRequirements, ['是否保证送达时间？'])
   assert.deepEqual(applied.citations.map(c => c.citationId), ['C1', 'C2'])
+})
+
+test('partial slots keep identical missing conditions tied to distinct objects', async () => {
+  const service = setup()
+  const { task } = await service.generate({ query: '对象甲的办理方式和期限？对象乙的办理方式和期限？', evidence: [original(0), original(1)] })
+  const processor = createRagAnswerProcessor({ config, fetchImpl: async () => reply({
+    Q1: { status: 'partial', answer: '到柜台办理', citations: ['C2'], missing: ['期限'] },
+    Q2: { status: 'partial', answer: '线上办理', citations: ['C1'], missing: ['期限'] }
+  }) })
+  const result = await processor.process(task)
+  const applied = await service.applyResult({ task, result })
+  assert.equal(applied.status, 'partial')
+  assert.deepEqual(applied.missingRequirements, ['问题 Q1：期限', '问题 Q2：期限'])
+  assert.match(applied.answer, /问题 Q1：对象甲的办理方式和期限？\n到柜台办理\n引用：C2/)
+  assert.match(applied.answer, /问题 Q2：对象乙的办理方式和期限？\n线上办理\n引用：C1/)
 })
 
 test('an active legacy task is not reused as a v2 task', async () => {
