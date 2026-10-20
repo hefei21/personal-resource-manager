@@ -159,11 +159,18 @@ function normalizeEvidence(evidence, maxItems) {
   return normalized
 }
 
-function evidenceDigest(evidence) {
-  return sha256(JSON.stringify(evidence.map(({ citationId, text }) => ({ citationId, text }))))
+function evidenceDigest(evidence, includeSourceTitles) {
+  return sha256(JSON.stringify(evidence.map(({ citationId, text, taskText }) => ({ citationId, text: includeSourceTitles ? taskText : text }))))
 }
 
-function budgetEvidence(evidence, { query, language, maxEvidenceBytes, maxEvidenceItems, systemPromptBytes, outputReserveBytes }) {
+function sourceTitleLabel(title) {
+  if (!isSafeRagText(title)) return ''
+  // Keep metadata inside the untrusted block; a title cannot close its wrapper.
+  const encoded = JSON.stringify(title).replace(/[<>\[\]]/gu, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
+  return `Source title (metadata, not answer evidence): ${encoded}\nOriginal text:\n`
+}
+
+function budgetEvidence(evidence, { query, language, maxEvidenceBytes, maxEvidenceItems, systemPromptBytes, outputReserveBytes, includeSourceTitles }) {
   const selected = []
   const omitted = []
   let used = Buffer.byteLength(languageInstruction(language), 'utf8') + Buffer.byteLength(query, 'utf8') + systemPromptBytes + outputReserveBytes
@@ -175,7 +182,8 @@ function budgetEvidence(evidence, { query, language, maxEvidenceBytes, maxEviden
     // Preserve paragraph boundaries, code indentation and table separators.
     // Match the Worker's accepted whitespace; strip only unsafe controls.
     const safeText = redactSensitiveText(item.text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, ' '))
-    const wrapped = `[UNTRUSTED_EVIDENCE ${item.citationId}] ${safeText} [END_UNTRUSTED_EVIDENCE ${item.citationId}]`
+    const label = includeSourceTitles ? sourceTitleLabel(item.title) : ''
+    const wrapped = `[UNTRUSTED_EVIDENCE ${item.citationId}] ${label}${safeText} [END_UNTRUSTED_EVIDENCE ${item.citationId}]`
     const bytes = Buffer.byteLength(wrapped, 'utf8')
     if (used + bytes > maxEvidenceBytes) {
       omitted.push({ citationId: item.citationId, reason: 'evidence_budget' })
@@ -232,10 +240,13 @@ export class RagAnswerService {
     this.authoritativeActiveSnapshot = authoritativeActiveSnapshot
     this.model = model
     const answerFormat = config.answerFormat ?? 'legacy'
+    const includeSourceTitles = config.includeSourceTitles ?? false
+    if (typeof includeSourceTitles !== 'boolean') fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, 'Source title option must be boolean.')
     if (!['legacy', 'question-slots-v1'].includes(answerFormat)) fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, 'Answer format is invalid.')
     this.processorVersion = answerFormat === 'question-slots-v1' ? 'v2' : RAG_ANSWER_PROCESSOR_VERSION
     this.config = Object.freeze({
       answerFormat,
+      includeSourceTitles,
       maxEvidenceItems: boundedInteger(config.maxEvidenceItems, 'config.maxEvidenceItems', 1, 64, 16),
       maxEvidenceBytes: boundedInteger(config.maxEvidenceBytes, 'config.maxEvidenceBytes', 256, 8 * 1024 * 1024, 32 * 1024),
       systemPromptBytes: boundedInteger(config.systemPromptBytes, 'config.systemPromptBytes', 0, 1_000_000, 512),
@@ -331,6 +342,7 @@ export class RagAnswerService {
       maxEvidenceBytes: this.config.maxEvidenceBytes,
       maxEvidenceItems: this.config.maxEvidenceItems,
       systemPromptBytes: this.config.systemPromptBytes,
+      includeSourceTitles: this.config.includeSourceTitles,
       outputReserveBytes: this.config.outputReserveBytes
     })
     if (budget.selected.length < this.config.minEvidenceItems) {
@@ -363,7 +375,7 @@ export class RagAnswerService {
     if (!this.taskStore || (typeof this.taskStore.enqueueExclusiveRun !== 'function' && typeof this.taskStore.enqueue !== 'function')) {
       return this.#fallback(normalizedQuery, language, budget.selected, 'task_store_unavailable', { omitted: budget.omitted })
     }
-    const evidenceHash = evidenceDigest(budget.selected)
+    const evidenceHash = evidenceDigest(budget.selected, this.config.includeSourceTitles)
     const request = {
       taskType: RAG_ANSWER_TASK_TYPE,
       processorVersion: this.processorVersion,
@@ -436,6 +448,7 @@ export class RagAnswerService {
           normalizedEvidence = normalizedEvidence.flatMap((item) => {
             const original = originals.get(item.internalId)
             if (!original || original.text !== item.text ||
+                (this.config.includeSourceTitles && original.title !== item.title) ||
                 JSON.stringify(original.locator) !== JSON.stringify(item.locator) ||
                 ['sourceType', 'sourceId', 'sourceVersionId', 'snapshotId', 'sourceContentSha256']
                   .some((key) => original.candidate[key] !== item.candidate[key])) return []

@@ -1505,7 +1505,7 @@ export function createRagRouter({
   model = undefined,
   rerankerModel = undefined,
   retrievalConfig = {},
-  answerConfig = {},
+  answerConfig = { includeSourceTitles: process.env.RAG_ANSWER_SOURCE_TITLES === 'true' },
   rerankerConfig = {},
   requestIdFactory = () => crypto.randomUUID(),
   queryRunStore = null

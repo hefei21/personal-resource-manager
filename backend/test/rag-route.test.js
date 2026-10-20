@@ -27,6 +27,7 @@ test('query transport preserves distinct Unicode objects with both raw and norma
 })
 
 const ANSWER_ENV_KEYS = [
+  'RAG_ANSWER_SOURCE_TITLES',
   'PC_WORKER_ANSWER_PROVIDER',
   'PC_WORKER_ANSWER_MODEL_ID',
   'PC_WORKER_LLM_MODEL_ID',
@@ -152,6 +153,24 @@ for (const status of ['enhanced', 'timeout', 'unavailable']) test(`enhanced phas
     assert.equal(generated, status === 'enhanced' ? 1 : 0)
     if (status !== 'enhanced') { assert.equal(data.reasonCode, 'enhancement_unavailable'); assert.equal(data.answer, null); assert.ok(data.evidence.length) }
   })
+})
+
+test('source title candidate is server-controlled and defaults off', async () => {
+  for (const value of [undefined, 'false', 'true', '1']) {
+    await withAnswerEnv(value === undefined ? {} : { RAG_ANSWER_SOURCE_TITLES: value }, async () => {
+      let captured
+      const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+        authoritativeChecksFactory: checks, candidateProvider: async () => ({ ftsCandidates: [] }),
+        hybridRetrieverFactory: () => ({ retrieve: () => retrieval() }),
+        answerServiceFactory: ({ answerConfig }) => { captured = answerConfig; return { generate: async () => ({ status: 'abstained', citations: [] }) } } })
+      await withServer(router, async base => {
+        const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query: '规则是什么' }) })
+        assert.equal(response.status, 200)
+        assert.equal(captured.includeSourceTitles, value === 'true')
+      })
+    })
+  }
+  assert.throws(() => normalizeQueryBody({ query: '规则', includeSourceTitles: true }))
 })
 
 test('optional translation affects recall only; ranking and answer keep original question', async () => {
