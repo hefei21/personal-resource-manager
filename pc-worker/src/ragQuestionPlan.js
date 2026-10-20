@@ -108,8 +108,11 @@ export function mapQuestionSlots(value, plan, evidence) {
   })
   const supported = entries.filter(x => x.status !== 'unsupported')
   const missing = entries.flatMap(x => x.status === 'unsupported' ? [x.question] : x.missing)
+  // Short slot answers can be bare values. Keep their original question attached
+  // when flattening; otherwise distinct objects become indistinguishable.
+  const answer = supported.map(x => entries.length > 1 ? `问题：${x.question}\n${x.answer}` : x.answer).join('\n\n')
   return { abstained: !supported.length, reasonCode: !supported.length ? 'EVIDENCE_INSUFFICIENT' : missing.length ? 'PARTIAL' : 'GROUNDED',
-    missingRequirements: supported.length ? missing : [], answer: supported.map(x => x.answer).join('\n\n'), citations: [...new Set(supported.flatMap(x => x.citations))] }
+    missingRequirements: supported.length ? missing : [], answer, citations: [...new Set(supported.flatMap(x => x.citations))] }
 }
 
 export function slotSystemPrompt(original) {

@@ -73,6 +73,20 @@ test('legacy workers and v2 workers cannot silently consume the other protocol',
   assert.throws(() => lookupPcWorkerProcessor('rag.answer.generate', 'v1').projectInput(queued.task.input))
 })
 
+test('short slot values retain their original objects through service delivery', async () => {
+  const service = setup()
+  const { task } = await service.generate({ query: '预约请求保留多久？预约到书保留多久？是否保证送达时间？', evidence: [original(0), original(1)] })
+  const processor = createRagAnswerProcessor({ config, fetchImpl: async () => reply({
+    Q1: supported('20天'), Q2: supported('7天', ['C2']), Q3: unsupported()
+  }) })
+  const result = await processor.process(task)
+  const applied = await service.applyResult({ task, result })
+  assert.equal(applied.answer, '问题：预约请求保留多久？\n20天\n\n问题：预约到书保留多久？\n7天')
+  assert.equal(applied.status, 'partial')
+  assert.deepEqual(applied.missingRequirements, ['是否保证送达时间？'])
+  assert.deepEqual(applied.citations.map(c => c.citationId), ['C1', 'C2'])
+})
+
 test('an active legacy task is not reused as a v2 task', async () => {
   const service = setup({ taskStore: { enqueueExclusiveRun: request => ({
     created: false, task: { ...request, id: 2, processorVersion: 'v1' }
