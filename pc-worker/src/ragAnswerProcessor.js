@@ -239,7 +239,18 @@ function requestsProhibitedAction(query) {
   // to run it. Mask only that verb; still inspect the rest of the query for
   // mixed action requests, private-file access and forged citations.
   const normalizedQuery = query.normalize('NFKC')
+  // In descriptive questions, dry-run is a compound option name, not the
+  // execution verb "run". Mask only that token, never the whole question.
   let inspected = normalizedQuery.replace(
+    /\b(which|what|with|the)(\s+)(--)?dry-run\b/giu,
+    (match, determiner, spacing, flag, offset) => {
+      const prefix = normalizedQuery.slice(0, offset).split(/[。！？!?；;\r\n]/u).at(-1)
+        .replace(/\bdry-run\b/giu, 'dry-doc')
+      if (/\b(?:please|you|execute|run|perform|invoke|do|try|use|start|launch)\b|请|帮我|立即|执行/iu.test(prefix)) return match
+      return `${determiner}${spacing}${flag ?? ''}dry-doc`
+    }
+  )
+  inspected = inspected.replace(
     /在执行([^。！？!?；;\r\n]{0,40}?(?:shell|命令))时(?=(?:有(?:什么|何)|有哪[些种])?(?:区别|差异|不同))/giu,
     (match, subject, offset) => {
       const prefix = normalizedQuery.slice(0, offset).split(/[。！？!?；;\r\n]/u).at(-1)
