@@ -3,7 +3,8 @@ const MAX_CONTEXT_ITEMS = 16
 
 const accepted = value => value === true || value?.visible === true
 const sameSection = (a, b) => JSON.stringify(a?.sectionPath ?? []) === JSON.stringify(b?.sectionPath ?? []) &&
-  a?.chapterIndex === b?.chapterIndex && a?.path === b?.path && a?.page === b?.page
+  a?.chapterIndex === b?.chapterIndex && a?.spineIndex === b?.spineIndex &&
+  a?.path === b?.path && a?.page === b?.page
 
 // Keep each neighbor as an independently authorized, locatable citation rather
 // than appending untracked text to a seed's chunk ID. Original seeds have budget

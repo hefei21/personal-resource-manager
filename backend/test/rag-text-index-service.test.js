@@ -363,6 +363,34 @@ test('CJK projection finds mid-sentence words without leaking tokens into eviden
   } finally { database.close() }
 })
 
+test('EPUB neighbors with equal titles stay inside the extracted spine item', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const service = createService(database, { chunkerOptions: { maxChunkBytes: 128 } })
+    const book = { ...source({ id: 41 }), sourceType: 'ebook',
+      baseLocator: { route: '/books', bookId: 41 },
+      sections: [
+        { format: 'ebook', sectionPath: ['Rules'], locator: { route: '/books', bookId: 41, spineIndex: 3 },
+          text: 'ScopeA adults must register. '.repeat(5) + '\n\nseedword children need adult supervision.' },
+        { format: 'ebook', sectionPath: ['Rules'], locator: { route: '/books', bookId: 41, spineIndex: 5 },
+          text: 'ScopeB children may enter alone.' }
+      ] }
+    await service.index({ sources: [book], errors: [] })
+    const seed = service.query({ q: 'seedword' }).data[0]
+    assert.equal(seed.locator.spineIndex, 3)
+    const checks = { authoritativeVisibility: () => true, authoritativeActiveSnapshot: () => true }
+    const expanded = await expandRagEvidenceContext({ database, evidence: [seed], checks })
+    assert.ok(expanded.length > 1, 'same-spine neighbor must still expand')
+    assert.ok(expanded.every(item => item.locator.spineIndex === 3), 'other spine item must not be borrowed')
+    assert.ok(expanded.some(item => item.chunkId !== seed.chunkId && item.body.includes('register')))
+    assert.ok(!expanded.some(item => item.body.includes('ScopeB')))
+    const revoked = await expandRagEvidenceContext({ database, evidence: [seed],
+      checks: { ...checks, authoritativeVisibility: item => item.chunkId === seed.chunkId } })
+    assert.deepEqual(revoked.map(item => item.chunkId), [seed.chunkId])
+  } finally { database.close() }
+})
+
 test('evidence expansion keeps individual authorized citations within the same section and snapshot', nativeTestOptions, async () => {
   const database = new Database(':memory:')
   try {
