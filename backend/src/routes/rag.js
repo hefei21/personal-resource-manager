@@ -14,6 +14,7 @@ import { createRagRerankService, RAG_RERANK_TASK_TYPE } from '../services/ragRer
 import { createRagHybridRetriever, selectGlobalRerankedEvidence } from '../services/ragHybridRetriever.js'
 import { createTranslatedCandidateProvider } from '../services/ragTranslatedCandidateProvider.js'
 import { expandRagEvidenceContext } from '../services/ragEvidenceContext.js'
+import { attachRagSourceTitles } from '../services/ragSourceTitles.js'
 import { ragRetrievalPolicy } from '../services/ragRetrievalPolicy.js'
 import { normalizeRagChunkScope, readRagChapterScope } from '../services/ragChapterScope.js'
 import {
@@ -1934,8 +1935,11 @@ export function createRagRouter({
       })
 
       queryController.signal.throwIfAborted()
-      const evidence = await expandRagEvidenceContext({ database, evidence: rankedRetrieval.data, checks,
+      let evidence = await expandRagEvidenceContext({ database, evidence: rankedRetrieval.data, checks,
         context: { query: input.query, req } })
+      if (answerConfig.includeSourceTitles === true) {
+        evidence = await attachRagSourceTitles({ database, evidence, checks, context: { query: input.query, req } })
+      }
       rankedRetrieval = Object.freeze({ ...rankedRetrieval, data: Object.freeze(evidence), total: evidence.length })
       if (evidencePhase || (input.phase === 'enhanced' && !enhancementReady)) {
         const visible = await authorizeReturnedEvidence(rankedRetrieval, checks, { phase: 'evidence_display', query: input.query, req })

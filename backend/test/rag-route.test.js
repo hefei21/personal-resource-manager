@@ -173,6 +173,37 @@ test('source title candidate is server-controlled and defaults off', async () =>
   assert.throws(() => normalizeQueryBody({ query: '规则', includeSourceTitles: true }))
 })
 
+test('opt-in HTTP answer uses authoritative source name after evidence expansion, default remains unchanged', async () => {
+  for (const enabled of [false, true]) {
+    let reads = 0, captured
+    const database = { prepare(sql) { return {
+      all: () => [],
+      get: id => {
+        if (sql === 'SELECT title AS title FROM documents WHERE id = ?') {
+          assert.equal(id, 7); reads++; return { title: 'Original resource name' }
+        }
+        return undefined
+      }
+    } } }
+    const router = createRagRouter({ databaseProvider: () => database, taskStoreProvider: () => null,
+      answerConfig: { includeSourceTitles: enabled }, authoritativeChecksFactory: checks,
+      candidateProvider: async () => ({ ftsCandidates: [] }),
+      hybridRetrieverFactory: () => ({ retrieve: () => retrieval() }),
+      answerServiceFactory: () => ({ generate: async ({ evidence }) => {
+        captured = evidence; return { status: 'abstained', citations: [] }
+      } }) })
+    await withServer(router, async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' },
+        body: JSON.stringify({ query: 'Which rules apply?' }) })
+      assert.equal(response.status, 200)
+      assert.equal(captured[0].title, enabled ? 'Original resource name' : 'Safe title')
+      assert.equal(captured[0].body, retrieval().data[0].body)
+      assert.equal(reads, enabled ? 1 : 0)
+    })
+  }
+})
+
 test('optional translation affects recall only; ranking and answer keep original question', async () => {
   const queries = [], downstream = []
   const query = '超时意味着整个下载超时吗'

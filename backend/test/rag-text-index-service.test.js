@@ -13,6 +13,8 @@ import { ragQueryTerms } from '../src/services/ragLexicalText.js'
 import { expandRagEvidenceContext } from '../src/services/ragEvidenceContext.js'
 import { readRagChapterScope, normalizeRagChunkScope } from '../src/services/ragChapterScope.js'
 import { createTranslatedCandidateProvider } from '../src/services/ragTranslatedCandidateProvider.js'
+import { attachRagSourceTitles } from '../src/services/ragSourceTitles.js'
+import { createRagAnswerService } from '../src/services/ragAnswerService.js'
 
 const require = createRequire(import.meta.url)
 let Database
@@ -31,6 +33,38 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   : { skip: 'better-sqlite3 native binding is unavailable locally; Linux CI must run this test' }
 
 const registry = createMigrationRegistry(RAG_INDEX_MIGRATIONS)
+
+test('actual FTS and neighbor evidence retain distinct book identity for equal chapter titles', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    database.exec("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT); INSERT INTO books VALUES (1, 'Garden Handbook'), (2, 'Library Handbook')")
+    const sources = [1, 2].map(id => ({ ...source({ id }), sourceType: 'ebook',
+      title: id === 1 ? 'Garden Handbook' : 'Library Handbook',
+      baseLocator: { route: '/books', bookId: id },
+      sections: [{ format: 'ebook', title: 'Introduction', sectionPath: ['Introduction'],
+        locator: { route: '/books', bookId: id, chapterIndex: 0 }, text: `sharedkeyword rules for source ${id}` }] }))
+    const index = createService(database, { collectSources: async () => ({ sources, errors: [] }) })
+    await index.refresh()
+    const hits = index.query({ q: 'sharedkeyword', limit: 10 }).data
+    assert.equal(hits.length, 2)
+    assert.deepEqual(hits.map(hit => hit.title), ['Introduction', 'Introduction'])
+    const checks = { authoritativeActiveSnapshot: () => true, authoritativeVisibility: () => true }
+    const expanded = await expandRagEvidenceContext({ database, evidence: hits, checks })
+    const labeled = await attachRagSourceTitles({ database, evidence: expanded, checks })
+    assert.deepEqual(labeled.map(item => item.title), ['Garden Handbook', 'Library Handbook'])
+    assert.deepEqual(labeled.map(({ title, ...item }) => item), expanded.map(({ title, ...item }) => item))
+    const service = createRagAnswerService({ ...checks, config: { includeSourceTitles: true },
+      model: { provider: 'local-test', modelId: 'answer-model', modelRevision: 'revision-1', dimensions: 32,
+        inputLimit: 4096, distance: 'cosine', normalization: 'l2', instruction: 'answer from evidence', configHash: 'a'.repeat(64) },
+      workerAvailable: () => true, taskStore: { enqueue: async task => ({ ...task, id: 1, status: 'queued' }) } })
+    const result = await service.generate({ query: 'What are the rules?', evidence: labeled })
+    const payload = JSON.stringify(result.task)
+    assert.match(payload, /Garden Handbook/)
+    assert.match(payload, /Library Handbook/)
+    assert.doesNotMatch(payload, /Source title[^\n]*Introduction/)
+  } finally { database.close() }
+})
 
 test('translated FTS accepts the complete protocol length without losing source scope', nativeTestOptions, async () => {
   const database = new Database(':memory:')
