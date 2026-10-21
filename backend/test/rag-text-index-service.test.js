@@ -15,6 +15,7 @@ import { readRagChapterScope, normalizeRagChunkScope } from '../src/services/rag
 import { createTranslatedCandidateProvider } from '../src/services/ragTranslatedCandidateProvider.js'
 import { attachRagSourceTitles } from '../src/services/ragSourceTitles.js'
 import { createRagAnswerService } from '../src/services/ragAnswerService.js'
+import { createRagHybridRetriever, selectGlobalRerankedEvidence } from '../src/services/ragHybridRetriever.js'
 
 const require = createRequire(import.meta.url)
 let Database
@@ -33,6 +34,39 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   : { skip: 'better-sqlite3 native binding is unavailable locally; Linux CI must run this test' }
 
 const registry = createMigrationRegistry(RAG_INDEX_MIGRATIONS)
+
+test('actual chunk line numbers in separate ebook chapters survive both evidence selectors', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    const book = { ...source({ id: 1 }), sourceType: 'ebook',
+      baseLocator: { route: '/books', bookId: 1 },
+      sections: [0, 1].map(chapterIndex => ({ format: 'ebook', sectionPath: ['Rules'],
+        locator: { route: '/books', bookId: 1, chapterIndex },
+        text: chapterIndex === 0 ? 'Admissionpolicy: adults may enter with a ticket.'
+          : 'Admissionpolicy: children must be accompanied by an adult.' })) }
+    const index = createService(database, { collectSources: async () => ({ sources: [book], errors: [] }) })
+    await index.refresh()
+    const pool = index.query({ q: 'Admissionpolicy', limit: 10 }).data
+    assert.equal(pool.length, 2)
+    assert.deepEqual(pool.map(c => c.locator.startLine), [1, 1])
+    const checks = { authoritativeActiveSnapshot: () => true, authoritativeVisibility: () => true }
+    const selected = (await createRagHybridRetriever({ ...checks }).retrieve({ ftsCandidates: pool,
+      vectorCandidates: [], limit: 10 })).data
+    assert.equal(selected.length, 2)
+    const reranked = selectGlobalRerankedEvidence({ pool: selected, ranked: [...selected].reverse() })
+    assert.equal(reranked.length, 2)
+    const expanded = await expandRagEvidenceContext({ database, evidence: reranked, checks })
+    assert.equal(expanded.length, 2)
+    const service = createRagAnswerService({ ...checks,
+      model: { provider: 'local-test', modelId: 'answer-model', modelRevision: 'revision-1', dimensions: 32,
+        configHash: 'a'.repeat(64) }, taskStore: { enqueue: task => ({ ...task, id: 1, status: 'queued' }) } })
+    const queued = await service.generate({ query: 'What is the admissionpolicy for adults and children?', evidence: expanded })
+    assert.equal(queued.task.input.evidence.length, 2)
+    assert.match(JSON.stringify(queued.task.input.evidence), /accompanied by an adult/)
+    assert.deepEqual(new Set(expanded.map(c => c.locator.chapterIndex)), new Set([0, 1]))
+  } finally { database.close() }
+})
 
 test('actual FTS and neighbor evidence retain distinct book identity for equal chapter titles', nativeTestOptions, async () => {
   const database = new Database(':memory:')

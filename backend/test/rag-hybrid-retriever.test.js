@@ -110,6 +110,38 @@ test('rerank candidate pools preserve overlap without changing ordinary retrieva
   await assert.rejects(retriever.retrieve({...input,rerankPool:true}),{code:RAG_HYBRID_ERROR_CODES.CLIENT_CONTROL_FORBIDDEN})
 })
 
+test('overlap coordinates are local to a chapter, spine item, file or page', async () => {
+  for (const [sourceType, field, values] of [
+    ['ebook', 'chapterIndex', [0, 1]],
+    ['ebook', 'spineIndex', [0, 1]],
+    ['code_repository', 'path', ['README.md', 'docs/policy.md']],
+    ['document', 'page', [1, 2]],
+    ['ebook', 'chapterIndex', [undefined, 0]]
+  ]) {
+    for (const coordinate of ['line', 'paragraph', 'ordinal']) {
+      const base = sourceType === 'ebook' ? { route: '/books', bookId: 1 }
+        : sourceType === 'document' ? { route: '/documents', documentId: 1 }
+          : { route: '/code', repositoryId: 1 }
+      const local = coordinate === 'line' ? { startLine: 1, endLine: 5 }
+        : coordinate === 'paragraph' ? { paragraphIndex: 0, paragraphEndIndex: 2 } : {}
+      const hits = [1, 2, 3].map((chunkId, i) => candidate({ chunkId, sourceType,
+        locator: { ...base, ...local, sectionPath: ['Introduction'],
+          [field]: values[i === 0 ? 0 : 1] } }))
+      const retriever = createRagHybridRetriever({ config: { maxPerSource: 6 }, authoritativeVisibility: () => true })
+      const result = await retriever.retrieve({ ftsCandidates: hits, vectorCandidates: [], limit: 10 })
+      assert.deepEqual(result.data.map(c => c.chunkId), [1, 2], `${field}/${coordinate}`)
+    }
+  }
+})
+
+test('different headings in one file do not bypass same-line overlap suppression', async () => {
+  const retriever = createRagHybridRetriever({ config: { maxPerSource: 6 }, authoritativeVisibility: () => true })
+  const hits = ['First', 'Second'].map((heading, i) => candidate({ chunkId: i + 1,
+    sourceType: 'code_repository', locator: { route: '/code', repositoryId: 1,
+      path: 'README.md', sectionPath: [heading], startLine: 1, endLine: 5 } }))
+  assert.equal((await retriever.retrieve({ ftsCandidates: hits, vectorCandidates: [], limit: 10 })).data.length, 1)
+})
+
 test('rerank pool reserves semantic candidates after both authoritative checks', async () => {
   const fts = Array.from({length:50},(_,i)=>candidate({chunkId:i+1,score:100-i,startLine:3*i+1}))
   const vector = Array.from({length:50},(_,i)=>candidate({channel:'vector',chunkId:i+101,score:100-i,locator:undefined}))

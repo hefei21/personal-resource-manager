@@ -271,6 +271,11 @@ function sameSection(left, right) {
 
 function overlapsOrAdjacent(left, right, adjacentGap) {
   if (sourceKey(left) !== sourceKey(right) || left.snapshotId !== right.snapshotId) return false
+  // Line/paragraph numbers restart in each chapter, file or page. Even ordinal
+  // adjacency cannot make chunks from different physical scopes duplicates.
+  for (const key of ['chapterIndex', 'spineIndex', 'path', 'page']) {
+    if (left.locator?.[key] !== right.locator?.[key]) return false
+  }
   if (!sameSection(left, right) && locatorRange(left.locator)?.kind === 'paragraph') return false
   const leftRange = locatorRange(left.locator)
   const rightRange = locatorRange(right.locator)
