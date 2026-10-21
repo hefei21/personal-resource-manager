@@ -109,6 +109,10 @@ test('successful task result remains bound to request and is returned without re
 })
 
 test('cleanup failure is observable but cannot block original-query fallback', async t => {
+  // Waiting uses performance.now(), while the task publishes a wall-clock TTL.
+  // Freeze only wall time: comparing both clocks at a 10ms boundary is flaky.
+  const wallNow = Date.now()
+  t.mock.method(Date, 'now', () => wallNow)
   const { store } = setup(t)
   let attempts = 0, notice
   const service = createQueryTranslationService({ enabled: true, model, timeoutMs: 10,
@@ -118,5 +122,5 @@ test('cleanup failure is observable but cannot block original-query fallback', a
   assert.deepEqual(await service.translate({ query }), { status: 'timeout', queries: [query] })
   assert.equal(attempts, 2)
   assert.deepEqual(notice, { code: 'TRANSLATION_CLEANUP_DEFERRED', taskId: 1 })
-  assert.ok(store.getById(1).input.expiresAt <= Date.now())
+  assert.equal(store.getById(1).input.expiresAt, wallNow + 10)
 })
