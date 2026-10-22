@@ -800,6 +800,7 @@ async function defaultCandidateProvider({
   source,
   chunkIds,
   expandedRerankPool = false,
+  boundIdentifierFallback = false,
   lexicalOnly = false,
   authoritativeVisibility,
   authoritativeActiveSnapshot,
@@ -819,13 +820,18 @@ async function defaultCandidateProvider({
     throw error
   }
   const search = expandedRerankPool && typeof service.queryRerankPool === 'function' ? service.queryRerankPool : service.query
-  const result = await Promise.resolve(search.call(service, {
+  const searchInput = {
     q: query,
     limit,
     offset: 0,
     ...(chunkIds ? { chunkIds } : {}),
     ...(source ? { sourceType: source.sourceType, sourceId: source.sourceId } : {})
-  }))
+  }
+  let result = await Promise.resolve(search.call(service, searchInput))
+  if (boundIdentifierFallback && source && result?.data?.length === 0 &&
+      typeof service.queryBoundIdentifierFallback === 'function') {
+    result = await Promise.resolve(service.queryBoundIdentifierFallback(searchInput)) ?? result
+  }
   if (!isPlainObject(result) || !Array.isArray(result.data)) {
     const error = new Error('RAG text candidates are invalid.')
     error.code = RAG_ROUTE_ERROR_CODES.CANDIDATES_INVALID
@@ -1506,6 +1512,7 @@ export function createRagRouter({
   model = undefined,
   rerankerModel = undefined,
   retrievalConfig = {},
+  boundIdentifierFallback = false,
   answerConfig = { includeSourceTitles: process.env.RAG_ANSWER_SOURCE_TITLES === 'true' },
   rerankerConfig = {},
   requestIdFactory = () => crypto.randomUUID(),
@@ -1527,6 +1534,7 @@ export function createRagRouter({
 
   const resolvedCandidateProvider = retrieveCandidates ?? candidateProvider ?? ((options) => defaultCandidateProvider({
     ...options,
+    boundIdentifierFallback: boundIdentifierFallback === true && Boolean(options.req?.body?.source),
     textIndexServiceFactory,
     queryRuntimeFactory,
     taskStoreProvider,

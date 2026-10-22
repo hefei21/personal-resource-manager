@@ -23,3 +23,15 @@ export function ragQueryTerms(query) {
   return [...new Set((query.normalize('NFKC').match(WORDS) ?? []).flatMap(text =>
     /^\p{Script=Han}+$/u.test(text) ? grams(text, false) : [text]))].slice(0, 64)
 }
+
+// A narrow lexical retry, not a translation or generated query. Only a sole
+// technical identifier in a mixed Chinese question may anchor this fallback.
+export function boundRagIdentifier(query) {
+  if (typeof query !== 'string' || !/\p{Script=Han}/u.test(query)) return null
+  // Inspect the whole question, not the capped FTS token budget: a second
+  // object late in a long question must still disable the retry.
+  const terms = [...new Set(query.match(WORDS) ?? [])].filter(term => !/^\p{Script=Han}+$/u.test(term))
+  if (terms.length !== 1) return null
+  const [term] = terms
+  return /^[A-Za-z][A-Za-z0-9_]{2,127}$/u.test(term) && /_|[a-z][A-Z]/u.test(term) ? term : null
+}

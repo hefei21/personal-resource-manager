@@ -9,7 +9,7 @@ import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
 import { chunkRagSource, normalizeRagChunkerOptions, RAG_CHUNKER_VERSION } from '../src/services/ragChunker.js'
 import { createRagTextIndexService, RAG_TEXT_INDEX_ERROR_CODES } from '../src/services/ragTextIndexService.js'
-import { ragQueryTerms } from '../src/services/ragLexicalText.js'
+import { ragQueryTerms, boundRagIdentifier } from '../src/services/ragLexicalText.js'
 import { expandRagEvidenceContext } from '../src/services/ragEvidenceContext.js'
 import { readRagChapterScope, normalizeRagChunkScope } from '../src/services/ragChapterScope.js'
 import { createTranslatedCandidateProvider } from '../src/services/ragTranslatedCandidateProvider.js'
@@ -34,6 +34,41 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   : { skip: 'better-sqlite3 native binding is unavailable locally; Linux CI must run this test' }
 
 const registry = createMigrationRegistry(RAG_INDEX_MIGRATIONS)
+
+test('bound identifier fallback is narrow and inspects objects beyond the FTS term budget', () => {
+  for (const value of ['S_IMODE返回哪些位？', 'QuantumWidget有什么条件？']) assert.ok(boundRagIdentifier(value))
+  for (const value of ['plain有什么条件？', 'S_IMODE S_IFMT有什么区别？', 'S_IMODE', 'S_IMODE保证20毫秒？',
+    'Ｓ_IMODE有什么条件？', 'S_IMODE' + '中文条件'.repeat(80) + 'OtherObject']) assert.equal(boundRagIdentifier(value), null)
+})
+
+test('bound identifier retry preserves body support, source, chapter and visibility boundaries', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    let allowed = true
+    const index = createService(database, { authoritativeVisibility: () => allowed,
+      collectSources: async () => ({ sources: [
+        source({ id: 1, title: 'OtherObject', text: 'S_IMODE returns permission bits on supported systems.' }),
+        source({ id: 2, text: 'OtherObject belongs only to the second source.' })
+      ], errors: [] }) })
+    await index.refresh()
+    const input = { q: 'S_IMODE返回哪些位？', sourceType: 'document', sourceId: 1, limit: 10 }
+    assert.equal(index.query(input).data.length, 0)
+    const hits = index.queryBoundIdentifierFallback(input).data
+    assert.equal(hits.length, 1); assert.equal(hits[0].sourceId, 1)
+    assert.match(hits[0].body, /supported systems/)
+    assert.equal(index.queryBoundIdentifierFallback({ ...input, q: 'OtherObject有什么条件？' }).data.length, 0)
+    assert.equal(index.queryBoundIdentifierFallback({ ...input, sourceId: 2 }).data.length, 0)
+    assert.equal(index.queryBoundIdentifierFallback({ ...input, chunkIds: [999999] }).data.length, 0)
+    assert.equal(index.queryBoundIdentifierFallback({ q: input.q, limit: 10 }), null)
+    assert.equal(index.queryBoundIdentifierFallback({ ...input, q: 'ordinary有什么条件？' }), null)
+    allowed = false
+    assert.equal(index.queryBoundIdentifierFallback(input).data.length, 0)
+    allowed = true
+    database.prepare('UPDATE rag_source_state SET active_snapshot_id = NULL WHERE source_id = 1').run()
+    assert.equal(index.queryBoundIdentifierFallback(input).data.length, 0)
+  } finally { database.close() }
+})
 
 test('actual chunk line numbers in separate ebook chapters survive both evidence selectors', nativeTestOptions, async () => {
   const database = new Database(':memory:')

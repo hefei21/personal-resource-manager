@@ -102,6 +102,31 @@ function rejectingChecks() {
   }
 }
 
+test('bound identifier retry is default off, explicit-source only, and zero-hit only', async () => {
+  for (const [enabled, explicit, nonempty, expected] of [
+    [false, true, false, 0], [true, false, false, 0], [true, true, true, 0], [true, true, false, 1]
+  ]) {
+    let retried = 0
+    const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+      authoritativeChecksFactory: checks, boundIdentifierFallback: enabled,
+      sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 1 } }),
+      structuredAnswerProvider: () => null,
+      querySourceResolver: () => ({ source: { sourceType: 'ebook', sourceId: 1 } }),
+      textIndexServiceFactory: () => ({ query: () => ({ data: nonempty ? [{ fixture: true }] : [] }),
+        queryBoundIdentifierFallback: input => { retried++; assert.equal(input.sourceId, 1); return { data: [] } } }),
+      queryRuntimeFactory: () => ({ query: () => ({ vectorCandidates: [] }) }),
+      hybridRetrieverFactory: () => ({ retrieve: () => ({ ...retrieval(), data: [], total: 0 }) }) })
+    await withServer(router, async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers: {
+        'content-type': 'application/json', 'x-test-principal': 'owner'
+      }, body: JSON.stringify({ query: 'S_IMODE返回哪些位？', ...(explicit ? { source: { type: 'ebook', id: 1 } } : {}) }) })
+      assert.equal(response.status, 200)
+      assert.equal(retried, expected)
+    })
+  }
+  assert.throws(() => normalizeQueryBody({ query: 'x', boundIdentifierFallback: true }))
+})
+
 test('progressive evidence is immediate, scoped, and starts neither translation nor answer', async () => {
   const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
     authoritativeChecksFactory: checks,

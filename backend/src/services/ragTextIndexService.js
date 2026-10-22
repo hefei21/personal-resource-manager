@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { normalizeRagChunkScope } from './ragChapterScope.js'
-import { buildRagSearchText, ragQueryTerms } from './ragLexicalText.js'
+import { buildRagSearchText, ragQueryTerms, boundRagIdentifier } from './ragLexicalText.js'
 
 import {
   RAG_CHUNK_FTS_TABLE,
@@ -907,7 +907,16 @@ export class RagTextIndexService {
     return this.#query(input, true)
   }
 
-  #query(input, bodyOnly) {
+  queryBoundIdentifierFallback(input = {}) {
+    const query = normalizeQuery(input)
+    const identifier = boundRagIdentifier(input.q ?? input.keyword)
+    if (!query.sourceId || !query.sourceType || query.limit > 50 || query.offset !== 0 || !identifier) return null
+    // Reuse exact body support, active snapshot, scope and visibility checks.
+    // A title-only hit must never turn into purported answer evidence.
+    return this.#query({ ...input, q: identifier }, true, identifier)
+  }
+
+  #query(input, bodyOnly, requiredBodyIdentifier = null) {
     const query = normalizeQuery(input)
     const candidateLimit = Math.min(MAX_QUERY_CANDIDATES, Math.max(query.limit + query.offset, (query.limit + query.offset) * 10))
     const clauses = [
@@ -952,6 +961,10 @@ export class RagTextIndexService {
       // optional vector Worker is offline or still indexing.
       rows = readCandidates(query.relaxedFtsQuery)
         .filter((row) => hasRelaxedLexicalSupport(row, query.relaxedTokens, bodyOnly))
+    }
+    if (requiredBodyIdentifier) {
+      const bodyPattern = new RegExp(`(?<![\\p{L}\\p{N}_])${requiredBodyIdentifier}(?![\\p{L}\\p{N}_])`, 'iu')
+      rows = rows.filter(row => bodyPattern.test(row.body))
     }
     const visible = []
     for (const row of rows) {
