@@ -241,12 +241,15 @@ export class RagAnswerService {
     this.model = model
     const answerFormat = config.answerFormat ?? 'legacy'
     const includeSourceTitles = config.includeSourceTitles ?? false
+    const omitDuplicateAbstentionInstruction = config.omitDuplicateAbstentionInstruction ?? false
+    if (typeof omitDuplicateAbstentionInstruction !== 'boolean') fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, 'Abstention instruction option must be boolean.')
     if (typeof includeSourceTitles !== 'boolean') fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, 'Source title option must be boolean.')
     if (!['legacy', 'question-slots-v1'].includes(answerFormat)) fail(RAG_ANSWER_ERROR_CODES.INPUT_INVALID, 'Answer format is invalid.')
     this.processorVersion = answerFormat === 'question-slots-v1' ? 'v2' : RAG_ANSWER_PROCESSOR_VERSION
     this.config = Object.freeze({
       answerFormat,
       includeSourceTitles,
+      omitDuplicateAbstentionInstruction,
       maxEvidenceItems: boundedInteger(config.maxEvidenceItems, 'config.maxEvidenceItems', 1, 64, 16),
       maxEvidenceBytes: boundedInteger(config.maxEvidenceBytes, 'config.maxEvidenceBytes', 256, 8 * 1024 * 1024, 32 * 1024),
       systemPromptBytes: boundedInteger(config.systemPromptBytes, 'config.systemPromptBytes', 0, 1_000_000, 512),
@@ -295,9 +298,11 @@ export class RagAnswerService {
   #modelQuery(query, language, conflict) {
     const conflictInstruction = conflict
       ? ' 证据可能存在冲突；请明确说明不确定性并引用相关来源。 '
-      : ' 多项要求仅部分有据时，只回答有据部分并标为PARTIAL、列出缺证项；全部缺证请拒答，不要补写证据之外的事实。 '
+      : this.config.omitDuplicateAbstentionInstruction ? ' 多项要求仅部分有据时，只回答有据部分并标为PARTIAL、列出缺证项； '
+        : ' 多项要求仅部分有据时，只回答有据部分并标为PARTIAL、列出缺证项；全部缺证请拒答，不要补写证据之外的事实。 '
     const safeQuery = redactSensitiveText(query.replace(/[\u0000-\u001f\u007f]/gu, ' '))
-    // Keep the established instruction bytes, but never fold the user's objects.
+    // Default bytes remain stable; the opt-in only removes a duplicate of the
+    // Worker's system rules. The final query hash isolates the changed task.
     const instructions = `${languageInstruction(language)}${conflictInstruction}`.normalize('NFKC')
     return `${instructions} USER QUESTION: <<<${safeQuery}>>> END USER QUESTION.`
   }

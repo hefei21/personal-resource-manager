@@ -75,6 +75,55 @@ function service(overrides = {}) {
   })
 }
 
+test('duplicate abstention instruction candidate is opt-in and retains partial guidance', async () => {
+  const run = (config = {}, conflict = false) => service({ config }).generate({ query: '比较½与1⁄2的适用条件', evidence: [evidence({ conflict })] })
+  const baseline = await run()
+  const disabled = await run({ omitDuplicateAbstentionInstruction: false })
+  const candidate = await run({ omitDuplicateAbstentionInstruction: true })
+  assert.deepEqual(baseline.task.input, disabled.task.input)
+  const duplicate = '全部缺证请拒答，不要补写证据之外的事实。'.normalize('NFKC')
+  assert.equal(candidate.task.input.query, baseline.task.input.query.replace(duplicate, ''))
+  assert.match(candidate.task.input.query, /PARTIAL/)
+  assert.notEqual(candidate.task.subjectId, baseline.task.subjectId)
+  assert.notEqual(candidate.task.input.querySha256, baseline.task.input.querySha256)
+  assert.equal(candidate.task.subjectContentSha256, baseline.task.subjectContentSha256)
+  assert.deepEqual(candidate.task.input.evidence, baseline.task.input.evidence)
+  assert.deepEqual(candidate.task.input.model, baseline.task.input.model)
+  assert.match(candidate.task.input.query, /½与1⁄2/)
+  assert.deepEqual((await run({}, true)).task.input, (await run({ omitDuplicateAbstentionInstruction: true }, true)).task.input)
+  assert.throws(() => service({ config: { omitDuplicateAbstentionInstruction: 'true' } }), /boolean/)
+})
+
+test('abstention reminder candidate preserves Worker system rules and partial/refusal delivery', async () => {
+  const { createRagAnswerProcessor, SYSTEM_PROMPT } = await import('../../pc-worker/src/ragAnswerProcessor.js')
+  for (const output of [
+    { answer: 'Supported fact.', abstained: false, reasonCode: 'PARTIAL', missingRequirements: ['Unknown duration'], citations: ['C1'] },
+    { answer: '', abstained: true, reasonCode: 'EVIDENCE_INSUFFICIENT', missingRequirements: [], citations: [] }
+  ]) {
+    const answer = service({ config: { omitDuplicateAbstentionInstruction: true } })
+    const queued = await answer.generate({ query: 'What fact and duration are supported?', evidence: [evidence({ body: 'Supported fact.' })] })
+    const worker = createRagAnswerProcessor({
+      config: { ...MODEL, baseUrl: 'http://127.0.0.1:1234', contextLimit: 8192, maxOutputBytes: 4096, maxEvidenceItems: 16, timeoutMs: 1000 },
+      fetchImpl: async (_url, options) => {
+        assert.equal(JSON.parse(options.body).messages[0].content, SYSTEM_PROMPT)
+        assert.match(SYSTEM_PROMPT, /If none of the requested requirements is supported, abstain/)
+        return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }] }))
+      }
+    })
+    const result = await worker.process(queued.task)
+    const delivered = await answer.applyResult({ task: queued.task, result })
+    assert.equal(delivered.abstained, output.abstained)
+    assert.equal(delivered.reasonCode, output.reasonCode)
+    for (const key of ['authoritativeVisibility', 'authoritativeActiveSnapshot']) {
+      answer[key] = () => false
+      const rejected = await answer.applyResult({ task: queued.task, result })
+      assert.equal(rejected.answer, null)
+      assert.deepEqual(rejected.citations, [])
+      answer[key] = () => true
+    }
+  }
+})
+
 test('source title projection is opt-in, bounded and part of task identity', async () => {
   const run = (title, config = {}) => service({ config }).generate({ query: '比较两馆规则', evidence: [evidence({ title })] })
   const old = await run('甲馆')
