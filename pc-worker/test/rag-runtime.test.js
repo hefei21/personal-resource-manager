@@ -28,6 +28,8 @@ function fixture(overrides = {}) {
   return { fetch, calls }
 }
 test('runtime profile is immutable, identified and strictly loopback', () => {
+  assert.equal(profile.modelKey, 'codex-extract-control/qwen35-9b/Qwen3.5-9B-Q6_K.gguf')
+  assert.equal(profile.prediction.reasoningBudget, 512)
   assert.match(RAG_RUNTIME_HASH, /^[a-f0-9]{64}$/)
   assert.throws(() => { profile.load.reasoningBudgetMessage = 'roleplay' })
   assert.equal(runtimeUrl(config.baseUrl + '/v1'), 'ws://127.0.0.1:1234')
@@ -36,6 +38,9 @@ test('runtime profile is immutable, identified and strictly loopback', () => {
 })
 test('runtime validates every required load field and model before evidence is sent', async () => {
   assertRuntime(info, profile.load)
+  assert.throws(() => assertRuntime({ ...info,
+    path: 'HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K.gguf'
+  }, profile.load))
   assert.throws(() => assertRuntime({ ...info, path: 'another-model' }, profile.load))
   for (const [key, value] of Object.entries(profile.load)) {
     const changed = structuredClone(profile.load); delete changed[key]

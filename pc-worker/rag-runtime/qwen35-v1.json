@@ -1,6 +1,6 @@
 {
   "id": "qwen35-rag-v1",
-  "modelKey": "HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q6_K.gguf",
+  "modelKey": "codex-extract-control/qwen35-9b/Qwen3.5-9B-Q6_K.gguf",
   "alias": "prm-rag-answer-v1",
   "load": {
     "autoFit": false,
@@ -57,7 +57,7 @@
     "xtcThreshold": false,
     "temperature": 0,
     "enableThinking": true,
-    "reasoningBudget": 256,
+    "reasoningBudget": 512,
     "topKSampling": 20,
     "topPSampling": 1,
     "minPSampling": 0,
