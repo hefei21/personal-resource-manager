@@ -232,6 +232,19 @@ function createSqliteQueryRunStore(database) {
       if (!runId || !owner || !contextJson || (taskId === null && idempotencyKey === null)) return false
       if (Buffer.byteLength(contextJson, 'utf8') > RAG_QUERY_RUN_CONTEXT_MAX_BYTES) return false
       prune()
+      // An idempotent task may already own a live query run. Reuse only the
+      // exact owner/context binding; never overwrite another request's scope.
+      if (taskId !== null) {
+        const bound = database.prepare(`
+          SELECT run_id, owner_scope, context_json, task_idempotency_key
+            FROM ${RAG_QUERY_RUN_TABLE} WHERE task_id = ?
+        `).get(taskId)
+        if (bound && bound.run_id !== runId) {
+          return bound.owner_scope === owner && bound.context_json === contextJson &&
+            bound.task_idempotency_key === idempotencyKey
+            ? { runId: bound.run_id } : false
+        }
+      }
       const existing = readAny(runId)
       if (existing && existing.owner_scope !== owner) {
         const error = new Error('RAG query identity conflict.')
@@ -2002,7 +2015,7 @@ export function createRagRouter({
       }
       const requiresRunId = answer?.status === 'queued' || answer?.status === 'active'
       const generatedRunId = requiresRunId ? requestIdFactory() : null
-      const runId = requiresRunId
+      let runId = requiresRunId
         ? normalizeRunId(typeof generatedRunId === 'string' ? generatedRunId : String(generatedRunId ?? ''))
         : null
       if (requiresRunId && runId === null) {
@@ -2027,7 +2040,8 @@ export function createRagRouter({
               taskKey: binding,
               status: answer.status
             }))
-            if (saved !== true) answer = referenceFallback(input.query, evidence, 'query_state_unavailable')
+            if (isPlainObject(saved) && normalizeRunId(saved.runId)) runId = saved.runId
+            else if (saved !== true) answer = referenceFallback(input.query, evidence, 'query_state_unavailable')
           } catch {
             answer = referenceFallback(input.query, evidence, 'query_state_unavailable')
           }

@@ -1165,6 +1165,61 @@ test('tracked query status/cancel is Owner-scoped and uses TaskStore for pending
   })
 })
 
+test('SQLite duplicate task reuses only its exact live owner and evidence context', async () => {
+  const { default: Database } = await import('better-sqlite3')
+  const { CREATE_RAG_QUERY_RUNS_SQL, RAG_QUERY_RUN_INDEXES_SQL } = await import('../src/config/ragQueryRunSchema.js')
+  const database = new Database(':memory:')
+  database.exec('CREATE TABLE tasks (id INTEGER PRIMARY KEY); INSERT INTO tasks VALUES (501)')
+  database.exec(`
+    CREATE TABLE rag_chunks (id INTEGER, ordinal INTEGER, body TEXT, title TEXT, locator_json TEXT, snapshot_id INTEGER);
+    CREATE TABLE rag_source_snapshots (id INTEGER, source_type TEXT, source_id INTEGER, source_version_id TEXT, status TEXT);
+    CREATE TABLE rag_source_state (source_type TEXT, source_id INTEGER, active_snapshot_id INTEGER);
+  `)
+  database.exec(CREATE_RAG_QUERY_RUNS_SQL)
+  database.exec(RAG_QUERY_RUN_INDEXES_SQL)
+  let sequence = 0
+  const task = { id: 501, idempotencyKey: 'same-task', status: 'pending',
+    taskType: 'rag.answer.generate', processorVersion: 'v1' }
+  const makeRouter = () => createRagRouter({
+    databaseProvider: () => database,
+    structuredAnswerProvider: () => null,
+    querySourceResolver: () => null,
+    authoritativeChecksFactory: checks,
+    taskStoreProvider: () => ({ getById: () => task }),
+    candidateProvider: async () => ({ ftsCandidates: [] }),
+    hybridRetrieverFactory: () => ({ retrieve: async () => retrieval() }),
+    answerServiceFactory: () => ({ generate: async ({ query }) => ({ status: 'queued', query, citations: [], task }) }),
+    requestIdFactory: () => `duplicate-run-${++sequence}`
+  })
+  let firstId
+  try {
+    for (let round = 0; round < 2; round++) await withServer(makeRouter(), async base => {
+      const post = async (query = 'same question', owner = 'alice') => {
+        const response = await fetch(`${base}/api/rag/queries`, { method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-test-principal': 'owner', 'x-test-owner': owner },
+          body: JSON.stringify({ query }) })
+        return { status: response.status, data: (await response.json()).data }
+      }
+      const first = await post()
+      assert.equal(first.status, 202)
+      firstId ??= first.data.runId
+      assert.equal(first.data.runId, firstId)
+      const duplicates = await Promise.all([post(), post()])
+      for (const duplicate of duplicates) {
+        assert.equal(duplicate.status, 202)
+        assert.equal(duplicate.data.runId, firstId)
+      }
+      for (const rejected of [await post('changed question'), await post('same question', 'bob')]) {
+        assert.equal(rejected.status, 200)
+        assert.equal(rejected.data.status, 'degraded')
+        assert.equal(rejected.data.answer, null)
+        assert.notEqual(rejected.data.runId, firstId)
+      }
+      assert.equal(database.prepare('SELECT count(*) n FROM rag_query_runs').get().n, 1)
+    })
+  } finally { database.close() }
+})
+
 test('persisted run mapping survives router reconstruction for the same Owner', async () => {
   const persistentRuns = queryRunStore()
   let task = {
