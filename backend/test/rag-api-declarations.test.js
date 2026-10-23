@@ -4,8 +4,12 @@ import { sourceApiDeclarations, declaredApiName } from '../src/services/ragApiDe
 const read = text => sourceApiDeclarations({ sections: [{ format: 'txt', text }] })
 test('raw declaration provenance excludes examples, fences, methods, overloads and ambiguous modules', () => {
   const module = '.. module:: alpha\n\n'
-  assert.deepEqual(read(module + '.. function:: wait(x)'), [{ name: 'wait', module: 'alpha', line: 3 }])
+  assert.deepEqual(read(module + '.. function:: wait(x)'), [{ name: 'wait', module: 'alpha', line: 3, endLine: 3 }])
   assert.equal(read(module + '.. function:: wait').length, 1)
+  assert.deepEqual(read(module + '.. function:: wait(x)\n\n   Tail.\n\n.. function:: poll(x)\n\n   Other.'), [
+    { name: 'wait', module: 'alpha', line: 3, endLine: 6 },
+    { name: 'poll', module: 'alpha', line: 7, endLine: 9 }
+  ])
   for (const suffix of [
     '.. code-block:: rst\n\n   .. function:: wait(x)',
     'Example::\n\n   .. function:: wait(x)',

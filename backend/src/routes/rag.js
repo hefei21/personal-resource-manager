@@ -14,6 +14,7 @@ import { createRagRerankService, RAG_RERANK_TASK_TYPE } from '../services/ragRer
 import { createRagHybridRetriever, selectGlobalRerankedEvidence } from '../services/ragHybridRetriever.js'
 import { createTranslatedCandidateProvider } from '../services/ragTranslatedCandidateProvider.js'
 import { expandRagEvidenceContext } from '../services/ragEvidenceContext.js'
+import { completeRagDeclarationContext } from '../services/ragDeclarationContext.js'
 import { attachRagSourceTitles } from '../services/ragSourceTitles.js'
 import { ragRetrievalPolicy } from '../services/ragRetrievalPolicy.js'
 import { normalizeRagChunkScope, readRagChapterScope } from '../services/ragChapterScope.js'
@@ -1541,6 +1542,7 @@ export function createRagRouter({
   boundComparisonFallback = false,
   answerConfig = { includeSourceTitles: process.env.RAG_ANSWER_SOURCE_TITLES === 'true' },
   boundDeclarationFallback = false,
+  boundDeclarationContext = false,
   rerankerConfig = {},
   requestIdFactory = () => crypto.randomUUID(),
   queryRunStore = null
@@ -1974,6 +1976,10 @@ export function createRagRouter({
       queryController.signal.throwIfAborted()
       let evidence = await expandRagEvidenceContext({ database, evidence: rankedRetrieval.data, checks,
         context: { query: input.query, req } })
+      if (boundDeclarationContext === true && input.source) {
+        evidence = await completeRagDeclarationContext({ database, evidence, query: input.query,
+          source: input.source, checks, context: { query: input.query, req, signal: queryController.signal } })
+      }
       if (answerConfig.includeSourceTitles === true) {
         evidence = await attachRagSourceTitles({ database, evidence, checks, context: { query: input.query, req } })
       }

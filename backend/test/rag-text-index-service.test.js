@@ -11,6 +11,7 @@ import { chunkRagSource, normalizeRagChunkerOptions, RAG_CHUNKER_VERSION } from 
 import { createRagTextIndexService, RAG_TEXT_INDEX_ERROR_CODES } from '../src/services/ragTextIndexService.js'
 import { ragQueryTerms, boundRagIdentifier, boundRagComparisonIdentifiers } from '../src/services/ragLexicalText.js'
 import { expandRagEvidenceContext } from '../src/services/ragEvidenceContext.js'
+import { completeRagDeclarationContext } from '../src/services/ragDeclarationContext.js'
 import { readRagChapterScope, normalizeRagChunkScope } from '../src/services/ragChapterScope.js'
 import { createTranslatedCandidateProvider } from '../src/services/ragTranslatedCandidateProvider.js'
 import { attachRagSourceTitles } from '../src/services/ragSourceTitles.js'
@@ -34,6 +35,86 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   : { skip: 'better-sqlite3 native binding is unavailable locally; Linux CI must run this test' }
 
 const registry = createMigrationRegistry(RAG_INDEX_MIGRATIONS)
+
+test('persisted declaration tails preserve original chunks and fail closed on identity, scope and budget', nativeTestOptions, async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rag-tail-'))
+  const filename = path.join(dir, 'index.sqlite')
+  let database = new Database(filename)
+  try {
+    migrate(database)
+    const text = '.. module:: alpha\n\n.. function:: wait(value)\n\n' +
+      Array.from({ length: 9 }, (_, i) => `   Clause ${i}: ` + 'condition applies to this object only. '.repeat(4)).join('\n\n') +
+      '\n\n.. function:: other(value)\n\n   Outside declaration.\n\n' + '   Other only. '.repeat(100)
+    const item = source({ text }); item.sections[0].format = 'txt'
+    const service = createService(database, { chunkerOptions: { maxChunkBytes: 256 } })
+    await service.index({ sources: [item], errors: [] })
+    const seed = service.queryBoundDeclarationFallback({ q: 'wait条件是什么？', sourceType: 'document', sourceId: 1, limit: 10 }).data[0]
+    database.close(); database = new Database(filename)
+    const checks = { authoritativeVisibility: () => true, authoritativeActiveSnapshot: () => true }
+    const baseline = await expandRagEvidenceContext({ database, evidence: [seed], checks })
+    const args = { database, evidence: baseline, query: 'wait条件是什么？', source: { sourceType: 'document', sourceId: 1 }, checks }
+    const expanded = await completeRagDeclarationContext(args)
+    assert.ok(expanded.length > baseline.length)
+    assert.deepEqual(expanded.slice(0, baseline.length), baseline)
+    assert.ok(expanded.some(e => e.body.includes('Clause 8')))
+    const firstAdded = expanded[baseline.length]
+    assert.deepEqual(await completeRagDeclarationContext({ ...args,
+      checks: { ...checks, authoritativeVisibility: e => e.chunkId !== firstAdded.chunkId } }), baseline,
+    'a denied intermediate chunk must not be skipped to reach later clauses')
+    assert.ok(expanded.length <= 16)
+    assert.ok(expanded.reduce((n, e) => n + Buffer.byteLength(e.body), 0) <= 24576)
+    for (const e of expanded) assert.equal(e.body, database.prepare('SELECT body FROM rag_chunks WHERE id=?').get(e.chunkId).body)
+    const { default: express } = await import('express'), { default: http } = await import('node:http')
+    process.env.DATA_PATH ??= os.tmpdir()
+    const { createRagRouter, normalizeQueryBody } = await import('../src/routes/rag.js')
+    assert.throws(() => normalizeQueryBody({ query: args.query, boundDeclarationContext: true }))
+    for (const enabled of [false, true]) {
+      let delivered
+      const app = express()
+      app.use(express.json(), (req, _res, next) => { req.user = { principal: 'owner', username: 'fixture' }; next() })
+      app.use('/api/rag', createRagRouter({ databaseProvider: () => database, taskStoreProvider: () => null,
+        boundDeclarationFallback: true, boundDeclarationContext: enabled,
+        authoritativeChecksFactory: () => checks, structuredAnswerProvider: () => null,
+        sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: expanded.length } }),
+        textIndexServiceFactory: () => createService(database),
+        queryRuntimeFactory: () => ({ query: () => ({ vectorCandidates: [] }) }),
+        answerServiceFactory: () => ({ generate: async ({ evidence }) => { delivered = evidence; return { status: 'abstained', citations: [] } } }) }))
+      const server = http.createServer(app)
+      await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+      try {
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/api/rag/queries`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ query: args.query, source: { type: 'document', id: 1 } }) })
+        assert.equal(response.status, 200)
+        assert.deepEqual(delivered.map(e => e.body), (enabled ? expanded : baseline).map(e => e.body))
+        assert.ok(delivered.every(e => !('api_declarations_json' in e)))
+      } finally { await new Promise(resolve => server.close(resolve)) }
+    }
+    for (const override of [
+      { source: null }, { source: { sourceType: 'document', sourceId: 2 } }, { query: 'wait和other条件？' },
+      { checks: { ...checks, authoritativeVisibility: () => false } },
+      { checks: { ...checks, authoritativeActiveSnapshot: () => false } }
+    ]) assert.deepEqual(await completeRagDeclarationContext({ ...args, ...override }), baseline)
+    const row = database.prepare('SELECT api_declarations_json FROM rag_chunks WHERE id=?').get(seed.chunkId)
+    for (const field of ['boundsVersion', 'snapshotId', 'sourceHash', 'chunkHash', 'chunkerVersion', 'chunkerConfigHash']) {
+      const bad = JSON.parse(row.api_declarations_json); bad[field] = 'invalid'
+      database.prepare('UPDATE rag_chunks SET api_declarations_json=? WHERE id=?').run(JSON.stringify(bad), seed.chunkId)
+      assert.deepEqual(await completeRagDeclarationContext(args), baseline, field)
+    }
+    for (const value of [null, '{}', '{broken']) {
+      database.prepare('UPDATE rag_chunks SET api_declarations_json=? WHERE id=?').run(value, seed.chunkId)
+      assert.deepEqual(await completeRagDeclarationContext(args), baseline)
+    }
+    database.prepare('UPDATE rag_chunks SET api_declarations_json=? WHERE id=?').run(row.api_declarations_json, seed.chunkId)
+    const full = [...baseline, ...Array.from({ length: 16 - baseline.length }, (_, i) => ({ ...seed, chunkId: -i - 1, body: 'reserved' }))]
+    assert.deepEqual(await completeRagDeclarationContext({ ...args, evidence: full }), full)
+    const large = [...baseline, { ...seed, chunkId: -1, body: 'x'.repeat(24576) }]
+    assert.deepEqual(await completeRagDeclarationContext({ ...args, evidence: large }), large)
+    await createService(database).index({ sources: [source({ version: 2, text: 'Replacement has no declaration.' })], errors: [] })
+    assert.deepEqual(await completeRagDeclarationContext(args), baseline, 'SQL active snapshot must reject even if callback permits')
+  } finally { database.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+})
 
 test('declaration provenance persists, rejects examples and binds snapshot and chunk configuration', nativeTestOptions, async () => {
   const fs = await import('node:fs')

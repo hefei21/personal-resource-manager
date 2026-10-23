@@ -19,11 +19,17 @@ export function sourceApiDeclarations(source) {
   let active = false
   const declarations = []
   const counts = new Map()
+  const ends = new Map()
+  let nextBoundary = lines.length
+  for (let i = lines.length - 1; i >= 0; i--) {
+    ends.set(i, nextBoundary)
+    if (/^\S/u.test(lines[i])) nextBoundary = i
+  }
   for (const [index, line] of lines.entries()) {
     if (line === modules[0]) active = true
     const match = /^\.\. function:: ([a-z][a-z0-9]{2,31})(?:\(|[ \t]*$)/u.exec(line)
     if (active && match) {
-      declarations.push({ name: match[1], module, line: index + 1 })
+      declarations.push({ name: match[1], module, line: index + 1, endLine: ends.get(index) })
       counts.set(match[1], (counts.get(match[1]) ?? 0) + 1)
     }
   }

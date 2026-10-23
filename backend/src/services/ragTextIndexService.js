@@ -563,7 +563,7 @@ function writeAttempt(database, source, snapshotId, identity, built, sourceError
       insertFts.run(currentChunkId, chunk.title, sectionPathJson, searchBody)
       const owned = declarations.filter(item => item.line >= chunk.locator.startLine && item.line <= chunk.locator.endLine)
       if (owned.length) writeDeclarations.run(JSON.stringify({
-        version: DECLARATION_VERSION, snapshotId, sourceHash: source.sourceContentSha256,
+        version: DECLARATION_VERSION, boundsVersion: 1, snapshotId, sourceHash: source.sourceContentSha256,
         chunkHash: chunk.bodySha256, chunkerVersion: built.chunkerVersion,
         chunkerConfigHash: built.chunkerConfigHash, declarations: owned
       }), currentChunkId)
