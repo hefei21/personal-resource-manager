@@ -814,7 +814,9 @@ async function defaultCandidateProvider({
   chunkIds,
   expandedRerankPool = false,
   boundIdentifierFallback = false,
+  boundComparisonFallback = false,
   lexicalOnly = false,
+  boundDeclarationFallback = false,
   authoritativeVisibility,
   authoritativeActiveSnapshot,
   textIndexServiceFactory,
@@ -844,6 +846,16 @@ async function defaultCandidateProvider({
   if (boundIdentifierFallback && source && result?.data?.length === 0 &&
       typeof service.queryBoundIdentifierFallback === 'function') {
     result = await Promise.resolve(service.queryBoundIdentifierFallback(searchInput)) ?? result
+  }
+  if (boundComparisonFallback && source && result?.data?.length === 0 &&
+      typeof service.queryBoundComparisonFallback === 'function') {
+    signal?.throwIfAborted()
+    result = await Promise.resolve(service.queryBoundComparisonFallback(searchInput)) ?? result
+  }
+  if (boundDeclarationFallback && source && result?.data?.length === 0 &&
+      typeof service.queryBoundDeclarationFallback === 'function') {
+    signal?.throwIfAborted()
+    result = await Promise.resolve(service.queryBoundDeclarationFallback(searchInput)) ?? result
   }
   if (!isPlainObject(result) || !Array.isArray(result.data)) {
     const error = new Error('RAG text candidates are invalid.')
@@ -1526,7 +1538,9 @@ export function createRagRouter({
   rerankerModel = undefined,
   retrievalConfig = {},
   boundIdentifierFallback = false,
+  boundComparisonFallback = false,
   answerConfig = { includeSourceTitles: process.env.RAG_ANSWER_SOURCE_TITLES === 'true' },
+  boundDeclarationFallback = false,
   rerankerConfig = {},
   requestIdFactory = () => crypto.randomUUID(),
   queryRunStore = null
@@ -1548,6 +1562,8 @@ export function createRagRouter({
   const resolvedCandidateProvider = retrieveCandidates ?? candidateProvider ?? ((options) => defaultCandidateProvider({
     ...options,
     boundIdentifierFallback: boundIdentifierFallback === true && Boolean(options.req?.body?.source),
+    boundComparisonFallback: boundComparisonFallback === true && Boolean(options.req?.body?.source),
+    boundDeclarationFallback: boundDeclarationFallback === true && Boolean(options.req?.body?.source),
     textIndexServiceFactory,
     queryRuntimeFactory,
     taskStoreProvider,

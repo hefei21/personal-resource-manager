@@ -35,3 +35,11 @@ export function boundRagIdentifier(query) {
   const [term] = terms
   return /^[A-Za-z][A-Za-z0-9_]{2,127}$/u.test(term) && /_|[a-z][A-Z]/u.test(term) ? term : null
 }
+
+// Inspect every object before retrying; do not normalize lookalike identifiers.
+export function boundRagComparisonIdentifiers(query) {
+  if (typeof query !== 'string' || !/\p{Script=Han}/u.test(query)) return null
+  const terms = [...new Set(query.match(WORDS) ?? [])].filter(term => !/^\p{Script=Han}+$/u.test(term))
+  return terms.length >= 2 && terms.length <= 3 && terms.every(term =>
+    /^[A-Za-z][A-Za-z0-9_]{2,127}$/u.test(term) && /_|[a-z][A-Z]/u.test(term)) ? terms : null
+}

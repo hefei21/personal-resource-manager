@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
+import { DECLARATION_VERSION, declaredApiName, sourceApiDeclarations } from './ragApiDeclarations.js'
 import { normalizeRagChunkScope } from './ragChapterScope.js'
-import { buildRagSearchText, ragQueryTerms, boundRagIdentifier } from './ragLexicalText.js'
+import { buildRagSearchText, ragQueryTerms, boundRagIdentifier, boundRagComparisonIdentifiers } from './ragLexicalText.js'
 
 import {
   RAG_CHUNK_FTS_TABLE,
@@ -539,6 +540,8 @@ function writeAttempt(database, source, snapshotId, identity, built, sourceError
       VALUES (?, ?, ?, ?)
     `)
     const updateNext = database.prepare(`UPDATE ${RAG_CHUNK_TABLE} SET next_chunk_id = ? WHERE id = ?`)
+    const declarations = sourceErrors.length ? [] : sourceApiDeclarations(source)
+    const writeDeclarations = database.prepare(`UPDATE ${RAG_CHUNK_TABLE} SET api_declarations_json = ? WHERE id = ?`)
     let previousChunkId = null
     for (const chunk of built.chunks) {
       const sectionPathJson = JSON.stringify(chunk.sectionPath)
@@ -558,6 +561,12 @@ function writeAttempt(database, source, snapshotId, identity, built, sourceError
         searchBody
       ).lastInsertRowid)
       insertFts.run(currentChunkId, chunk.title, sectionPathJson, searchBody)
+      const owned = declarations.filter(item => item.line >= chunk.locator.startLine && item.line <= chunk.locator.endLine)
+      if (owned.length) writeDeclarations.run(JSON.stringify({
+        version: DECLARATION_VERSION, snapshotId, sourceHash: source.sourceContentSha256,
+        chunkHash: chunk.bodySha256, chunkerVersion: built.chunkerVersion,
+        chunkerConfigHash: built.chunkerConfigHash, declarations: owned
+      }), currentChunkId)
       if (previousChunkId !== null) updateNext.run(currentChunkId, previousChunkId)
       previousChunkId = currentChunkId
     }
@@ -914,6 +923,42 @@ export class RagTextIndexService {
     // Reuse exact body support, active snapshot, scope and visibility checks.
     // A title-only hit must never turn into purported answer evidence.
     return this.#query({ ...input, q: identifier }, true, identifier)
+  }
+
+  queryBoundComparisonFallback(input = {}) {
+    const query = normalizeQuery(input)
+    const identifiers = boundRagComparisonIdentifiers(input.q ?? input.keyword)
+    if (!query.sourceId || !query.sourceType || query.limit > 50 || query.offset !== 0 || !identifiers) return null
+    const patterns = identifiers.map(identifier => new RegExp(`(?<![\\p{L}\\p{N}_])${identifier}(?![\\p{L}\\p{N}_])`, 'iu'))
+    // Every object must occur in authorized original body text, not just titles.
+    const pool = this.queryRerankPool({ ...input, limit: 50 })
+    const data = pool.data.filter(entry => patterns.some(pattern => pattern.test(entry.body)))
+    if (!patterns.every(pattern => data.some(entry => pattern.test(entry.body)))) return null
+    return Object.freeze({ ...pool, data: Object.freeze(data), total: data.length })
+  }
+
+  queryBoundDeclarationFallback(input = {}) {
+    const query = normalizeQuery(input)
+    const name = declaredApiName(input.q ?? input.keyword)
+    if (!query.sourceId || !query.sourceType || query.limit > 50 || query.offset !== 0 || !name) return null
+    const pool = this.queryRerankPool({ ...input, limit: 50 })
+    const read = this.database.prepare(`SELECT c.api_declarations_json AS metadata, c.chunk_sha256 AS chunkHash,
+      s.chunker_version AS chunkerVersion, s.chunker_config_hash AS chunkerConfigHash
+      FROM rag_chunks c JOIN rag_source_snapshots s ON s.id=c.snapshot_id
+      WHERE c.id=? AND c.snapshot_id=?`)
+    const data = pool.data.filter(entry => {
+      const row = read.get(entry.chunkId, entry.snapshotId)
+      if (!row?.metadata) return false
+      try {
+        const metadata = JSON.parse(row.metadata)
+        return metadata.version === DECLARATION_VERSION && metadata.snapshotId === entry.snapshotId &&
+          metadata.sourceHash === entry.sourceContentSha256 && metadata.chunkHash === row.chunkHash &&
+          metadata.chunkerVersion === row.chunkerVersion && metadata.chunkerConfigHash === row.chunkerConfigHash &&
+          Array.isArray(metadata.declarations) && metadata.declarations.some(item => item.name === name &&
+            Number.isInteger(item.line) && item.line >= entry.locator.startLine && item.line <= entry.locator.endLine)
+      } catch { return false }
+    })
+    return data.length ? Object.freeze({ ...pool, data: Object.freeze(data), total: data.length }) : null
   }
 
   #query(input, bodyOnly, requiredBodyIdentifier = null) {

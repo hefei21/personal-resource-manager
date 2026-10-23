@@ -602,7 +602,7 @@ test('application registry freezes 57 column migrations and thirty-five register
   assert.ok(Object.isFrozen(applicationMigrationRegistry))
   assert.ok(Object.isFrozen(applicationMigrationRegistry.migrations))
   assert.ok(applicationMigrationRegistry.migrations.every((migration) => Object.isFrozen(migration)))
-  assert.equal(applicationMigrationRegistry.migrations.length, 93)
+  assert.equal(applicationMigrationRegistry.migrations.length, 94)
   assert.deepEqual(
     applicationMigrationRegistry.migrations.map(({ id }) => id),
     [
@@ -672,7 +672,8 @@ test('application registry freezes 57 column migrations and thirty-five register
       '0090_note_revision',
       '0091_note_creation_key',
       '0092_note_last_mutation_id',
-      '0093_rag_search_projection'
+      '0093_rag_search_projection',
+      '0094_rag_api_declarations'
     ]
   )
   assert.deepEqual(applicationMigrationRegistry.migrations.slice(0, 6).map(({ id, source, checksum, compatibility }) => ({

@@ -296,5 +296,9 @@ export const RAG_INDEX_MIGRATIONS = Object.freeze([
       legacy: []
     }
   },
-  ...RAG_SEARCH_PROJECTION_MIGRATIONS
+  ...RAG_SEARCH_PROJECTION_MIGRATIONS,
+  {
+    id: '0094_rag_api_declarations',
+    source: 'ALTER TABLE rag_chunks ADD COLUMN api_declarations_json TEXT;'
+  }
 ])

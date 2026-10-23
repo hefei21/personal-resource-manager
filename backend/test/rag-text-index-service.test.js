@@ -9,7 +9,7 @@ import { executeMigrationBatch } from '../src/config/migrationExecutor.js'
 import { createMigrationPlan, createMigrationRegistry } from '../src/config/migrationPlan.js'
 import { chunkRagSource, normalizeRagChunkerOptions, RAG_CHUNKER_VERSION } from '../src/services/ragChunker.js'
 import { createRagTextIndexService, RAG_TEXT_INDEX_ERROR_CODES } from '../src/services/ragTextIndexService.js'
-import { ragQueryTerms, boundRagIdentifier } from '../src/services/ragLexicalText.js'
+import { ragQueryTerms, boundRagIdentifier, boundRagComparisonIdentifiers } from '../src/services/ragLexicalText.js'
 import { expandRagEvidenceContext } from '../src/services/ragEvidenceContext.js'
 import { readRagChapterScope, normalizeRagChunkScope } from '../src/services/ragChapterScope.js'
 import { createTranslatedCandidateProvider } from '../src/services/ragTranslatedCandidateProvider.js'
@@ -34,6 +34,153 @@ const nativeTestOptions = process.env.CI || nativeBindingAvailable
   : { skip: 'better-sqlite3 native binding is unavailable locally; Linux CI must run this test' }
 
 const registry = createMigrationRegistry(RAG_INDEX_MIGRATIONS)
+
+test('declaration provenance persists, rejects examples and binds snapshot and chunk configuration', nativeTestOptions, async () => {
+  const fs = await import('node:fs')
+  const os = await import('node:os')
+  const path = await import('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rag-declarations-'))
+  const filename = path.join(dir, 'index.sqlite')
+  let database = new Database(filename)
+  let allowed = true
+  const make = (id, text) => { const item = source({ id, text }); item.sections[0].format = 'txt'; return item }
+  const real = '.. module:: alpha\n\n.. function:: wait(delay)\n\n   Returns elapsed time.'
+  let sources = [make(1, real), make(2, real.replace('alpha', 'beta').replace('elapsed time', 'an event')),
+    make(3, '.. module:: examples\n\nExample::\n\n   .. function:: wait(delay)\n\n      Not a real API.'),
+    make(4, real + '\n\n.. module:: beta\n\n.. function:: wait(delay)\n\n   Other module.')]
+  const service = () => createService(database, { authoritativeVisibility: () => allowed, collectSources: async () => ({ sources, errors: [] }) })
+  const query = { q: 'wait返回什么？', sourceType: 'document', sourceId: 1, limit: 10 }
+  try {
+    migrate(database)
+    await service().refresh()
+    const expected = service().queryBoundDeclarationFallback(query)
+    assert.equal(expected.data.length, 1)
+    const { default: express } = await import('express')
+    const { default: http } = await import('node:http')
+    process.env.DATA_PATH ??= os.tmpdir()
+    const { createRagRouter } = await import('../src/routes/rag.js')
+    for (const enabled of [false, true]) {
+      let delivered
+      const app = express()
+      app.use(express.json(), (req, _res, next) => { req.user = { principal: 'owner', username: 'fixture' }; next() })
+      app.use('/api/rag', createRagRouter({ databaseProvider: () => database, taskStoreProvider: () => null,
+        boundDeclarationFallback: enabled, authoritativeChecksFactory: () => ({
+          authoritativeVisibility: () => allowed, authoritativeActiveSnapshot: () => true }),
+        sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 1 } }),
+        structuredAnswerProvider: () => null, textIndexServiceFactory: service,
+        queryRuntimeFactory: () => ({ query: () => ({ vectorCandidates: [] }) }),
+        answerServiceFactory: () => ({ generate: async ({ evidence }) => { delivered = evidence; return { status: 'abstained', citations: [] } } }) }))
+      const server = http.createServer(app)
+      await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+      try {
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/api/rag/queries`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ query: query.q, source: { type: 'document', id: 1 } }) })
+        assert.equal(response.status, 200)
+        assert.equal(delivered?.length ?? 0, enabled ? 1 : 0)
+        if (enabled) { assert.equal(delivered[0].body, expected.data[0].body); assert.equal('api_declarations_json' in delivered[0], false) }
+      } finally { await new Promise(resolve => server.close(resolve)) }
+    }
+    assert.equal(service().queryBoundDeclarationFallback({ ...query, sourceId: 2 }).data[0].sourceId, 2)
+    for (const sourceId of [3, 4]) assert.equal(service().queryBoundDeclarationFallback({ ...query, sourceId }), null)
+    database.close(); database = new Database(filename)
+    assert.deepEqual(service().queryBoundDeclarationFallback(query), expected)
+    const row = database.prepare('SELECT id, api_declarations_json FROM rag_chunks WHERE id=?').get(expected.data[0].chunkId)
+    for (const field of ['version', 'snapshotId', 'sourceHash', 'chunkHash', 'chunkerVersion', 'chunkerConfigHash']) {
+      const bad = JSON.parse(row.api_declarations_json); bad[field] = 'invalid'
+      database.prepare('UPDATE rag_chunks SET api_declarations_json=? WHERE id=?').run(JSON.stringify(bad), row.id)
+      assert.equal(service().queryBoundDeclarationFallback(query), null, field)
+    }
+    for (const value of [null, '{broken']) {
+      database.prepare('UPDATE rag_chunks SET api_declarations_json=? WHERE id=?').run(value, row.id)
+      assert.equal(service().queryBoundDeclarationFallback(query), null)
+    }
+    database.prepare('UPDATE rag_chunks SET api_declarations_json=NULL WHERE id=?').run(row.id)
+    await service().refresh()
+    assert.equal(service().queryBoundDeclarationFallback(query), null, 'legacy metadata is not guessed or silently backfilled')
+    database.prepare('UPDATE rag_chunks SET api_declarations_json=? WHERE id=?').run(row.api_declarations_json, row.id)
+    for (const extra of [{ chunkIds: [999999] }, { offset: 1 }, { limit: 51 }, { sourceId: undefined }, { q: 'wait和poll返回什么？' }]) {
+      assert.equal(service().queryBoundDeclarationFallback({ ...query, ...extra }), null)
+    }
+    allowed = false; assert.equal(service().queryBoundDeclarationFallback(query), null); allowed = true
+    sources = [make(1, '.. module:: alpha\n\nNo declaration in the replacement.')]
+    await service().refresh()
+    assert.equal(service().queryBoundDeclarationFallback(query), null)
+    assert.notEqual(database.prepare('SELECT active_snapshot_id AS id FROM rag_source_state WHERE source_id=1').get().id, expected.data[0].snapshotId)
+  } finally { database.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+})
+
+test('comparison identifiers require two or three exact technical objects in the whole question', () => {
+  assert.deepEqual(boundRagComparisonIdentifiers('S_IMODE和S_IFMT有什么不同？'), ['S_IMODE', 'S_IFMT'])
+  assert.deepEqual(boundRagComparisonIdentifiers('FirstObject和SecondObject与ThirdObject？'), ['FirstObject', 'SecondObject', 'ThirdObject'])
+  for (const q of ['S_IMODE如何？', 'S_IMODE and S_IFMT', 'S_IMODE和S_IFMT等待20秒？',
+    'S_IMODE和plain比较？', 'Ｓ_IMODE和S_IFMT？', 'FirstObject和SecondObject与ThirdObject' + '中文'.repeat(80) + 'FourthObject']) {
+    assert.equal(boundRagComparisonIdentifiers(q), null)
+  }
+})
+
+test('comparison fallback requires every body object within authorized active scope', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  try {
+    migrate(database)
+    let allowed = true
+    const index = createService(database, { authoritativeVisibility: () => allowed,
+      collectSources: async () => ({ sources: [
+        source({ id: 1, title: 'MissingObject', text:
+          '# First section\n\nFirstObject uses seconds.\n\n# Second section\n\nSecondObject requires supported systems.\n\n# Third section\n\nThirdObject is optional.' }),
+        source({ id: 2, text: 'FirstObject_EXTRA and SecondObject are unrelated names.' })
+      ], errors: [] }) })
+    await index.refresh()
+    const input = { q: 'FirstObject与SecondObject有何条件？', sourceType: 'document', sourceId: 1, limit: 10 }
+    assert.equal(index.query(input).data.length, 0)
+    assert.equal(index.queryBoundIdentifierFallback(input), null)
+    const result = index.queryBoundComparisonFallback(input)
+    assert.equal(result.data.length, 2)
+    assert.ok(result.data.every(entry => entry.sourceId === 1))
+    assert.ok(result.data.some(entry => /requires supported systems/.test(entry.body)))
+    assert.equal(index.queryBoundComparisonFallback({ ...input, q: 'FirstObject与SecondObject及ThirdObject？' }).data.length, 3)
+    // Actual HTTP -> SQLite -> selection -> expansion delivery, not a pool stub.
+    const { default: express } = await import('express')
+    const { default: http } = await import('node:http')
+    process.env.DATA_PATH ??= (await import('node:os')).tmpdir()
+    const { createRagRouter } = await import('../src/routes/rag.js')
+    for (const enabled of [false, true]) {
+      let delivered
+      const app = express()
+      app.use(express.json(), (req, _res, next) => { req.user = { principal: 'owner', username: 'fixture' }; next() })
+      app.use('/api/rag', createRagRouter({ databaseProvider: () => database, taskStoreProvider: () => null,
+        boundComparisonFallback: enabled, boundIdentifierFallback: true,
+        authoritativeChecksFactory: () => ({ authoritativeVisibility: () => allowed, authoritativeActiveSnapshot: () => true }),
+        sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 3 } }),
+        structuredAnswerProvider: () => null, textIndexServiceFactory: () => index,
+        queryRuntimeFactory: () => ({ query: () => ({ vectorCandidates: [] }) }),
+        answerServiceFactory: () => ({ generate: async ({ evidence }) => {
+          delivered = evidence; return { status: 'abstained', citations: [] }
+        } }) }))
+      const server = http.createServer(app)
+      await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+      try {
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/api/rag/queries`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ query: input.q, source: { type: 'document', id: 1 } })
+        })
+        assert.equal(response.status, 200)
+        assert.equal(delivered?.length ?? 0, enabled ? 2 : 0, JSON.stringify({ enabled, delivered, pool: result.data }))
+        if (enabled) assert.deepEqual(delivered.map(entry => entry.body).sort(), result.data.map(entry => entry.body).sort())
+      } finally { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
+    }
+    for (const overrides of [{ sourceId: 2 }, { chunkIds: [999999] }, { q: 'FirstObject与MissingObject？' },
+      { sourceId: undefined, sourceType: undefined }, { offset: 1 }, { limit: 51 }]) {
+      assert.equal(index.queryBoundComparisonFallback({ ...input, ...overrides }), null)
+    }
+    allowed = false
+    assert.equal(index.queryBoundComparisonFallback(input), null)
+    allowed = true
+    assert.deepEqual(index.queryBoundComparisonFallback(input), result)
+    database.prepare('UPDATE rag_source_state SET active_snapshot_id = NULL WHERE source_id = 1').run()
+    assert.equal(index.queryBoundComparisonFallback(input), null)
+  } finally { database.close() }
+})
 
 test('bound identifier fallback is narrow and inspects objects beyond the FTS term budget', () => {
   for (const value of ['S_IMODE返回哪些位？', 'QuantumWidget有什么条件？']) assert.ok(boundRagIdentifier(value))

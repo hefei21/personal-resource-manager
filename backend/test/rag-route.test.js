@@ -127,6 +127,57 @@ test('bound identifier retry is default off, explicit-source only, and zero-hit 
   assert.throws(() => normalizeQueryBody({ query: 'x', boundIdentifierFallback: true }))
 })
 
+test('comparison retry is server-only, default off, explicit-bound and after zero-hit single retry', async () => {
+  for (const [enabled, explicit, normalHit, singleHit, expected] of [
+    [false, true, false, false, 0], [true, false, false, false, 0],
+    [true, true, true, false, 0], [true, true, false, true, 0], [true, true, false, false, 1]
+  ]) {
+    let retried = 0
+    const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+      authoritativeChecksFactory: checks, boundIdentifierFallback: true, boundComparisonFallback: enabled,
+      sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 1 } }),
+      structuredAnswerProvider: () => null,
+      querySourceResolver: () => ({ source: { sourceType: 'ebook', sourceId: 1 } }),
+      textIndexServiceFactory: () => ({ query: () => ({ data: normalHit ? [{ fixture: true }] : [] }),
+        queryBoundIdentifierFallback: () => ({ data: singleHit ? [{ fixture: true }] : [] }),
+        queryBoundComparisonFallback: input => { retried++; assert.equal(input.sourceId, 1); return { data: [] } } }),
+      queryRuntimeFactory: () => ({ query: () => ({ vectorCandidates: [] }) }),
+      hybridRetrieverFactory: () => ({ retrieve: () => ({ ...retrieval(), data: [], total: 0 }) }) })
+    await withServer(router, async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers: {
+        'content-type': 'application/json', 'x-test-principal': 'owner'
+      }, body: JSON.stringify({ query: 'FirstObject与SecondObject有什么不同？', ...(explicit ? { source: { type: 'ebook', id: 1 } } : {}) }) })
+      assert.equal(response.status, 200)
+      assert.equal(retried, expected)
+    })
+  }
+  assert.throws(() => normalizeQueryBody({ query: 'x', boundComparisonFallback: true }))
+})
+
+test('declaration retry is server-only, explicit-bound, default-off and last zero-hit fallback', async () => {
+  for (const [enabled, explicit, priorHit, expected] of [
+    [undefined, true, false, 0], [true, false, false, 0], [true, true, true, 0], [true, true, false, 1]
+  ]) {
+    let retried = 0
+    const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+      authoritativeChecksFactory: checks, boundDeclarationFallback: enabled, boundComparisonFallback: true,
+      sourceStatusProvider: () => ({ sourceState: { status: 'ready' }, chunks: { count: 1 } }),
+      structuredAnswerProvider: () => null, querySourceResolver: () => ({ source: { sourceType: 'ebook', sourceId: 1 } }),
+      textIndexServiceFactory: () => ({ query: () => ({ data: [] }),
+        queryBoundComparisonFallback: () => ({ data: priorHit ? [{ fixture: true }] : [] }),
+        queryBoundDeclarationFallback: () => { retried++; return { data: [] } } }),
+      queryRuntimeFactory: () => ({ query: () => ({ vectorCandidates: [] }) }),
+      hybridRetrieverFactory: () => ({ retrieve: () => ({ ...retrieval(), data: [], total: 0 }) }) })
+    await withServer(router, async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers: {
+        'content-type': 'application/json', 'x-test-principal': 'owner'
+      }, body: JSON.stringify({ query: 'wait返回什么？', ...(explicit ? { source: { type: 'ebook', id: 1 } } : {}) }) })
+      assert.equal(response.status, 200); assert.equal(retried, expected)
+    })
+  }
+  assert.throws(() => normalizeQueryBody({ query: 'x', boundDeclarationFallback: true }))
+})
+
 test('progressive evidence is immediate, scoped, and starts neither translation nor answer', async () => {
   const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
     authoritativeChecksFactory: checks,

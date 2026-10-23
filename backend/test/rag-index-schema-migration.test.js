@@ -75,7 +75,8 @@ test('creates RAG migrations and versioned search projection and repeats safely'
       '0080_rag_source_state',
       '0081_rag_chunks',
       '0082_rag_chunks_fts',
-      '0093_rag_search_projection'
+      '0093_rag_search_projection',
+      '0094_rag_api_declarations'
     ])
 
     const summary = migrate(database)
