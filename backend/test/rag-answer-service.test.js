@@ -221,6 +221,19 @@ test('citation titles and section names permit concepts but never credential val
   }
 })
 
+test('non-refused conflict, unknown and truncated results cannot publish a complete answer', async () => {
+  const answer = service()
+  const queued = await answer.generate({ query: '条件和适用对象是什么？', evidence: [evidence()] })
+  for (const reasonCode of ['CONFLICT', 'EVIDENCE_INSUFFICIENT', 'MODEL_ABSTAINED', 'unrecognized', 'EVIDENCE_TRUNCATED']) {
+    const raw = workerResult(queued.task, { reasonCode })
+    const result = await answer.applyResult({ task: queued.task, result: raw })
+    assert.equal(result.status, 'degraded', reasonCode)
+    assert.equal(result.answer, null, reasonCode)
+    assert.equal(result.missingRequirements, undefined)
+    assert.equal(raw.output.reasonCode, reasonCode)
+  }
+})
+
 test('partial result preserves missing requirements but rejects inconsistent or unsafe fields', async () => {
   const answer = service()
   const queued = await answer.generate({ query: '默认值和最大层数？', evidence: [evidence()] })

@@ -434,6 +434,10 @@ function normalizeResult(value, evidence, config, truncated) {
   }
   if (value.reasonCode !== undefined) output.reasonCode = token(value.reasonCode, 'answer.result.reasonCode', 128)
   if (!Object.hasOwn(output, 'reasonCode')) output.reasonCode = value.abstained ? 'MODEL_ABSTAINED' : 'GROUNDED'
+  // Truncation is a Worker observation, never a model-supplied completion state.
+  if (!output.abstained && !['GROUNDED', 'PARTIAL'].includes(output.reasonCode.toUpperCase())) {
+    fail('WORKER_ANSWER_RESULT_INVALID', 'Answer reason contradicts non-abstained state.')
+  }
   const missing = value.missingRequirements ?? []
   if (!Array.isArray(missing) || missing.length > 16 || missing.some(item =>
     typeof item !== 'string' || !item.trim() || item.length > 512 || item.normalize('NFKC').length > 512 ||

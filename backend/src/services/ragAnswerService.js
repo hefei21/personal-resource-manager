@@ -488,6 +488,11 @@ export class RagAnswerService {
       return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), allowed, degradedReason(error))
     }
     const output = normalized.output
+    // A Worker that dropped supplied evidence cannot certify the full question.
+    // Keep the ordinary evidence fallback; do not invent missing requirements.
+    if (output.reasonCode?.toUpperCase() === 'EVIDENCE_TRUNCATED') {
+      return this.#fallback(context?.query ?? '', context?.language ?? detectLanguage(projectedInput.query), allowed, 'evidence_truncated')
+    }
     const selectedCitations = output.abstained
       ? []
       : output.citations.map((citation) => byCitation.get(citation)).filter(Boolean)

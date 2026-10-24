@@ -112,6 +112,15 @@ test('documented dry-run terms do not become execution verbs, while mixed reques
   assert.equal(calls, 3)
 })
 
+test('model reasons cannot contradict a non-abstained answer or impersonate a runtime truncation', async () => {
+  for (const reasonCode of ['CONFLICT', 'EVIDENCE_INSUFFICIENT', 'MODEL_ABSTAINED', 'unrecognized', 'EVIDENCE_TRUNCATED']) {
+    const processor = createRagAnswerProcessor({ config, fetchImpl: async () => response({
+      answer: 'Unsupported completion.', abstained: false, reasonCode, citations: ['C1']
+    }) })
+    await assert.rejects(processor.process(task()), error => error.code === 'WORKER_ANSWER_RESULT_INVALID', reasonCode)
+  }
+})
+
 test('partial answers require evidence, missing requirements and consistent state', async () => {
   const valid = { answer: '默认值为1。C1', abstained: false, reasonCode: 'PARTIAL', citations: ['C1'], missingRequirements: ['Windows最大层数'] }
   const run = async value => (await createRagAnswerProcessor({ config, fetchImpl: async () => response(value) }).process(task())).output

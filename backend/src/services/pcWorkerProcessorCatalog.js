@@ -635,6 +635,12 @@ function normalizeAnswerResult(value, expected) {
   }
   if (value.answer !== undefined) normalized.answer = boundedOutputText(value.answer, 'result.output.answer', LIMITS.answer.outputMaxBytes, true)
   if (value.reasonCode !== undefined) normalized.reasonCode = token(value.reasonCode, 'result.output.reasonCode', MAX_REASON_BYTES)
+  // Preserve legacy omitted reasons and explicit Worker truncation, but reject
+  // refusal/unknown reasons attached to an allegedly supported answer.
+  if (!normalized.abstained && normalized.reasonCode !== undefined &&
+      !['GROUNDED', 'PARTIAL', 'EVIDENCE_TRUNCATED'].includes(normalized.reasonCode.toUpperCase())) {
+    fail('PC_WORKER_PROCESSOR_RESULT_INVALID', 'Answer reason contradicts non-abstained state.')
+  }
   const missing = value.missingRequirements ?? []
   if (!Array.isArray(missing) || missing.length > 16 || missing.some(item =>
     typeof item !== 'string' || !item.trim() || item.length > 512 || item.normalize('NFKC').length > 512 ||
