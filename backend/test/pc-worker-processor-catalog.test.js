@@ -7,10 +7,20 @@ import {
   matchPcWorkerCapabilities,
   PC_WORKER_PROCESSOR_CATALOG,
   PC_WORKER_PROCESSOR_DEFINITIONS,
-  rerankCandidateSetSha256
+  rerankCandidateSetSha256,
+  normalizeRagContentArtifact
 } from '../src/services/pcWorkerProcessorCatalog.js'
 
 const hash = 'a'.repeat(64)
+
+test('extraction artifacts preserve hash-bound Unicode objects and reject folded tampering', () => {
+  const artifact = { schemaVersion: 1, format: 'epub', sections: [{ ordinal: 0, title: 'x² versus x2', text: 'ǉeto ≠ ljeto; ϲ ≠ ς; i₉ ≠ i9', locator: { spineIndex: 0 } }] }
+  const serialized = JSON.stringify(artifact)
+  const expected = { artifactBytes: Buffer.byteLength(serialized), artifactSha256: crypto.createHash('sha256').update(serialized).digest('hex') }
+  assert.deepEqual(normalizeRagContentArtifact(artifact, expected).artifact, artifact)
+  assert.throws(() => normalizeRagContentArtifact(JSON.parse(serialized.normalize('NFKC')), expected))
+  assert.throws(() => normalizeRagContentArtifact({ ...artifact, sections: [{ ...artifact.sections[0], text: 'bad\u0000text' }] }))
+})
 
 test('translation contract binds request/model/hash and retains only bounded faithful query variants', () => {
   const definition = lookupPcWorkerProcessor('rag.query.translate')

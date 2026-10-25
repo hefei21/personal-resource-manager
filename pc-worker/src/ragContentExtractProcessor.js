@@ -9,7 +9,7 @@ import { extractEpubHtml } from './epubText.js'
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
 export const RAG_CONTENT_EXTRACT_EXECUTION_CLASS = 'cpu'
-export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v9'
+export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v10'
 
 const MAX_INPUT_BYTES = 64 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
@@ -36,7 +36,9 @@ function fail(code, message = code) {
 }
 
 function text(value) {
-  return String(value ?? '').normalize('NFKC')
+  // Evidence is not a search key: compatibility folding merges distinct
+  // characters (x²/x2, ǉ/lj). Search and safety can normalize separate shadows.
+  return String(value ?? '')
     .replace(/\r\n?/gu, '\n')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
     .replace(/[ \t]+/gu, ' ')

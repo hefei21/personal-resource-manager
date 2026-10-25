@@ -161,7 +161,8 @@ function boundedOutputText(value, fieldName, maxBytes, preserveText = false) {
   }
   // Answer safety is checked on a normalized shadow by ragOutputSafety. Keep
   // the original answer characters; compatibility folding loses exponents and
-  // distinctions between mathematical objects. Extraction behavior is unchanged.
+  // distinctions between mathematical objects. Hash-bound extraction text must
+  // likewise survive transport without compatibility folding.
   return preserveText ? value : value.normalize('NFKC')
 }
 
@@ -467,8 +468,8 @@ export function normalizeRagContentArtifact(value, expected = {}) {
     }
     return freeze({
       ordinal: nonNegativeInteger(section.ordinal, `artifact.sections[${index}].ordinal`, 100_000),
-      title: boundedOutputText(section.title, `artifact.sections[${index}].title`, 2048),
-      text: boundedOutputText(section.text, `artifact.sections[${index}].text`, LIMITS.contentExtract.outputMaxBytes),
+      title: boundedOutputText(section.title, `artifact.sections[${index}].title`, 2048, true),
+      text: boundedOutputText(section.text, `artifact.sections[${index}].text`, LIMITS.contentExtract.outputMaxBytes, true),
       locator: freeze({ ...section.locator })
     })
   })

@@ -81,7 +81,7 @@ test('PDF numeric columns and raised punctuation are not joined as decimals', as
 test('EPUB Ruby produces a versioned hash-bound artifact without changing spine identity', async () => {
   const buffer=epub('<p>Before <ruby>H2O<rt>water molecule</rt></ruby> after.</p>')
   const result=await createRagContentExtractProcessor().process(task('epub',buffer),Readable.from([buffer]))
-  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v9')
+  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v10')
   assert.equal(result.artifact.sections[0].text,'Before H2O after.\n[Ruby "H2O" → "water molecule"]')
   assert.deepEqual(result.artifact.sections[0].locator,{spineIndex:0})
   assert.equal(result.output.artifactSha256,crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
@@ -95,6 +95,17 @@ test('extracts bounded DOCX paragraphs into a hash-bound Worker artifact', async
   assert.match(result.artifact.sections[0].text, /第一段\n\nSecond paragraph/u)
   assert.equal(result.output.artifactSha256, crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
   assert.equal(Object.hasOwn(result.output, 'manifest'), false)
+})
+
+test('binary extraction preserves distinct mathematical and compatibility characters', async () => {
+  const original = 'x² ≠ x2; i₉ ≠ i9; ǉeto ≠ ljeto; ϲ ≠ ς; 𝑑 ≠ d'
+  const zip = new AdmZip()
+  zip.addFile('word/document.xml', Buffer.from(`<w:document><w:body><w:p><w:r><w:t>${original}</w:t></w:r></w:p></w:body></w:document>`))
+  for (const [format, buffer] of [['docx', zip.toBuffer()], ['epub', epub(`<p>${original}</p>`)]]) {
+    const result = await createRagContentExtractProcessor().process(task(format, buffer), Readable.from([buffer]))
+    assert.equal(result.artifact.sections[0].text, original)
+    assert.equal(result.output.artifactSha256, crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
+  }
 })
 
 test('DOCX joins visible text runs without adding XML layout or exposing field instructions', async () => {
@@ -124,7 +135,7 @@ test('DOCX preserves visible nonbreaking hyphens without inserting discretionary
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('docx', buffer), Readable.from([buffer]))
   assert.equal(result.artifact.sections[0].text, 'Non-Performance; Know-How; international; <w:noBreakHyphen/>')
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v9')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v10')
   assert.equal(result.output.artifactSha256, crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
 })
 
@@ -139,7 +150,7 @@ test('extracts EPUB spine order and strips markup', async () => {
 test('EPUB preserves inline words and separates blocks without inventing spaces', async () => {
   const buffer = epub('<p>Trans<em>former</em>与地<strong>球</strong>，<a href="#note">注释</a>。</p><p>Next<br/>line</p><ul><li>one</li><li>two</li></ul>')
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
-  assert.equal(result.artifact.sections[0].text, 'Transformer与地球,注释。\n\nNext\nline\n\none\n\ntwo')
+  assert.equal(result.artifact.sections[0].text, 'Transformer与地球，注释。\n\nNext\nline\n\none\n\ntwo')
 })
 
 test('EPUB decodes entities once and retains literal examples without executing markup', async () => {
@@ -165,7 +176,7 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v9')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v10')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }
