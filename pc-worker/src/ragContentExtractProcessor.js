@@ -9,7 +9,7 @@ import { extractEpubHtml } from './epubText.js'
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
 export const RAG_CONTENT_EXTRACT_EXECUTION_CLASS = 'cpu'
-export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v8'
+export const RAG_CONTENT_EXTRACTOR_VERSION = 'pc-worker-structured-text.v9'
 
 const MAX_INPUT_BYTES = 64 * 1024 * 1024
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
@@ -189,6 +189,41 @@ function extractEpub(buffer) {
   return sections
 }
 
+function touchingPdfRuns(left, right) {
+  if (!left || !right || left.hasEOL || left.dir !== 'ltr' || right.dir !== 'ltr' ||
+      !left.str || !right.str || /\s$/u.test(left.str) || /^\s/u.test(right.str)) return false
+  const a = left.transform
+  const b = right.transform
+  const height = Math.min(left.height, right.height)
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== 6 || b.length !== 6 ||
+      ![...a, ...b, left.width, left.height, right.height].every(Number.isFinite) || height <= 0 ||
+      a[1] !== 0 || a[2] !== 0 || b[1] !== 0 || b[2] !== 0 || a[0] <= 0 || b[0] <= 0) return false
+  // Only near-contiguous horizontal runs at the same baseline and size qualify.
+  // Do not bridge table columns, superscripts, explicit spaces, or line breaks.
+  const tolerance = Math.min(0.5, height * 0.05)
+  return Math.abs(a[5] - b[5]) <= tolerance && Math.abs(left.height - right.height) <= tolerance &&
+    Math.abs(b[4] - a[4] - left.width) <= tolerance
+}
+
+function pdfPageText(items) {
+  const joined = new Set()
+  for (let index = 0; index < items.length - 1; index += 1) {
+    const left = items[index]
+    const right = items[index + 1]
+    if (!touchingPdfRuns(left, right)) continue
+    if ((/\d\.$/u.test(left.str) && /^\d/u.test(right.str)) ||
+        (/\d$/u.test(left.str) && /^\.\d/u.test(right.str))) joined.add(index)
+    if (/\d$/u.test(left.str) && right.str === '.' && /^\d/u.test(items[index + 2]?.str ?? '') &&
+        touchingPdfRuns(right, items[index + 2])) {
+      joined.add(index)
+      joined.add(index + 1)
+    }
+  }
+  // PDF font changes may split a decimal into "0", ".", "05". Inserting a
+  // space at every item boundary corrupts the literal even when no gap exists.
+  return text(items.map((item, index) => `${item.str ?? ''}${item.hasEOL ? '\n' : joined.has(index) ? '' : ' '}`).join(''))
+}
+
 async function extractPdf(buffer, signal) {
   let document
   try {
@@ -202,7 +237,7 @@ async function extractPdf(buffer, signal) {
       const content = await page.getTextContent()
       // PDF.js already returns plain text. Markup stripping would delete literal
       // tokens such as <EOS> and comparisons, or decode literal entity examples.
-      const pageText = text(content.items.map((item) => `${item.str ?? ''}${item.hasEOL ? '\n' : ' '}`).join(''))
+      const pageText = pdfPageText(content.items)
       if (pageText) sections.push({ ordinal: sections.length, title: `Page ${pageNumber}`, text: pageText, locator: { page: pageNumber } })
     }
   } finally {

@@ -40,15 +40,16 @@ function epub(body = '<h1>Hello</h1><p>Grounded text.</p>') {
   return zip.toBuffer()
 }
 
-function pdf(bodyText = 'Hello PDF evidence') {
+function pdf(bodyText = 'Hello PDF evidence', streamOverride) {
   const escaped = bodyText.replace(/[\\()]/gu, '\\$&')
-  const stream = `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`
+  const stream = streamOverride ?? `BT /F1 12 Tf 72 720 Td (${escaped}) Tj ET`
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 6 0 R >> >> /Contents 5 0 R >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>'
   ]
   let body = '%PDF-1.4\n'
   const offsets = [0]
@@ -63,10 +64,24 @@ function pdf(bodyText = 'Hello PDF evidence') {
   return Buffer.from(body, 'ascii')
 }
 
+test('PDF decimals split across font runs retain their numeric value', async () => {
+  const buffer = pdf('', 'BT /F1 12 Tf 72 720 Td (Rate = 0) Tj /F2 12 Tf (.) Tj /F1 12 Tf (05) Tj ET')
+  const result = await createRagContentExtractProcessor().process(task('pdf', buffer), Readable.from([buffer]))
+  assert.equal(result.artifact.sections[0].text, 'Rate = 0.05')
+  assert.deepEqual(result.artifact.sections[0].locator, { page: 1 })
+  assert.equal(result.output.sourceContentSha256, task('pdf', buffer).input.sourceContentSha256)
+})
+
+test('PDF numeric columns and raised punctuation are not joined as decimals', async () => {
+  const buffer = pdf('', 'BT /F1 12 Tf 72 720 Td (0) Tj /F2 12 Tf 20 0 Td (.) Tj /F1 12 Tf 20 0 Td (05) Tj ET\nBT /F1 12 Tf 72 680 Td (1) Tj /F2 12 Tf 4 Ts (.) Tj /F1 12 Tf 0 Ts (25) Tj ET')
+  const result = await createRagContentExtractProcessor().process(task('pdf', buffer), Readable.from([buffer]))
+  assert.doesNotMatch(result.artifact.sections[0].text, /0\.05|1\.25/u)
+})
+
 test('EPUB Ruby produces a versioned hash-bound artifact without changing spine identity', async () => {
   const buffer=epub('<p>Before <ruby>H2O<rt>water molecule</rt></ruby> after.</p>')
   const result=await createRagContentExtractProcessor().process(task('epub',buffer),Readable.from([buffer]))
-  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v8')
+  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v9')
   assert.equal(result.artifact.sections[0].text,'Before H2O after.\n[Ruby "H2O" → "water molecule"]')
   assert.deepEqual(result.artifact.sections[0].locator,{spineIndex:0})
   assert.equal(result.output.artifactSha256,crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
@@ -109,7 +124,7 @@ test('DOCX preserves visible nonbreaking hyphens without inserting discretionary
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('docx', buffer), Readable.from([buffer]))
   assert.equal(result.artifact.sections[0].text, 'Non-Performance; Know-How; international; <w:noBreakHyphen/>')
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v8')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v9')
   assert.equal(result.output.artifactSha256, crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
 })
 
@@ -150,7 +165,7 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v8')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v9')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }
