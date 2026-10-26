@@ -281,6 +281,18 @@ function requestsProhibitedAction(query) {
       return `API${match.slice(subject.length).replace('执行', '讨论')}`
     }
   )
+  // A named program's inability to invoke a command is a documented failure
+  // condition, not an instruction to execute one. Only mask this predicate;
+  // imperative prefixes and every remaining action clause stay inspected.
+  inspected = inspected.replace(
+    /([A-Za-z_][A-Za-z0-9_.-]{0,63}(?:\(\))?)\s*(?:找到但)?(?:无法|不能|未能)执行\s*命令时(?=[^。！？!?；;\r\n]{0,100}[？?])/gu,
+    (match, subject, offset) => {
+      const prefix = inspected.slice(0, offset).split(/[。！？!?；;\r\n]/u).at(-1)
+      if (/^(?:you|assistant|agent|codex|chatgpt|run|execute)$/iu.test(subject) ||
+          /(?:请|帮|替|为我|你|立即|马上|现在|务必|必须|直接|让|要求|执行|运行)|\b(?:please|run|execute)\b/iu.test(prefix)) return match
+      return `API${match.slice(subject.length).replace('执行', '讨论')}`
+    }
+  )
   return PROHIBITED_ACTION_REQUESTS.some((pattern) => pattern.test(inspected))
 }
 
