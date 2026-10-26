@@ -35,7 +35,7 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
   const current = token => !disposed && token === generation
   function stop() { if (timer !== null) clearTimer(timer); timer = null }
   function abandon(id) { if (id) Promise.resolve().then(() => api.cancelQuery(id)).catch(() => {}) }
-  function reset() {
+  function reset({ keepResult = false } = {}) {
     generation += 1
     submission?.abort()
     submission = null
@@ -43,7 +43,7 @@ export function useRagQuery({ api, errorLabel, normalizeResult, setTimer = setTi
     abandon(queryId.value)
     queryId.value = ''
     state.value = 'idle'
-    result.value = null
+    if (!keepResult) result.value = null
     feedback.value = ''
     cancellable.value = false
     phase.value = ''

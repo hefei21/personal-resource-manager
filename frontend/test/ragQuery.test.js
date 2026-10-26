@@ -21,6 +21,23 @@ function fixture(overrides = {}) {
 }
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
 
+test('navigation retains displayed evidence but stops work and ignores a late answer', async () => {
+  const d = deferred()
+  const c = fixture({ createQuery: async payload => payload.phase === 'evidence'
+    ? response('evidence', { enhancementRequired: true, evidence: [{ excerpt: 'original' }] }) : d.promise })
+  const pending = c.submit({ q: 'question' })
+  await Promise.resolve(); await Promise.resolve()
+  c.reset({ keepResult: true })
+  assert.equal(c.result.value.evidence[0].excerpt, 'original')
+  assert.equal(c.loading.value, false)
+  d.resolve(queued()); await pending; await Promise.resolve()
+  assert.deepEqual(c.calls, [['cancel', 'q1']])
+  assert.equal(c.timers.size, 0)
+  assert.equal(c.result.value.evidence[0].excerpt, 'original')
+  c.dispose()
+  assert.equal(c.result.value, null)
+})
+
 test('progressive query shows evidence while waiting and preserves it when cancelled', async () => {
   const d = deferred(), calls = []
   const c = fixture({ createQuery: async (payload, options) => {

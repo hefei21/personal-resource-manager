@@ -279,7 +279,8 @@ onActivated(async () => {
 })
 onDeactivated(() => {
   if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
-  if (askLoading.value || askState.value === 'paused') ask.reset()
+  // Keep already displayed evidence in this in-memory route when opening its source.
+  if (askLoading.value || askState.value === 'paused') ask.reset({ keepResult: true })
   if (pollTimer) window.clearTimeout(pollTimer)
   if (ragIndexPollTimer) window.clearTimeout(ragIndexPollTimer)
 })
