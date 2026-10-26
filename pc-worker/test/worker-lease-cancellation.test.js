@@ -5,7 +5,7 @@ import test from 'node:test'
 import { WorkerApiClient } from '../src/apiClient.js'
 import { PcWorker } from '../src/worker.js'
 
-async function exercise(t, { status, code, ignoreAbort = false }) {
+async function exercise(t, { status, code, ignoreAbort = false, heartbeatIntervalMs = 5 }) {
   const calls = []
   let release
   let processorSignal
@@ -22,7 +22,7 @@ async function exercise(t, { status, code, ignoreAbort = false }) {
   t.after(() => { server.closeAllConnections(); server.close() })
   const disabled = () => ({ supports: () => false })
   const worker = new PcWorker({
-    config: { heartbeatIntervalMs: 5 },
+    config: { heartbeatIntervalMs },
     api: new WorkerApiClient({ baseUrl: `http://127.0.0.1:${server.address().port}` }),
     logger: { info() {}, warn() {} },
     modelReadinessFactory: () => ({ refresh: async () => false, isReady: () => true }),
@@ -49,6 +49,16 @@ async function exercise(t, { status, code, ignoreAbort = false }) {
   t.after(() => { release?.(); worker.stop() })
   return { calls, outcome, release: () => release(), signal: () => processorSignal }
 }
+
+test('answer cancellation is observed promptly with the normal 20 second lease heartbeat', { timeout: 3000 }, async t => {
+  const started = performance.now()
+  const run = await exercise(t, { status: 409, code: 'TASK_INVALID_STATE', heartbeatIntervalMs: 20_000 })
+  assert.equal((await run.outcome).code, 'TASK_INVALID_STATE')
+  assert.ok(performance.now() - started < 2500)
+  assert.equal(run.signal().aborted, true)
+  assert.equal(run.calls.includes('complete'), false)
+  assert.equal(run.calls.includes('fail'), false)
+})
 
 for (const code of ['TASK_INVALID_STATE', 'TASK_LEASE_MISMATCH', 'TASK_LEASE_EXPIRED', 'TASK_STATE_CONFLICT']) {
   test(`authoritative ${code} aborts processing without reporting a retry`, { timeout: 3000 }, async t => {

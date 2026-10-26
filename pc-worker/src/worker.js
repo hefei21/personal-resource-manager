@@ -24,6 +24,9 @@ import { createModelReadiness, modelKindForTaskType } from './modelReadiness.js'
 
 const ACCESS_REFRESH_MARGIN_MS = 60_000
 const PROFILE_REFRESH_MS = 5 * 60_000
+// Interactive answers must notice cancellation before an ordinary answer ends.
+// Only active answer leases use this cadence; idle polling stays unchanged.
+const ANSWER_HEARTBEAT_MAX_MS = 1000
 const LOST_LEASE_CODES = new Set([
   'TASK_INVALID_STATE', 'TASK_LEASE_MISMATCH', 'TASK_LEASE_EXPIRED', 'TASK_STATE_CONFLICT'
 ])
@@ -296,7 +299,9 @@ export class PcWorker {
           }
           safeLog(this.logger, 'warn', 'task_heartbeat_failed', { taskId: task.id, code: error.code || 'UNKNOWN' })
         }).finally(() => { heartbeatBusy = false })
-      }, this.config.heartbeatIntervalMs)
+      }, task.taskType === 'rag.answer.generate'
+        ? Math.min(this.config.heartbeatIntervalMs, ANSWER_HEARTBEAT_MAX_MS)
+        : this.config.heartbeatIntervalMs)
       heartbeatTimer.unref?.()
 
       let result
