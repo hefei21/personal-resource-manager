@@ -30,6 +30,9 @@ const { createRagRerankService } = await import('../src/services/ragRerankServic
 const { QWEN_RERANKER_MODEL } = await import('../src/config/qwenReranker.js')
 const { createRagRerankProcessor, rerankProcessorsForConfig } = await import('../../pc-worker/src/ragRerankProcessor.js')
 const { StorageService } = await import('../src/services/storageService.js')
+const { createRagAnswerService } = await import('../src/services/ragAnswerService.js')
+const { lookupPcWorkerProcessor } = await import('../src/services/pcWorkerProcessorCatalog.js')
+const { createRagAnswerProcessor, answerProcessorsForConfig } = await import('../../pc-worker/src/ragAnswerProcessor.js')
 
 const require = createRequire(import.meta.url)
 let Database
@@ -112,6 +115,72 @@ test('pool is leased once only to a capable worker and completes all 150 through
     const result = await createRagRerankService({ model, workerAvailable: () => true, taskStore: store }).rerankPool({ query: 'q', candidates: inputs })
     assert.equal(result.applied, true); assert.equal(result.candidates[0].citationId, 'C149')
     assert.equal(await api.claim(current.accessToken), null)
+  }) } finally { database.close() }
+})
+
+test('answer delivery preserves partial requirements and rechecks snapshots through real SQLite/HTTP', nativeTestOptions, async () => {
+  const database = new Database(':memory:')
+  database.exec(`${CREATE_TASK_SCHEMA_SQL};${CREATE_PC_WORKERS_SQL};${CREATE_PC_WORKER_ENROLLMENTS_SQL};${CREATE_PC_WORKER_CREDENTIALS_SQL};`)
+  const store = createTaskStore({ database }), runtime = () => ({ getStore: () => store })
+  const model = {
+    provider: 'local-test', modelId: 'answer-model', modelRevision: 'revision-1',
+    dimensions: 32, inputLimit: 4096, distance: 'cosine', normalization: 'l2',
+    instruction: 'answer from evidence', configHash: 'a'.repeat(64)
+  }
+  const config = { ...model, baseUrl: 'http://127.0.0.1:1234', contextLimit: 8192,
+    maxOutputBytes: 4096, maxEvidenceItems: 16, timeoutMs: 1000 }
+  let snapshotActive = true
+  const service = createRagAnswerService({ taskStore: store, model,
+    processorCatalog: lookupPcWorkerProcessor, workerAvailable: () => true,
+    authoritativeVisibility: () => true, authoritativeActiveSnapshot: () => snapshotActive })
+  const app = express(); app.use(express.json())
+  app.use('/api/pc-workers', ownerBoundary, createPcWorkerOwnerRouter({ database: () => database, runtime }))
+  app.use('/api/pc-worker-agent', createPcWorkerAgentRouter({ database: () => database, runtime }))
+  try { await withServer(app, async baseUrl => {
+    const api = new WorkerApiClient({ baseUrl })
+    const response = await fetch(`${baseUrl}/api/pc-workers/enrollments`, {
+      method: 'POST', headers: { 'x-test-role': 'owner', 'content-type': 'application/json' }, body: '{}'
+    })
+    assert.equal(response.status, 201)
+    const { data } = await response.json(), workerProfile = profile()
+    workerProfile.capabilities.processors = answerProcessorsForConfig(config)
+    const credentials = await api.enroll(data.token, workerProfile)
+    const queued = await service.generate({ query: 'What must be enabled and how long does it take?', evidence: [{
+      citationId: 'internal:1', sourceType: 'document', sourceId: 1, sourceVersionId: 'v1',
+      snapshotId: 10, title: 'Guide', body: 'Automatic backup must be enabled before recovery.',
+      locator: { route: '/documents', documentId: 1, sectionPath: ['Recovery'], startLine: 3, endLine: 3 }
+    }] })
+    assert.equal(queued.status, 'queued')
+    const leased = await api.claim(credentials.accessToken)
+    assert.equal(leased.id, queued.task.id)
+    assert.equal(leased.taskType, 'rag.answer.generate')
+    await api.start(credentials.accessToken, leased)
+    // Deterministic model transport tests delivery, not semantic model quality.
+    const expected = { answer: 'Automatic backup must be enabled before recovery.', abstained: false,
+      reasonCode: 'PARTIAL', missingRequirements: ['Recovery duration is not documented.'], citations: ['C1'] }
+    let modelCalls = 0
+    const processor = createRagAnswerProcessor({ config, fetchImpl: async () => {
+      modelCalls += 1
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(expected) } }] }))
+    } })
+    await api.complete(credentials.accessToken, leased, await processor.process(leased))
+    const persisted = store.getById(leased.id)
+    assert.equal(persisted.status, 'succeeded')
+    const delivered = await service.applyResult({ task: persisted, result: persisted.result })
+    assert.equal(delivered.status, 'partial')
+    assert.equal(delivered.answer, expected.answer)
+    assert.deepEqual(delivered.missingRequirements, expected.missingRequirements)
+    assert.equal(delivered.citations.length, 1)
+    assert.equal(delivered.citations[0].citationId, 'C1')
+    assert.deepEqual(delivered.citations[0].locator.sectionPath, ['Recovery'])
+    assert.equal(delivered.citations[0].locator.documentId, undefined)
+    assert.equal(modelCalls, 1)
+    assert.equal(await api.claim(credentials.accessToken), null)
+    snapshotActive = false
+    const stale = await service.applyResult({ task: persisted, result: persisted.result })
+    assert.equal(stale.answer, null)
+    assert.equal(stale.degraded, true)
+    assert.deepEqual(stale.citations, [])
   }) } finally { database.close() }
 })
 
