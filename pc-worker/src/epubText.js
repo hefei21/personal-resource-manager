@@ -4,6 +4,13 @@ const BLOCKS = new Set(['address', 'article', 'aside', 'blockquote', 'dd', 'div'
   'figcaption', 'figure', 'footer', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr',
   'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'table', 'tr', 'ul'])
 const OMIT = new Set(['script', 'style', 'template'])
+
+// Authored alternatives are part of the book, including inline formulae.
+// parse5 has already decoded entities; never parse this text as markup, infer
+// a caption from a file name, or fetch the image itself.
+function imageAlternative(node) {
+  return node.attrs?.find(attribute => attribute.name === 'alt')?.value ?? ''
+}
 // Match the NAS deferred prose ceiling. Oversized blocks keep legacy text
 // rather than moving annotations beyond the existing neighbor context window.
 export const EPUB_RUBY_BLOCK_BYTES = 1536
@@ -16,6 +23,7 @@ function visibleText(root) {
     if (typeof node === 'string') { pieces.push(node); continue }
     if (!node || OMIT.has(node.tagName)) continue
     if (node.nodeName === '#text') { pieces.push(node.value); continue }
+    if (node.tagName === 'img') { pieces.push(imageAlternative(node)); continue }
     if (node.tagName === 'br') { pieces.push('\n'); continue }
     const boundary = BLOCKS.has(node.tagName) ? '\n' : ['td', 'th'].includes(node.tagName) ? ' ' : ''
     if (boundary) { pieces.push(boundary); pending.push(boundary) }
@@ -45,6 +53,7 @@ function simpleRuby(node) {
     if (current.tagName === 'rp') continue
     if (BLOCKS.has(current.tagName) || current.tagName === 'br') return null
     if (current.nodeName === '#text') { base.push(current.value); continue }
+    if (current.tagName === 'img') { base.push(imageAlternative(current)); continue }
     const children = current.childNodes ?? []
     for (let i = children.length - 1; i >= 0; i--) pending.push(children[i])
   }
@@ -71,6 +80,7 @@ function rubyAwareText(root) {
     const node = item.node
     if (!node || OMIT.has(node.tagName)) continue
     if (node.nodeName === '#text') { frame.pieces.push(node.value); continue }
+    if (node.tagName === 'img') { frame.pieces.push(imageAlternative(node)); continue }
     if (node.tagName === 'br') { frame.pieces.push('\n'); continue }
     if (node.tagName === 'ruby') {
       const pair = simpleRuby(node)

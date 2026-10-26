@@ -3,6 +3,16 @@ import test from 'node:test'
 import { extractEpubHtml, EPUB_RUBY_BLOCK_BYTES } from '../src/epubText.js'
 import { chunkRagSource, RAG_CHUNKER_DEFAULTS } from '../../backend/src/services/ragChunker.js'
 
+test('image alternatives retain authored objects without loading or decoding markup twice', () => {
+  const html = '<p>Let <img src="https://invalid.example/formula.svg" alt="x² &lt; y"> hold; <img alt="&amp;lt;EOS&amp;gt;"> remains literal.<img alt=""><img src="missing.png"></p>'
+  assert.equal(extractEpubHtml(html).body.trim(), 'Let x² < y hold; &lt;EOS&gt; remains literal.')
+  assert.equal(extractEpubHtml('<p><img alt="d x"> means a little of <img alt="x">.</p>').body.trim(), 'd x means a little of x.')
+  assert.equal(extractEpubHtml('<p><img alt="<script>not executable</script>"></p>').body.trim(), '<script>not executable</script>')
+  assert.equal(extractEpubHtml('<p><ruby><img alt="x"><rt>variable</rt></ruby></p>').body.trim(), 'x\n[Ruby "x" → "variable"]')
+  const long = ' text'.repeat(400)
+  assert.equal(extractEpubHtml(`<p><img alt="x²"><ruby>X<rt>note</rt></ruby>${long}</p>`).body.trim(), `x²Xnote${long}`)
+})
+
 test('simple Ruby preserves continuous prose and explicit annotation relationships', () => {
   const {body}=extractEpubHtml('<p>智に働けば<ruby>角<rp>(</rp><rt>かど</rt><rp>)</rp></ruby>が立つ。</p>')
   assert.equal(body.trim(), '智に働けば角が立つ。\n[Ruby "角" → "かど"]')
