@@ -183,7 +183,7 @@
       <button v-if="!isMobile && errorCode === 'SEARCH_INDEX_MISSING'" @click="refreshIndex(true)">建立索引</button>
     </div>
 
-    <section v-if="mode === 'ask' && askState !== 'idle'" class="answer-panel" aria-live="polite">
+    <section v-if="mode === 'ask' && (askState !== 'idle' || askResult)" class="answer-panel" aria-live="polite">
       <header class="answer-heading">
         <div>
           <strong>原文与总结</strong>
@@ -194,6 +194,9 @@
 
       <div v-if="askLoading" class="answer-loading" role="status">
         {{ askState === 'cancelling' ? '正在确认取消…' : askState === 'enhancing' ? '正在等待增强检索，模型忙时可能需要稍候。可先查看原文，也可取消；证据就绪后再生成总结。' : askState === 'submitting' ? '正在检索并筛选证据…' : askPhase === 'queued' ? '问题已进入队列，等待 Worker 处理…' : '正在整理回答和引用…' }}
+      </div>
+      <div v-else-if="askState === 'idle' && askResult" class="answer-feedback" role="status">
+        已保留离开前的原文，本页已停止等待总结。需要总结时可重新提问。
       </div>
       <div v-else-if="['error', 'paused'].includes(askState)" class="answer-feedback" role="alert">
         {{ askFeedback }}
