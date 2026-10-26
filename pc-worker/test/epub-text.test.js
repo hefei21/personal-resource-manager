@@ -3,6 +3,14 @@ import test from 'node:test'
 import { extractEpubHtml, EPUB_RUBY_BLOCK_BYTES } from '../src/epubText.js'
 import { chunkRagSource, RAG_CHUNKER_DEFAULTS } from '../../backend/src/services/ragChunker.js'
 
+test('authored superscript and subscript preserve object boundaries without interpreting mathematics', () => {
+  assert.equal(extractEpubHtml('<p>(b - 1)<sub>b + c - 1</sub>; a<sup>α</sup>; H<sub>2</sub>O.</p>').body.trim(), '(b - 1)_{b + c - 1}; a^{α}; H_{2}O.')
+  assert.equal(extractEpubHtml('<p>x<sup><i>a</i><sub>n</sub></sup><sup>&amp;lt;T&amp;gt;</sup></p>').body.trim(), 'x^{a_{n}}^{&lt;T&gt;}')
+  assert.equal(extractEpubHtml('<p>Note<sup><a href="https://invalid.example">[1]</a></sup><sub><script>hidden</script>k</sub></p>').body.trim(), 'Note^{[1]}_{k}')
+  const tail = ' text'.repeat(400)
+  assert.equal(extractEpubHtml(`<p>x<sup>2</sup><ruby>A<rt>note</rt></ruby>${tail}</p>`).body.trim(), `x^{2}Anote${tail}`)
+})
+
 test('image alternatives retain authored objects without loading or decoding markup twice', () => {
   const html = '<p>Let <img src="https://invalid.example/formula.svg" alt="x² &lt; y"> hold; <img alt="&amp;lt;EOS&amp;gt;"> remains literal.<img alt=""><img src="missing.png"></p>'
   assert.equal(extractEpubHtml(html).body.trim(), 'Let x² < y hold; &lt;EOS&gt; remains literal.')
@@ -17,8 +25,8 @@ test('simple Ruby preserves continuous prose and explicit annotation relationshi
   const {body}=extractEpubHtml('<p>智に働けば<ruby>角<rp>(</rp><rt>かど</rt><rp>)</rp></ruby>が立つ。</p>')
   assert.equal(body.trim(), '智に働けば角が立つ。\n[Ruby "角" → "かど"]')
   const semantic=extractEpubHtml('<p><ruby><rb>H<sub>2</sub>O</rb><rt>water molecule</rt></ruby> remains.</p>').body
-  assert.match(semantic,/H2O remains\./u)
-  assert.match(semantic,/\[Ruby "H2O" → "water molecule"\]/u)
+  assert.match(semantic,/H_\{2\}O remains\./u)
+  assert.match(semantic,/\[Ruby "H_\{2\}O" → "water molecule"\]/u)
 })
 
 test('notes remain scoped to their own blocks with escaped annotation text', () => {

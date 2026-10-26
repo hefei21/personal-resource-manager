@@ -81,7 +81,7 @@ test('PDF numeric columns and raised punctuation are not joined as decimals', as
 test('EPUB image alternatives reach the versioned artifact with original identity', async () => {
   const buffer = epub('<p>Condition: <img src="https://invalid.example/formula.svg" alt="x² &lt; y">.</p>')
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v11')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v12')
   assert.equal(result.artifact.sections[0].text, 'Condition: x² < y.')
   assert.deepEqual(result.artifact.sections[0].locator, { spineIndex: 0 })
   assert.equal(result.output.sourceContentSha256, task('epub', buffer).input.sourceContentSha256)
@@ -91,10 +91,20 @@ test('EPUB image alternatives reach the versioned artifact with original identit
 test('EPUB Ruby produces a versioned hash-bound artifact without changing spine identity', async () => {
   const buffer=epub('<p>Before <ruby>H2O<rt>water molecule</rt></ruby> after.</p>')
   const result=await createRagContentExtractProcessor().process(task('epub',buffer),Readable.from([buffer]))
-  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v11')
+  assert.equal(result.output.extractorVersion,'pc-worker-structured-text.v12')
   assert.equal(result.artifact.sections[0].text,'Before H2O after.\n[Ruby "H2O" → "water molecule"]')
   assert.deepEqual(result.artifact.sections[0].locator,{spineIndex:0})
   assert.equal(result.output.artifactSha256,crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
+})
+
+test('EPUB script placement survives versioned extraction and artifact hashing', async () => {
+  const buffer = epub('<p>If empty: (b-1)<sub>b+c-1</sub>; otherwise (b-1)<sub>c-1</sub>. a<sup>α</sup>.</p>')
+  const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v12')
+  assert.equal(result.artifact.sections[0].text, 'If empty: (b-1)_{b+c-1}; otherwise (b-1)_{c-1}. a^{α}.')
+  assert.deepEqual(result.artifact.sections[0].locator, { spineIndex: 0 })
+  assert.equal(result.output.sourceContentSha256, task('epub', buffer).input.sourceContentSha256)
+  assert.equal(result.output.artifactSha256, crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
 })
 
 test('extracts bounded DOCX paragraphs into a hash-bound Worker artifact', async () => {
@@ -145,7 +155,7 @@ test('DOCX preserves visible nonbreaking hyphens without inserting discretionary
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('docx', buffer), Readable.from([buffer]))
   assert.equal(result.artifact.sections[0].text, 'Non-Performance; Know-How; international; <w:noBreakHyphen/>')
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v11')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v12')
   assert.equal(result.output.artifactSha256, crypto.createHash('sha256').update(JSON.stringify(result.artifact)).digest('hex'))
 })
 
@@ -186,7 +196,7 @@ test('keeps original EPUB spine positions when empty items are skipped', async (
   const buffer = zip.toBuffer()
   const result = await createRagContentExtractProcessor().process(task('epub', buffer), Readable.from([buffer]))
   assert.equal(result.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
-  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v11')
+  assert.equal(result.output.extractorVersion, 'pc-worker-structured-text.v12')
   assert.deepEqual(result.artifact.sections.map(({ ordinal, title, text, locator }) => ({ ordinal, title, text, locator })), [
     { ordinal: 0, title: 'One', text: 'First chapter.', locator: { spineIndex: 1 } },
     { ordinal: 1, title: 'Two', text: 'Second chapter.', locator: { spineIndex: 3 } }

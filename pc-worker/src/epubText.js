@@ -11,6 +11,11 @@ const OMIT = new Set(['script', 'style', 'template'])
 function imageAlternative(node) {
   return node.attrs?.find(attribute => attribute.name === 'alt')?.value ?? ''
 }
+// Keep authored vertical placement explicit in plain text. This records markup,
+// not a guessed operation: note markers and formulae use the same notation.
+function scriptOpening(node) {
+  return node.tagName === 'sup' ? '^{' : node.tagName === 'sub' ? '_{' : ''
+}
 // Match the NAS deferred prose ceiling. Oversized blocks keep legacy text
 // rather than moving annotations beyond the existing neighbor context window.
 export const EPUB_RUBY_BLOCK_BYTES = 1536
@@ -25,6 +30,8 @@ function visibleText(root) {
     if (node.nodeName === '#text') { pieces.push(node.value); continue }
     if (node.tagName === 'img') { pieces.push(imageAlternative(node)); continue }
     if (node.tagName === 'br') { pieces.push('\n'); continue }
+    const script = scriptOpening(node)
+    if (script) { pieces.push(script); pending.push('}') }
     const boundary = BLOCKS.has(node.tagName) ? '\n' : ['td', 'th'].includes(node.tagName) ? ' ' : ''
     if (boundary) { pieces.push(boundary); pending.push(boundary) }
     const children = node.childNodes ?? []
@@ -37,6 +44,7 @@ function simpleRuby(node) {
   const base = [], annotations = [], pending = [node]
   while (pending.length) {
     const current = pending.pop()
+    if (typeof current === 'string') { base.push(current); continue }
     if (OMIT.has(current.tagName)) continue
     if ((current !== node && current.tagName === 'ruby') || current.tagName === 'rtc') return null
     if (current.tagName === 'rt') {
@@ -54,6 +62,8 @@ function simpleRuby(node) {
     if (BLOCKS.has(current.tagName) || current.tagName === 'br') return null
     if (current.nodeName === '#text') { base.push(current.value); continue }
     if (current.tagName === 'img') { base.push(imageAlternative(current)); continue }
+    const script = scriptOpening(current)
+    if (script) { base.push(script); pending.push('}') }
     const children = current.childNodes ?? []
     for (let i = children.length - 1; i >= 0; i--) pending.push(children[i])
   }
@@ -82,6 +92,8 @@ function rubyAwareText(root) {
     if (node.nodeName === '#text') { frame.pieces.push(node.value); continue }
     if (node.tagName === 'img') { frame.pieces.push(imageAlternative(node)); continue }
     if (node.tagName === 'br') { frame.pieces.push('\n'); continue }
+    const script = scriptOpening(node)
+    if (script) { frame.pieces.push(script); pending.push({ text: '}' }) }
     if (node.tagName === 'ruby') {
       const pair = simpleRuby(node)
       if (pair) {
