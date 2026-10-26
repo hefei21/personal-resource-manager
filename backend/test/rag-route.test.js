@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
+import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
@@ -1269,6 +1270,78 @@ test('SQLite duplicate task reuses only its exact live owner and evidence contex
       assert.equal(database.prepare('SELECT count(*) n FROM rag_query_runs').get().n, 1)
     })
   } finally { database.close() }
+})
+
+test('completed partial answer survives database reopen and rechecks visibility through HTTP', async () => {
+  const { default: Database } = await import('better-sqlite3')
+  const { CREATE_TASK_SCHEMA_SQL } = await import('../src/config/taskSchema.js')
+  const { CREATE_RAG_QUERY_RUNS_SQL, RAG_QUERY_RUN_INDEXES_SQL } = await import('../src/config/ragQueryRunSchema.js')
+  const { createTaskStore } = await import('../src/services/taskStore.js')
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'rag-completed-reopen-'))
+  const filename = path.join(directory, 'test.sqlite')
+  let database = new Database(filename)
+  let visible = true
+  const model = { provider: 'local-test', modelId: 'answer-model', modelRevision: 'revision-1',
+    dimensions: 32, inputLimit: 4096, distance: 'cosine', normalization: 'l2',
+    instruction: 'answer from evidence', configHash: 'a'.repeat(64) }
+  const makeRouter = () => createRagRouter({
+    databaseProvider: () => database, model, workerAvailable: () => true,
+    structuredAnswerProvider: () => null, querySourceResolver: () => null,
+    authoritativeChecksFactory: () => ({ authoritativeVisibility: () => visible, authoritativeActiveSnapshot: () => true }),
+    taskStoreProvider: () => createTaskStore({ database }),
+    candidateProvider: async () => ({ ftsCandidates: [] }),
+    hybridRetrieverFactory: () => ({ retrieve: async () => retrieval() }),
+    requestIdFactory: () => 'completed-reopen-run'
+  })
+  const headers = { 'content-type': 'application/json', 'x-test-principal': 'owner', 'x-test-owner': 'alice' }
+  try {
+    database.exec(`${CREATE_TASK_SCHEMA_SQL};${CREATE_RAG_QUERY_RUNS_SQL};${RAG_QUERY_RUN_INDEXES_SQL};`)
+    database.exec(`
+      CREATE TABLE rag_chunks (id INTEGER, ordinal INTEGER, body TEXT, title TEXT, locator_json TEXT, snapshot_id INTEGER);
+      CREATE TABLE rag_source_snapshots (id INTEGER, source_type TEXT, source_id INTEGER, source_version_id TEXT, status TEXT);
+      CREATE TABLE rag_source_state (source_type TEXT, source_id INTEGER, active_snapshot_id INTEGER);
+    `)
+    await withServer(makeRouter(), async base => {
+      const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers,
+        body: JSON.stringify({ query: 'What is supported and what is the duration?' }) })
+      assert.equal(response.status, 202)
+      assert.equal((await response.json()).data.runId, 'completed-reopen-run')
+    })
+    // Seed a completed model result; Worker HTTP completion is covered separately.
+    const result = { schemaVersion: 1, processorVersion: 'v1', output: {
+      answer: 'Complete authorized evidence.', abstained: false, reasonCode: 'PARTIAL',
+      missingRequirements: ['Duration is not documented.'], citations: ['C1']
+    } }
+    database.prepare("UPDATE tasks SET status = 'succeeded', result_json = ?").run(JSON.stringify(result))
+    database.close()
+    database = new Database(filename)
+    await withServer(makeRouter(), async base => {
+      const url = `${base}/api/rag/queries/completed-reopen-run`
+      const otherOwner = await fetch(url, { headers: { ...headers, 'x-test-owner': 'bob' } })
+      assert.equal(otherOwner.status, 404)
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await fetch(url, { headers })
+        assert.equal(response.status, 200)
+        const { data } = await response.json()
+        assert.equal(data.status, 'partial')
+        assert.equal(data.answer, result.output.answer)
+        assert.deepEqual(data.missingRequirements, result.output.missingRequirements)
+        assert.equal(data.citations[0].citationId, 'C1')
+        assert.equal(data.evidence[0].excerpt, retrieval().data[0].body)
+        assert.doesNotMatch(JSON.stringify(data), /private|secret\.md|leaseToken|input_json/u)
+      }
+      assert.equal(database.prepare('SELECT count(*) n FROM tasks').get().n, 1)
+      visible = false
+      const stale = (await (await fetch(url, { headers })).json()).data
+      assert.equal(stale.status, 'degraded')
+      assert.equal(stale.answer, null)
+      assert.deepEqual(stale.evidence, [])
+      assert.deepEqual(stale.citations, [])
+    })
+  } finally {
+    if (database.open) database.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('persisted run mapping survives router reconstruction for the same Owner', async () => {
