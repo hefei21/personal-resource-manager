@@ -12,11 +12,11 @@ try {
     const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: theme,
       reducedMotion: 'reduce', isMobile: width < 768, hasTouch: width < 768 })
     const errors = [], requests = []
-    let answerImmediately = false, cancelled = 0
+    let answerImmediately = false, cancelled = 0, recoveryMode = false, recoveryReady = false
     await context.route(`${base}/api/**`, async route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname
       assert.equal(url.origin, base, 'No external API requests')
-      let body = { data: [], total: 0 }
+      let body = { data: [], total: 0 }, status = 200
       if (p === '/api/auth/check') body = { authenticated: true, user: { username: 'owner', principal: 'owner', isGuest: false } }
       else if (p === '/api/rag/status') body = { data: { status: 'ready' } }
       else if (p === '/api/rag/coverage') body = { data: { data: [{ source: { type: 'document', id: 701, title: '合成借阅说明' }, status: 'ready', chunkCount: 2 }] } }
@@ -28,10 +28,12 @@ try {
             ? { status: 'evidence', enhancementRequired: true, evidence, citations: [] }
             : { status: 'queued', runId: 'synthetic-run', cancellable: true, evidence, citations: [] } }
       } else if (p.includes('/api/rag/queries/')) {
-        if (request.method() !== 'GET') { cancelled++; body = { data: { status: 'cancelled' } } }
+        if (recoveryMode && !recoveryReady) { status = 503; body = { code: 'SYNTHETIC_CONNECTION_FAILURE' } }
+        else if (recoveryMode) body = { data: { status: 'complete', answer: '恢复原任务的回答。', citations: evidence, evidence } }
+        else if (request.method() !== 'GET') { cancelled++; body = { data: { status: 'cancelled' } } }
         else body = { data: { status: 'running', runId: 'synthetic-run', cancellable: true, evidence, citations: [] } }
       }
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
     })
     const page = await context.newPage()
     page.on('pageerror', error => errors.push(error.message))
@@ -70,8 +72,24 @@ try {
     await page.reload()
     await input.waitFor()
     assert.equal(await page.locator('.rag-evidence-result').count(), 0, 'Reload must not restore private result content')
+
+    answerImmediately = false
+    recoveryMode = true
+    await input.fill('连接恢复后继续当前问题')
+    await page.locator('.search-row button').click()
+    await page.getByText('暂时无法读取回答状态', { exact: false }).waitFor()
+    assert.equal(await page.getByText(excerpt, { exact: true }).isVisible(), true)
+    const beforeRecovery = requests.length
+    await page.getByRole('button', { name: '取消', exact: true }).click()
+    await page.getByText('尚未确认取消', { exact: false }).waitFor()
+    assert.equal(await page.getByText('已取消本次提问', { exact: false }).count(), 0)
+    recoveryReady = true
+    await page.getByRole('button', { name: '继续查询', exact: true }).click()
+    await page.locator('summary').click()
+    await page.getByText('恢复原任务的回答。', { exact: true }).waitFor()
+    assert.equal(requests.length, beforeRecovery, 'Recovery reads the original task, never creates a new one')
     assert.deepEqual(errors, [])
-    console.log(`PASS ${width} ${theme}: pending and completed source navigation/back, no resubmit, cancellation, memory-only results, reload clears`)
+    console.log(`PASS ${width} ${theme}: source navigation/back, memory-only results, reload clears, polling failure, failed cancel, same-task recovery`)
     await context.close()
   }
 } finally { await browser.close() }
