@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import AdmZip from 'adm-zip'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { extractEpubHtml } from './epubText.js'
+import { preserveDocxTableRows } from './docxTableRows.js'
 
 export const RAG_CONTENT_EXTRACT_TASK_TYPE = 'rag.content.extract'
 export const RAG_CONTENT_EXTRACT_PROCESSOR_VERSION = 'v1'
@@ -97,7 +98,7 @@ function docxParagraphText(xml, noteText) {
   return text(parts.join(''))
 }
 
-function extractDocx(buffer) {
+function extractDocx(buffer, preserveSimpleTableRows = false) {
   const zip = archive(buffer)
   const xml = entryText(zip, 'word/document.xml')
   const notes = new Map()
@@ -149,9 +150,16 @@ function extractDocx(buffer) {
     if (noteBytes > MAX_ARTIFACT_BYTES) fail('WORKER_CONTENT_EXTRACT_ARTIFACT_TOO_LARGE')
     return result
   }
-  const paragraphs = [...xml.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/giu)]
-    .map((match) => docxParagraphText(match[1], noteText))
-    .filter(Boolean)
+  const readParagraphs = value => [...value.matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/giu)]
+    .map(match => docxParagraphText(match[1], noteText)).filter(Boolean)
+  const tables = preserveSimpleTableRows ? preserveDocxTableRows(xml, value => docxParagraphText(value, noteText)) : []
+  const paragraphs = []
+  let offset = 0
+  for (const table of tables) {
+    paragraphs.push(...readParagraphs(xml.slice(offset, table.start)), ...table.rows)
+    offset = table.end
+  }
+  paragraphs.push(...readParagraphs(xml.slice(offset)))
   if (paragraphs.length === 0) fail('WORKER_CONTENT_EXTRACT_EMPTY')
   return [{ ordinal: 0, title: 'Document', text: paragraphs.join('\n\n'), locator: { paragraphStart: 0, paragraphEnd: paragraphs.length - 1 } }]
 }
@@ -278,7 +286,7 @@ function normalizeTask(task) {
   return input
 }
 
-export function createRagContentExtractProcessor() {
+export function createRagContentExtractProcessor({ preserveSimpleTableRows = false } = {}) {
   return Object.freeze({
     supports(taskType) { return taskType === RAG_CONTENT_EXTRACT_TASK_TYPE },
     async process(task, stream, { signal } = {}) {
@@ -286,7 +294,7 @@ export function createRagContentExtractProcessor() {
       const buffer = await readInput(stream, input, signal)
       const sections = input.format === 'pdf'
         ? await extractPdf(buffer, signal)
-        : input.format === 'docx' ? extractDocx(buffer) : extractEpub(buffer)
+        : input.format === 'docx' ? extractDocx(buffer, preserveSimpleTableRows === true) : extractEpub(buffer)
       if (sections.length > MAX_SECTION_COUNT) fail('WORKER_CONTENT_EXTRACT_ARTIFACT_TOO_LARGE')
       const artifact = { schemaVersion: 1, format: input.format, sections }
       const serialized = JSON.stringify(artifact)
@@ -299,7 +307,8 @@ export function createRagContentExtractProcessor() {
         output: {
           sourceVersionId: input.sourceVersionId,
           sourceContentSha256: input.sourceContentSha256,
-          extractorVersion: RAG_CONTENT_EXTRACTOR_VERSION,
+          extractorVersion: input.format === 'docx' && preserveSimpleTableRows === true
+            ? `${RAG_CONTENT_EXTRACTOR_VERSION}-table-rows.v1` : RAG_CONTENT_EXTRACTOR_VERSION,
           artifactSha256,
           artifactBytes,
           sectionCount: sections.length,

@@ -32,6 +32,40 @@ function docx() {
   return zip.toBuffer()
 }
 
+test('optional DOCX row preservation binds cells, escapes literals and leaves the default identity unchanged', async () => {
+  const p = value => `<w:p><w:r><w:t>${value}</w:t></w:r></w:p>`
+  const row = values => `<w:tr>${values.map(v => `<w:tc>${p(v)}</w:tc>`).join('')}</w:tr>`
+  const zip = new AdmZip()
+  zip.addFile('word/document.xml', Buffer.from(`<w:document><w:body><w:p/><w:tbl>${row(['Object', 'Condition'])}${row(['A &amp; B', '&lt;later&gt; &amp;amp;'])}${row(['C', 'before noon'])}</w:tbl></w:body></w:document>`))
+  const bytes = zip.toBuffer()
+  const baseline = await createRagContentExtractProcessor().process(task('docx', bytes), Readable.from([bytes]))
+  const candidate = await createRagContentExtractProcessor({ preserveSimpleTableRows: true }).process(task('docx', bytes), Readable.from([bytes]))
+  assert.equal(baseline.artifact.sections[0].text, 'Object\n\nCondition\n\nA & B\n\n<later> &amp;\n\nC\n\nbefore noon')
+  assert.equal(candidate.artifact.sections[0].text, '| Object | Condition |\n\n| A & B | <later> &amp; |\n\n| C | before noon |')
+  assert.equal(baseline.output.extractorVersion, RAG_CONTENT_EXTRACTOR_VERSION)
+  assert.equal(candidate.output.extractorVersion, `${RAG_CONTENT_EXTRACTOR_VERSION}-table-rows.v1`)
+  assert.notEqual(candidate.output.artifactSha256, baseline.output.artifactSha256)
+})
+
+test('optional DOCX row preservation keeps checklists, merges and nested tables on the existing path', async () => {
+  const p = value => `<w:p><w:r><w:t>${value}</w:t></w:r></w:p>`
+  const cell = value => `<w:tc>${p(value)}</w:tc>`
+  const cases = [
+    `<w:tbl><w:tr>${cell('Task')}${cell('Tick')}</w:tr><w:tr>${cell('Do only after approval')}${cell(' ')}</w:tr></w:tbl>`,
+    `<w:tbl><w:tr>${cell('A')}${cell('B')}</w:tr><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr>${p('Merged condition')}</w:tc></w:tr></w:tbl>`,
+    `<w:tbl><w:tr>${cell('A')}${cell('B')}</w:tr><w:tr><w:tc><w:tbl><w:tr>${cell('Nested')}${cell('condition')}</w:tr></w:tbl></w:tc>${cell('Outer')}</w:tr></w:tbl>`,
+    `<w:tbl><w:tr>${cell('A')}${cell('B')}</w:tr><w:tr><w:trPr><w:gridBefore w:val="1"/></w:trPr>${cell('C')}${cell('D')}</w:tr></w:tbl>`
+  ]
+  for (const table of cases) {
+    const zip = new AdmZip()
+    zip.addFile('word/document.xml', Buffer.from(`<w:document><w:body>${p('Before')}${table}${p('After')}</w:body></w:document>`))
+    const bytes = zip.toBuffer()
+    const baseline = await createRagContentExtractProcessor().process(task('docx', bytes), Readable.from([bytes]))
+    const candidate = await createRagContentExtractProcessor({ preserveSimpleTableRows: true }).process(task('docx', bytes), Readable.from([bytes]))
+    assert.deepEqual(candidate.artifact, baseline.artifact)
+  }
+})
+
 function epub(body = '<h1>Hello</h1><p>Grounded text.</p>') {
   const zip = new AdmZip()
   zip.addFile('META-INF/container.xml', Buffer.from('<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>'))
