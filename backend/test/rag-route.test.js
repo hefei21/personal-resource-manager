@@ -438,6 +438,46 @@ function retrieval() {
   }
 }
 
+test('source navigation is built from authorized resource identity, not model links or private locators', async () => {
+  const cases = [
+    ['document', { route: '/documents', documentId: 7 }, '/documents?documentId=7'],
+    ['ebook', { route: '/books', bookId: 7, chapterIndex: 0 }, '/books?bookId=7&chapterIndex=0'],
+    ['code_repository', { route: '/code', repositoryId: 7, path: 'guide/read me.md', commit: 'a'.repeat(40), startLine: 12 }, `/code?repositoryId=7&path=guide%2Fread+me.md&commit=${'a'.repeat(40)}&line=12`],
+    ['document', { route: '/documents', documentId: 8 }, null],
+    ['document', { route: 'https://example.com', documentId: 7 }, null],
+    ['code_repository', { route: '/code', repositoryId: 7, path: '../private.md', commit: 'a'.repeat(40) }, null],
+    ['code_repository', { route: '/code', repositoryId: 7, path: 'C:\\private.md', commit: 'a'.repeat(40) }, null],
+    ['code_repository', { route: '/code', repositoryId: 7, path: 'guide.md', commit: 'unbound' }, null]
+  ]
+  for (const [sourceType, locator, expected] of cases) {
+    for (const revoked of [false, true]) {
+      let visible = true
+      const router = createRagRouter({ databaseProvider: () => ({}), taskStoreProvider: () => null,
+        authoritativeChecksFactory: () => ({ authoritativeVisibility: () => visible, authoritativeActiveSnapshot: () => true }),
+        candidateProvider: async () => ({ ftsCandidates: [] }),
+        hybridRetrieverFactory: () => ({ retrieve: async () => ({ ...retrieval(), data: [{ ...retrieval().data[0], sourceType, locator, openUrl: 'https://example.com/unsafe' }] }) }),
+        answerServiceFactory: () => ({ generate: async () => {
+          if (revoked) visible = false
+          return { status: 'complete', answer: 'Answer', citations: [{ citationId: 'C1', openUrl: 'https://example.com/unsafe' }] }
+        } })
+      })
+      await withServer(router, async base => {
+        const response = await fetch(`${base}/api/rag/queries`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-principal': 'owner' }, body: JSON.stringify({ query: 'find evidence' }) })
+        assert.equal(response.status, 200)
+        const { data } = await response.json()
+        if (revoked) assert.deepEqual(data.evidence, [])
+        else {
+          assert.equal(data.evidence[0].openUrl ?? null, expected)
+          assert.equal(data.evidence[0].locator.documentId, undefined)
+          assert.equal(data.evidence[0].locator.commit, undefined)
+        }
+        assert.doesNotMatch(JSON.stringify(data.evidence.map(item => item.openUrl)), /example\.com|private\.md/u)
+        assert.equal(data.citations[0]?.openUrl, undefined)
+      })
+    }
+  }
+})
+
 test('evidence-first response uses authorized source text, bounds excerpts and rechecks after generation', async () => {
   for (const mode of ['plain', 'concept', 'long', 'sensitive', 'revoked']) {
     let visible = true

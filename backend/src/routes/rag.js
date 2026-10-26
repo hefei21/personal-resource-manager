@@ -1119,6 +1119,35 @@ function publicCitation(item, index) {
   return citation
 }
 
+// Build navigation only from re-authorized retrieval evidence, never a model URL
+// or the redacted public locator. Resource pages enforce authorization again.
+function evidenceOpenUrl(item) {
+  const locator = item?.locator
+  const destinations = {
+    document: ['/documents', 'documentId'],
+    ebook: ['/books', 'bookId'],
+    code_repository: ['/code', 'repositoryId']
+  }
+  const destination = destinations[item?.sourceType]
+  if (!Array.isArray(destination) || !Number.isSafeInteger(item.sourceId) || item.sourceId <= 0 ||
+      locator?.route !== destination[0] || locator[destination[1]] !== item.sourceId) return null
+  const params = new URLSearchParams({ [destination[1]]: String(item.sourceId) })
+  if (item.sourceType === 'ebook' && Number.isSafeInteger(locator.chapterIndex) && locator.chapterIndex >= 0) {
+    params.set('chapterIndex', String(locator.chapterIndex))
+  }
+  if (item.sourceType === 'code_repository') {
+    if (typeof locator.path !== 'string' || !locator.path ||
+        /^[A-Za-z]:|^[\\/]/u.test(locator.path) || locator.path.includes('\\') ||
+        locator.path.split('/').some(part => !part || part === '.' || part === '..') ||
+        !isSafeRagText(locator.path) || !/^[a-f0-9]{40,64}$/u.test(locator.commit ?? '')) return null
+    params.set('path', locator.path)
+    params.set('commit', locator.commit)
+    const line = locator.line ?? locator.startLine
+    if (Number.isSafeInteger(line) && line > 0) params.set('line', String(line))
+  }
+  return `${destination[0]}?${params}`
+}
+
 function referenceCitations(evidence) {
   return Array.isArray(evidence) ? evidence.map(publicCitation) : []
 }
@@ -1213,7 +1242,9 @@ function projectAnswer(answer, retrieval, runId, authorizedEvidence = []) {
     evidence: authorizedEvidence.slice(0, 16).map((item, index) => {
       const text = safeAnswerText(item.body)
       const { title, locator } = publicCitation(item, index)
+      const openUrl = evidenceOpenUrl(item)
       return { label: `E${index + 1}`, ...(title ? { title } : {}), locator,
+        ...(openUrl ? { openUrl } : {}),
         excerpt: text?.slice(0, 800) ?? '', excerptTruncated: Boolean(text && text.length > 800),
         excerptUnavailable: !text }
     })
