@@ -385,7 +385,9 @@ export class RagAnswerService {
       taskType: RAG_ANSWER_TASK_TYPE,
       processorVersion: this.processorVersion,
       subjectType: TASK_SUBJECT_TYPE,
-      subjectId: `answer-${querySha256.slice(0, 32)}`,
+      // The same question under a different runtime contract must not collide
+      // with an older task's immutable input or reuse its completed answer.
+      subjectId: `answer-${sha256(JSON.stringify({ querySha256, model: projectedInput.model })).slice(0, 32)}`,
       subjectVersionId: querySha256,
       subjectContentSha256: evidenceHash,
       input: projectedInput,

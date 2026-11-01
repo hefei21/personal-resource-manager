@@ -75,6 +75,26 @@ function service(overrides = {}) {
   })
 }
 
+test('answer task reuse is scoped to the normalized runtime identity', async () => {
+  const taskStore = taskStoreFake()
+  const input = { query: '如何恢复关闭的页面？', evidence: [evidence()] }
+  const original = await service({ taskStore }).generate(input)
+  const repeated = await service({ taskStore, model: { ...MODEL } }).generate(input)
+  assert.equal(repeated.task.id, original.task.id)
+  const changed = await service({ taskStore, model: {
+    ...MODEL, inputLimit: 8192, configHash: 'b'.repeat(64)
+  } }).generate(input)
+  assert.equal(changed.status, 'queued')
+  assert.notEqual(changed.task.id, original.task.id)
+  assert.equal(changed.task.subjectVersionId, original.task.subjectVersionId)
+  assert.equal(changed.task.subjectContentSha256, original.task.subjectContentSha256)
+  assert.deepEqual(original.task.input.model.configHash, MODEL.configHash)
+  const repeatedChanged = await service({ taskStore, model: {
+    ...MODEL, inputLimit: 8192, configHash: 'b'.repeat(64)
+  } }).generate(input)
+  assert.equal(repeatedChanged.task.id, changed.task.id)
+})
+
 test('duplicate abstention instruction candidate is opt-in and retains partial guidance', async () => {
   const run = (config = {}, conflict = false) => service({ config }).generate({ query: '比较½与1⁄2的适用条件', evidence: [evidence({ conflict })] })
   const baseline = await run()

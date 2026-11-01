@@ -4,6 +4,7 @@ import path from 'path'
 import fs from 'fs'
 import { randomUUID } from 'node:crypto'
 import AdmZip from 'adm-zip'
+import { parseEpubManifest } from '../services/epubManifest.js'
 import sharp from 'sharp'
 import { getDatabase } from '../config/database.js'
 import { getStoragePath } from '../config/storage.js'
@@ -1879,31 +1880,7 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
         }
         console.log('📖 Spine条目数:', spineItems.length)
 
-        // 解析manifest获取文件路径 - 支持多种格式
-        const manifest = {}
-        
-        // 方法1: 标准顺序 id -> href
-        const itemMatches1 = opfContent.matchAll(/<item[^>]*id=["']([^"']+)["'][^>]*href=["']([^"']+)["']/gi)
-        for (const match of itemMatches1) {
-          manifest[match[1]] = match[2]
-        }
-        
-        // 方法2: 反向顺序 href -> id
-        const itemMatches2 = opfContent.matchAll(/<item[^>]*href=["']([^"']+)["'][^>]*id=["']([^"']+)["']/gi)
-        for (const match of itemMatches2) {
-          manifest[match[2]] = match[1]
-        }
-        
-        // 方法3: 处理可能的多行情况
-        const itemMatches3 = opfContent.matchAll(/<item\s+([^>]*\n?[^>]*)\/>/gi)
-        for (const match of itemMatches3) {
-          const itemContent = match[1]
-          const idMatch = itemContent.match(/id=["']([^"']+)["']/i)
-          const hrefMatch = itemContent.match(/href=["']([^"']+)["']/i)
-          if (idMatch && hrefMatch && !manifest[idMatch[1]]) {
-            manifest[idMatch[1]] = hrefMatch[1]
-          }
-        }
+        const manifest = parseEpubManifest(opfContent)
         
         console.log('📖 Manifest条目数:', Object.keys(manifest).length)
         console.log('📖 Manifest前5项:', Object.entries(manifest).slice(0, 5))
@@ -2291,11 +2268,7 @@ router.get('/:id/chapters', authenticateToken, async (req, res) => {
         }
         
         // 解析manifest
-        const manifest = {}
-        const itemMatches = opfContent.matchAll(/<item[^>]*id=["']([^"']+)["'][^>]*href=["']([^"']+)["']/gi)
-        for (const match of itemMatches) {
-          manifest[match[1]] = match[2]
-        }
+        const manifest = parseEpubManifest(opfContent)
         
         // 构建章节列表（不含内容）
         let index = 0
