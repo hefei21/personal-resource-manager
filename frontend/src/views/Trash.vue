@@ -2,7 +2,7 @@
   <div class="trash-page">
     <div class="trash-intro">
       <div>
-        <p>集中管理文档、电子书、音频和个人笔记的删除与恢复；文档历史版本仍在文档详情中管理。</p>
+        <p>集中管理文档、电子书、音频、个人笔记、书签、游戏和动漫的删除与恢复；文档历史版本仍在文档详情中管理。</p>
         <span>系统不会在此页面自动永久删除资源。到期条目只会标记为可清理。</span>
       </div>
       <NativeButton variant="outline" :loading="loading" @click="loadTrash">

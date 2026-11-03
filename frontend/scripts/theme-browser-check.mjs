@@ -13,6 +13,7 @@ const browser=await chromium.launch({headless:true,...(process.env.THEME_BROWSER
 const book={id:701,title:'山间书信：关于生活与观察的长篇记录',author:'合成作者',fileType:'txt',fileSize:2048,progress:24,categoryName:'随笔',chapterCount:1}
 const document={id:702,title:'项目设计与日常记录',fileType:'txt',fileSize:2048,currentVersion:1,version:1,tags:['设计'],updatedAt:'2026-09-20T08:00:00Z',createdAt:'2026-09-20T08:00:00Z'}
 const requests=new Set(), errors=[], results=[]
+const extended = process.env.THEME_EXTENDED_ONLY === '1'
 function contrastAudit(){
  const failures=[]
  const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const ctx=canvas.getContext('2d',{willReadFrequently:true})
@@ -49,7 +50,7 @@ async function fixture(route){
  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)})
 }
 try{
- for(const width of [1440,390])for(const theme of ['light','dark']){
+ for(const width of (extended ? [] : [1440,390]))for(const theme of ['light','dark']){
   const context=await browser.newContext({viewport:{width,height:960},colorScheme:theme,reducedMotion:'reduce',isMobile:width<768,hasTouch:width<768})
   await context.route(`${base}/api/**`,fixture)
   const page=await context.newPage();page.on('pageerror',e=>errors.push({width,theme,error:e.message}))
@@ -134,19 +135,31 @@ try{
   await page.screenshot({path:`${out}/${width}-${theme}-controls.png`,fullPage:true})
   await context.close()
  }
- for(const width of [360,768,3840]){
-  const context=await browser.newContext({viewport:{width,height:1000},colorScheme:'dark',reducedMotion:'reduce',isMobile:width<=768,hasTouch:width<=768})
+ for(const width of (extended ? (process.env.THEME_WIDTHS?.split(',').map(Number) || [360,390,768,1440,3840]) : [360,768,3840])) for(const theme of (extended ? ['light','dark'] : ['dark'])){
+  const context=await browser.newContext({viewport:{width,height:1000},colorScheme:theme,reducedMotion:'reduce',isMobile:width<=768,hasTouch:width<=768})
   await context.route(`${base}/api/**`,fixture);const page=await context.newPage();page.on('pageerror',e=>errors.push({width,error:e.message}))
-  for(const path of ['documents','books','blog']){
+  for(const path of (extended ? (process.env.THEME_PATHS?.split(',') || ['dashboard','documents','books','code','music','blog','bookmarks','games','anime','trash','search','tasks',width<=768?'more':'system']) : ['documents','books','blog'])){
    await page.goto(base+'/'+path);await page.waitForFunction(()=>document.body.innerText.trim().length>35,null,{timeout:15000});await page.locator('.global-loading-overlay').waitFor({state:'hidden',timeout:10000});await page.waitForTimeout(300)
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+2),false,`${path} ${width} overflow`)
-   results.push({width,theme:'dark',path,contrast:await page.evaluate(contrastAudit)})
+   results.push({width,theme,path,contrast:await page.evaluate(contrastAudit)})
+   if(extended){
+    if(['dashboard','documents','tasks'].includes(path)&&[360,1440,3840].includes(width))await page.screenshot({path:`${out}/${width}-${theme}-${path}.png`})
+    // Double each computed text size independently, including px-based typography.
+    await page.evaluate(()=>{
+     const values=[...document.body.querySelectorAll('*')].map(e=>[e,getComputedStyle(e).fontSize])
+     for(const [e,size] of values)e.style.fontSize=`${parseFloat(size)*2}px`
+    })
+    const enlarged=await page.evaluate(()=>({overflow:document.documentElement.scrollWidth>innerWidth+2, viewport:innerWidth, scrollWidth:document.documentElement.scrollWidth}))
+    results.push({width,theme,path:`${path}-text200`,...enlarged})
+    if(enlarged.overflow)await page.screenshot({path:`${out}/${width}-${theme}-${path}-text200.png`})
+   }
   }
   await context.close()
  }
  assert.deepEqual(errors,[])
  const failures=results.flatMap(row=>(row.contrast||[]).map(failure=>({width:row.width,theme:row.theme,path:row.path,...failure})))
- console.log(JSON.stringify({checks:results.length,themeControls:4,errors,contrastFailures:failures.length,output:out},null,2))
+ console.log(JSON.stringify({checks:results.length,themeControls:extended?0:4,errors,contrastFailures:failures.length,output:out},null,2))
  await writeFile(`${out}/results.json`,JSON.stringify({results,errors,requests:[...requests]},null,2))
  assert.deepEqual(failures,[],'Visible text contrast regression')
+ assert.deepEqual(results.filter(row=>row.overflow),[],'200% text page overflow')
 }finally{await browser.close()}

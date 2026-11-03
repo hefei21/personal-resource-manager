@@ -163,7 +163,8 @@ function close() {
 
 // ESC 关闭
 function handleEsc(e) {
-  if (e.key === 'Escape' && props.modelValue && props.closeOnEsc) {
+  if (e.key === 'Escape' && !e.defaultPrevented && drawerRef.value?.contains(e.target) && props.modelValue && props.closeOnEsc) {
+    e.preventDefault()
     close()
   }
 }

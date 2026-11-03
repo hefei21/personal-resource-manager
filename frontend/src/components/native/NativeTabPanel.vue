@@ -1,11 +1,11 @@
 <template>
-  <div v-show="isActive" class="native-tab-panel">
+  <div v-show="isActive" class="native-tab-panel" role="tabpanel" :id="tabs?.panelId(name)" :aria-labelledby="tabs?.tabId(name)" tabindex="0">
     <slot></slot>
   </div>
 </template>
 
 <script setup>
-import { inject, computed, onMounted, onUnmounted, getCurrentInstance, ref } from 'vue'
+import { inject, computed, onMounted, onUnmounted } from 'vue'
 
 const props = defineProps({
   label: { type: String, required: true },
@@ -25,21 +25,12 @@ const isActive = computed(() => {
   return tabs.activeName.value === props.name
 })
 
-const instance = getCurrentInstance()
-
 onMounted(() => {
-  tabs.addTab({
-    label: props.label,
-    name: props.name,
-    icon: props.icon,
-    badge: props.badge,
-    disabled: props.disabled,
-    uid: instance.uid
-  })
+  tabs?.addTab(props)
 })
 
 onUnmounted(() => {
-  tabs.removeTab(props.name)
+  tabs?.removeTab(props.name)
 })
 </script>
 

@@ -3,11 +3,12 @@
     v-if="useRekaSelect"
     :model-value="rekaModelValue"
     :disabled="disabled"
+    :open="rekaOpen"
     @update:model-value="handleRekaValueChange"
     @update:open="rekaOpen = $event"
   >
     <div
-      v-bind="attrs"
+      v-bind="wrapperAttrs()"
       class="native-select native-select--reka"
       :class="[
         attrs.class,
@@ -19,6 +20,7 @@
       ]"
     >
       <SelectTrigger
+        v-bind="fieldAttrs()"
         class="native-select__trigger"
         :class="{ 'native-select--disabled': disabled }"
         :aria-label="attrs['aria-label'] || placeholder"
@@ -68,9 +70,10 @@
     </div>
   </SelectRoot>
 
-  <div v-else ref="selectRef" v-bind="attrs" class="native-select" :class="[attrs.class, { 'native-select--open': isOpen, 'native-select--multiple': multiple, 'native-select--filterable': filterable, [`native-select--${size}`]: true }]">
+  <div v-else ref="selectRef" v-bind="wrapperAttrs()" class="native-select" :class="[attrs.class, { 'native-select--open': isOpen, 'native-select--multiple': multiple, 'native-select--filterable': filterable, [`native-select--${size}`]: true }]">
     <div 
       ref="triggerRef"
+      v-bind="fieldAttrs()"
       class="native-select__trigger" 
       :class="{ 'native-select--disabled': disabled }"
       :tabindex="disabled ? -1 : 0"
@@ -89,6 +92,7 @@
           <span v-for="val in selectedValues.slice(0, maxTagCount)" :key="val" class="native-select__tag">
             {{ getOptionLabel(val) }}
             <button
+              v-if="!disabled"
               type="button"
               class="native-select__tag-close"
               :aria-label="`移除${getOptionLabel(val)}`"
@@ -140,7 +144,8 @@
       </span>
     </div>
     <Teleport to="body">
-      <div v-if="isOpen" ref="dropdownRef" class="native-select__dropdown" :style="dropdownStyle" @click.stop>
+      <FocusScope v-if="isOpen" as-child @mount-auto-focus="focusCustomInput" @unmount-auto-focus.prevent>
+      <div ref="dropdownRef" class="native-select__dropdown" :style="dropdownStyle" @click.stop>
         <div v-if="filterable" class="native-select__filter-dropdown">
           <input 
             ref="dropdownFilterInput"
@@ -191,13 +196,16 @@
           </div>
         </div>
       </div>
+      </FocusScope>
     </Teleport>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted, useAttrs } from 'vue'
+import { useNativeFormField } from '@/composables/useNativeFormField'
 import {
+  FocusScope,
   SelectContent,
   SelectItem,
   SelectItemText,
@@ -250,6 +258,11 @@ const props = defineProps({
 
 const emit = defineEmits(['update:modelValue', 'change'])
 const attrs = useAttrs()
+const { fieldAttrs } = useNativeFormField(attrs)
+function wrapperAttrs() {
+  const { id, 'aria-labelledby': labelledBy, 'aria-describedby': describedBy, 'aria-invalid': invalid, 'aria-required': required, ...rest } = attrs
+  return rest
+}
 
 const hasSingleValue = computed(() => (
   props.modelValue !== '' && props.modelValue !== null && props.modelValue !== undefined
@@ -266,7 +279,7 @@ const rekaModelValue = computed(() => {
 function handleRekaValueChange(token) {
   const index = Number.parseInt(String(token).replace('native-select-option-', ''), 10)
   const option = props.options[index]
-  if (!option || option.disabled) return
+  if (props.disabled || !option || option.disabled) return
   emit('update:modelValue', option.value)
   emit('change', option.value)
 }
@@ -291,13 +304,14 @@ function documentClickHandler(event) {
   if (!isOpen.value) return
   
   const target = event.target
+  const path = event.composedPath?.() || []
   
   // 如果点击的是 trigger 元素或其子元素，不处理（由 trigger 的点击事件处理）
-  if (triggerRef.value && triggerRef.value.contains(target)) return
+  if (triggerRef.value && (path.includes(triggerRef.value) || triggerRef.value.contains(target))) return
   
   // 如果点击的是 dropdown 元素或其子元素，不关闭
   // 由于 dropdown 被 Teleport 到 body，需要通过 ref 检查
-  if (dropdownRef.value && dropdownRef.value.contains(target)) return
+  if (dropdownRef.value && (path.includes(dropdownRef.value) || dropdownRef.value.contains(target))) return
   
   // 点击了外部，关闭下拉框
   close()
@@ -494,14 +508,13 @@ function initialActiveIndex() {
 
 function scrollActiveOption() {
   const element = optionRefs.value[activeIndex.value]
-  if (!element || typeof element.scrollIntoView !== 'function') return
-
-  try {
-    element.scrollIntoView({ block: 'nearest' })
-  } catch {
-    // Some embedded browsers expose scrollIntoView without accepting options.
-    element.scrollIntoView()
-  }
+  const container = element?.closest('.native-select__options-list') || dropdownRef.value
+  if (!element || !container) return
+  // Scroll only the options, never the page while the portal is being positioned.
+  const option = element.getBoundingClientRect()
+  const viewport = container.getBoundingClientRect()
+  if (option.top < viewport.top) container.scrollTop -= viewport.top - option.top
+  else if (option.bottom > viewport.bottom) container.scrollTop += option.bottom - viewport.bottom
 }
 
 function open() {
@@ -525,6 +538,12 @@ function open() {
     }
   })
   startPositionListeners()
+}
+
+function focusCustomInput(event) {
+  event.preventDefault()
+  const input = props.multiple ? dropdownFilterInput.value : filterInput.value
+  ;(props.filterable ? input : triggerRef.value)?.focus({ preventScroll: true })
 }
 
 function close({ focusTrigger = false } = {}) {
@@ -562,6 +581,7 @@ function selectActiveOption() {
 
 function handleKeyboardEvent(event) {
   if (props.disabled) return
+  if (event.target?.closest?.('button') && event.target !== triggerRef.value) return
 
   const { key } = event
   const isFilterInput = isFilterInputTarget(event)
@@ -627,7 +647,7 @@ function handleOptionMouseEnter(index) {
 }
 
 function selectOption(option, index = -1) {
-  if (option.disabled) return
+  if (props.disabled || option.disabled) return
 
   if (index >= 0) activeIndex.value = index
   
@@ -649,6 +669,7 @@ function selectOption(option, index = -1) {
 }
 
 function removeTag(value) {
+  if (props.disabled) return
   if (props.multiple) {
     const currentValues = Array.isArray(props.modelValue) ? [...props.modelValue] : []
     const index = currentValues.indexOf(value)
@@ -661,6 +682,7 @@ function removeTag(value) {
 }
 
 function clearSelection() {
+  if (props.disabled) return
   if (props.multiple) {
     emit('update:modelValue', [])
     emit('change', [])
@@ -670,6 +692,13 @@ function clearSelection() {
   }
   filterText.value = ''
 }
+
+watch(() => props.disabled, disabled => {
+  if (disabled) {
+    close()
+    rekaOpen.value = false
+  }
+})
 
 watch(filteredOptions, (options, previousOptions = []) => {
   optionRefs.value = []

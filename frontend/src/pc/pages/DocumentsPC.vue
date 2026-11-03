@@ -3011,7 +3011,7 @@ onMounted(async () => {
 
 .documents {
   width: 100%;
-  max-width: 1900px;
+  max-width: 100%;
   margin: 0 auto;
 }
 

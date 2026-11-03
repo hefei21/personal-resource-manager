@@ -26,7 +26,9 @@ test('reka-ui stays behind Native component wrappers', () => {
 
   assert.deepEqual(directImports, [
     'components/native/NativeDialog.vue',
-    'components/native/NativeSelect.vue'
+    'components/native/NativePopconfirm.vue',
+    'components/native/NativeSelect.vue',
+    'components/native/NativeTreeSelect.vue'
   ])
 })
 

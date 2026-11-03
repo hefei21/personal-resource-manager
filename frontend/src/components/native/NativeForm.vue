@@ -5,7 +5,7 @@
 </template>
 
 <script setup>
-import { provide, reactive, computed } from 'vue'
+import { provide, reactive } from 'vue'
 
 const props = defineProps({
   modelValue: { type: Object, default: () => ({}) },
@@ -22,17 +22,18 @@ const emit = defineEmits(['submit', 'validate'])
 const errors = reactive({})
 
 // 提供给子组件的上下文
-const formContext = computed(() => ({
-  layout: props.layout,
-  labelWidth: props.labelWidth,
-  labelAlign: props.labelAlign,
-  disabled: props.disabled,
+const formContext = reactive({
+  get layout() { return props.layout },
+  get labelWidth() { return props.labelWidth },
+  get labelAlign() { return props.labelAlign },
+  get disabled() { return props.disabled },
+  get rules() { return props.rules },
   errors,
   validateField,
   clearValidate
-}))
+})
 
-provide('nativeForm', formContext.value)
+provide('nativeForm', formContext)
 
 // 验证单个字段
 async function validateField(fieldName) {
@@ -61,7 +62,7 @@ async function validateField(fieldName) {
     }
     
     // 正则验证
-    if (rule.pattern && value && !rule.pattern.test(value)) {
+    if (rule.pattern && value && !new RegExp(rule.pattern).test(value)) {
       errors[fieldName] = rule.message || '格式不正确'
       return false
     }

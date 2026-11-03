@@ -8,17 +8,17 @@
       'native-form-item--vertical': layout === 'vertical'
     }"
   >
-    <label v-if="label || $slots.label" class="native-form-item__label" :style="labelStyle">
+    <label v-if="label || $slots.label" :id="labelId" :for="firstControlId" class="native-form-item__label" :style="labelStyle">
       <slot name="label">{{ label }}</slot>
-      <span v-if="isRequired" class="required-mark">*</span>
+      <span v-if="isRequired" class="required-mark" aria-hidden="true">*</span>
     </label>
     <div class="native-form-item__content">
       <slot />
       <transition name="fade">
-        <div v-if="errorMessage" class="native-form-item__error">
+        <div v-if="errorMessage" :id="`${feedbackId}-error`" class="native-form-item__error" role="alert">
           {{ errorMessage }}
         </div>
-        <div v-else-if="tips" class="native-form-item__tips">
+        <div v-else-if="tips" :id="`${feedbackId}-tips`" class="native-form-item__tips">
           {{ tips }}
         </div>
       </transition>
@@ -27,7 +27,7 @@
 </template>
 
 <script setup>
-import { computed, inject } from 'vue'
+import { computed, inject, provide, ref, useId, useSlots } from 'vue'
 
 const props = defineProps({
   label: { type: String, default: '' },
@@ -72,7 +72,7 @@ const labelStyle = computed(() => {
 // 是否必填
 const isRequired = computed(() => {
   if (props.required) return true
-  return props.rules.some(rule => rule.required)
+  return [...props.rules, ...(formContext.rules?.[props.name] || [])].some(rule => rule.required)
 })
 
 // 错误信息
@@ -85,6 +85,26 @@ const errorMessage = computed(() => {
 
 // 是否有错误
 const hasError = computed(() => !!errorMessage.value)
+const itemId = `native-form-item-${useId()}`
+const slots = useSlots()
+const labelId = computed(() => props.label || slots.label ? `${itemId}-label` : undefined)
+const feedbackId = `${itemId}-feedback`
+const firstControlId = ref()
+const controls = new Set()
+provide('nativeFormItem', {
+  labelId,
+  descriptionId: computed(() => errorMessage.value ? `${feedbackId}-error` : props.tips ? `${feedbackId}-tips` : undefined),
+  invalid: hasError,
+  required: isRequired,
+  register(id) {
+    controls.add(id)
+    firstControlId.value = controls.values().next().value
+    return () => {
+      controls.delete(id)
+      firstControlId.value = controls.values().next().value
+    }
+  }
+})
 </script>
 
 <style scoped>

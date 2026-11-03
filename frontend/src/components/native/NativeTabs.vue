@@ -2,23 +2,31 @@
   <div class="native-tabs" :class="[`native-tabs--${type}`, `native-tabs--${size}`, { 'native-tabs--center': center }]">
     <!-- 标签头 -->
     <div class="native-tabs__header">
-      <div class="native-tabs__nav">
-        <div
+      <div ref="navRef" class="native-tabs__nav" role="tablist" aria-label="内容视图">
+        <button
           v-for="(tab, index) in tabs"
           :key="tab.name"
           class="native-tabs__tab"
+          type="button"
+          role="tab"
+          :id="tabId(tab.name)"
+          :aria-controls="panelId(tab.name)"
+          :aria-selected="activeName === tab.name"
+          :disabled="tab.disabled"
+          :tabindex="activeName === tab.name ? 0 : -1"
           :class="{
             'native-tabs__tab--active': activeName === tab.name,
             'native-tabs__tab--disabled': tab.disabled
           }"
           @click="handleTabClick(tab, index)"
+          @keydown="handleTabKeydown($event, index)"
         >
           <slot name="label" :tab="tab" :index="index">
             <NativeIcon v-if="tab.icon" :name="tab.icon" size="14" />
             <span>{{ tab.label }}</span>
             <span v-if="tab.badge" class="native-tabs__badge">{{ tab.badge }}</span>
           </slot>
-        </div>
+        </button>
         <!-- 激活下划线 -->
         <div v-if="type === 'line'" class="native-tabs__line" :style="lineStyle"></div>
       </div>
@@ -37,7 +45,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, provide, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, provide, onMounted, nextTick, useId } from 'vue'
 import NativeIcon from './NativeIcon.vue'
 
 const props = defineProps({
@@ -52,6 +60,10 @@ const emit = defineEmits(['update:modelValue', 'change', 'tabClick'])
 const tabs = ref([])
 const activeIndex = ref(0)
 const lineStyle = ref({})
+const navRef = ref(null)
+const instanceId = `native-tabs-${useId()}`
+const tabId = name => `${instanceId}-tab-${encodeURIComponent(name)}`
+const panelId = name => `${instanceId}-panel-${encodeURIComponent(name)}`
 
 const activeName = computed({
   get: () => props.modelValue,
@@ -65,7 +77,9 @@ provide('nativeTabs', {
   props,
   activeName,
   addTab,
-  removeTab
+  removeTab,
+  tabId,
+  panelId
 })
 
 // 添加标签
@@ -97,12 +111,25 @@ function handleTabClick(tab, index) {
   updateLineStyle()
 }
 
+function handleTabKeydown(event, index) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const enabled = tabs.value.map((tab, i) => tab.disabled ? -1 : i).filter(i => i >= 0)
+  if (!enabled.length) return
+  const position = enabled.indexOf(index)
+  const next = event.key === 'Home' ? enabled[0] : event.key === 'End' ? enabled.at(-1)
+    : enabled[(position + (event.key === 'ArrowRight' ? 1 : -1) + enabled.length) % enabled.length]
+  handleTabClick(tabs.value[next], next)
+  navRef.value?.querySelectorAll('[role="tab"]')[next]?.focus()
+}
+
 // 更新下划线位置
 function updateLineStyle() {
   if (props.type !== 'line') return
   
   nextTick(() => {
-    const tabEl = document.querySelectorAll('.native-tabs__tab')[activeIndex.value]
+    const selectedIndex = tabs.value.findIndex(tab => tab.name === activeName.value)
+    const tabEl = navRef.value?.querySelectorAll('.native-tabs__tab')[selectedIndex]
     if (tabEl) {
       lineStyle.value = {
         width: `${tabEl.offsetWidth}px`,
@@ -147,6 +174,8 @@ onMounted(() => {
 }
 
 .native-tabs__tab {
+  border: 0;
+  background: transparent;
   display: flex;
   align-items: center;
   gap: 6px;

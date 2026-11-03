@@ -5,6 +5,7 @@
         <tr>
           <th v-if="selectable" class="native-table__checkbox">
             <NativeCheckbox
+              aria-label="全选"
               :modelValue="isAllSelected"
               :indeterminate="isIndeterminate"
               @change="toggleSelectAll"
@@ -18,6 +19,10 @@
               'native-table__cell--sorted': sortKey === (col.key || col.dataIndex)
             }"
             :style="[{ textAlign: col.headerAlign || col.align || 'left' }, getCellStyle(col)]"
+            :tabindex="col.sorter ? 0 : undefined"
+            :aria-sort="col.sorter ? (sortKey === (col.key || col.dataIndex) && sortOrder ? (sortOrder === 'desc' ? 'descending' : 'ascending') : 'none') : undefined"
+            @keydown.enter.self.prevent="handleSort(col)"
+            @keydown.space.self.prevent="handleSort(col)"
             @click="handleSort(col)"
           >
             <slot :name="`header-${col.key || col.dataIndex}`" :column="col">
@@ -35,13 +40,14 @@
             v-for="(row, rowIndex) in dataSource"
             :key="getRowKey(row, rowIndex)"
             :class="{
-              'native-table__row--selected': isRowSelected(row),
+              'native-table__row--selected': isRowSelected(row, rowIndex),
               'native-table__row--hover': hover
             }"
             @click="handleRowClick(row, rowIndex)"
           >
             <td v-if="selectable" class="native-table__checkbox" @click.stop>
               <NativeCheckbox 
+                :aria-label="`选择第 ${rowIndex + 1} 行`"
                 :modelValue="selectedKeys.includes(getRowKey(row, rowIndex))"
                 @change="toggleSelectRow(row, rowIndex)"
               />
@@ -132,7 +138,7 @@ function getRowKey(row, index) {
   if (typeof props.rowKey === 'function') {
     return props.rowKey(row)
   }
-  return row[props.rowKey] || index
+  return row[props.rowKey] ?? index
 }
 
 // 获取单元格值
@@ -209,8 +215,8 @@ const isIndeterminate = computed(() => {
 })
 
 // 行是否被选中
-function isRowSelected(row) {
-  return selectedKeys.value.includes(getRowKey(row))
+function isRowSelected(row, index) {
+  return selectedKeys.value.includes(getRowKey(row, index))
 }
 
 // 切换全选

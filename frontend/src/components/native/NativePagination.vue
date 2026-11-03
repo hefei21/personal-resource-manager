@@ -1,8 +1,8 @@
 <template>
-  <div class="native-pagination">
+  <nav class="native-pagination" aria-label="分页">
     <!-- 每页条数选择器 -->
     <div v-if="showPageSize" class="native-pagination__size">
-      <select v-model="localPageSize" @change="handlePageSizeChange" class="native-pagination__select">
+      <select v-model="localPageSize" @change="handlePageSizeChange" class="native-pagination__select" aria-label="每页条数">
         <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }}条/页</option>
       </select>
     </div>
@@ -11,6 +11,7 @@
     <div class="native-pagination__pages">
       <!-- 上一页 -->
       <button 
+        type="button"
         class="native-pagination__btn" 
         :disabled="current <= 1"
         @click="goToPage(current - 1)"
@@ -23,8 +24,11 @@
       
       <!-- 页码 -->
       <button 
-        v-for="page in visiblePages" 
-        :key="page"
+        v-for="(page, index) in visiblePages"
+        :key="page === '...' ? `ellipsis-${index}` : page"
+        type="button"
+        :aria-label="page === '...' ? '更多页码' : `第 ${page} 页`"
+        :aria-current="page === current ? 'page' : undefined"
         class="native-pagination__btn"
         :class="{ 
           'native-pagination__btn--active': page === current,
@@ -38,6 +42,7 @@
       
       <!-- 下一页 -->
       <button 
+        type="button"
         class="native-pagination__btn" 
         :disabled="current >= totalPages"
         @click="goToPage(current + 1)"
@@ -48,7 +53,7 @@
         </svg>
       </button>
     </div>
-  </div>
+  </nav>
 </template>
 
 <script setup>
@@ -138,6 +143,7 @@ function handlePageSizeChange() {
 <style scoped>
 .native-pagination {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 16px;
@@ -151,6 +157,8 @@ function handlePageSizeChange() {
 
 .native-pagination__pages {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -217,5 +225,10 @@ function handlePageSizeChange() {
 .native-pagination__select:hover,
 .native-pagination__select:focus {
   border-color: var(--color-primary);
+}
+
+@media (max-width: 768px) {
+  .native-pagination__btn,
+  .native-pagination__select { min-width: 44px; min-height: 44px; }
 }
 </style>

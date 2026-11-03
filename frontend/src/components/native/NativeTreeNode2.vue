@@ -9,7 +9,11 @@
       :style="{ paddingLeft: level * 20 + 'px' }"
     >
       <!-- 展开图标 -->
-      <span 
+      <button
+        type="button"
+        :disabled="!showExpandIcon || isLoading"
+        :aria-label="`${isExpanded ? '收起' : '展开'} ${node[labelField]}`"
+        :aria-expanded="showExpandIcon ? isExpanded : undefined"
         class="native-tree-node__expand-icon"
         :class="{ 
           'native-tree-node__expand-icon--expanded': isExpanded,
@@ -20,7 +24,7 @@
         <NativeIcon v-if="isLoading" name="loading" size="14" class="loading-icon" />
         <NativeIcon v-else-if="showExpandIcon" name="chevron-right" size="14" />
         <span v-else class="native-tree-node__placeholder"></span>
-      </span>
+      </button>
       
       <!-- 复选框 -->
       <span v-if="checkable" class="native-tree-node__checkbox" @click.stop="toggleCheck">
@@ -38,7 +42,10 @@
       </span>
       
       <!-- 节点内容 -->
-      <div 
+      <button
+        type="button"
+        :disabled="node.disabled || !selectable"
+        :aria-pressed="isSelected"
         class="native-tree-node__label"
         :class="{ 'native-tree-node__label--selected': isSelected }"
         @click="handleSelect"
@@ -46,7 +53,7 @@
         <slot name="node" :node="node" :selected="isSelected">
           {{ node[labelField] }}
         </slot>
-      </div>
+      </button>
     </div>
     
     <!-- 子节点 -->
@@ -192,6 +199,9 @@ function toggleCheck() {
 }
 
 .native-tree-node__expand-icon {
+  border: 0;
+  padding: 0;
+  background: transparent;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -260,6 +270,12 @@ function toggleCheck() {
 }
 
 .native-tree-node__label {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
   flex: 1;
   color: var(--color-text-primary);
 }

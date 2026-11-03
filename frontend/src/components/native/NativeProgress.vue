@@ -1,5 +1,5 @@
 <template>
-  <div class="native-progress" :class="{ 'native-progress--inline': inline }">
+  <div class="native-progress" :class="{ 'native-progress--inline': inline }" role="progressbar" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="boundedPercentage" :aria-label="$attrs['aria-label'] || text || '进度'">
     <div 
       v-if="theme === 'line'" 
       class="native-progress__line"
@@ -9,14 +9,14 @@
         <div 
           class="native-progress__bar" 
           :class="`native-progress__bar--${status}`"
-          :style="{ width: `${percentage}%` }"
+          :style="{ width: `${boundedPercentage}%` }"
         >
           <div v-if="striped" class="native-progress__stripes"></div>
         </div>
       </div>
       <span v-if="!hideText" class="native-progress__text">
-        <slot :percentage="percentage">
-          {{ text || `${percentage}%` }}
+        <slot :percentage="boundedPercentage">
+          {{ text || `${boundedPercentage}%` }}
         </slot>
       </span>
     </div>
@@ -39,8 +39,8 @@
         />
       </svg>
       <span v-if="!hideText" class="native-progress__circle-text">
-        <slot :percentage="percentage">
-          {{ text || `${percentage}%` }}
+        <slot :percentage="boundedPercentage">
+          {{ text || `${boundedPercentage}%` }}
         </slot>
       </span>
     </div>
@@ -63,12 +63,13 @@ const props = defineProps({
   strokeWidth: { type: Number, default: 6 }
 })
 
+const boundedPercentage = computed(() => Number.isFinite(props.percentage) ? Math.min(100, Math.max(0, props.percentage)) : 0)
 const radius = computed(() => 50 - props.strokeWidth / 2)
 
 const circumference = computed(() => 2 * Math.PI * radius.value)
 
 const circleStyle = computed(() => {
-  const offset = circumference.value - (props.percentage / 100) * circumference.value
+  const offset = circumference.value - (boundedPercentage.value / 100) * circumference.value
   return {
     strokeDasharray: circumference.value,
     strokeDashoffset: offset,

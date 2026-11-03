@@ -1,11 +1,10 @@
 <template>
   <div class="native-input-wrapper" :class="attrs.class" :style="attrs.style">
     <input
-      v-bind="inputAttrs()"
+      v-bind="{ ...inputAttrs(), ...fieldAttrs() }"
       ref="inputRef"
       :class="['native-input', { 'native-input--clearable': clearable }]"
       :type="type"
-      :id="id"
       :name="name"
       :autocomplete="autocomplete"
       :value="modelValue"
@@ -36,6 +35,7 @@
 
 <script setup>
 import { ref, useAttrs } from 'vue'
+import { useNativeFormField } from '@/composables/useNativeFormField'
 
 defineOptions({ inheritAttrs: false })
 const attrs = useAttrs()
@@ -55,6 +55,7 @@ const props = defineProps({
   name: { type: String, default: undefined },
   autocomplete: { type: String, default: undefined }
 })
+const { fieldAttrs } = useNativeFormField(attrs, () => props.id)
 
 const emit = defineEmits(['update:modelValue', 'enter', 'clear', 'focus', 'blur'])
 

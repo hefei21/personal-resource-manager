@@ -1,24 +1,30 @@
 <template>
-  <div ref="pickerRef" class="native-date-range-picker" :class="{ 'native-date-range-picker--disabled': disabled }">
+  <div ref="pickerRef" class="native-date-range-picker" :class="{ 'native-date-range-picker--disabled': disabled }" v-click-outside="close" @keydown.esc.stop.prevent="closeAndFocus">
     <!-- 触发器 -->
-    <div 
+    <button
+      ref="triggerRef"
+      type="button"
+      :disabled="disabled"
+      aria-haspopup="dialog"
+      :aria-expanded="isOpen"
+      :aria-controls="panelId"
       class="native-date-range-picker__trigger" 
       @click="togglePicker"
       :class="{ 'native-date-range-picker__trigger--active': isOpen }"
     >
       <span v-if="displayValue" class="native-date-range-picker__value">{{ displayValue }}</span>
-      <span v-else class="native-date-range-picker__placeholder">{{ placeholder }}</span>
+      <span v-else class="native-date-range-picker__placeholder">{{ Array.isArray(placeholder) ? placeholder.join(' 至 ') : placeholder }}</span>
       <NativeIcon name="calendar" size="16" class="native-date-range-picker__icon" />
-    </div>
+    </button>
     
     <!-- 日期选择面板 -->
-    <div v-if="isOpen" class="native-date-range-picker__dropdown" :style="dropdownStyle" v-click-outside="close">
+    <div v-if="isOpen" :id="panelId" role="dialog" aria-label="日期范围" class="native-date-range-picker__dropdown" :style="dropdownStyle">
       <div class="native-date-range-picker__header">
-        <button class="native-date-range-picker__nav" @click="prevMonth">
+        <button type="button" aria-label="上个月" class="native-date-range-picker__nav" @click="prevMonth">
           <NativeIcon name="chevron-left" size="16" />
         </button>
         <span class="native-date-range-picker__current">{{ currentYear }}年{{ currentMonth + 1 }}月</span>
-        <button class="native-date-range-picker__nav" @click="nextMonth">
+        <button type="button" aria-label="下个月" class="native-date-range-picker__nav" @click="nextMonth">
           <NativeIcon name="chevron-right" size="16" />
         </button>
       </div>
@@ -34,6 +40,9 @@
           <button
             v-for="date in calendarDays"
             :key="date.date"
+            type="button"
+            :aria-label="formatDate(date.date)"
+            :aria-pressed="isSelected(date)"
             class="native-date-range-picker__day"
             :class="{
               'native-date-range-picker__day--other-month': !date.isCurrentMonth,
@@ -57,6 +66,7 @@
         <button
           v-for="preset in presets"
           :key="preset.label"
+          type="button"
           class="native-date-range-picker__preset"
           @click="applyPreset(preset)"
         >
@@ -66,15 +76,15 @@
       
       <!-- 底部按钮 -->
       <div class="native-date-range-picker__footer">
-        <button class="native-date-range-picker__btn native-date-range-picker__btn--text" @click="clear">清空</button>
-        <button class="native-date-range-picker__btn native-date-range-picker__btn--primary" @click="confirm">确定</button>
+        <button type="button" class="native-date-range-picker__btn native-date-range-picker__btn--text" @click="clear">清空</button>
+        <button type="button" class="native-date-range-picker__btn native-date-range-picker__btn--primary" @click="confirm">确定</button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted, useId } from 'vue'
 import NativeIcon from './NativeIcon.vue'
 import { vClickOutside } from './directives/clickOutside'
 
@@ -99,7 +109,7 @@ function getScrollParents(element) {
 const props = defineProps({
   modelValue: { type: Array, default: () => [null, null] },
   disabled: { type: Boolean, default: false },
-  placeholder: { type: String, default: '请选择日期范围' },
+  placeholder: { type: [String, Array], default: '请选择日期范围' },
   format: { type: String, default: 'YYYY-MM-DD' },
   presets: { type: Array, default: () => [] },
   minDate: { type: Date, default: null },
@@ -114,6 +124,8 @@ const selecting = ref(false) // 是否正在选择中（已选开始日期，未
 const tempStart = ref(null) // 临时开始日期
 const tempEnd = ref(null) // 临时结束日期
 const pickerRef = ref(null)
+const triggerRef = ref(null)
+const panelId = `native-date-range-${useId()}`
 const dropdownStyle = ref({})
 const scrollParents = ref([])
 let resizeObserver = null
@@ -379,21 +391,30 @@ function close() {
 
 // 确认选择
 function confirm() {
+  if (props.disabled) return
   const start = tempStart.value ? formatDate(tempStart.value) : null
   const end = tempEnd.value ? formatDate(tempEnd.value) : null
   emit('update:modelValue', [start, end])
   emit('change', [start, end])
-  close()
+  closeAndFocus()
 }
 
 // 清空
 function clear() {
+  if (props.disabled) return
   tempStart.value = null
   tempEnd.value = null
   emit('update:modelValue', [null, null])
   emit('change', [null, null])
-  close()
+  closeAndFocus()
 }
+
+function closeAndFocus() {
+  close()
+  triggerRef.value?.focus()
+}
+
+watch(() => props.disabled, disabled => { if (disabled) close() })
 
 // 上月
 function prevMonth() {
@@ -423,6 +444,8 @@ onUnmounted(() => {
 }
 
 .native-date-range-picker__trigger {
+  width: 100%;
+  text-align: left;
   display: flex;
   align-items: center;
   justify-content: space-between;

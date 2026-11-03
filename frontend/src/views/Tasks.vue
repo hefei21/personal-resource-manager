@@ -376,8 +376,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .tasks-page {
   width: 100%;
-  max-width: 1500px;
-  margin: 0 auto;
 }
 
 .tasks-toolbar {

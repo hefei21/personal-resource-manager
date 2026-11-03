@@ -9,12 +9,13 @@
     role="checkbox"
     :aria-checked="indeterminate ? 'mixed' : modelValue"
     :aria-disabled="disabled"
-    tabindex="0"
+    :tabindex="disabled ? -1 : 0"
     @keydown.enter.prevent="toggle"
     @keydown.space.prevent="toggle"
   >
     <input
       type="checkbox"
+      aria-hidden="true"
       :checked="modelValue"
       :disabled="disabled"
       @change="handleChange"
@@ -65,6 +66,7 @@ onMounted(() => {
 const emit = defineEmits(['update:modelValue', 'change'])
 
 function handleChange(e) {
+  if (props.disabled) return
   const checked = e.target.checked
   emit('update:modelValue', checked)
   emit('change', checked)

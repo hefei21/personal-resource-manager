@@ -10,14 +10,17 @@
       @click="handleClick"
     >
       <!-- 展开/折叠图标 -->
-      <span 
+      <button
         v-if="hasChildren"
+        type="button"
+        :aria-label="`${isExpanded ? '收起' : '展开'} ${node[labelKey]}`"
+        :aria-expanded="isExpanded"
         class="native-tree-node__expand"
         :class="{ 'native-tree-node__expand--expanded': isExpanded }"
         @click.stop="toggleExpand"
       >
         <NativeIcon name="chevron-right" size="14" />
-      </span>
+      </button>
       <span v-else class="native-tree-node__expand native-tree-node__expand--placeholder"></span>
       
       <!-- 多选框 -->
@@ -36,7 +39,7 @@
       </span>
       
       <!-- 节点标签 -->
-      <span class="native-tree-node__label">{{ node[labelKey] }}</span>
+      <button type="button" class="native-tree-node__label" :disabled="node.disabled" :aria-pressed="isSelected">{{ node[labelKey] }}</button>
     </div>
     
     <!-- 子节点 -->
@@ -138,6 +141,9 @@ function toggleSelect() {
 }
 
 .native-tree-node__expand {
+  border: 0;
+  padding: 0;
+  background: transparent;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -155,6 +161,17 @@ function toggleSelect() {
 
 .native-tree-node__expand--placeholder {
   cursor: default;
+}
+
+.native-tree-node__label {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: inherit;
 }
 
 .native-tree-node__checkbox {

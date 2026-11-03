@@ -1,11 +1,12 @@
 <template>
   <div 
     class="native-tag-input" 
-    :class="{ 
+    :style="attrs.style"
+    :class="[attrs.class, {
       'native-tag-input--focused': isFocused, 
       'native-tag-input--disabled': disabled,
       'native-tag-input--error': error
-    }"
+    }]"
     @click="focusInput"
   >
     <!-- 标签列表 -->
@@ -16,15 +17,16 @@
       :class="{ 'native-tag-input__tag--closable': !disabled }"
     >
       {{ tag }}
-      <span v-if="!disabled" class="native-tag-input__close" @click.stop="removeTag(index)">
+      <button v-if="!disabled" type="button" :aria-label="`移除 ${tag}`" class="native-tag-input__close" @click.stop="removeTag(index)">
         <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
           <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
         </svg>
-      </span>
+      </button>
     </span>
     
     <!-- 输入框 -->
     <input
+      v-bind="{ ...inputAttrs(), ...fieldAttrs() }"
       ref="inputRef"
       v-model="inputValue"
       class="native-tag-input__input"
@@ -49,7 +51,16 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, useAttrs } from 'vue'
+import { useNativeFormField } from '@/composables/useNativeFormField'
+
+const attrs = useAttrs()
+defineOptions({ inheritAttrs: false })
+const { fieldAttrs } = useNativeFormField(attrs)
+function inputAttrs() {
+  const { class: _class, style: _style, ...rest } = attrs
+  return rest
+}
 
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
@@ -88,6 +99,7 @@ function focusInput() {
 
 // 添加标签
 function addTag(event) {
+  if (props.disabled) return
   if (event?.isComposing || event?.keyCode === 229) return
   const value = inputValue.value.trim()
   if (!value) return
@@ -158,6 +170,7 @@ defineExpose({
   focus: focusInput,
   blur: () => inputRef.value?.blur(),
   clear: () => {
+    if (props.disabled) return
     tags.value = []
     inputValue.value = ''
   }
@@ -220,6 +233,10 @@ defineExpose({
 }
 
 .native-tag-input__close {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
   display: inline-flex;
   align-items: center;
   cursor: pointer;

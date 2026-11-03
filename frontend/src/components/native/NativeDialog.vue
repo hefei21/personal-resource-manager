@@ -155,6 +155,10 @@ function handleCancel() {
 }
 
 function handleEscapeKeyDown(event) {
+  if (isOwnedPortalInteraction(event)) {
+    event.preventDefault()
+    return
+  }
   if (!closeOnEscape.value) event.preventDefault()
 }
 
@@ -162,6 +166,7 @@ const ownedPortalSelector = [
   '.native-tree-select__dropdown',
   '.native-select__dropdown',
   '.native-date-range-picker__dropdown',
+  '.native-popconfirm__popup',
   '.native-dropdown__menu'
 ].join(', ')
 

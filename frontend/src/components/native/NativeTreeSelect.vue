@@ -1,8 +1,18 @@
 <template>
-  <div class="native-tree-select" :class="{ 'native-tree-select--disabled': disabled }" v-click-outside="close">
+  <div v-bind="wrapperAttrs()" class="native-tree-select" :class="{ 'native-tree-select--disabled': disabled }" v-click-outside="close">
     <!-- 触发器 -->
     <div 
       ref="triggerRef"
+      v-bind="fieldAttrs()"
+      role="combobox"
+      :tabindex="disabled ? -1 : 0"
+      :aria-disabled="disabled"
+      :aria-expanded="isOpen"
+      aria-haspopup="dialog"
+      :aria-label="$attrs['aria-label'] || placeholder"
+      @keydown.enter.self.prevent="toggleOpen"
+      @keydown.space.self.prevent="toggleOpen"
+      @keydown.esc.stop.prevent="closeAndFocus"
       class="native-tree-select__trigger" 
       @click="toggleOpen"
       :class="{ 'native-tree-select__trigger--active': isOpen }"
@@ -11,11 +21,11 @@
         <div class="native-tree-select__tags">
           <span v-for="(label, index) in selectedLabels.slice(0, maxTagCount)" :key="index" class="native-tree-select__tag">
             {{ label }}
-            <span class="native-tree-select__tag-close" @click.stop="removeTag(index)">
+            <button v-if="!disabled" type="button" :aria-label="`移除 ${label}`" class="native-tree-select__tag-close" @click.stop="removeTag(index)">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
                 <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
               </svg>
-            </span>
+            </button>
           </span>
           <span v-if="selectedLabels.length > maxTagCount" class="native-tree-select__tag native-tree-select__tag--more">
             +{{ selectedLabels.length - maxTagCount }}
@@ -29,13 +39,16 @@
     
     <!-- 下拉面板 -->
     <Teleport to="body">
+    <FocusScope v-if="isOpen" as-child loop trapped @unmount-auto-focus.prevent>
     <div
-      v-if="isOpen"
       ref="dropdownRef"
+      role="dialog"
+      aria-label="选择分类"
       class="native-tree-select__dropdown"
       :style="dropdownStyle"
       @pointerdown.stop
       @click.stop
+      @keydown.esc.stop.prevent="closeAndFocus"
     >
       <!-- 搜索框 -->
       <div v-if="filterable" class="native-tree-select__search">
@@ -43,6 +56,7 @@
         <input
           v-model="filterText"
           type="text"
+          aria-label="搜索分类"
           :placeholder="filterPlaceholder"
           @click.stop
         />
@@ -71,12 +85,15 @@
         {{ emptyText }}
       </div>
     </div>
+    </FocusScope>
     </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted, useAttrs } from 'vue'
+import { useNativeFormField } from '@/composables/useNativeFormField'
+import { FocusScope } from 'reka-ui'
 import NativeIcon from './NativeIcon.vue'
 import TreeNode from './NativeTreeNode.vue'
 
@@ -98,6 +115,13 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
+defineOptions({ inheritAttrs: false })
+const attrs = useAttrs()
+const { fieldAttrs } = useNativeFormField(attrs)
+function wrapperAttrs() {
+  const { id, 'aria-labelledby': labelledBy, 'aria-describedby': describedBy, 'aria-invalid': invalid, 'aria-required': required, ...rest } = attrs
+  return rest
+}
 
 const isOpen = ref(false)
 const triggerRef = ref(null)
@@ -111,7 +135,7 @@ const selectedValues = computed(() => {
   if (props.multiple) {
     return Array.isArray(props.modelValue) ? props.modelValue : []
   }
-  return props.modelValue ? [props.modelValue] : []
+  return props.modelValue !== '' && props.modelValue != null ? [props.modelValue] : []
 })
 
 // 选中的标签
@@ -152,7 +176,7 @@ function filterTree(nodes, keyword) {
   for (const node of nodes) {
     const children = node[props.childrenKey] || []
     const filteredChildren = filterTree(children, keyword)
-    const match = node[props.labelKey].toLowerCase().includes(keyword.toLowerCase())
+    const match = String(node[props.labelKey] ?? '').toLowerCase().includes(keyword.toLowerCase())
     
     if (match || filteredChildren.length > 0) {
       result.push({
@@ -177,6 +201,7 @@ function toggleExpand(node) {
 
 // 选择节点
 function selectNode(node) {
+  if (props.disabled || node.disabled) return
   const value = node[props.valueKey]
   
   if (props.multiple) {
@@ -192,12 +217,13 @@ function selectNode(node) {
   } else {
     emit('update:modelValue', value)
     emit('change', value)
-    close()
+    closeAndFocus()
   }
 }
 
 // 移除标签
 function removeTag(index) {
+  if (props.disabled) return
   const values = [...selectedValues.value]
   values.splice(index, 1)
   emit('update:modelValue', values)
@@ -211,6 +237,7 @@ function toggleOpen() {
   if (isOpen.value) {
     nextTick(() => {
       updateDropdownPosition()
+      dropdownRef.value?.querySelector('input, button:not(:disabled)')?.focus()
     })
   }
 }
@@ -220,6 +247,13 @@ function close() {
   isOpen.value = false
   filterText.value = ''
 }
+
+function closeAndFocus() {
+  close()
+  nextTick(() => triggerRef.value?.focus({ preventScroll: true }))
+}
+
+watch(() => props.disabled, disabled => { if (disabled) close() })
 
 // 下拉面板传送到 body，避免被 Dialog 的 transform/overflow 裁剪。
 function updateDropdownPosition() {
@@ -335,6 +369,10 @@ const vClickOutside = {
 }
 
 .native-tree-select__tag-close {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
   display: inline-flex;
   align-items: center;
   cursor: pointer;

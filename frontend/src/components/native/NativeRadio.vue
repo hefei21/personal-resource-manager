@@ -7,10 +7,10 @@
       'native-radio--filled': isFilledVariant,
       'native-radio--filled-checked': isFilledVariant && isChecked
     }"
-    @click="handleChange"
+    @click.prevent="handleChange"
     @keydown.enter.prevent="handleChange"
     @keydown.space.prevent="handleChange"
-    tabindex="0"
+    :tabindex="isDisabled ? -1 : 0"
     role="radio"
     :aria-checked="isChecked"
     :aria-disabled="isDisabled"
@@ -18,6 +18,7 @@
     <input
       v-if="!isFilledVariant"
       type="radio"
+      aria-hidden="true"
       :name="name"
       :value="value"
       :checked="isChecked"
@@ -66,7 +67,7 @@ const isChecked = computed(() => {
 })
 
 function handleChange() {
-  if (isDisabled.value) return
+  if (isDisabled.value || isChecked.value) return
   if (radioGroup) {
     radioGroup.updateValue(props.value)
   }

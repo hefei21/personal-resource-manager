@@ -1,5 +1,6 @@
 <template>
   <textarea
+    v-bind="{ ...$attrs, ...fieldAttrs() }"
     class="native-textarea"
     :value="modelValue"
     :placeholder="placeholder"
@@ -16,6 +17,11 @@
 </template>
 
 <script setup>
+import { useAttrs } from 'vue'
+import { useNativeFormField } from '@/composables/useNativeFormField'
+
+defineOptions({ inheritAttrs: false })
+const { fieldAttrs } = useNativeFormField(useAttrs())
 defineProps({
   modelValue: { type: String, default: '' },
   placeholder: { type: String, default: '' },

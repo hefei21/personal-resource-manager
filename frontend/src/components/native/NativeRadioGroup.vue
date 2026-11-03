@@ -53,30 +53,30 @@ function handleKeydown(e) {
   if (props.disabled || optionValues.value.length === 0) return
   
   const currentIndex = optionValues.value.indexOf(internalValue.value)
+  const radios = [...(groupRef.value?.querySelectorAll('.native-radio') || [])]
+  const enabled = optionValues.value.map((_, index) => radios[index]?.getAttribute('aria-disabled') === 'true' ? -1 : index).filter(index => index >= 0)
+  if (!enabled.length) return
+  const position = enabled.indexOf(currentIndex)
   let newIndex = currentIndex
   
   switch (e.key) {
     case 'ArrowUp':
     case 'ArrowLeft':
       e.preventDefault()
-      newIndex = currentIndex <= 0 
-        ? optionValues.value.length - 1 
-        : currentIndex - 1
+      newIndex = enabled[(position - 1 + enabled.length) % enabled.length]
       break
     case 'ArrowDown':
     case 'ArrowRight':
       e.preventDefault()
-      newIndex = currentIndex >= optionValues.value.length - 1 
-        ? 0 
-        : currentIndex + 1
+      newIndex = enabled[(position + 1) % enabled.length]
       break
     case 'Home':
       e.preventDefault()
-      newIndex = 0
+      newIndex = enabled[0]
       break
     case 'End':
       e.preventDefault()
-      newIndex = optionValues.value.length - 1
+      newIndex = enabled.at(-1)
       break
     default:
       return
@@ -97,6 +97,7 @@ function handleKeydown(e) {
 }
 
 function updateValue(value) {
+  if (props.disabled || value === internalValue.value) return
   internalValue.value = value
   emit('update:modelValue', value)
   emit('change', value)
@@ -107,8 +108,8 @@ const radioGroupState = {
   get modelValue() {
     return internalValue.value
   },
-  variant: props.variant,
-  disabled: props.disabled,
+  get variant() { return props.variant },
+  get disabled() { return props.disabled },
   updateValue,
   registerOption,
   unregisterOption
