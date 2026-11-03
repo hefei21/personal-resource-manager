@@ -1,6 +1,7 @@
 <template>
-  <div class="native-input-wrapper">
+  <div class="native-input-wrapper" :class="attrs.class" :style="attrs.style">
     <input
+      v-bind="inputAttrs()"
       ref="inputRef"
       :class="['native-input', { 'native-input--clearable': clearable }]"
       :type="type"
@@ -10,6 +11,7 @@
       :value="modelValue"
       :placeholder="placeholder"
       :disabled="disabled"
+      :readonly="readonly"
       :aria-disabled="disabled"
       :aria-placeholder="placeholder"
       @input="handleInput"
@@ -18,7 +20,7 @@
       @blur="handleBlur"
     />
     <button 
-      v-if="clearable && modelValue" 
+      v-if="clearable && modelValue && !disabled && !readonly"
       class="native-input__clear" 
       @click="handleClear"
       type="button"
@@ -33,7 +35,14 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, useAttrs } from 'vue'
+
+defineOptions({ inheritAttrs: false })
+const attrs = useAttrs()
+function inputAttrs() {
+  const { class: _class, style: _style, ...rest } = attrs
+  return rest
+}
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -41,6 +50,7 @@ const props = defineProps({
   placeholder: { type: String, default: '' },
   clearable: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
+  readonly: { type: Boolean, default: false },
   id: { type: String, default: undefined },
   name: { type: String, default: undefined },
   autocomplete: { type: String, default: undefined }
@@ -74,8 +84,10 @@ function handleEnter(e) {
 }
 
 function handleClear() {
+  if (props.disabled || props.readonly) return
   emit('update:modelValue', '')
   emit('clear')
+  focus()
 }
 
 function handleFocus(e) {
@@ -158,6 +170,7 @@ function handleBlur(e) {
 
 @media (max-width: 768px) {
   .native-input { height: var(--control-height-touch); font-size: 16px; }
-  .native-input__clear { width: 32px; height: 32px; }
+  .native-input--clearable { padding-right: 48px; }
+  .native-input__clear { right: 0; width: var(--control-height-touch); height: var(--control-height-touch); }
 }
 </style>

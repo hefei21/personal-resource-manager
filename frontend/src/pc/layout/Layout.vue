@@ -47,6 +47,7 @@
             type="button"
             class="menu-item"
             :class="{ active: activeNavigation?.routeName === item.routeName }"
+            :aria-current="activeNavigation?.routeName === item.routeName ? 'page' : undefined"
             @click="navigateTo(item)"
           >
             <span class="menu-icon-shell">
@@ -73,14 +74,16 @@
         </div>
         <div class="user-info">
           <ThemeControl compact />
-          <span 
+          <button
             v-if="!authStore.isGuest()" 
+            type="button"
             class="username-link" 
             @click="showPasswordDialog = true"
             title="修改密码"
+            aria-label="修改密码"
           >
             {{ authStore.user?.username || '用户' }}
-          </span>
+          </button>
           <span v-else class="username-text">
             {{ authStore.user?.username || '用户' }}
           </span>
@@ -113,16 +116,16 @@
       @closed="resetPasswordForm"
     >
       <div class="form-item">
-        <label>旧密码</label>
-        <NativeInput v-model="passwordForm.oldPassword" type="password" placeholder="请输入旧密码" />
+        <label for="owner-current-password">旧密码</label>
+        <NativeInput id="owner-current-password" v-model="passwordForm.oldPassword" type="password" autocomplete="current-password" placeholder="请输入旧密码" />
       </div>
       <div class="form-item">
-        <label>新密码</label>
-        <NativeInput v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" />
+        <label for="owner-new-password">新密码</label>
+        <NativeInput id="owner-new-password" v-model="passwordForm.newPassword" type="password" autocomplete="new-password" placeholder="请输入新密码" />
       </div>
       <div class="form-item">
-        <label>确认密码</label>
-        <NativeInput v-model="passwordForm.confirmPassword" type="password" placeholder="请再次输入新密码" />
+        <label for="owner-confirm-password">确认密码</label>
+        <NativeInput id="owner-confirm-password" v-model="passwordForm.confirmPassword" type="password" autocomplete="new-password" placeholder="请再次输入新密码" />
       </div>
       <div v-if="passwordError" class="form-error" role="alert">{{ passwordError }}</div>
     </NativeDialog>
@@ -569,6 +572,7 @@ async function handlePasswordChange() {
 }
 
 .page-heading {
+  min-width: 0;
   display: grid;
   gap: 2px;
 }
@@ -589,6 +593,8 @@ async function handlePasswordChange() {
 
 .user-info {
   display: flex;
+  min-width: 0;
+  max-width: 60%;
   align-items: center;
   gap: 16px;
 }
@@ -598,9 +604,16 @@ async function handlePasswordChange() {
   font-weight: 500;
   color: var(--color-primary);
   padding: 4px 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .username-link {
+  border: 0;
+  background: transparent;
+  min-height: var(--control-height-md);
   cursor: pointer;
   transition: all 0.3s ease;
   border-radius: 4px;
@@ -613,6 +626,7 @@ async function handlePasswordChange() {
 
 /* 退出按钮 */
 .logout-btn {
+  flex-shrink: 0;
   padding: 6px 16px;
   display: inline-flex;
   align-items: center;

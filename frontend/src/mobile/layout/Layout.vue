@@ -26,15 +26,7 @@
           </div>
         </div>
         <div class="user-info">
-          <span 
-            v-if="!authStore.isGuest()" 
-            class="username-link" 
-            @click="showPasswordDialog = true"
-            title="修改密码"
-          >
-            {{ authStore.user?.username || '用户' }}
-          </span>
-          <span v-else class="username-text">
+          <span class="username-text" :title="authStore.user?.username || '用户'">
             {{ authStore.user?.username || '用户' }}
           </span>
           <button class="logout-btn" @click="handleLogout">
@@ -69,32 +61,6 @@
     <!-- 音乐播放器 -->
     <MediaPlayer />
     
-    <NativeDialog
-      v-model="showPasswordDialog"
-      title="修改密码"
-      width="400px"
-      confirm-text="确认修改"
-      :confirm-loading="passwordLoading"
-      :confirm-disabled="passwordLoading"
-      :close-on-overlay-click="!passwordLoading"
-      :close-on-esc="!passwordLoading"
-      @confirm="handleMobilePasswordChange"
-      @closed="resetPasswordForm"
-    >
-      <div class="form-item">
-        <label>旧密码</label>
-        <NativeInput v-model="passwordForm.oldPassword" type="password" placeholder="请输入旧密码" />
-      </div>
-      <div class="form-item">
-        <label>新密码</label>
-        <NativeInput v-model="passwordForm.newPassword" type="password" placeholder="请输入新密码" />
-      </div>
-      <div class="form-item">
-        <label>确认密码</label>
-        <NativeInput v-model="passwordForm.confirmPassword" type="password" placeholder="请再次输入新密码" />
-      </div>
-      <div v-if="passwordError" class="form-error" role="alert">{{ passwordError }}</div>
-    </NativeDialog>
   </div>
 </template>
 
@@ -104,9 +70,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import MediaPlayer from '@/components/business/media-player/index.vue'
 import WorkspaceRouteView from '@/components/WorkspaceRouteView.vue'
-import { NativeDialog, NativeIcon, NativeInput } from '@/components/native'
-import api from '@/api'
-import { useToast } from '@/composables/useToast'
+import { NativeIcon } from '@/components/native'
 import {
   MOBILE_BOTTOM_NAVIGATION,
   mobileGroupParentForRoute,
@@ -114,12 +78,10 @@ import {
   navigationItemsForGroup,
   pageTitleForRoute
 } from '@/router/navigation'
-import { validateOwnerPasswordChange } from '@/utils/passwordPolicy'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
-const toast = useToast()
 
 const routeLoading = ref(false)
 const initialLoading = ref(true)
@@ -202,16 +164,6 @@ function navigateToGroupLanding() {
   if (parentNavigation.value) router.push(parentNavigation.value.path)
 }
 
-// 修改密码相关
-const showPasswordDialog = ref(false)
-const passwordLoading = ref(false)
-const passwordForm = ref({
-  oldPassword: '',
-  newPassword: '',
-  confirmPassword: ''
-})
-const passwordError = ref('')
-
 const pageTitle = computed(() => pageTitleForRoute(route.name) || '雨的空间')
 
 async function handleLogout() {
@@ -219,61 +171,6 @@ async function handleLogout() {
   router.push('/login')
 }
 
-function resetPasswordForm() {
-  passwordForm.value = {
-    oldPassword: '',
-    newPassword: '',
-    confirmPassword: ''
-  }
-  passwordError.value = ''
-}
-
-function closePasswordDialog() {
-  showPasswordDialog.value = false
-  resetPasswordForm()
-}
-
-// 移动端密码修改处理（原生表单验证）
-async function handleMobilePasswordChange() {
-  passwordError.value = ''
-  
-  if (!passwordForm.value.oldPassword) {
-    passwordError.value = '请输入旧密码'
-    return
-  }
-  const passwordPolicyError = validateOwnerPasswordChange(
-    passwordForm.value.oldPassword,
-    passwordForm.value.newPassword
-  )
-  if (passwordPolicyError) {
-    passwordError.value = passwordPolicyError
-    return
-  }
-  if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
-    passwordError.value = '两次输入的密码不一致'
-    return
-  }
-  
-  passwordLoading.value = true
-  try {
-    const response = await api.auth.changePassword({
-      oldPassword: passwordForm.value.oldPassword,
-      newPassword: passwordForm.value.newPassword
-    })
-
-    if (response.data.message) {
-      toast.success('密码修改成功，请重新登录')
-      closePasswordDialog()
-      setTimeout(() => {
-        handleLogout()
-      }, 1500)
-    }
-  } catch (error) {
-    passwordError.value = error.response?.data?.message || '修改密码失败'
-  } finally {
-    passwordLoading.value = false
-  }
-}
 </script>
 
 <style scoped>
@@ -316,8 +213,8 @@ async function handleMobilePasswordChange() {
 
 .group-back-button {
   display: grid;
-  width: 40px;
-  height: 40px;
+  width: var(--control-height-touch);
+  height: var(--control-height-touch);
   flex: 0 0 auto;
   place-items: center;
   padding: 0;
@@ -355,31 +252,28 @@ async function handleMobilePasswordChange() {
 
 .user-info {
   display: flex;
+  min-width: 0;
+  max-width: 45%;
   align-items: center;
   gap: 8px;
 }
 
-.username-link,
 .username-text {
   font-size: 12px;
   font-weight: 500;
   color: var(--color-primary);
   padding: 4px 8px;
-}
-
-.username-link {
-  cursor: pointer;
-  transition: all 0.3s ease;
-  border-radius: 4px;
-}
-
-.username-link:hover {
-  color: var(--color-primary-active);
-  background: var(--color-primary-alpha-10);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 退出按钮 */
 .logout-btn {
+  flex-shrink: 0;
+  min-width: var(--control-height-touch);
+  min-height: var(--control-height-touch);
   padding: 6px 12px;
   border: 1px solid var(--color-border-default);
   border-radius: 4px;
@@ -456,7 +350,6 @@ async function handleMobilePasswordChange() {
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .username-link:hover { color: var(--color-primary); background: transparent; }
   .logout-btn:hover { border-color: var(--color-border-default); color: var(--color-text-secondary); box-shadow: none; }
 }
 
@@ -493,27 +386,6 @@ async function handleMobilePasswordChange() {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-.form-item {
-  margin-bottom: 16px;
-}
-
-.form-item label {
-  display: block;
-  font-size: 14px;
-  color: var(--color-text-primary);
-  margin-bottom: 6px;
-  font-weight: 500;
-}
-
-.form-error {
-  color: var(--color-danger);
-  font-size: 13px;
-  margin-top: 8px;
-  padding: 8px 12px;
-  background: var(--color-danger-surface);
-  border-radius: 4px;
 }
 
 </style>
