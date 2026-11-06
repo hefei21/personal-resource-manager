@@ -34,7 +34,7 @@
       :disabled="disabled"
       @focus="isFocused = true"
       @blur="handleBlur"
-      @keydown.enter.prevent="addTag"
+      @keydown.enter="addTag"
       @keydown.backspace="handleBackspace"
     />
     
@@ -101,6 +101,7 @@ function focusInput() {
 function addTag(event) {
   if (props.disabled) return
   if (event?.isComposing || event?.keyCode === 229) return
+  event?.preventDefault()
   const value = inputValue.value.trim()
   if (!value) return
   
@@ -155,6 +156,7 @@ function handleBlur() {
 
 // 处理退格键
 function handleBackspace(e) {
+  if (e.isComposing || e.keyCode === 229) return
   if (inputValue.value === '' && tags.value.length > 0) {
     removeTag(tags.value.length - 1)
   }

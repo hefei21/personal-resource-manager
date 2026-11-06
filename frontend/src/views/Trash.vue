@@ -27,7 +27,7 @@
         </label>
         <label class="trash-search-field">
           <span>关键词</span>
-          <NativeInput v-model="filters.q" placeholder="标题、作者、艺术家或原位置" clearable @enter="applyFilters" />
+          <NativeInput v-model="filters.q" placeholder="标题、作者、艺术家或原位置" clearable />
         </label>
         <label>
           <span>到期状态</span>
@@ -178,7 +178,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import api from '@/api'
@@ -251,7 +251,7 @@ const sortOptions = [
 ]
 const sourceOptions = computed(() => (summary.value.sources || []).map((value) => ({ value, label: value })))
 const summaryCards = computed(() => [
-  { key: 'total', label: '全部资源', value: summary.value.total || 0, description: '文档、电子书与音频' },
+  { key: 'total', label: '全部资源', value: summary.value.total || 0, description: '七类资源统一回收' },
   { key: 'restorable', label: '可恢复', value: summary.value.restorable || 0, description: '可安全执行恢复' },
   { key: 'expired', label: '已到清理时间', value: summary.value.expired || 0, description: '不会自动永久删除' },
   { key: 'filtered', label: '当前结果', value: summary.value.filteredTotal || 0, description: '符合当前筛选' }
@@ -296,22 +296,27 @@ function localDateBoundary(value, endOfDay = false) {
   return Number.isNaN(date.getTime()) ? value : date.toISOString()
 }
 
+let listRequest = 0
+onBeforeUnmount(() => { listRequest++ })
 async function loadTrash() {
+  const request = ++listRequest
   loading.value = true
   loadError.value = ''
   try {
     const response = await api.trash.list(queryParams())
+    if (request !== listRequest) return
     const data = response.data?.data || {}
     items.value = Array.isArray(data.items) ? data.items : []
     summary.value = data.summary || summary.value
     Object.assign(pagination, data.pagination || { page: 1, pageSize: pagination.pageSize, total: 0 })
     selectedKeys.value = selectedKeys.value.filter((key) => itemByKey.value.has(key))
   } catch (error) {
+    if (request !== listRequest) return
     items.value = []
     pagination.total = 0
     loadError.value = error.response?.data?.message || '请检查网络或稍后重试'
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 

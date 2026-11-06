@@ -3,7 +3,7 @@
     <input
       v-bind="{ ...inputAttrs(), ...fieldAttrs() }"
       ref="inputRef"
-      :class="['native-input', { 'native-input--clearable': clearable }]"
+      :class="['native-input', { 'native-input--clearable': clearable, 'native-input--suffix': $slots.suffix }]"
       :type="type"
       :name="name"
       :autocomplete="autocomplete"
@@ -14,6 +14,9 @@
       :aria-disabled="disabled"
       :aria-placeholder="placeholder"
       @input="handleInput"
+      @compositionstart="composing = true"
+      @compositionend="handleCompositionEnd"
+      @keydown="handleKeydown"
       @keyup.enter="handleEnter"
       @focus="handleFocus"
       @blur="handleBlur"
@@ -21,6 +24,7 @@
     <button 
       v-if="clearable && modelValue && !disabled && !readonly"
       class="native-input__clear" 
+      :class="{ 'native-input__clear--with-suffix': $slots.suffix }"
       @click="handleClear"
       type="button"
       aria-label="清除"
@@ -61,6 +65,8 @@ const emit = defineEmits(['update:modelValue', 'enter', 'clear', 'focus', 'blur'
 
 // 内部 input ref
 const inputRef = ref(null)
+let composing = false
+let compositionEnter = false
 
 // 暴露 focus 方法
 function focus() {
@@ -77,11 +83,22 @@ defineExpose({
 })
 
 function handleInput(e) {
+  if (composing || e.isComposing) return
   emit('update:modelValue', e.target.value)
 }
 
+function handleCompositionEnd(e) {
+  composing = false
+  handleInput(e)
+}
+
 function handleEnter(e) {
+  if (composing || compositionEnter || e.isComposing || e.keyCode === 229) return
   emit('enter', e)
+}
+
+function handleKeydown(e) {
+  compositionEnter = (composing || e.isComposing || e.keyCode === 229) && e.key === 'Enter'
 }
 
 function handleClear() {
@@ -133,6 +150,9 @@ function handleBlur(e) {
 }
 
 .native-input--clearable { padding-right: 32px; }
+.native-input--suffix { padding-right: 48px; }
+.native-input--suffix.native-input--clearable { padding-right: 76px; }
+.native-input__clear--with-suffix { right: 48px; }
 
 .native-input__clear {
   position: absolute;
@@ -173,5 +193,7 @@ function handleBlur(e) {
   .native-input { height: var(--control-height-touch); font-size: 16px; }
   .native-input--clearable { padding-right: 48px; }
   .native-input__clear { right: 0; width: var(--control-height-touch); height: var(--control-height-touch); }
+  .native-input--suffix.native-input--clearable { padding-right: 92px; }
+  .native-input__clear--with-suffix { right: 44px; }
 }
 </style>

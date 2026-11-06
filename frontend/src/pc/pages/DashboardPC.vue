@@ -91,16 +91,17 @@
             <NativeCheckbox 
               v-if="!isGuest"
               :model-value="!!todo.completed"
-              @change="(val) => { todo.completed = val ? 1 : 0; updateTodo(todo) }"
+              :disabled="savingTodos.has(todo.id)"
+              @change="(val) => toggleTodo(todo, val)"
             />
             <input 
               type="text"
               :value="todo.text || ''"
               @input="(e) => todo.text = e.target.value"
               placeholder="输入待办内容"
-              :disabled="!!todo.confirmed && !todo.editing"
-              @blur="handleBlur(todo)"
-              @keyup.enter="(e) => handleTodoEnter(todo, e)"
+              :disabled="savingTodos.has(todo.id) || (!!todo.confirmed && !todo.editing)"
+              @blur="(e) => handleBlur(todo, e)"
+              @keydown.enter="(e) => handleTodoEnter(todo, e)"
               class="todo-input"
             />
             <NativeButton
@@ -109,7 +110,7 @@
               size="small"
               theme="success"
               @click="confirmTodo(todo)"
-              :disabled="isGuest"
+              :disabled="isGuest || savingTodos.has(todo.id)"
             >
               确认
             </NativeButton>
@@ -119,7 +120,7 @@
               size="small"
               theme="primary"
               @click="editTodo(todo)"
-              :disabled="isGuest"
+              :disabled="isGuest || savingTodos.has(todo.id)"
             >
               编辑
             </NativeButton>
@@ -129,11 +130,11 @@
               size="small"
               theme="success"
               @click="saveEdit(todo)"
-              :disabled="isGuest"
+              :disabled="isGuest || savingTodos.has(todo.id)"
             >
               保存
             </NativeButton>
-            <NativeButton variant="text" theme="danger" @click="deleteTodo(todo.id)" :disabled="isGuest">
+            <NativeButton variant="text" theme="danger" aria-label="删除待办" @click="deleteTodo(todo.id)" :disabled="isGuest || savingTodos.has(todo.id)">
               <template #icon><NativeIcon name="trash" /></template>
             </NativeButton>
           </div>
@@ -147,7 +148,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, nextTick } from 'vue'
+import { ref, reactive, onMounted, computed, nextTick } from 'vue'
+import { useToast } from '@/composables/useToast'
 import api from '@/api'
 import { Solar } from 'lunar-javascript'
 import { usePermission } from '@/composables/usePermission'
@@ -414,6 +416,8 @@ async function loadMonthTodos() {
 
 // 正在创建中的待办 ID 集合（防止重复创建）
 const creatingTodos = new Set()
+const savingTodos = reactive(new Set())
+const toast = useToast()
 
 // 添加待办
 function addTodo() {
@@ -442,6 +446,7 @@ function addTodo() {
 
 // 确认待办（锁定内容，不可编辑）
 async function confirmTodo(todo) {
+  if (savingTodos.has(todo.id)) return
   // 如果内容为空，不确认
   if (!(todo.text || '').trim()) {
     return
@@ -456,8 +461,9 @@ async function confirmTodo(todo) {
   }
   
   // 标记为已确认
+  const previous = todo.confirmed
   todo.confirmed = 1
-  await updateTodo(todo)
+  if (!await updateTodo(todo)) todo.confirmed = previous
 }
 
 // 编辑已确认的待办
@@ -483,15 +489,25 @@ function editTodo(todo) {
 
 // 保存编辑
 async function saveEdit(todo) {
+  if (savingTodos.has(todo.id)) return
   todo.editing = false
-  delete todo._originalText
-  await updateTodo(todo)
+  if (await updateTodo(todo)) delete todo._originalText
+  else todo.editing = true
+}
+
+async function toggleTodo(todo, value) {
+  if (savingTodos.has(todo.id)) return
+  const previous = todo.completed
+  todo.completed = value ? 1 : 0
+  if (!await updateTodo(todo)) todo.completed = previous
 }
 
 // 处理失焦
-async function handleBlur(todo) {
-  // 如果正在编辑已确认的待办，不自动保存，等点击保存按钮
-  if (todo.confirmed && todo.editing) {
+async function handleBlur(todo, event) {
+  // Let an explicit same-row action consume the current text before autosave disables it.
+  if (event?.relatedTarget?.closest('.todo-item') === event?.target?.closest('.todo-item')) return
+  // 已确认条目只显式保存；确认/保存禁用输入时产生的 blur 不再重复写入。
+  if (todo.confirmed) {
     return
   }
   await updateTodo(todo)
@@ -499,6 +515,7 @@ async function handleBlur(todo) {
 
 // 处理回车键：编辑状态保存，新增状态确认，无内容则删除
 async function handleTodoEnter(todo, e) {
+  if (e.isComposing || e.keyCode === 229) return
   const text = (todo.text || '').trim()
   
   // 如果正在编辑已确认的待办，保存编辑
@@ -524,6 +541,7 @@ async function handleTodoEnter(todo, e) {
 
 // 更新待办
 async function updateTodo(todo) {
+  if (savingTodos.has(todo.id)) return false
   const text = (todo.text || '').trim()
   
   // 如果内容为空
@@ -543,6 +561,8 @@ async function updateTodo(todo) {
     return
   }
   
+  const savingKey = todo.id
+  savingTodos.add(savingKey)
   try {
     if (todo.isNew) {
       // 标记为正在创建
@@ -578,9 +598,13 @@ async function updateTodo(todo) {
     }
     // 更新月度缓存
     loadMonthTodos()
+    return true
   } catch (error) {
-    console.error('保存待办事项失败:', error)
+    toast.error('待办保存失败，内容仍保留，请重试')
     creatingTodos.delete(todo.id) // 出错时清理标记
+    return false
+  } finally {
+    savingTodos.delete(savingKey)
   }
 }
 
@@ -595,7 +619,7 @@ async function deleteTodo(id) {
     todos.value = todos.value.filter(t => t.id !== id)
     loadMonthTodos()
   } catch (error) {
-    console.error('删除待办事项失败:', error)
+    toast.error('删除待办失败，条目仍保留，请重试')
   }
 }
 

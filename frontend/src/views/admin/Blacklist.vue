@@ -3,19 +3,19 @@
     <!-- 统计卡片 -->
     <div class="stats-cards">
       <div class="stat-card">
-        <div class="stat-value">{{ stats.total }}</div>
+        <div class="stat-value">{{ stats.total ?? '—' }}</div>
         <div class="stat-label">累计拉黑</div>
       </div>
       <div class="stat-card">
-        <div class="stat-value">{{ stats.active }}</div>
+        <div class="stat-value">{{ stats.active ?? '—' }}</div>
         <div class="stat-label">生效中</div>
       </div>
       <div class="stat-card">
-        <div class="stat-value">{{ stats.permanent }}</div>
+        <div class="stat-value">{{ stats.permanent ?? '—' }}</div>
         <div class="stat-label">永久拉黑</div>
       </div>
       <div class="stat-card">
-        <div class="stat-value">{{ stats.todayBlocked }}</div>
+        <div class="stat-value">{{ stats.todayBlocked ?? '—' }}</div>
         <div class="stat-label">今日新增</div>
       </div>
     </div>
@@ -26,11 +26,12 @@
         v-model="keyword"
         placeholder="搜索IP地址或原因"
         clearable
-        @enter="loadData"
+        @enter="search"
+        aria-label="搜索IP地址或原因"
         style="width: 300px"
       >
         <template #suffix>
-          <NativeButton theme="primary" variant="text" @click="loadData">
+          <NativeButton theme="primary" variant="text" aria-label="搜索黑名单" @click="search">
             <template #icon><NativeIcon name="magnifying-glass" /></template>
           </NativeButton>
         </template>
@@ -42,7 +43,14 @@
     </div>
 
     <!-- 黑名单列表 -->
+    <NativeAlert v-if="statsError" role="status" theme="warning" title="黑名单统计暂时不可用">
+      <NativeButton variant="outline" @click="loadStats">重试统计</NativeButton>
+    </NativeAlert>
+    <NativeAlert v-if="loadError" role="alert" theme="error" title="黑名单加载失败">
+      {{ loadError }} <NativeButton variant="outline" @click="loadData">重试</NativeButton>
+    </NativeAlert>
     <NativeTable
+      v-else
       :dataSource="blacklist"
       :columns="columns"
       :loading="loading"
@@ -62,7 +70,7 @@
         {{ formatDate(row.blocked_at) }}
       </template>
       <template #cell-action="{ row }">
-        <NativeButton theme="primary" variant="text" @click="unblock(row)">
+        <NativeButton theme="primary" variant="text" :loading="unblocking.has(row.ip_address)" @click="unblock(row)">
           解除
         </NativeButton>
       </template>
@@ -84,20 +92,24 @@
       v-model="showBlockDialog"
       title="手动拉黑IP"
       width="500px"
+      :confirm-loading="blocking"
+      :close-on-overlay-click="!blocking"
+      :close-on-esc="!blocking"
+      :close-btn="!blocking"
       @confirm="confirmBlock"
     >
       <div class="block-form">
         <div class="form-item">
-          <label class="form-label required">IP地址</label>
-          <NativeInput v-model="blockForm.ipAddress" placeholder="请输入要拉黑的IP地址" />
+          <label class="form-label required" for="block-ip">IP地址</label>
+          <NativeInput id="block-ip" v-model="blockForm.ipAddress" placeholder="请输入要拉黑的IP地址" :disabled="blocking" />
         </div>
         <div class="form-item">
-          <label class="form-label">拉黑原因</label>
-          <NativeTextarea v-model="blockForm.reason" placeholder="请输入拉黑原因" />
+          <label class="form-label" for="block-reason">拉黑原因</label>
+          <NativeTextarea id="block-reason" v-model="blockForm.reason" placeholder="请输入拉黑原因" :disabled="blocking" />
         </div>
         <div class="form-item">
           <label class="form-label">拉黑时长</label>
-          <NativeRadioGroup v-model="blockForm.durationType">
+          <NativeRadioGroup v-model="blockForm.durationType" :disabled="blocking" aria-label="拉黑时长">
             <NativeRadio value="24">24小时</NativeRadio>
             <NativeRadio value="168">7天</NativeRadio>
             <NativeRadio value="720">30天</NativeRadio>
@@ -105,15 +117,27 @@
           </NativeRadioGroup>
         </div>
       </div>
+      <template #footer>
+        <NativeButton :disabled="blocking" @click="showBlockDialog = false">取消</NativeButton>
+        <NativeButton theme="primary" :loading="blocking" @click="confirmBlock">确认拉黑</NativeButton>
+      </template>
     </NativeDialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useToast } from '@/composables/useToast'
 import axios from 'axios'
-import { NativeButton, NativeInput, NativeDialog, NativeTag, NativeTextarea, NativeRadio, NativeRadioGroup, NativeIcon, NativeTable, NativePagination } from '@/components/native'
+import { NativeAlert, NativeButton, NativeInput, NativeDialog, NativeTag, NativeTextarea, NativeRadio, NativeRadioGroup, NativeIcon, NativeTable, NativePagination } from '@/components/native'
 
+const toast = useToast()
+const loadError = ref('')
+const statsError = ref(false)
+const blocking = ref(false)
+const unblocking = reactive(new Set())
+let listRequest = 0, statsRequest = 0
+onBeforeUnmount(() => { listRequest++; statsRequest++ })
 // Owner authentication is provided by the same-origin HttpOnly cookie.
 const apiClient = axios.create({
   baseURL: '/api',
@@ -123,10 +147,10 @@ const apiClient = axios.create({
 const loading = ref(false)
 const blacklist = ref([])
 const stats = reactive({
-  total: 0,
-  active: 0,
-  permanent: 0,
-  todayBlocked: 0
+  total: null,
+  active: null,
+  permanent: null,
+  todayBlocked: null
 })
 const keyword = ref('')
 const pagination = reactive({
@@ -158,7 +182,9 @@ onMounted(() => {
 })
 
 async function loadData() {
+  const request = ++listRequest
   loading.value = true
+  loadError.value = ''
   try {
     const res = await apiClient.get('/admin/blacklist', {
       params: {
@@ -167,25 +193,32 @@ async function loadData() {
         keyword: keyword.value
       }
     })
+    if (request !== listRequest) return
     if (res.data) {
       blacklist.value = res.data.data
       pagination.total = res.data.total
     }
   } catch (error) {
-    toast.error('加载黑名单失败: ' + error.message)
+    if (request !== listRequest) return
+    blacklist.value = []
+    pagination.total = 0
+    loadError.value = '请检查网络后重试。'
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
 async function loadStats() {
+  const request = ++statsRequest
+  statsError.value = false
   try {
     const res = await apiClient.get('/admin/blacklist/stats')
+    if (request !== statsRequest) return
     if (res.data) {
       Object.assign(stats, res.data.data)
     }
   } catch (error) {
-    console.error('加载统计失败:', error)
+    if (request === statsRequest) statsError.value = true
   }
 }
 
@@ -195,7 +228,14 @@ function onPageChange(pageInfo) {
   loadData()
 }
 
+function search() {
+  pagination.current = 1
+  loadData()
+}
+
 async function unblock(row) {
+  if (unblocking.has(row.ip_address)) return
+  unblocking.add(row.ip_address)
   try {
     await apiClient.post('/admin/blacklist/unblock', {
       ipAddress: row.ip_address
@@ -205,15 +245,19 @@ async function unblock(row) {
     loadStats()
   } catch (error) {
     toast.error('解除拉黑失败: ' + error.message)
+  } finally {
+    unblocking.delete(row.ip_address)
   }
 }
 
 async function confirmBlock() {
+  if (blocking.value) return
   if (!blockForm.ipAddress) {
     toast.warning('请输入IP地址')
     return
   }
 
+  blocking.value = true
   try {
     await apiClient.post('/admin/blacklist/block', {
       ipAddress: blockForm.ipAddress,
@@ -229,6 +273,8 @@ async function confirmBlock() {
     loadStats()
   } catch (error) {
     toast.error('拉黑失败: ' + error.message)
+  } finally {
+    blocking.value = false
   }
 }
 
@@ -257,33 +303,34 @@ function isExpired(expiresAt) {
 }
 
 .stat-card {
-  background: var(--td-bg-color-container);
-  border-radius: 8px;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
   padding: 20px;
   text-align: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
 .stat-value {
   font-size: 32px;
   font-weight: 700;
-  color: var(--td-brand-color);
+  color: var(--color-text-primary);
   margin-bottom: 8px;
 }
 
 .stat-label {
   font-size: 14px;
-  color: var(--td-text-color-secondary);
+  color: var(--color-text-secondary);
 }
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 16px;
 }
 
 .expired {
-  color: var(--td-text-color-secondary);
+  color: var(--color-text-secondary);
   font-style: italic;
 }
 

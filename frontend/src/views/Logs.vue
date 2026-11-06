@@ -1,9 +1,8 @@
 <!--  --><template>
   <div class="logs-container">
     <div class="logs-header">
-      <div></div>
       <div class="header-btns">
-        <NativeButton theme="warning" @click="showBlacklist = true">
+        <NativeButton v-if="!isMobile" variant="outline" @click="showBlacklist = true">
           <template #icon><NativeIcon name="secured" /></template>
           IP黑名单
         </NativeButton>
@@ -17,16 +16,16 @@
     <!-- 统计卡片 -->
     <div class="stats-cards">
       <NativeCard class="stat-card">
-        <div class="stat-value">{{ stats.todayCount }}</div>
-        <div class="stat-label">今日访问</div>
+        <div class="stat-value">{{ stats.todayCount ?? '—' }}</div>
+        <div class="stat-label">今日访问（UTC）</div>
       </NativeCard>
       <NativeCard class="stat-card">
-        <div class="stat-value">{{ stats.totalCount }}</div>
+        <div class="stat-value">{{ stats.totalCount ?? '—' }}</div>
         <div class="stat-label">总记录数</div>
       </NativeCard>
       <NativeCard class="stat-card">
-        <div class="stat-value">{{ stats.todayActiveUsers }}</div>
-        <div class="stat-label">今日活跃用户</div>
+        <div class="stat-value">{{ stats.todayActiveUsers ?? '—' }}</div>
+        <div class="stat-label">今日活跃用户（UTC）</div>
       </NativeCard>
       <NativeCard class="stat-card">
         <div class="stat-value">{{ pagination.total }}</div>
@@ -36,10 +35,11 @@
 
     <!-- 筛选栏 -->
     <NativeCard class="filter-card">
-      <div class="filter-btns">
+      <form class="filter-btns" @submit.prevent="searchLogs">
         <NativeSelect
           v-model="filters.action"
           placeholder="操作类型"
+          aria-label="操作类型"
           :clearable="true"
           style="width: 120px"
           :options="[
@@ -53,16 +53,18 @@
             { value: 'worker', label: 'Worker 协议' }
           ]"
         />
-        <NativeInput v-model="filters.keyword" placeholder="搜索用户/IP/路径" style="width: 200px" />
-        <NativeDateRangePicker v-model="filters.dateRange" :placeholder="['开始日期', '结束日期']" clearable style="width: 240px" />
-        <NativeButton theme="primary" @click="searchLogs">查询</NativeButton>
+        <NativeInput v-model="filters.keyword" aria-label="搜索用户/IP/路径" placeholder="搜索用户/IP/路径" style="width: 200px" clearable />
+        <NativeDateRangePicker v-model="filters.dateRange" aria-label="访问日期（UTC+8）" :placeholder="['开始日期', '结束日期']" clearable style="width: 240px" />
+        <NativeButton theme="primary" type="submit">查询</NativeButton>
         <NativeButton variant="outline" @click="resetFilters">重置</NativeButton>
-      </div>
+      </form>
     </NativeCard>
 
     <!-- 日志表格 -->
+    <NativeAlert v-if="statsError" theme="warning" role="status" title="访问统计暂时不可用">{{ statsError }}</NativeAlert>
+    <NativeAlert v-if="loadError" theme="error" role="alert" title="日志加载失败">{{ loadError }}</NativeAlert>
     <NativeCard class="table-card">
-      <NativeTable :dataSource="logs" :columns="columns" :loading="loading" rowKey="id" stripe hover>
+      <NativeTable v-if="!loadError" :dataSource="logs" :columns="columns" :loading="loading" rowKey="id" stripe hover>
         <template #cell-created_at="{ row }">
           {{ formatToUTC8(row.created_at) }}
         </template>
@@ -115,7 +117,7 @@
       </NativeTable>
 
       <!-- 分页 -->
-      <div class="pagination-wrapper">
+      <div v-if="!loadError" class="pagination-wrapper">
         <NativePagination
           :current="pagination.current"
           :page-size="pagination.pageSize"
@@ -127,6 +129,7 @@
 
     <!-- IP黑名单抽屉 -->
     <NativeDrawer
+      v-if="!isMobile"
       v-model="showBlacklist"
       title="IP黑名单管理"
       size="80%"
@@ -140,18 +143,22 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useViewport } from '@/composables/useViewport'
 import api from '@/api'
 import BlacklistPanel from '@/views/admin/Blacklist.vue'
-import { NativeButton, NativeInput, NativeCard, NativeSelect, NativeTag, NativePagination, NativeIcon, NativeDateRangePicker, NativeTable, NativeTooltip, NativeDrawer } from '@/components/native'
+import { NativeAlert, NativeButton, NativeInput, NativeCard, NativeSelect, NativeTag, NativePagination, NativeIcon, NativeDateRangePicker, NativeTable, NativeTooltip, NativeDrawer } from '@/components/native'
 
+const { isMobile } = useViewport()
 const logs = ref([])
+const loadError = ref('')
+const statsError = ref('')
 const loading = ref(false)
 const showBlacklist = ref(false)
 const stats = ref({
-  todayCount: 0,
-  totalCount: 0,
-  todayActiveUsers: 0,
+  todayCount: null,
+  totalCount: null,
+  todayActiveUsers: null,
   topActions: []
 })
 
@@ -170,9 +177,12 @@ const pagination = ref({
 // 将 UTC 时间转换为 UTC+8
 function formatToUTC8(utcTime) {
   if (!utcTime) return ''
-  const date = new Date(utcTime)
-  const utc8Date = new Date(date.getTime() + 8 * 60 * 60 * 1000)
-  return utc8Date.toLocaleString('zh-CN', {
+  // SQLite CURRENT_TIMESTAMP is UTC without an offset; ISO responses already carry one.
+  const value = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(utcTime) ? utcTime.replace(' ', 'T') + 'Z' : utcTime
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -270,17 +280,26 @@ function getLocationTheme(location) {
   return 'warning'
 }
 
+let listRequest = 0, statsRequest = 0
+onBeforeUnmount(() => { listRequest++; statsRequest++ })
+watch(isMobile, mobile => { if (mobile) showBlacklist.value = false })
 async function loadStats() {
+  const request = ++statsRequest
+  statsError.value = ''
   try {
     const response = await api.logs.stats()
+    if (request !== statsRequest) return
     stats.value = response.data.data
   } catch (error) {
-    console.error('加载统计失败:', error)
+    if (request !== statsRequest) return
+    statsError.value = '请点击刷新重试；已有统计可能不是最新结果。'
   }
 }
 
 async function loadLogs() {
+  const request = ++listRequest
   loading.value = true
+  loadError.value = ''
   try {
     const params = {
       page: pagination.value.current,
@@ -294,22 +313,22 @@ async function loadLogs() {
       params.keyword = filters.value.keyword
     }
     if (filters.value.dateRange && filters.value.dateRange.length === 2) {
-      params.startDate = filters.value.dateRange[0]
-      params.endDate = filters.value.dateRange[1]
+      // Match the displayed UTC+8 calendar days to SQLite's UTC timestamp format.
+      params.startDate = new Date(`${filters.value.dateRange[0]}T00:00:00+08:00`).toISOString().slice(0, 19).replace('T', ' ')
+      params.endDate = new Date(`${filters.value.dateRange[1]}T23:59:59+08:00`).toISOString().slice(0, 19).replace('T', ' ')
     }
     
     const response = await api.logs.list(params)
+    if (request !== listRequest) return
     logs.value = response.data.data || []
     pagination.value.total = response.data.total || 0
   } catch (error) {
-    console.error('加载日志失败:', error)
-    if (error.response?.status === 403) {
-      toast.error('只有管理员可以查看日志')
-    } else {
-      toast.error('加载日志失败')
-    }
+    if (request !== listRequest) return
+    logs.value = []
+    pagination.value.total = 0
+    loadError.value = error.response?.status === 403 ? '当前会话无权查看访问日志。' : '请检查网络后点击刷新重试。'
   } finally {
-    loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
@@ -330,6 +349,7 @@ function resetFilters() {
 
 function handlePageChange(pageInfo) {
   pagination.value.current = pageInfo.current
+  pagination.value.pageSize = pageInfo.pageSize
   loadLogs()
 }
 
@@ -345,68 +365,47 @@ onMounted(() => {
 
 <style scoped>
 .logs-container {
-  padding: 24px;
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
 }
 
 .logs-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
-  margin-bottom: 24px;
-}
-
-.logs-header h2 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 600;
+  gap: var(--space-3);
 }
 
 .stats-cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
-  margin-bottom: 16px;
 }
 
 .stat-card {
   text-align: center;
 }
 
-.stat-card :deep(.t-card__body) {
+.stat-card :deep(.native-card__body) {
   padding: 24px 16px;
 }
 
 .stat-value {
   font-size: 28px;
   font-weight: bold;
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--color-text-primary);
   line-height: 1.2;
-  transition: all 0.3s ease;
-}
-
-.stat-card:hover .stat-value {
-  transform: scale(1.1);
 }
 
 .stat-label {
   font-size: 14px;
   color: var(--color-text-secondary);
   margin-top: 8px;
-  transition: all 0.3s ease;
-}
-
-.stat-card:hover .stat-label {
-  color: var(--color-primary);
-}
-
-.filter-card {
-  margin-bottom: 16px;
 }
 
 .table-card {
-  min-height: 400px;
+  min-width: 0;
 }
 
 .path-text {
@@ -421,7 +420,7 @@ onMounted(() => {
 
 .is-admin {
   font-weight: 600;
-  color: var(--td-brand-color, var(--color-primary));
+  color: var(--color-primary);
 }
 
 .pagination-wrapper {
@@ -437,7 +436,14 @@ onMounted(() => {
 
 .filter-btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   align-items: center;
+}
+
+@media (max-width: 768px) {
+  .stats-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
+  .filter-btns > * { width: 100% !important; min-width: 0; }
+  .stat-value { font-size: 24px; }
 }
 </style>

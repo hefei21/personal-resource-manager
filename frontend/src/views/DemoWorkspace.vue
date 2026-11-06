@@ -8,7 +8,7 @@
       </div>
       <div class="header-actions">
         <button class="button secondary" :disabled="busy" @click="resetWorkspace">重置会话</button>
-        <button class="button ghost" @click="leaveDemo">退出演示</button>
+        <button class="button ghost" :disabled="busy" @click="leaveDemo">退出演示</button>
       </div>
     </header>
 
@@ -19,6 +19,10 @@
       <span>30 分钟后自动丢弃</span>
     </section>
 
+    <div v-if="error" class="message error" role="alert">
+      {{ error }}
+      <button v-if="!journeys.length" class="button secondary" :disabled="busy" @click="initialize">重试加载</button>
+    </div>
     <section class="journey-section" aria-labelledby="journey-heading">
       <div class="section-heading">
         <div><span class="section-index">01</span><h2 id="journey-heading">选择一条技术旅程</h2></div>
@@ -31,6 +35,7 @@
           class="journey-card"
           :class="{ active: activeJourneyId === journey.id }"
           :aria-current="activeJourneyId === journey.id ? 'step' : undefined"
+          :disabled="busy"
           @click="startJourney(journey.id)"
         >
           <span class="journey-number">0{{ index + 1 }}</span>
@@ -40,14 +45,14 @@
       </nav>
     </section>
 
-    <section v-if="activeJourney" class="journey-workspace">
+    <section v-if="activeJourney" class="journey-workspace" :aria-busy="busy">
       <div class="interaction-panel">
         <div class="panel-heading">
           <div><span class="status-chip">合成演示</span><h2>{{ activeJourney.title }}</h2></div>
           <span v-if="result?.retrievalMode" class="mode-chip">{{ result.retrievalMode }}</span>
         </div>
-        <div v-if="error" class="message error" role="alert">{{ error }}</div>
         <div v-if="notice" class="message success" role="status">{{ notice }}</div>
+        <div v-if="busy && activeJourneyId !== 'discovery'" class="loading" role="status">正在加载演示结果…</div>
 
         <template v-if="activeJourneyId === 'discovery'">
           <form class="query-form" @submit.prevent="runDiscovery">
@@ -68,7 +73,7 @@
 
         <template v-else-if="activeJourneyId === 'answer'">
           <div class="scenario-switch" role="group" aria-label="问答场景">
-            <button v-for="option in answerScenarios" :key="option.value" :class="{ active: answerScenario === option.value }" @click="runAnswer(option.value)">{{ option.label }}</button>
+            <button v-for="option in answerScenarios" :key="option.value" :disabled="busy" :class="{ active: answerScenario === option.value }" @click="runAnswer(option.value)">{{ option.label }}</button>
           </div>
           <article v-if="result" class="answer-card" :class="result.status">
             <span class="answer-state">{{ result.status === 'refused' ? '明确拒答' : '引用式回答' }}</span>
@@ -82,8 +87,8 @@
 
         <template v-else-if="activeJourneyId === 'task'">
           <div class="scenario-switch" role="group" aria-label="任务场景">
-            <button :class="{ active: taskScenario === 'success' }" @click="runTask('success')">正常完成</button>
-            <button :class="{ active: taskScenario === 'offline' }" @click="runTask('offline')">模拟 Worker 失联</button>
+            <button :disabled="busy" :class="{ active: taskScenario === 'success' }" @click="runTask('success')">正常完成</button>
+            <button :disabled="busy" :class="{ active: taskScenario === 'offline' }" @click="runTask('offline')">模拟 Worker 失联</button>
           </div>
           <ol v-if="result" class="timeline">
             <li v-for="(state, index) in result.states" :key="`${state}-${index}`"><span>{{ index + 1 }}</span><div><strong>{{ taskStateLabel(state) }}</strong><small>{{ taskStateHint(state) }}</small></div></li>
@@ -150,47 +155,53 @@ async function loadSummary() { summary.value = (await api.demo.summary()).data.s
 async function loadLifecycleItems() { lifecycleItems.value = (await api.demo.list('notes', { pageSize: 20 })).data.items }
 
 async function runJourney(id, input = {}) {
-  busy.value = true; error.value = ''
+  busy.value = true; error.value = ''; result.value = null
   try { result.value = (await api.demo.runJourney(id, input)).data }
   catch (requestError) { error.value = requestError.response?.data?.message || '演示旅程执行失败' }
   finally { busy.value = false }
 }
 
 async function startJourney(id) {
+  if (busy.value) return
   activeJourneyId.value = id
   if (id === 'discovery') return runDiscovery()
   if (id === 'answer') return runAnswer(answerScenario.value)
   if (id === 'task') return runTask(taskScenario.value)
-  await loadLifecycleItems(); await runJourney('lifecycle')
+  await runJourney('lifecycle')
 }
 function runDiscovery() { return runJourney('discovery', { query: query.value }) }
 function runAnswer(scenario) { answerScenario.value = scenario; return runJourney('answer', { scenario }) }
 function runTask(scenario) { taskScenario.value = scenario; return runJourney('task', { scenario }) }
 
 async function createLifecycleItem() {
-  if (!lifecycleTitle.value) return
+  if (busy.value || !lifecycleTitle.value) return
   busy.value = true; error.value = ''
   try { await api.demo.create('notes', { title: lifecycleTitle.value, content: '仅当前会话可见的合成笔记' }); lifecycleTitle.value = ''; await Promise.all([loadLifecycleItems(), loadSummary()]); await runJourney('lifecycle'); flash('已写入当前会话覆盖层') }
   catch (requestError) { error.value = requestError.response?.data?.message || '新增失败'; busy.value = false }
 }
 
 async function removeLifecycleItem(item) {
+  if (busy.value) return
   busy.value = true; error.value = ''
   try { await api.demo.delete('notes', item.id); await Promise.all([loadLifecycleItems(), loadSummary()]); await runJourney('lifecycle'); flash('条目已移入当前会话回收层') }
   catch (requestError) { error.value = requestError.response?.data?.message || '操作失败'; busy.value = false }
 }
 
 async function resetWorkspace() {
+  if (busy.value) return
   busy.value = true; error.value = ''
-  try { await api.demo.reset(); await Promise.all([loadSummary(), loadLifecycleItems()]); await startJourney(activeJourneyId.value); flash('会话覆盖层已清空，合成基线已恢复') }
+  try { await api.demo.reset(); await Promise.all([loadSummary(), loadLifecycleItems()]); await runJourney(activeJourneyId.value, activeJourneyId.value === 'discovery' ? { query: query.value } : { scenario: activeJourneyId.value === 'answer' ? answerScenario.value : taskScenario.value }); flash('会话覆盖层已清空，合成基线已恢复') }
   catch (requestError) { error.value = requestError.response?.data?.message || '重置失败'; busy.value = false }
 }
 async function leaveDemo() { await authStore.logout(); await router.push('/login') }
 
-onMounted(async () => {
+async function initialize() {
+  busy.value = true; error.value = ''
   try { const [journeyResponse] = await Promise.all([api.demo.journeys(), loadSummary(), loadLifecycleItems()]); journeys.value = journeyResponse.data.journeys; await runDiscovery() }
   catch (requestError) { error.value = requestError.response?.data?.message || '演示空间初始化失败' }
-})
+  finally { busy.value = false }
+}
+onMounted(initialize)
 </script>
 
 <style scoped>

@@ -4,8 +4,8 @@
     <!-- 搜索栏 -->
     <div class="search-section">
       <div class="search-bar">
-        <input v-model="searchKeyword" placeholder="搜索音乐..." @keyup.enter="handleSearch" />
-        <NativeIcon name="search" class="search-icon" @click="handleSearch" />
+        <NativeInput v-model="searchKeyword" aria-label="搜索音乐" placeholder="搜索音乐..." @enter="handleSearch" />
+        <button type="button" class="search-icon" aria-label="搜索音乐" @click="handleSearch"><NativeIcon name="search" /></button>
       </div>
       <button class="filter-btn" aria-label="筛选音乐" @click="showFilterDrawer = true">
         <NativeIcon name="filter" />
@@ -248,7 +248,7 @@ import NativeSelect from '@/components/native/NativeSelect.vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import api from '@/api'
-import { NativeIcon } from '@/components/native'
+import { NativeIcon, NativeInput } from '@/components/native'
 import ResourceListState from '@/components/common/ResourceListState.vue'
 import { useToast } from '@/composables/useToast'
 const authStore = useAuthStore()
@@ -680,23 +680,31 @@ onUnmounted(() => {
 
 .search-bar {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   background: var(--color-surface-subtle);
   border-radius: 20px;
-  padding: 0 14px;
+  padding: 0;
 }
 
-.search-bar input {
+.search-bar :deep(.native-input-wrapper) {
   flex: 1;
+  min-width: 0;
+}
+.search-bar :deep(.native-input) {
   border: none;
   background: none;
-  padding: 10px 8px;
-  font-size: 14px;
-  outline: none;
 }
 
 .search-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
   color: var(--color-text-muted);
   cursor: pointer;
 }

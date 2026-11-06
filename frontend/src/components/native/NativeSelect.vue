@@ -580,6 +580,7 @@ function selectActiveOption() {
 }
 
 function handleKeyboardEvent(event) {
+  if (event.isComposing || event.keyCode === 229) return
   if (props.disabled) return
   if (event.target?.closest?.('button') && event.target !== triggerRef.value) return
 

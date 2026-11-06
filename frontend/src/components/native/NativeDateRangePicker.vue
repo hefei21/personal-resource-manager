@@ -5,6 +5,7 @@
       ref="triggerRef"
       type="button"
       :disabled="disabled"
+      :aria-label="$attrs['aria-label']"
       aria-haspopup="dialog"
       :aria-expanded="isOpen"
       :aria-controls="panelId"
